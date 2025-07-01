@@ -35,30 +35,92 @@ fi
 echo "✅ DollhouseMCP successfully installed and built!"
 echo
 
-# Generate Claude Desktop configuration
+# Detect platform and set config file path
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    CONFIG_FILE="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+    PLATFORM="macOS"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+    CONFIG_FILE="$APPDATA/Claude/claude_desktop_config.json"
+    PLATFORM="Windows"
+else
+    CONFIG_FILE="$HOME/.config/claude/claude_desktop_config.json"
+    PLATFORM="Linux"
+fi
+
 echo "🔧 Claude Desktop Configuration:"
 echo "================================"
+echo "📁 Platform: $PLATFORM"
+echo "📁 Config file: $CONFIG_FILE"
 echo
-echo "Add this to your Claude Desktop configuration file:"
-echo
-echo "📁 Location (macOS): ~/Library/Application Support/Claude/claude_desktop_config.json"
-echo "📁 Location (Windows): %APPDATA%/Claude/claude_desktop_config.json"
-echo
-echo "Configuration to add:"
-echo
-cat << EOF
+
+# Check if config file exists and read it
+if [[ -f "$CONFIG_FILE" ]]; then
+    echo "✅ Found existing Claude Desktop configuration"
+    
+    # Check if it has valid JSON
+    if python3 -m json.tool "$CONFIG_FILE" > /dev/null 2>&1; then
+        echo "📖 Reading existing configuration..."
+        
+        # Use Python to merge the configurations
+        MERGED_CONFIG=$(python3 << EOF
+import json
+import sys
+
+# Read existing config
+with open("$CONFIG_FILE", 'r') as f:
+    config = json.load(f)
+
+# Ensure mcpServers exists
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+
+# Add or update dollhousemcp server
+config['mcpServers']['dollhousemcp'] = {
+    "command": "node",
+    "args": ["$DIST_PATH"]
+}
+
+# Pretty print the result
+print(json.dumps(config, indent=2))
+EOF
+)
+        
+        echo "🔄 Updated configuration (copy this entire content to your config file):"
+        echo
+        echo "$MERGED_CONFIG"
+        echo
+        echo "🎯 The dollhousemcp server has been added to your existing configuration."
+        
+    else
+        echo "⚠️  Existing config file has invalid JSON. Here's a fresh configuration:"
+        echo
+        cat << EOF
 {
   "mcpServers": {
     "dollhousemcp": {
       "command": "node",
-      "args": ["${DIST_PATH}"]
+      "args": ["$DIST_PATH"]
     }
   }
 }
 EOF
-echo
-echo "📝 If you already have other MCP servers configured, add just the dollhousemcp section"
-echo "   to your existing mcpServers object."
+    fi
+else
+    echo "📝 No existing configuration found. Here's a fresh configuration:"
+    echo
+    cat << EOF
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["$DIST_PATH"]
+    }
+  }
+}
+EOF
+    echo
+    echo "💡 Create the config file at: $CONFIG_FILE"
+fi
 echo
 echo "🔄 After updating the configuration:"
 echo "   1. Save the configuration file"
