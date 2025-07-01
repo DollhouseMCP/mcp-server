@@ -86,8 +86,8 @@ class DollhouseMCPServer {
       }
     );
 
-    // Use environment variable if set, otherwise default to personas subdirectory
-    this.personasDir = process.env.PERSONAS_DIR || path.join(process.cwd(), "personas");
+    // Use environment variable if set, otherwise default to personas subdirectory relative to this script
+    this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
