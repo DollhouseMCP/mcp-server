@@ -3,6 +3,14 @@ Version 3, 19 November 2007
 
 Copyright (C) 2024 Mick Darling <mick@mickdarling.com>
 
+LICENSE TRANSITION NOTICE:
+This project was originally developed under the MIT License as "persona-mcp-server".
+On July 1, 2025, the copyright owner (Mick Darling) exercised their right to relicense
+the work under AGPL-3.0 as part of the transformation to "DollhouseMCP". This transition
+is documented in the git commit history and represents a lawful relicensing of original
+work by the sole copyright holder. All code was authored by Mick Darling, with no external
+contributors to the original MIT-licensed version.
+
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
 by the Free Software Foundation, either version 3 of the License, or
