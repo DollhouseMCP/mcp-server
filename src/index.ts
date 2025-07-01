@@ -71,6 +71,7 @@ class DollhouseMCPServer {
   private personasDir: string;
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
+  private currentUser: string | null = null;
 
   constructor() {
     this.server = new Server(
@@ -87,6 +88,10 @@ class DollhouseMCPServer {
 
     // Use environment variable if set, otherwise default to personas subdirectory
     this.personasDir = process.env.PERSONAS_DIR || path.join(process.cwd(), "personas");
+    
+    // Load user identity from environment variables
+    this.currentUser = process.env.DOLLHOUSE_USER || null;
+    
     this.setupHandlers();
     this.loadPersonas();
   }
@@ -155,6 +160,109 @@ class DollhouseMCPServer {
               properties: {},
             },
           },
+          {
+            name: "browse_marketplace",
+            description: "Browse personas from the DollhouseMCP marketplace by category",
+            inputSchema: {
+              type: "object",
+              properties: {
+                category: {
+                  type: "string",
+                  description: "Category to browse (creative, professional, educational, gaming, personal)",
+                },
+              },
+            },
+          },
+          {
+            name: "search_marketplace",
+            description: "Search for personas in the marketplace by keywords",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "Search query for finding personas",
+                },
+              },
+              required: ["query"],
+            },
+          },
+          {
+            name: "get_marketplace_persona",
+            description: "Get detailed information about a persona from the marketplace",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "The marketplace path to the persona (e.g., 'creative/storyteller_20250701_alice.md')",
+                },
+              },
+              required: ["path"],
+            },
+          },
+          {
+            name: "install_persona",
+            description: "Install a persona from the marketplace to your local collection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "The marketplace path to the persona to install",
+                },
+              },
+              required: ["path"],
+            },
+          },
+          {
+            name: "submit_persona",
+            description: "Submit a persona to the marketplace for community review",
+            inputSchema: {
+              type: "object",
+              properties: {
+                persona: {
+                  type: "string",
+                  description: "The persona name or filename to submit",
+                },
+              },
+              required: ["persona"],
+            },
+          },
+          {
+            name: "set_user_identity",
+            description: "Set your user identity for persona creation and attribution",
+            inputSchema: {
+              type: "object",
+              properties: {
+                username: {
+                  type: "string",
+                  description: "Your username for persona attribution",
+                },
+                email: {
+                  type: "string",
+                  description: "Your email (optional, for contact)",
+                },
+              },
+              required: ["username"],
+            },
+          },
+          {
+            name: "get_user_identity",
+            description: "Get your current user identity",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
+          {
+            name: "clear_user_identity",
+            description: "Clear your user identity (return to anonymous mode)",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -176,6 +284,22 @@ class DollhouseMCPServer {
             return await this.getPersonaDetails((args as any)?.persona as string);
           case "reload_personas":
             return await this.reloadPersonas();
+          case "browse_marketplace":
+            return await this.browseMarketplace((args as any)?.category as string);
+          case "search_marketplace":
+            return await this.searchMarketplace((args as any)?.query as string);
+          case "get_marketplace_persona":
+            return await this.getMarketplacePersona((args as any)?.path as string);
+          case "install_persona":
+            return await this.installPersona((args as any)?.path as string);
+          case "submit_persona":
+            return await this.submitPersona((args as any)?.persona as string);
+          case "set_user_identity":
+            return await this.setUserIdentity((args as any)?.username as string, (args as any)?.email as string);
+          case "get_user_identity":
+            return await this.getUserIdentity();
+          case "clear_user_identity":
+            return await this.clearUserIdentity();
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -236,7 +360,8 @@ class DollhouseMCPServer {
           // Generate unique ID if not present
           let uniqueId = metadata.unique_id;
           if (!uniqueId) {
-            uniqueId = generateUniqueId(metadata.name, metadata.author);
+            const authorForId = metadata.author || this.getCurrentUserForAttribution();
+            uniqueId = generateUniqueId(metadata.name, authorForId);
             console.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
           }
 
@@ -432,6 +557,439 @@ class DollhouseMCPServer {
         },
       ],
     };
+  }
+
+  // GitHub API marketplace integration
+  private async fetchFromGitHub(url: string): Promise<any> {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to fetch from GitHub: ${error}`
+      );
+    }
+  }
+
+  private async browseMarketplace(category?: string) {
+    const baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
+    const url = category ? `${baseUrl}/${category}` : baseUrl;
+    
+    try {
+      const data = await this.fetchFromGitHub(url);
+      
+      if (!Array.isArray(data)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid marketplace response. Expected directory listing.`,
+            },
+          ],
+        };
+      }
+
+      const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
+      const categories = data.filter((item: any) => item.type === 'dir');
+
+      let text = `${this.getPersonaIndicator()}🏪 **DollhouseMCP Marketplace**\n\n`;
+      
+      if (!category) {
+        text += `**📁 Categories (${categories.length}):**\n`;
+        categories.forEach((cat: any) => {
+          text += `   📂 **${cat.name}** - Browse with: \`browse_marketplace "${cat.name}"\`\n`;
+        });
+        text += '\n';
+      }
+
+      if (items.length > 0) {
+        text += `**🎭 Personas in ${category || 'root'} (${items.length}):**\n`;
+        items.forEach((item: any) => {
+          const path = category ? `${category}/${item.name}` : item.name;
+          text += `   ▫️ **${item.name}**\n`;
+          text += `      📥 Install: \`install_persona "${path}"\`\n`;
+          text += `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`;
+        });
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: text,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error browsing marketplace: ${error}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async searchMarketplace(query: string) {
+    const searchUrl = `https://api.github.com/search/code?q=${encodeURIComponent(query)}+repo:mickdarling/DollhouseMCP-Personas+extension:md`;
+    
+    try {
+      const data = await this.fetchFromGitHub(searchUrl);
+      
+      if (!data.items || data.items.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}🔍 No personas found for query: "${query}"`,
+            },
+          ],
+        };
+      }
+
+      let text = `${this.getPersonaIndicator()}🔍 **Search Results for "${query}"** (${data.items.length} found)\n\n`;
+      
+      data.items.forEach((item: any) => {
+        const path = item.path.replace('personas/', '');
+        text += `   🎭 **${item.name}**\n`;
+        text += `      📂 Path: ${path}\n`;
+        text += `      📥 Install: \`install_persona "${path}"\`\n`;
+        text += `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`;
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: text,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error searching marketplace: ${error}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async getMarketplacePersona(path: string) {
+    const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${path}`;
+    
+    try {
+      const data = await this.fetchFromGitHub(url);
+      
+      if (data.type !== 'file') {
+        throw new Error('Path does not point to a file');
+      }
+
+      // Decode Base64 content
+      const content = Buffer.from(data.content, 'base64').toString('utf-8');
+      const parsed = matter(content);
+      const metadata = parsed.data as PersonaMetadata;
+
+      let text = `${this.getPersonaIndicator()}🎭 **Marketplace Persona: ${metadata.name}**\n\n`;
+      text += `**📋 Details:**\n`;
+      text += `   🆔 ID: ${metadata.unique_id || 'Not specified'}\n`;
+      text += `   👤 Author: ${metadata.author || 'Unknown'}\n`;
+      text += `   📁 Category: ${metadata.category || 'General'}\n`;
+      text += `   🔖 Price: ${metadata.price || 'Free'}\n`;
+      text += `   📊 Version: ${metadata.version || '1.0'}\n`;
+      text += `   🔞 Age Rating: ${metadata.age_rating || 'All'}\n`;
+      text += `   ${metadata.ai_generated ? '🤖 AI Generated' : '👤 Human Created'}\n\n`;
+      
+      text += `**📝 Description:**\n${metadata.description}\n\n`;
+      
+      if (metadata.triggers && metadata.triggers.length > 0) {
+        text += `**🔗 Triggers:** ${metadata.triggers.join(', ')}\n\n`;
+      }
+
+      text += `**📥 Installation:**\n`;
+      text += `Use: \`install_persona "${path}"\`\n\n`;
+      
+      text += `**📄 Full Content:**\n\`\`\`\n${parsed.content}\n\`\`\``;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: text,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error fetching persona: ${error}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async installPersona(path: string) {
+    const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${path}`;
+    
+    try {
+      const data = await this.fetchFromGitHub(url);
+      
+      if (data.type !== 'file') {
+        throw new Error('Path does not point to a file');
+      }
+
+      // Decode Base64 content
+      const content = Buffer.from(data.content, 'base64').toString('utf-8');
+      const parsed = matter(content);
+      const metadata = parsed.data as PersonaMetadata;
+
+      // Generate local filename (remove path directories)
+      const filename = path.split('/').pop() || 'downloaded-persona.md';
+      const localPath = `${this.personasDir}/${filename}`;
+
+      // Check if file already exists
+      try {
+        await fs.access(localPath);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}⚠️ Persona already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`,
+            },
+          ],
+        };
+      } catch {
+        // File doesn't exist, proceed with installation
+      }
+
+      // Write the file
+      await fs.writeFile(localPath, content, 'utf-8');
+      
+      // Reload personas to include the new one
+      await this.loadPersonas();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ **Persona Installed Successfully!**\n\n` +
+            `🎭 **${metadata.name}** by ${metadata.author}\n` +
+            `📁 Saved as: ${filename}\n` +
+            `📊 Total personas: ${this.personas.size}\n\n` +
+            `🎯 **Ready to use:** \`activate_persona "${metadata.name}"\``,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error installing persona: ${error}`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async submitPersona(personaIdentifier: string) {
+    // Find the persona in local collection
+    let persona = this.personas.get(personaIdentifier);
+    
+    if (!persona) {
+      // Search by name
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+
+    if (!persona) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Persona not found: ${personaIdentifier}`,
+          },
+        ],
+      };
+    }
+
+    // Generate GitHub issue body
+    const issueTitle = `New Persona Submission: ${persona.metadata.name}`;
+    const issueBody = `## Persona Submission
+
+**Name:** ${persona.metadata.name}
+**Author:** ${persona.metadata.author || 'Unknown'}
+**Category:** ${persona.metadata.category || 'General'}
+**Description:** ${persona.metadata.description}
+
+### Persona Content:
+\`\`\`markdown
+---
+${Object.entries(persona.metadata)
+  .map(([key, value]) => `${key}: ${Array.isArray(value) ? JSON.stringify(value) : JSON.stringify(value)}`)
+  .join('\n')}
+---
+
+${persona.content}
+\`\`\`
+
+### Submission Details:
+- Submitted via DollhouseMCP client
+- Filename: ${persona.filename}
+- Unique ID: ${persona.unique_id}
+
+---
+*Please review this persona for inclusion in the marketplace.*`;
+
+    const githubIssueUrl = `https://github.com/mickdarling/DollhouseMCP-Personas/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}📤 **Persona Submission Prepared**\n\n` +
+          `🎭 **${persona.metadata.name}** is ready for marketplace submission!\n\n` +
+          `**Next Steps:**\n` +
+          `1. Click this link to create a GitHub issue: \n` +
+          `   ${githubIssueUrl}\n\n` +
+          `2. Review the pre-filled content\n` +
+          `3. Click "Submit new issue"\n` +
+          `4. The maintainers will review your submission\n\n` +
+          `⭐ **Tip:** You can also submit via pull request if you're familiar with Git!`,
+        },
+      ],
+    };
+  }
+
+  // User identity management
+  private async setUserIdentity(username: string, email?: string) {
+    if (!username || username.trim().length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Username cannot be empty`,
+          },
+        ],
+      };
+    }
+
+    // Validate username format (alphanumeric, dashes, underscores)
+    const validUsername = /^[a-zA-Z0-9_-]+$/.test(username);
+    if (!validUsername) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Username can only contain letters, numbers, dashes, and underscores`,
+          },
+        ],
+      };
+    }
+
+    this.currentUser = username;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}✅ **User Identity Set**\n\n` +
+          `👤 **Username:** ${username}\n` +
+          `${email ? `📧 **Email:** ${email}\n` : ''}` +
+          `\n🎯 **Next Steps:**\n` +
+          `• New personas you create will be attributed to "${username}"\n` +
+          `• Set environment variable \`DOLLHOUSE_USER=${username}\` to persist this setting\n` +
+          `${email ? `• Set environment variable \`DOLLHOUSE_EMAIL=${email}\` for contact info\n` : ''}` +
+          `• Use \`clear_user_identity\` to return to anonymous mode`,
+        },
+      ],
+    };
+  }
+
+  private async getUserIdentity() {
+    const email = process.env.DOLLHOUSE_EMAIL;
+    
+    if (!this.currentUser) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}👤 **User Identity: Anonymous**\n\n` +
+            `🔒 **Status:** Anonymous mode\n` +
+            `📝 **Attribution:** Personas will use anonymous IDs\n\n` +
+            `**To set your identity:**\n` +
+            `• Use: \`set_user_identity "your-username"\`\n` +
+            `• Or set environment variable: \`DOLLHOUSE_USER=your-username\``,
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}👤 **User Identity: ${this.currentUser}**\n\n` +
+          `✅ **Status:** Authenticated\n` +
+          `👤 **Username:** ${this.currentUser}\n` +
+          `${email ? `📧 **Email:** ${email}\n` : ''}` +
+          `📝 **Attribution:** New personas will be credited to "${this.currentUser}"\n\n` +
+          `**Environment Variables:**\n` +
+          `• \`DOLLHOUSE_USER=${this.currentUser}\`\n` +
+          `${email ? `• \`DOLLHOUSE_EMAIL=${email}\`\n` : ''}` +
+          `\n**Management:**\n` +
+          `• Use \`clear_user_identity\` to return to anonymous mode\n` +
+          `• Use \`set_user_identity "new-username"\` to change username`,
+        },
+      ],
+    };
+  }
+
+  private async clearUserIdentity() {
+    const wasSet = this.currentUser !== null;
+    const previousUser = this.currentUser;
+    this.currentUser = null;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: wasSet 
+            ? `${this.getPersonaIndicator()}✅ **User Identity Cleared**\n\n` +
+              `👤 **Previous:** ${previousUser}\n` +
+              `🔒 **Current:** Anonymous mode\n\n` +
+              `📝 **Effect:** New personas will use anonymous IDs\n\n` +
+              `⚠️ **Note:** This only affects the current session.\n` +
+              `To persist this change, unset the \`DOLLHOUSE_USER\` environment variable.`
+            : `${this.getPersonaIndicator()}ℹ️ **Already in Anonymous Mode**\n\n` +
+              `👤 No user identity was set.\n\n` +
+              `Use \`set_user_identity "username"\` to set your identity.`,
+        },
+      ],
+    };
+  }
+
+  private getCurrentUserForAttribution(): string {
+    return this.currentUser || generateAnonymousId();
   }
 
   async run() {
