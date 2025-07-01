@@ -1,0 +1,68 @@
+{
+  "name": "dollhousemcp",
+  "version": "1.0.0",
+  "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "dollhousemcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build",
+    "setup": "npm install && npm run build",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --watchAll=false"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "persona",
+    "prompt",
+    "claude",
+    "ai-assistant",
+    "roleplay",
+    "character",
+    "behavioral-profiles",
+    "dynamic-prompting",
+    "typescript",
+    "dollhouse",
+    "marketplace"
+  ],
+  "author": {
+    "name": "Mick Darling",
+    "email": "mick@mickdarling.com",
+    "url": "https://github.com/mickdarling"
+  },
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mickdarling/DollhouseMCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mickdarling/DollhouseMCP/issues"
+  },
+  "homepage": "https://dollhousemcp.com",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.0.3",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^30.0.3",
+    "ts-jest": "^29.4.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
