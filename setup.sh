@@ -1,85 +1,75 @@
 #!/bin/bash
 
-echo "🎭 Setting up Persona MCP Server..."
+# DollhouseMCP Setup Script
+# Automatically configures and provides Claude Desktop integration instructions
 
-# Get current directory
-CURRENT_DIR=$(pwd)
+set -e
 
-# Check Node.js version
-if ! command -v node &> /dev/null; then
-    echo "❌ Node.js is not installed. Please install Node.js 18+ first."
-    exit 1
-fi
+echo "🎭 DollhouseMCP Setup Script"
+echo "=========================="
+echo
 
-NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-if [ "$NODE_VERSION" -lt 18 ]; then
-    echo "❌ Node.js version 18+ required. Current version: $(node --version)"
-    exit 1
-fi
+# Get the absolute path of the current directory
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIST_PATH="${INSTALL_DIR}/dist/index.js"
 
-echo "✅ Node.js $(node --version) detected"
+echo "📍 Installation detected at:"
+echo "   ${INSTALL_DIR}"
+echo
 
-# Install dependencies
+# Install dependencies and build
 echo "📦 Installing dependencies..."
-npm install
+npm install --silent
 
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to install dependencies"
-    exit 1
-fi
-
-# Build TypeScript
 echo "🔨 Building TypeScript..."
 npm run build
 
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to build TypeScript"
+echo
+
+# Verify build was successful
+if [[ ! -f "${DIST_PATH}" ]]; then
+    echo "❌ Build failed - dist/index.js not found"
     exit 1
 fi
 
-# Create personas directory if it doesn't exist
-PERSONAS_DIR="$CURRENT_DIR/personas"
-if [ ! -d "$PERSONAS_DIR" ]; then
-    echo "📁 Creating personas directory at $PERSONAS_DIR..."
-    mkdir -p "$PERSONAS_DIR"
-fi
+echo "✅ DollhouseMCP successfully installed and built!"
+echo
 
-# Make the script executable
-chmod +x dist/index.js
-
-echo "✅ Setup complete!"
-echo ""
-echo "📁 Installation directory: $CURRENT_DIR"
-echo "📁 Personas directory: $PERSONAS_DIR"
-echo ""
-echo "🚀 To start the server:"
-echo "   npm start"
-echo ""
-echo "🔧 To run in development mode:"
-echo "   npm run dev"
-echo ""
-echo "📝 Add this to your Claude Desktop configuration:"
-echo "   File: ~/Library/Application Support/Claude/claude_desktop_config.json"
-echo ""
-echo "{"
-echo "  \"mcpServers\": {"
-echo "    \"persona-mcp-server\": {"
-echo "      \"command\": \"node\","
-echo "      \"args\": [\"$CURRENT_DIR/dist/index.js\"]"
-echo "    }"
-echo "  }"
-echo "}"
-echo ""
-echo "🎭 Available personas:"
-if [ -d "$PERSONAS_DIR" ] && [ "$(ls -A $PERSONAS_DIR/*.md 2>/dev/null)" ]; then
-    for file in $PERSONAS_DIR/*.md; do
-        if [ -f "$file" ]; then
-            name=$(grep -m1 "^name:" "$file" | cut -d'"' -f2)
-            desc=$(grep -m1 "^description:" "$file" | cut -d'"' -f2)
-            echo "   • $name - $desc"
-        fi
-    done
-else
-    echo "   (No persona files found in $PERSONAS_DIR)"
-    echo "   The example persona files should be placed in this directory."
-fi
+# Generate Claude Desktop configuration
+echo "🔧 Claude Desktop Configuration:"
+echo "================================"
+echo
+echo "Add this to your Claude Desktop configuration file:"
+echo
+echo "📁 Location (macOS): ~/Library/Application Support/Claude/claude_desktop_config.json"
+echo "📁 Location (Windows): %APPDATA%/Claude/claude_desktop_config.json"
+echo
+echo "Configuration to add:"
+echo
+cat << EOF
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["${DIST_PATH}"]
+    }
+  }
+}
+EOF
+echo
+echo "📝 If you already have other MCP servers configured, add just the dollhousemcp section"
+echo "   to your existing mcpServers object."
+echo
+echo "🔄 After updating the configuration:"
+echo "   1. Save the configuration file"
+echo "   2. Restart Claude Desktop completely"
+echo "   3. All 17 DollhouseMCP tools will be available in your next conversation"
+echo
+echo "🎯 Quick Test:"
+echo "   Try using 'list_personas' tool in Claude to verify the installation works"
+echo
+echo "📚 Documentation:"
+echo "   Repository: https://github.com/mickdarling/DollhouseMCP"
+echo "   Marketplace: https://github.com/mickdarling/DollhouseMCP-Personas"
+echo
+echo "🎭 Happy persona management!"

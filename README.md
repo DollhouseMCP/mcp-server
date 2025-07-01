@@ -26,6 +26,24 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ### Installation
 
+#### Automated Setup (Recommended)
+```bash
+# Clone the repository
+git clone https://github.com/mickdarling/DollhouseMCP.git
+cd DollhouseMCP
+
+# Run automated setup script
+./setup.sh
+```
+
+The setup script will:
+- 📦 Install all dependencies
+- 🔨 Build the TypeScript code
+- 📍 Detect your installation path
+- 🔧 Generate the exact Claude Desktop configuration
+- 📋 Provide step-by-step setup instructions
+
+#### Manual Installation
 ```bash
 # Clone the repository
 git clone https://github.com/mickdarling/DollhouseMCP.git
