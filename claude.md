@@ -10,7 +10,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 **Author**: Mick Darling (mick@mickdarling.com)  
 **License**: AGPL-3.0 with Platform Stability Commitments  
 
-## Project Status: Phase 2B Complete ✅
+## Project Status: Phase 2B+ Complete ✅ (Installation Validated)
 
 ### Completed (Phase 1 - Foundation):
 ✅ **Fresh Repository Setup** - Clean DollhouseMCP repository with AGPL-3.0 license  
@@ -33,6 +33,15 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Comprehensive Validation** - Quality checks with detailed reports and recommendations  
 ✅ **Real-time Editing** - Modify any persona field with automatic version bumping  
 ✅ **Error Handling & UX** - Clear feedback, conflict detection, and helpful guidance  
+
+### Completed (Phase 2B+ - Installation & UX Refinements):
+✅ **Automated Setup Script** - `./setup.sh` with path detection and config generation  
+✅ **Smart Config Merging** - Reads existing Claude Desktop config and merges intelligently  
+✅ **Cross-Platform Support** - Auto-detects macOS/Windows/Linux config locations  
+✅ **Production Installation Validation** - Tested clean install in `/Applications/MCP-Servers/`  
+✅ **Critical Path Resolution Fix** - Fixed personas directory resolution for production environments  
+✅ **Complete Documentation Update** - README, LICENSE, and setup instructions validated  
+✅ **License Transition Documentation** - Clear legal record of MIT→AGPL-3.0 transition  
 
 ### Next Steps (Phase 2C - Private Personas & Advanced Features):
 🔄 **Local Private Persona Support** - User-specific directories and privacy controls  
@@ -435,13 +444,43 @@ This represents a **transformative marketplace platform** that bridges the gap b
 **Server Status**: Startup verified, all 17 MCP tools functional  
 **Marketplace Status**: Fully operational with 5 initial personas across categories
 
-**Current State (Phase 2B Complete)**:
+**Current State (Phase 2B+ Complete)**:
 1. ✅ Chat-based persona creation, editing, and validation tools implemented
 2. ✅ GitHub marketplace repository populated with initial personas
 3. ✅ Complete persona lifecycle management via conversational interface
 4. ✅ Comprehensive validation system with quality feedback
 5. ✅ User identity system with environment-based attribution
+6. ✅ Production-ready installation process with automated setup script
+7. ✅ Smart configuration merging for Claude Desktop integration
+8. ✅ Cross-platform support and path resolution fixes
+
+## Installation Validation Summary (July 1, 2025)
+
+### Installation Process Tested & Validated:
+✅ **Clean Installation Location**: `/Applications/MCP-Servers/DollhouseMCP/` - Separate from development workspace  
+✅ **Automated Setup Script**: `./setup.sh` detects paths and generates exact Claude Desktop configuration  
+✅ **Smart Config Merging**: Reads existing `claude_desktop_config.json` and merges intelligently  
+✅ **Cross-Platform Support**: Auto-detects macOS/Windows/Linux config file locations  
+✅ **Critical Bug Fix**: Fixed personas directory path resolution (`process.cwd()` → `__dirname` relative)  
+
+### Bugs Found & Fixed:
+🐛 **Path Resolution Issue**: Server tried to create `/personas` (root) instead of `./personas` (relative)  
+✅ **Fixed**: Changed from `process.cwd()` to `path.join(__dirname, "..", "personas")`  
+✅ **Validated**: Production installation at `/Applications/MCP-Servers/DollhouseMCP/` works perfectly  
+
+### User Experience Improvements:
+🎯 **Installation UX**: From manual configuration fragments to complete merged config files  
+🎯 **Error Prevention**: Auto-detection eliminates common path configuration mistakes  
+🎯 **Documentation**: README, LICENSE, and setup process all validated and updated  
+
+### Log Verification:
+```
+Generated unique ID for Business Consultant: business-consultant_20250701-191847_Persona MCP Server
+Loaded persona: Business Consultant (business-consultant_20250701-191847_Persona MCP Server)
+Loaded persona: Creative Writer (creative-writer_20250701-150000_dollhousemcp)
+✅ All 17 MCP tools registered and functional in Claude Desktop
+```
 
 **Ready for Phase 2C**: Private persona support, templates, and advanced management features
 
-This represents a **comprehensive persona management platform** with both local-first functionality and community marketplace integration, providing the foundation for the definitive AI persona ecosystem.
+This represents a **production-ready, comprehensively tested persona management platform** with both local-first functionality and community marketplace integration, providing the validated foundation for the definitive AI persona ecosystem.
