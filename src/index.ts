@@ -263,6 +263,72 @@ class DollhouseMCPServer {
               properties: {},
             },
           },
+          {
+            name: "create_persona",
+            description: "Create a new persona through guided chat interface",
+            inputSchema: {
+              type: "object",
+              properties: {
+                name: {
+                  type: "string",
+                  description: "The name for the new persona",
+                },
+                description: {
+                  type: "string",
+                  description: "Brief description of what this persona does",
+                },
+                category: {
+                  type: "string",
+                  description: "Category (creative, professional, educational, gaming, personal)",
+                },
+                instructions: {
+                  type: "string",
+                  description: "The persona's behavioral instructions and guidelines",
+                },
+                triggers: {
+                  type: "string",
+                  description: "Comma-separated list of trigger keywords (optional)",
+                },
+              },
+              required: ["name", "description", "category", "instructions"],
+            },
+          },
+          {
+            name: "edit_persona",
+            description: "Edit an existing persona's metadata or content",
+            inputSchema: {
+              type: "object",
+              properties: {
+                persona: {
+                  type: "string",
+                  description: "The persona name or filename to edit",
+                },
+                field: {
+                  type: "string",
+                  description: "Field to edit: name, description, category, instructions, triggers, version",
+                },
+                value: {
+                  type: "string",
+                  description: "New value for the field",
+                },
+              },
+              required: ["persona", "field", "value"],
+            },
+          },
+          {
+            name: "validate_persona",
+            description: "Validate a persona's format and metadata",
+            inputSchema: {
+              type: "object",
+              properties: {
+                persona: {
+                  type: "string",
+                  description: "The persona name or filename to validate",
+                },
+              },
+              required: ["persona"],
+            },
+          },
         ],
       };
     });
@@ -300,6 +366,22 @@ class DollhouseMCPServer {
             return await this.getUserIdentity();
           case "clear_user_identity":
             return await this.clearUserIdentity();
+          case "create_persona":
+            return await this.createPersona(
+              (args as any)?.name as string,
+              (args as any)?.description as string,
+              (args as any)?.category as string,
+              (args as any)?.instructions as string,
+              (args as any)?.triggers as string
+            );
+          case "edit_persona":
+            return await this.editPersona(
+              (args as any)?.persona as string,
+              (args as any)?.field as string,
+              (args as any)?.value as string
+            );
+          case "validate_persona":
+            return await this.validatePersona((args as any)?.persona as string);
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -990,6 +1072,420 @@ ${persona.content}
 
   private getCurrentUserForAttribution(): string {
     return this.currentUser || generateAnonymousId();
+  }
+
+  // Chat-based persona management tools
+  private async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
+    if (!name || !description || !category || !instructions) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Missing Required Fields**\n\n` +
+              `Please provide all required fields:\n` +
+              `• **name**: Display name for the persona\n` +
+              `• **description**: Brief description of what it does\n` +
+              `• **category**: creative, professional, educational, gaming, or personal\n` +
+              `• **instructions**: The persona's behavioral guidelines\n\n` +
+              `**Optional:**\n` +
+              `• **triggers**: Comma-separated keywords for activation`,
+          },
+        ],
+      };
+    }
+
+    // Validate category
+    const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
+    if (!validCategories.includes(category.toLowerCase())) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Invalid Category**\n\n` +
+              `Category must be one of: ${validCategories.join(', ')}\n` +
+              `You provided: "${category}"`,
+          },
+        ],
+      };
+    }
+
+    // Generate metadata
+    const author = this.getCurrentUserForAttribution();
+    const uniqueId = generateUniqueId(name, this.currentUser || undefined);
+    const filename = `${slugify(name)}.md`;
+    const filePath = path.join(this.personasDir, filename);
+
+    // Check if file already exists
+    try {
+      await fs.access(filePath);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ **Persona Already Exists**\n\n` +
+              `A persona file named "${filename}" already exists.\n` +
+              `Use \`edit_persona\` to modify it, or choose a different name.`,
+          },
+        ],
+      };
+    } catch {
+      // File doesn't exist, proceed with creation
+    }
+
+    // Parse triggers
+    const triggerList = triggers ? 
+      triggers.split(',').map(t => t.trim()).filter(t => t.length > 0) : 
+      [];
+
+    // Create persona metadata
+    const metadata: PersonaMetadata = {
+      name,
+      description,
+      unique_id: uniqueId,
+      author,
+      triggers: triggerList,
+      version: "1.0",
+      category: category.toLowerCase(),
+      age_rating: "all",
+      content_flags: ["user-created"],
+      ai_generated: true,
+      generation_method: "Claude",
+      price: "free",
+      revenue_split: "80/20",
+      license: "CC-BY-SA-4.0",
+      created_date: new Date().toISOString().slice(0, 10)
+    };
+
+    // Create full persona content
+    const frontmatter = Object.entries(metadata)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+      .join('\n');
+
+    const personaContent = `---
+${frontmatter}
+---
+
+# ${name}
+
+${instructions}
+
+## Response Style
+- Follow the behavioral guidelines above
+- Maintain consistency with the persona's character
+- Adapt responses to match the intended purpose
+
+## Usage Notes
+- Created via DollhouseMCP chat interface
+- Author: ${author}
+- Version: 1.0`;
+
+    try {
+      // Write the file
+      await fs.writeFile(filePath, personaContent, 'utf-8');
+      
+      // Reload personas to include the new one
+      await this.loadPersonas();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ **Persona Created Successfully!**\n\n` +
+              `🎭 **${name}** by ${author}\n` +
+              `📁 Category: ${category}\n` +
+              `🆔 Unique ID: ${uniqueId}\n` +
+              `📄 Saved as: ${filename}\n` +
+              `📊 Total personas: ${this.personas.size}\n\n` +
+              `🎯 **Ready to use:** \`activate_persona "${name}"\`\n` +
+              `📤 **Share it:** \`submit_persona "${name}"\`\n` +
+              `✏️ **Edit it:** \`edit_persona "${name}" "field" "new value"\``,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Error Creating Persona**\n\n` +
+              `Failed to write persona file: ${error}\n\n` +
+              `Please check permissions and try again.`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async editPersona(personaIdentifier: string, field: string, value: string) {
+    if (!personaIdentifier || !field || !value) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Missing Parameters**\n\n` +
+              `Usage: \`edit_persona "persona_name" "field" "new_value"\`\n\n` +
+              `**Editable fields:**\n` +
+              `• **name** - Display name\n` +
+              `• **description** - Brief description\n` +
+              `• **category** - creative, professional, educational, gaming, personal\n` +
+              `• **instructions** - Main persona content\n` +
+              `• **triggers** - Comma-separated keywords\n` +
+              `• **version** - Version number`,
+          },
+        ],
+      };
+    }
+
+    // Find the persona
+    let persona = this.personas.get(personaIdentifier);
+    
+    if (!persona) {
+      // Search by name
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+
+    if (!persona) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Persona Not Found**\n\n` +
+              `Could not find persona: "${personaIdentifier}"\n\n` +
+              `Use \`list_personas\` to see available personas.`,
+          },
+        ],
+      };
+    }
+
+    const validFields = ['name', 'description', 'category', 'instructions', 'triggers', 'version'];
+    if (!validFields.includes(field.toLowerCase())) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Invalid Field**\n\n` +
+              `Field "${field}" is not editable.\n\n` +
+              `**Valid fields:** ${validFields.join(', ')}`,
+          },
+        ],
+      };
+    }
+
+    const filePath = path.join(this.personasDir, persona.filename);
+
+    try {
+      // Read current file
+      const fileContent = await fs.readFile(filePath, 'utf-8');
+      const parsed = matter(fileContent);
+      
+      // Update the appropriate field
+      const normalizedField = field.toLowerCase();
+      
+      if (normalizedField === 'instructions') {
+        // Update the main content
+        parsed.content = value;
+      } else if (normalizedField === 'triggers') {
+        // Parse triggers as comma-separated list
+        parsed.data[normalizedField] = value.split(',').map(t => t.trim()).filter(t => t.length > 0);
+      } else if (normalizedField === 'category') {
+        // Validate category
+        const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
+        if (!validCategories.includes(value.toLowerCase())) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${this.getPersonaIndicator()}❌ **Invalid Category**\n\n` +
+                    `Category must be one of: ${validCategories.join(', ')}\n` +
+                    `You provided: "${value}"`,
+              },
+            ],
+          };
+        }
+        parsed.data[normalizedField] = value.toLowerCase();
+      } else {
+        // Update metadata field
+        parsed.data[normalizedField] = value;
+      }
+
+      // Update version and modification info
+      if (normalizedField !== 'version') {
+        const currentVersion = parsed.data.version || '1.0';
+        const versionParts = currentVersion.split('.').map(Number);
+        versionParts[1] = (versionParts[1] || 0) + 1;
+        parsed.data.version = versionParts.join('.');
+      }
+
+      // Regenerate file content
+      const updatedContent = matter.stringify(parsed.content, parsed.data);
+      
+      // Write updated file
+      await fs.writeFile(filePath, updatedContent, 'utf-8');
+      
+      // Reload personas
+      await this.loadPersonas();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
+              `🎭 **${persona.metadata.name}**\n` +
+              `📝 **Field Updated:** ${field}\n` +
+              `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : value}\n` +
+              `📊 **Version:** ${parsed.data.version}\n\n` +
+              `Use \`get_persona_details "${persona.metadata.name}"\` to see all changes.`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Error Updating Persona**\n\n` +
+              `Failed to update persona: ${error}\n\n` +
+              `Please check file permissions and try again.`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async validatePersona(personaIdentifier: string) {
+    if (!personaIdentifier) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Missing Persona Identifier**\n\n` +
+              `Usage: \`validate_persona "persona_name"\`\n\n` +
+              `Use \`list_personas\` to see available personas.`,
+          },
+        ],
+      };
+    }
+
+    // Find the persona
+    let persona = this.personas.get(personaIdentifier);
+    
+    if (!persona) {
+      // Search by name
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+
+    if (!persona) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Persona Not Found**\n\n` +
+              `Could not find persona: "${personaIdentifier}"\n\n` +
+              `Use \`list_personas\` to see available personas.`,
+          },
+        ],
+      };
+    }
+
+    // Validation checks
+    const issues: string[] = [];
+    const warnings: string[] = [];
+    const metadata = persona.metadata;
+
+    // Required field checks
+    if (!metadata.name || metadata.name.trim().length === 0) {
+      issues.push("Missing or empty 'name' field");
+    }
+    if (!metadata.description || metadata.description.trim().length === 0) {
+      issues.push("Missing or empty 'description' field");
+    }
+    if (!persona.content || persona.content.trim().length < 50) {
+      issues.push("Persona content is too short (minimum 50 characters)");
+    }
+
+    // Category validation
+    const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal', 'general'];
+    if (metadata.category && !validCategories.includes(metadata.category)) {
+      issues.push(`Invalid category '${metadata.category}'. Must be one of: ${validCategories.join(', ')}`);
+    }
+
+    // Age rating validation
+    const validAgeRatings = ['all', '13+', '18+'];
+    if (metadata.age_rating && !validAgeRatings.includes(metadata.age_rating)) {
+      warnings.push(`Invalid age_rating '${metadata.age_rating}'. Should be one of: ${validAgeRatings.join(', ')}`);
+    }
+
+    // Optional field warnings
+    if (!metadata.triggers || metadata.triggers.length === 0) {
+      warnings.push("No trigger keywords defined - users may have difficulty finding this persona");
+    }
+    if (!metadata.version) {
+      warnings.push("No version specified - defaulting to '1.0'");
+    }
+    if (!metadata.unique_id) {
+      warnings.push("No unique_id - one will be generated automatically");
+    }
+
+    // Content quality checks
+    if (persona.content.length > 5000) {
+      warnings.push("Persona content is very long - consider breaking it into sections");
+    }
+    if (metadata.name && metadata.name.length > 50) {
+      warnings.push("Persona name is very long - consider shortening for better display");
+    }
+    if (metadata.description && metadata.description.length > 200) {
+      warnings.push("Description is very long - consider keeping it under 200 characters");
+    }
+
+    // Generate validation report
+    let report = `${this.getPersonaIndicator()}📋 **Validation Report: ${persona.metadata.name}**\n\n`;
+    
+    if (issues.length === 0 && warnings.length === 0) {
+      report += `✅ **All Checks Passed!**\n\n` +
+        `🎭 **Persona:** ${metadata.name}\n` +
+        `📁 **Category:** ${metadata.category || 'general'}\n` +
+        `📊 **Version:** ${metadata.version || '1.0'}\n` +
+        `📝 **Content Length:** ${persona.content.length} characters\n` +
+        `🔗 **Triggers:** ${metadata.triggers?.length || 0} keywords\n\n` +
+        `This persona meets all validation requirements and is ready for use!`;
+    } else {
+      if (issues.length > 0) {
+        report += `❌ **Issues Found (${issues.length}):**\n`;
+        issues.forEach((issue, i) => {
+          report += `   ${i + 1}. ${issue}\n`;
+        });
+        report += '\n';
+      }
+
+      if (warnings.length > 0) {
+        report += `⚠️ **Warnings (${warnings.length}):**\n`;
+        warnings.forEach((warning, i) => {
+          report += `   ${i + 1}. ${warning}\n`;
+        });
+        report += '\n';
+      }
+
+      if (issues.length > 0) {
+        report += `**Recommendation:** Fix the issues above before using this persona.\n`;
+        report += `Use \`edit_persona "${persona.metadata.name}" "field" "value"\` to make corrections.`;
+      } else {
+        report += `**Status:** Persona is functional but could be improved.\n`;
+        report += `Address warnings above for optimal performance.`;
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: report,
+        },
+      ],
+    };
   }
 
   async run() {
