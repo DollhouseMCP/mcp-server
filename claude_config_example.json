@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "persona-mcp-server": {
+      "command": "node",
+      "args": ["/path/to/persona-mcp-server/dist/index.js"]
+    }
+  }
+}
+
+// Instructions:
+// 1. Save this configuration to ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
+// 2. On Windows: Save to %APPDATA%/Claude/claude_desktop_config.json
+// 3. On Linux: Save to ~/.config/Claude/claude_desktop_config.json
+// 4. Restart Claude Desktop after making changes
+
+// Note: The PERSONAS_DIR environment variable is optional - the server will automatically
+// look for personas in the "personas" subdirectory of the server installation folder
+
+// If you want to use a custom personas directory, add the env section:
+// {
+//   "mcpServers": {
+//     "persona-mcp-server": {
+//       "command": "node",
+//       "args": ["/path/to/persona-mcp-server/dist/index.js"],
+//       "env": {
+//         "PERSONAS_DIR": "/custom/path/to/personas"
+//       }
+//     }
+//   }
+// }
