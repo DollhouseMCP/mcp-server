@@ -1704,7 +1704,7 @@ ${instructions}
 
       // Check if we're in a git repository
       try {
-        await exec('git status', { cwd: rootDir });
+        await safeExec('git', ['status'], { cwd: rootDir });
       } catch {
         return {
           content: [{
@@ -1722,7 +1722,7 @@ ${instructions}
       }
 
       // Check for uncommitted changes
-      const { stdout: statusOutput } = await exec('git status --porcelain', { cwd: rootDir });
+      const { stdout: statusOutput } = await safeExec('git', ['status', '--porcelain'], { cwd: rootDir });
       if (statusOutput.trim()) {
         return {
           content: [{
@@ -1746,7 +1746,7 @@ ${instructions}
       updateLog += '✅ Backup created: ' + path.basename(backupDir) + '\n';
 
       // Pull latest changes
-      const { stdout: pullOutput } = await exec('git pull origin main', { cwd: rootDir });
+      const { stdout: pullOutput } = await safeExec('git', ['pull', 'origin', 'main'], { cwd: rootDir });
       updateLog += '✅ Git pull completed\n';
 
       // Check if there were actually updates
@@ -1765,11 +1765,11 @@ ${instructions}
       }
 
       // Update dependencies
-      await exec('npm install', { cwd: rootDir });
+      await safeExec('npm', ['install'], { cwd: rootDir });
       updateLog += '✅ Dependencies updated\n';
 
       // Rebuild
-      await exec('npm run build', { cwd: rootDir });
+      await safeExec('npm', ['run', 'build'], { cwd: rootDir });
       updateLog += '✅ Build completed\n';
 
       updateLog += '\n🎉 **Update Complete!**\n\n';
@@ -1828,7 +1828,7 @@ ${instructions}
       const parentDir = path.dirname(rootDir);
 
       // Find backup directories
-      const { stdout: lsOutput } = await exec('ls -1t', { cwd: parentDir });
+      const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
       const backupDirs = lsOutput.split('\n')
         .filter(dir => dir.startsWith('.backup-'))
         .map(dir => path.join(parentDir, dir));
@@ -1869,7 +1869,7 @@ ${instructions}
 
       // Rebuild if needed
       try {
-        await exec('npm run build', { cwd: rootDir });
+        await safeExec('npm', ['run', 'build'], { cwd: rootDir });
         rollbackLog += '✅ Rebuild completed\n';
       } catch {
         rollbackLog += '⚠️ Rebuild skipped (may not be needed)\n';
@@ -1918,9 +1918,9 @@ ${instructions}
       let gitInfo = "Not available";
       let lastCommit = "Unknown";
       try {
-        const { stdout: branchOutput } = await exec('git rev-parse --abbrev-ref HEAD', { cwd: rootDir });
-        const { stdout: commitOutput } = await exec('git rev-parse --short HEAD', { cwd: rootDir });
-        const { stdout: dateOutput } = await exec('git log -1 --format=%cd --date=short', { cwd: rootDir });
+        const { stdout: branchOutput } = await safeExec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootDir });
+        const { stdout: commitOutput } = await safeExec('git', ['rev-parse', '--short', 'HEAD'], { cwd: rootDir });
+        const { stdout: dateOutput } = await safeExec('git', ['log', '-1', '--format=%cd', '--date=short'], { cwd: rootDir });
         gitInfo = branchOutput.trim() + ' (' + commitOutput.trim() + ')';
         lastCommit = dateOutput.trim();
       } catch {
@@ -1931,7 +1931,7 @@ ${instructions}
       let backupInfo = "None found";
       try {
         const parentDir = path.dirname(rootDir);
-        const { stdout: lsOutput } = await exec('ls -1', { cwd: parentDir });
+        const { stdout: lsOutput } = await safeExec('ls', ['-1'], { cwd: parentDir });
         const backupCount = lsOutput.split('\n').filter(dir => dir.startsWith('.backup-')).length;
         if (backupCount > 0) {
           backupInfo = backupCount + ' backup(s) available';
