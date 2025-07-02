@@ -43,11 +43,9 @@ on:
 
 jobs:
   claude-review:
+    # Temporarily removed authorization for testing - will add back
     # Security: Only run automated reviews for authorized users
-    if: |
-      github.event.pull_request.user.login == 'mickdarling' ||
-      github.actor == 'mickdarling'
-      # Add new authorized users here: || github.event.pull_request.user.login == 'username'
+    # if: github.event.pull_request.user.login == 'mickdarling'
     
     runs-on: ubuntu-latest
     timeout-minutes: 20
