@@ -2,21 +2,20 @@ name: Claude Code
 
 # User Access Controls & Workflow Triggering
 # ============================================
-# WHO CAN TRIGGER: Users with repository access can mention @claude in:
-#   - Issue comments
-#   - Pull request comments  
-#   - Pull request reviews
-#   - Issue descriptions/titles
+# WHO CAN TRIGGER: Only explicitly authorized users can mention @claude:
+#   - Currently authorized: mickdarling (repository owner)
+#   - Add new users by updating the conditional logic below
+#   - Triggers work in: issue comments, PR comments, reviews, issue titles
 #
-# REQUIRED PERMISSIONS:
-#   - Repository access (read or higher)
-#   - Ability to comment on issues/PRs
+# SECURITY MODEL:
+#   - Restricted to authorized users only (not all repository contributors)
+#   - Prevents unauthorized API usage and potential security vulnerabilities
+#   - Repository owner controls who can trigger Claude workflows
 #
 # SECURITY NOTES:
-#   - Only users with repository access can trigger workflows
 #   - Claude has write permissions and can modify repository content
 #   - All Claude actions are logged in GitHub Actions history
-#   - Consider branch protection rules for additional security
+#   - Unauthorized users will see workflow skipped (not failed)
 #
 # USAGE GUIDELINES:
 #   - Use @claude for code assistance, bug fixes, feature implementation
@@ -36,10 +35,14 @@ on:
 jobs:
   claude:
     if: |
-      contains(github.event.comment.body || '', '@claude') ||
-      contains(github.event.review.body || '', '@claude') ||
-      contains(github.event.issue.body || '', '@claude') ||
-      contains(github.event.issue.title || '', '@claude')
+      (contains(github.event.comment.body || '', '@claude') ||
+       contains(github.event.review.body || '', '@claude') ||
+       contains(github.event.issue.body || '', '@claude') ||
+       contains(github.event.issue.title || '', '@claude')) &&
+      (github.actor == 'mickdarling' || 
+       github.event.sender.type == 'User' && 
+       (github.event.sender.login == 'mickdarling'))
+      # Add new authorized users here: || github.actor == 'username'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

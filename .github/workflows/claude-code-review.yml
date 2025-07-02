@@ -3,10 +3,13 @@ name: Claude Code Review
 # Automated PR Review Workflow
 # =============================
 # AUTOMATIC TRIGGERING: This workflow runs automatically on:
-#   - New pull requests (opened)
-#   - Updated pull requests (synchronize)
+#   - New pull requests (opened) from authorized users only
+#   - Updated pull requests (synchronize) from authorized users only
 #
-# NO USER INTERACTION REQUIRED: This is an automated review workflow
+# SECURITY MODEL:
+#   - Only runs for PRs created by explicitly authorized users
+#   - Currently authorized: mickdarling (repository owner)
+#   - Add new users by updating the conditional logic below
 #
 # PERMISSIONS: 
 #   - Read-only access to repository content
@@ -14,10 +17,10 @@ name: Claude Code Review
 #   - Cannot modify repository files (review-only)
 #
 # SECURITY NOTES:
-#   - Triggers automatically for ALL pull requests
+#   - Restricted to authorized users only (not all contributors)
 #   - Uses read-only permissions for safety
 #   - All reviews are logged in GitHub Actions history
-#   - Consider disabling for external contributors if needed
+#   - Unauthorized PRs will not trigger automated review
 
 on:
   pull_request:
@@ -40,11 +43,10 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Security: Only run automated reviews for authorized users
+    if: |
+      github.event.pull_request.user.login == 'mickdarling'
+      # Add new authorized users here: || github.event.pull_request.user.login == 'username'
     
     runs-on: ubuntu-latest
     timeout-minutes: 20
