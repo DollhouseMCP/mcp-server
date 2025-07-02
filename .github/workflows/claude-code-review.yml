@@ -45,7 +45,8 @@ jobs:
   claude-review:
     # Security: Only run automated reviews for authorized users
     if: |
-      github.event.pull_request.user.login == 'mickdarling'
+      github.event.pull_request.user.login == 'mickdarling' ||
+      github.actor == 'mickdarling'
       # Add new authorized users here: || github.event.pull_request.user.login == 'username'
     
     runs-on: ubuntu-latest

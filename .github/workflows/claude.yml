@@ -39,9 +39,7 @@ jobs:
        contains(github.event.review.body || '', '@claude') ||
        contains(github.event.issue.body || '', '@claude') ||
        contains(github.event.issue.title || '', '@claude')) &&
-      (github.actor == 'mickdarling' || 
-       github.event.sender.type == 'User' && 
-       (github.event.sender.login == 'mickdarling'))
+      (github.actor == 'mickdarling')
       # Add new authorized users here: || github.actor == 'username'
     runs-on: ubuntu-latest
     timeout-minutes: 15
