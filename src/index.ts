@@ -17,8 +17,47 @@ import { fileURLToPath } from "url";
 
 const exec = promisify(child_process.exec);
 
+// Helper function for safe command execution
+function safeExec(command: string, args: string[], options: { cwd?: string } = {}): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = child_process.spawn(command, args, {
+      cwd: options.cwd,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    proc.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    proc.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(`Command failed with exit code ${code}: ${stderr}`));
+      }
+    });
+    
+    proc.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Repository configuration constants
+const REPO_OWNER = 'mickdarling';
+const REPO_NAME = 'DollhouseMCP';
+const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
+const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 
 interface PersonaMetadata {
   name: string;
@@ -1554,13 +1593,19 @@ ${instructions}
       const currentVersion = packageData.version;
 
       // Check GitHub releases API for latest version
-      const releasesUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP/releases/latest';
+      const releasesUrl = RELEASES_API_URL;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
       const response = await fetch(releasesUrl, {
         headers: {
           'Accept': 'application/vnd.github.v3+json',
           'User-Agent': 'DollhouseMCP/1.0'
-        }
+        },
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         if (response.status === 404) {
@@ -1609,18 +1654,22 @@ ${instructions}
         content: [{ type: "text", text: statusText }]
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isAbortError = error instanceof Error && error.name === 'AbortError';
+      
       return {
         content: [{
           type: "text",
           text: this.getPersonaIndicator() + 
             '❌ **Update Check Failed**\n\n' +
-            'Error: ' + error + '\n\n' +
+            'Error: ' + errorMessage + '\n\n' +
             '**Possible causes:**\n' +
+            (isAbortError ? '• Request timed out (>10 seconds)\n' : '') +
             '• Network connectivity issues\n' +
             '• GitHub API rate limiting\n' +
             '• Repository access problems\n\n' +
             'Try again later or check manually at:\n' +
-            'https://github.com/mickdarling/DollhouseMCP/releases'
+            REPO_URL + '/releases'
         }]
       };
     }
@@ -1692,8 +1741,8 @@ ${instructions}
       updateLog += '✅ Repository status clean\n';
 
       // Create backup
-      const backupDir = path.join(rootDir, '.backup-' + Date.now());
-      await exec('cp -r "' + rootDir + '" "' + backupDir + '"', { cwd: path.dirname(rootDir) });
+      const backupDir = path.join(path.dirname(rootDir), '.backup-' + Date.now());
+      await safeExec('cp', ['-r', rootDir, backupDir]);
       updateLog += '✅ Backup created: ' + path.basename(backupDir) + '\n';
 
       // Pull latest changes
@@ -1702,7 +1751,7 @@ ${instructions}
 
       // Check if there were actually updates
       if (pullOutput.includes('Already up to date')) {
-        await exec('rm -rf "' + backupDir + '"');
+        await safeExec('rm', ['-rf', backupDir]);
         return {
           content: [{
             type: "text",
@@ -1736,12 +1785,15 @@ ${instructions}
         content: [{ type: "text", text: updateLog }]
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : '';
+      
       return {
         content: [{
           type: "text",
           text: this.getPersonaIndicator() + 
             '❌ **Update Failed**\n\n' +
-            'Error during update: ' + error + '\n\n' +
+            'Error during auto-update: ' + errorMessage + '\n\n' +
             '**Recovery:**\n' +
             'If the server is in an unstable state:\n' +
             '1. Use `rollback_update true` to restore previous version\n' +
@@ -1804,15 +1856,15 @@ ${instructions}
 
       // Create safety backup of current state
       const safetyBackup = path.join(parentDir, '.rollback-safety-' + Date.now());
-      await exec('cp -r "' + rootDir + '" "' + safetyBackup + '"');
+      await safeExec('cp', ['-r', rootDir, safetyBackup]);
       rollbackLog += '✅ Safety backup created\n';
 
       // Remove current installation
-      await exec('rm -rf "' + rootDir + '"');
+      await safeExec('rm', ['-rf', rootDir]);
       rollbackLog += '✅ Current version removed\n';
 
       // Restore from backup
-      await exec('cp -r "' + latestBackup + '" "' + rootDir + '"');
+      await safeExec('cp', ['-r', latestBackup, rootDir]);
       rollbackLog += '✅ Previous version restored\n';
 
       // Rebuild if needed
