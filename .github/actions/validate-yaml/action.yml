@@ -1,0 +1,29 @@
+name: 'Validate YAML'
+description: 'Validates YAML syntax for modified workflow files'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate Workflow YAML
+      shell: bash
+      run: |
+        # Check if any workflow files were modified and validate them
+        changed_workflows=$(git diff --name-only HEAD~1 HEAD -- .github/workflows/ 2>/dev/null || git diff --name-only --cached -- .github/workflows/ 2>/dev/null || echo "")
+        if [ -n "$changed_workflows" ]; then
+          echo "Validating modified workflow files..."
+          for file in $changed_workflows; do
+            if [ -f "$file" ]; then
+              echo "Validating $file"
+              python3 -c "import yaml; yaml.safe_load(open('$file'))" || {
+                echo "❌ YAML syntax error in $file"
+                exit 1
+              }
+              echo "✅ $file is valid YAML"
+            fi
+          done
+        else
+          echo "No workflow files modified, skipping validation"
+        fi
