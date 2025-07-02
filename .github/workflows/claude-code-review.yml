@@ -21,16 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      id-token: write
+      contents: read           # Read-only: this workflow only reviews, doesn't modify
+      pull-requests: write     # Write needed: to post review comments
+      issues: read             # Read-only: just needs to read issue context
+      id-token: write          # Write needed: for OIDC authentication
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # Full git history for comprehensive review context
+          # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review

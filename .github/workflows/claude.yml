@@ -13,22 +13,24 @@ on:
 jobs:
   claude:
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      contains(github.event.comment.body || '', '@claude') ||
+      contains(github.event.review.body || '', '@claude') ||
+      contains(github.event.issue.body || '', '@claude') ||
+      contains(github.event.issue.title || '', '@claude')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      id-token: write
+      contents: write          # Write needed: Claude may create branches/commits for fixes
+      pull-requests: write     # Write needed: to create PRs and post comments
+      issues: write            # Write needed: to post comments and manage issues
+      id-token: write          # Write needed: for OIDC authentication
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # Full git history for comprehensive review context
+          # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
+          fetch-depth: 0
 
       - name: Run Claude Code
         id: claude
