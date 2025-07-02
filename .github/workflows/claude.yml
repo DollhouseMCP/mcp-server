@@ -1,5 +1,28 @@
 name: Claude Code
 
+# User Access Controls & Workflow Triggering
+# ============================================
+# WHO CAN TRIGGER: Users with repository access can mention @claude in:
+#   - Issue comments
+#   - Pull request comments  
+#   - Pull request reviews
+#   - Issue descriptions/titles
+#
+# REQUIRED PERMISSIONS:
+#   - Repository access (read or higher)
+#   - Ability to comment on issues/PRs
+#
+# SECURITY NOTES:
+#   - Only users with repository access can trigger workflows
+#   - Claude has write permissions and can modify repository content
+#   - All Claude actions are logged in GitHub Actions history
+#   - Consider branch protection rules for additional security
+#
+# USAGE GUIDELINES:
+#   - Use @claude for code assistance, bug fixes, feature implementation
+#   - Be specific in requests for better results
+#   - Claude will respond in the same thread where mentioned
+
 on:
   issue_comment:
     types: [created]
@@ -31,6 +54,26 @@ jobs:
           # Full git history for comprehensive review context
           # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
           fetch-depth: 0
+
+      - name: Validate Workflow YAML
+        run: |
+          # Check if any workflow files were modified and validate them
+          changed_workflows=$(git diff --name-only HEAD~1 HEAD -- .github/workflows/ || echo "")
+          if [ -n "$changed_workflows" ]; then
+            echo "Validating modified workflow files..."
+            for file in $changed_workflows; do
+              if [ -f "$file" ]; then
+                echo "Validating $file"
+                python -c "import yaml; yaml.safe_load(open('$file'))" || {
+                  echo "❌ YAML syntax error in $file"
+                  exit 1
+                }
+                echo "✅ $file is valid YAML"
+              fi
+            done
+          else
+            echo "No workflow files modified, skipping validation"
+          fi
 
       - name: Run Claude Code
         id: claude

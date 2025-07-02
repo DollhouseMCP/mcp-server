@@ -1,14 +1,42 @@
 name: Claude Code Review
 
+# Automated PR Review Workflow
+# =============================
+# AUTOMATIC TRIGGERING: This workflow runs automatically on:
+#   - New pull requests (opened)
+#   - Updated pull requests (synchronize)
+#
+# NO USER INTERACTION REQUIRED: This is an automated review workflow
+#
+# PERMISSIONS: 
+#   - Read-only access to repository content
+#   - Write access to post review comments
+#   - Cannot modify repository files (review-only)
+#
+# SECURITY NOTES:
+#   - Triggers automatically for ALL pull requests
+#   - Uses read-only permissions for safety
+#   - All reviews are logged in GitHub Actions history
+#   - Consider disabling for external contributors if needed
+
 on:
   pull_request:
     types: [opened, synchronize]
-    # Optional: Only run on specific file changes
+    # Optional: Only run on specific file changes (uncomment when repo grows)
+    # Saves GitHub Actions minutes and API calls for irrelevant changes
     # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    #   - "src/**/*.ts"           # TypeScript source files
+    #   - "src/**/*.tsx"          # TypeScript React files
+    #   - "src/**/*.js"           # JavaScript files
+    #   - "src/**/*.jsx"          # JavaScript React files
+    #   - "*.md"                  # Documentation files
+    #   - "package.json"          # Dependencies
+    #   - "tsconfig.json"         # TypeScript config
+    #   - ".github/workflows/**"  # Workflow files themselves
+    # paths-ignore:
+    #   - "dist/**"               # Ignore compiled output
+    #   - "node_modules/**"       # Ignore dependencies
+    #   - "coverage/**"           # Ignore test coverage
 
 jobs:
   claude-review:
@@ -33,6 +61,26 @@ jobs:
           # Full git history for comprehensive review context
           # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
           fetch-depth: 0
+
+      - name: Validate Workflow YAML
+        run: |
+          # Check if any workflow files were modified and validate them
+          changed_workflows=$(git diff --name-only HEAD~1 HEAD -- .github/workflows/ || echo "")
+          if [ -n "$changed_workflows" ]; then
+            echo "Validating modified workflow files..."
+            for file in $changed_workflows; do
+              if [ -f "$file" ]; then
+                echo "Validating $file"
+                python -c "import yaml; yaml.safe_load(open('$file'))" || {
+                  echo "❌ YAML syntax error in $file"
+                  exit 1
+                }
+                echo "✅ $file is valid YAML"
+              fi
+            done
+          else
+            echo "No workflow files modified, skipping validation"
+          fi
 
       - name: Run Claude Code Review
         id: claude-review
