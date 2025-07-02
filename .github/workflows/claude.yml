@@ -28,6 +28,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # Full git history for comprehensive review context
+          # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
           fetch-depth: 0
 
       - name: Run Claude Code
