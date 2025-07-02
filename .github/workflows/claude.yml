@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
+      contents: write          # Write needed: Claude may create branches/commits for fixes
+      pull-requests: write     # Write needed: to create PRs and post comments
+      issues: write            # Write needed: to post comments and manage issues
+      id-token: write          # Write needed: for OIDC authentication
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

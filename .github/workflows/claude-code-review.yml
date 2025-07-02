@@ -21,10 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
+      contents: read           # Read-only: this workflow only reviews, doesn't modify
+      pull-requests: write     # Write needed: to post review comments
+      issues: read             # Read-only: just needs to read issue context
+      id-token: write          # Write needed: for OIDC authentication
     
     steps:
       - name: Checkout repository
