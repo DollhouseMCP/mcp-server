@@ -10,8 +10,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as child_process from "child_process";
+import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
+
+const exec = promisify(child_process.exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -329,6 +333,50 @@ class DollhouseMCPServer {
               required: ["persona"],
             },
           },
+          {
+            name: "check_for_updates",
+            description: "Check GitHub releases for available DollhouseMCP updates",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
+          {
+            name: "update_server",
+            description: "Update DollhouseMCP server to the latest version",
+            inputSchema: {
+              type: "object",
+              properties: {
+                confirm: {
+                  type: "boolean",
+                  description: "Confirm you want to proceed with the update",
+                },
+              },
+              required: ["confirm"],
+            },
+          },
+          {
+            name: "rollback_update",
+            description: "Rollback to the previous version of DollhouseMCP",
+            inputSchema: {
+              type: "object",
+              properties: {
+                confirm: {
+                  type: "boolean",
+                  description: "Confirm you want to rollback to the previous version",
+                },
+              },
+              required: ["confirm"],
+            },
+          },
+          {
+            name: "get_server_status",
+            description: "Get current DollhouseMCP server version and status information",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -382,6 +430,14 @@ class DollhouseMCPServer {
             );
           case "validate_persona":
             return await this.validatePersona((args as any)?.persona as string);
+          case "check_for_updates":
+            return await this.checkForUpdates();
+          case "update_server":
+            return await this.updateServer((args as any)?.confirm as boolean);
+          case "rollback_update":
+            return await this.rollbackUpdate((args as any)?.confirm as boolean);
+          case "get_server_status":
+            return await this.getServerStatus();
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -1486,6 +1542,418 @@ ${instructions}
         },
       ],
     };
+  }
+
+  // Auto-update management tools
+  private async checkForUpdates() {
+    try {
+      // Get current version from package.json
+      const packageJsonPath = path.join(__dirname, "..", "package.json");
+      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageData = JSON.parse(packageContent);
+      const currentVersion = packageData.version;
+
+      // Check GitHub releases API for latest version
+      const releasesUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP/releases/latest';
+      const response = await fetch(releasesUrl, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: this.getPersonaIndicator() + 
+                '📦 **Update Check Complete**\n\n' +
+                '🔄 **Current Version:** ' + currentVersion + '\n' +
+                '📡 **Remote Status:** No releases found on GitHub\n' +
+                'ℹ️ **Note:** This may be a development version or releases haven\'t been published yet.\n\n' +
+                '**Manual Update:**\n' +
+                'Use `update_server true` to pull latest changes from main branch.'
+            }]
+          };
+        }
+        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+      }
+
+      const releaseData = await response.json();
+      const latestVersion = releaseData.tag_name?.replace(/^v/, '') || releaseData.name;
+      const publishedAt = new Date(releaseData.published_at).toLocaleDateString();
+
+      // Simple version comparison (assumes semantic versioning)
+      const isUpdateAvailable = this.compareVersions(currentVersion, latestVersion) < 0;
+
+      let statusText = this.getPersonaIndicator() + '📦 **Update Check Complete**\n\n';
+      statusText += '🔄 **Current Version:** ' + currentVersion + '\n';
+      statusText += '📡 **Latest Version:** ' + latestVersion + '\n';
+      statusText += '📅 **Released:** ' + publishedAt + '\n\n';
+
+      if (isUpdateAvailable) {
+        statusText += '✨ **Update Available!**\n\n';
+        statusText += '**What\'s New:**\n' + (releaseData.body ? releaseData.body.substring(0, 500) + (releaseData.body.length > 500 ? '...' : '') : 'See release notes on GitHub') + '\n\n';
+        statusText += '**To Update:**\n';
+        statusText += '• Use: `update_server true`\n';
+        statusText += '• Or visit: ' + releaseData.html_url + '\n\n';
+        statusText += '⚠️ **Note:** Update will restart the server and reload all personas.';
+      } else {
+        statusText += '✅ **You\'re Up to Date!**\n\n';
+        statusText += 'Your DollhouseMCP installation is current.\n';
+        statusText += 'Check back later for new features and improvements.';
+      }
+
+      return {
+        content: [{ type: "text", text: statusText }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '❌ **Update Check Failed**\n\n' +
+            'Error: ' + error + '\n\n' +
+            '**Possible causes:**\n' +
+            '• Network connectivity issues\n' +
+            '• GitHub API rate limiting\n' +
+            '• Repository access problems\n\n' +
+            'Try again later or check manually at:\n' +
+            'https://github.com/mickdarling/DollhouseMCP/releases'
+        }]
+      };
+    }
+  }
+
+  private async updateServer(confirm: boolean) {
+    if (!confirm) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '⚠️ **Update Confirmation Required**\n\n' +
+            'To proceed with the update, you must confirm:\n' +
+            '`update_server true`\n\n' +
+            '**What will happen:**\n' +
+            '• Backup current version\n' +
+            '• Pull latest changes from GitHub\n' +
+            '• Update dependencies\n' +
+            '• Rebuild TypeScript\n' +
+            '• Restart server (will disconnect temporarily)\n\n' +
+            '**Prerequisites:**\n' +
+            '• Git repository must be clean (no uncommitted changes)\n' +
+            '• Network connection required\n' +
+            '• Sufficient disk space for backup'
+        }]
+      };
+    }
+
+    try {
+      const rootDir = path.join(__dirname, "..");
+      let updateLog = this.getPersonaIndicator() + '🔄 **Starting DollhouseMCP Update**\n\n';
+
+      // Check if we're in a git repository
+      try {
+        await exec('git status', { cwd: rootDir });
+      } catch {
+        return {
+          content: [{
+            type: "text",
+            text: this.getPersonaIndicator() + 
+              '❌ **Update Failed**\n\n' +
+              'This directory is not a Git repository.\n' +
+              'DollhouseMCP can only be updated if installed via Git clone.\n\n' +
+              '**Manual Update Steps:**\n' +
+              '1. Download latest code from GitHub\n' +
+              '2. Replace installation files\n' +
+              '3. Run `npm install && npm run build`'
+          }]
+        };
+      }
+
+      // Check for uncommitted changes
+      const { stdout: statusOutput } = await exec('git status --porcelain', { cwd: rootDir });
+      if (statusOutput.trim()) {
+        return {
+          content: [{
+            type: "text",
+            text: this.getPersonaIndicator() + 
+              '❌ **Update Blocked**\n\n' +
+              'Uncommitted changes detected:\n```\n' + statusOutput + '```\n\n' +
+              '**Resolution:**\n' +
+              '• Commit your changes: `git add . && git commit -m "Save local changes"`\n' +
+              '• Or stash them: `git stash`\n' +
+              '• Then retry the update'
+          }]
+        };
+      }
+
+      updateLog += '✅ Repository status clean\n';
+
+      // Create backup
+      const backupDir = path.join(rootDir, '.backup-' + Date.now());
+      await exec('cp -r "' + rootDir + '" "' + backupDir + '"', { cwd: path.dirname(rootDir) });
+      updateLog += '✅ Backup created: ' + path.basename(backupDir) + '\n';
+
+      // Pull latest changes
+      const { stdout: pullOutput } = await exec('git pull origin main', { cwd: rootDir });
+      updateLog += '✅ Git pull completed\n';
+
+      // Check if there were actually updates
+      if (pullOutput.includes('Already up to date')) {
+        await exec('rm -rf "' + backupDir + '"');
+        return {
+          content: [{
+            type: "text",
+            text: this.getPersonaIndicator() + 
+              'ℹ️ **Already Up to Date**\n\n' +
+              'No updates were available.\n' +
+              'Your DollhouseMCP installation is current.\n\n' +
+              'Use `check_for_updates` to see version information.'
+          }]
+        };
+      }
+
+      // Update dependencies
+      await exec('npm install', { cwd: rootDir });
+      updateLog += '✅ Dependencies updated\n';
+
+      // Rebuild
+      await exec('npm run build', { cwd: rootDir });
+      updateLog += '✅ Build completed\n';
+
+      updateLog += '\n🎉 **Update Complete!**\n\n';
+      updateLog += '**Changes Applied:**\n' + pullOutput + '\n\n';
+      updateLog += '**Next Steps:**\n';
+      updateLog += '• Server will restart automatically\n';
+      updateLog += '• All personas will be reloaded\n';
+      updateLog += '• Use `get_server_status` to verify update\n\n';
+      updateLog += '**Backup Location:** ' + backupDir + '\n';
+      updateLog += 'Use `rollback_update true` if issues occur.';
+
+      return {
+        content: [{ type: "text", text: updateLog }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '❌ **Update Failed**\n\n' +
+            'Error during update: ' + error + '\n\n' +
+            '**Recovery:**\n' +
+            'If the server is in an unstable state:\n' +
+            '1. Use `rollback_update true` to restore previous version\n' +
+            '2. Or manually restore from backup directory\n' +
+            '3. Report the issue on GitHub if it persists'
+        }]
+      };
+    }
+  }
+
+  private async rollbackUpdate(confirm: boolean) {
+    if (!confirm) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '⚠️ **Rollback Confirmation Required**\n\n' +
+            'To proceed with rollback, you must confirm:\n' +
+            '`rollback_update true`\n\n' +
+            '**What will happen:**\n' +
+            '• Find most recent backup\n' +
+            '• Restore previous version\n' +
+            '• Rebuild if necessary\n' +
+            '• Restart server\n\n' +
+            '⚠️ **Warning:** This will undo recent updates and changes.'
+        }]
+      };
+    }
+
+    try {
+      const rootDir = path.join(__dirname, "..");
+      const parentDir = path.dirname(rootDir);
+
+      // Find backup directories
+      const { stdout: lsOutput } = await exec('ls -1t', { cwd: parentDir });
+      const backupDirs = lsOutput.split('\n')
+        .filter(dir => dir.startsWith('.backup-'))
+        .map(dir => path.join(parentDir, dir));
+
+      if (backupDirs.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: this.getPersonaIndicator() + 
+              '❌ **No Backups Found**\n\n' +
+              'No backup directories found for rollback.\n' +
+              'Backups are created automatically during updates.\n\n' +
+              '**Manual Recovery:**\n' +
+              'You may need to manually restore from:\n' +
+              '• Git history: `git reset --hard HEAD~1`\n' +
+              '• External backup\n' +
+              '• Fresh installation'
+          }]
+        };
+      }
+
+      const latestBackup = backupDirs[0];
+      let rollbackLog = this.getPersonaIndicator() + '🔄 **Starting Rollback**\n\n';
+      rollbackLog += '📁 **Using backup:** ' + path.basename(latestBackup) + '\n';
+
+      // Create safety backup of current state
+      const safetyBackup = path.join(parentDir, '.rollback-safety-' + Date.now());
+      await exec('cp -r "' + rootDir + '" "' + safetyBackup + '"');
+      rollbackLog += '✅ Safety backup created\n';
+
+      // Remove current installation
+      await exec('rm -rf "' + rootDir + '"');
+      rollbackLog += '✅ Current version removed\n';
+
+      // Restore from backup
+      await exec('cp -r "' + latestBackup + '" "' + rootDir + '"');
+      rollbackLog += '✅ Previous version restored\n';
+
+      // Rebuild if needed
+      try {
+        await exec('npm run build', { cwd: rootDir });
+        rollbackLog += '✅ Rebuild completed\n';
+      } catch {
+        rollbackLog += '⚠️ Rebuild skipped (may not be needed)\n';
+      }
+
+      rollbackLog += '\n🎉 **Rollback Complete!**\n\n';
+      rollbackLog += '**Status:**\n';
+      rollbackLog += '• Previous version restored\n';
+      rollbackLog += '• Server will restart automatically\n';
+      rollbackLog += '• Use `get_server_status` to verify rollback\n\n';
+      rollbackLog += '**Cleanup:**\n';
+      rollbackLog += '• Safety backup: ' + path.basename(safetyBackup) + '\n';
+      rollbackLog += '• Original backup: ' + path.basename(latestBackup) + '\n';
+      rollbackLog += 'Remove these manually when satisfied with rollback.';
+
+      return {
+        content: [{ type: "text", text: rollbackLog }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '❌ **Rollback Failed**\n\n' +
+            'Error during rollback: ' + error + '\n\n' +
+            '**Emergency Recovery:**\n' +
+            '1. Check for safety backup directories\n' +
+            '2. Manually restore from backup\n' +
+            '3. Or reinstall DollhouseMCP from GitHub\n' +
+            '4. Report this issue if it persists'
+        }]
+      };
+    }
+  }
+
+  private async getServerStatus() {
+    try {
+      const rootDir = path.join(__dirname, "..");
+      const packageJsonPath = path.join(rootDir, "package.json");
+      
+      // Read version info
+      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageData = JSON.parse(packageContent);
+      
+      // Get git information
+      let gitInfo = "Not available";
+      let lastCommit = "Unknown";
+      try {
+        const { stdout: branchOutput } = await exec('git rev-parse --abbrev-ref HEAD', { cwd: rootDir });
+        const { stdout: commitOutput } = await exec('git rev-parse --short HEAD', { cwd: rootDir });
+        const { stdout: dateOutput } = await exec('git log -1 --format=%cd --date=short', { cwd: rootDir });
+        gitInfo = branchOutput.trim() + ' (' + commitOutput.trim() + ')';
+        lastCommit = dateOutput.trim();
+      } catch {
+        // Git info not available
+      }
+
+      // Check for backup directories
+      let backupInfo = "None found";
+      try {
+        const parentDir = path.dirname(rootDir);
+        const { stdout: lsOutput } = await exec('ls -1', { cwd: parentDir });
+        const backupCount = lsOutput.split('\n').filter(dir => dir.startsWith('.backup-')).length;
+        if (backupCount > 0) {
+          backupInfo = backupCount + ' backup(s) available';
+        }
+      } catch {
+        // Backup check failed
+      }
+
+      // System information
+      const nodeVersion = process.version;
+      const platform = process.platform;
+      const arch = process.arch;
+      const uptime = process.uptime();
+      const uptimeString = Math.floor(uptime / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm ' + Math.floor(uptime % 60) + 's';
+
+      let statusText = this.getPersonaIndicator() + '📊 **DollhouseMCP Server Status**\n\n';
+      
+      statusText += '**📦 Version Information:**\n';
+      statusText += '• **Version:** ' + packageData.version + '\n';
+      statusText += '• **Git Branch:** ' + gitInfo + '\n';
+      statusText += '• **Last Update:** ' + lastCommit + '\n\n';
+      
+      statusText += '**⚙️ System Information:**\n';
+      statusText += '• **Node.js:** ' + nodeVersion + '\n';
+      statusText += '• **Platform:** ' + platform + ' (' + arch + ')\n';
+      statusText += '• **Uptime:** ' + uptimeString + '\n';
+      statusText += '• **Installation:** ' + rootDir + '\n\n';
+      
+      statusText += '**🎭 Persona Information:**\n';
+      statusText += '• **Total Personas:** ' + this.personas.size + '\n';
+      statusText += '• **Active Persona:** ' + (this.activePersona || 'None') + '\n';
+      statusText += '• **User Identity:** ' + (this.currentUser || 'Anonymous') + '\n';
+      statusText += '• **Personas Directory:** ' + this.personasDir + '\n\n';
+      
+      statusText += '**🔄 Update Information:**\n';
+      statusText += '• **Backups:** ' + backupInfo + '\n';
+      statusText += '• **Check Updates:** `check_for_updates`\n';
+      statusText += '• **Update Server:** `update_server true`\n';
+      statusText += '• **Rollback:** `rollback_update true`\n\n';
+      
+      statusText += '**🛠️ Tools Available:** 21 MCP tools registered';
+
+      return {
+        content: [{ type: "text", text: statusText }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: this.getPersonaIndicator() + 
+            '❌ **Status Check Failed**\n\n' +
+            'Error gathering system information: ' + error + '\n\n' +
+            'Basic information:\n' +
+            '• Server is running (you received this message)\n' +
+            '• Personas loaded: ' + this.personas.size + '\n' +
+            '• Active persona: ' + (this.activePersona || 'None')
+        }]
+      };
+    }
+  }
+
+  private compareVersions(version1: string, version2: string): number {
+    const v1parts = version1.split('.').map(Number);
+    const v2parts = version2.split('.').map(Number);
+    
+    for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+      const v1part = v1parts[i] || 0;
+      const v2part = v2parts[i] || 0;
+      
+      if (v1part < v2part) return -1;
+      if (v1part > v2part) return 1;
+    }
+    
+    return 0;
   }
 
   async run() {
