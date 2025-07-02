@@ -1,3 +1,4 @@
+---
 name: Claude Code Review
 
 # Automated PR Review Workflow
@@ -11,7 +12,7 @@ name: Claude Code Review
 #   - Currently authorized: mickdarling (repository owner)
 #   - Add new users by updating the conditional logic below
 #
-# PERMISSIONS: 
+# PERMISSIONS:
 #   - Read-only access to repository content
 #   - Write access to post review comments
 #   - Cannot modify repository files (review-only)
@@ -46,7 +47,7 @@ jobs:
     # Security: Only run automated reviews for authorized users
     if: github.event.pull_request.user.login == 'mickdarling'
     # Add new authorized users here: || github.event.pull_request.user.login == 'username'
-    
+
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -54,7 +55,7 @@ jobs:
       pull-requests: write     # Write needed: to post review comments
       issues: read             # Read-only: just needs to read issue context
       id-token: write          # Write needed: for OIDC authentication
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -72,10 +73,10 @@ jobs:
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          
+
           # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
           # model: "claude-opus-4-20250514"
-          
+
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
             Please review this pull request and provide feedback on:
@@ -84,9 +85,9 @@ jobs:
             - Performance considerations
             - Security concerns
             - Test coverage
-            
+
             Be constructive and helpful in your feedback.
-          
+
           # Optional: Customize review based on file types
           # direct_prompt: |
           #   Review this PR focusing on:
@@ -94,16 +95,16 @@ jobs:
           #   - For API endpoints: Security, input validation, and error handling
           #   - For React components: Performance, accessibility, and best practices
           #   - For tests: Coverage, edge cases, and test quality
-          
+
           # Optional: Different prompts for different authors
           # direct_prompt: |
-          #   ${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' && 
+          #   ${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' &&
           #   'Welcome! Please review this PR from a first-time contributor. Be encouraging and provide detailed explanations for any suggestions.' ||
           #   'Please provide a thorough code review focusing on our coding standards and best practices.' }}
-          
+
           # Optional: Add specific tools for running tests or linting
           # allowed_tools: "Bash(npm run test),Bash(npm run lint),Bash(npm run typecheck)"
-          
+
           # Optional: Skip review for certain conditions
           # if: |
           #   !contains(github.event.pull_request.title, '[skip-review]') &&
@@ -120,4 +121,3 @@ jobs:
               repo: context.repo.repo,
               body: '🤖 **Claude Code Review temporarily unavailable**\n\nThe Claude API appears to be experiencing issues. The automated review could not be completed. Please try again later or request manual review if needed.'
             });
-
