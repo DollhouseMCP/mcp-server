@@ -7,23 +7,63 @@ branding:
 runs:
   using: 'composite'
   steps:
+    - name: Install yamllint
+      shell: bash
+      run: |
+        if ! command -v yamllint &> /dev/null; then
+          echo "Installing yamllint..."
+          pip3 install yamllint || {
+            echo "⚠️ Could not install yamllint, falling back to basic YAML validation"
+            export YAMLLINT_AVAILABLE=false
+          }
+        else
+          echo "yamllint already available"
+        fi
+        echo "YAMLLINT_AVAILABLE=${YAMLLINT_AVAILABLE:-true}" >> $GITHUB_ENV
+
     - name: Validate Workflow YAML
       shell: bash
       run: |
-        # Check if any workflow files were modified and validate them
-        changed_workflows=$(git diff --name-only HEAD~1 HEAD -- .github/workflows/ 2>/dev/null || git diff --name-only --cached -- .github/workflows/ 2>/dev/null || echo "")
+        # Robust git command with multiple fallbacks for edge cases
+        echo "Detecting modified workflow files..."
+        changed_workflows=$(
+          git diff --name-only HEAD~1 HEAD -- .github/workflows/ 2>/dev/null || \
+          git diff --name-only --cached -- .github/workflows/ 2>/dev/null || \
+          git ls-files .github/workflows/ 2>/dev/null || \
+          echo ""
+        )
+        
         if [ -n "$changed_workflows" ]; then
           echo "Validating modified workflow files..."
+          validation_failed=false
+          
           for file in $changed_workflows; do
             if [ -f "$file" ]; then
-              echo "Validating $file"
+              echo "Validating $file..."
+              
+              # Basic YAML syntax validation
               python3 -c "import yaml; yaml.safe_load(open('$file'))" || {
                 echo "❌ YAML syntax error in $file"
-                exit 1
+                validation_failed=true
+                continue
               }
+              
+              # Enhanced validation with yamllint (if available)
+              if [ "$YAMLLINT_AVAILABLE" = "true" ] && command -v yamllint &> /dev/null; then
+                yamllint "$file" || {
+                  echo "⚠️ YAML style issues in $file (non-blocking)"
+                  # Don't fail on style issues, just warn
+                }
+              fi
+              
               echo "✅ $file is valid YAML"
             fi
           done
+          
+          if [ "$validation_failed" = "true" ]; then
+            echo "❌ YAML validation failed for one or more files"
+            exit 1
+          fi
         else
           echo "No workflow files modified, skipping validation"
         fi
