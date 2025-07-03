@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose configuration for DollhouseMCP
+# Note: version field is obsolete and removed per Docker Compose v2
 
 services:
   dollhousemcp:
@@ -8,7 +9,8 @@ services:
       target: production
     image: dollhousemcp:latest
     container_name: dollhousemcp
-    restart: unless-stopped
+    # MCP servers are stdio-based and exit after initialization (expected behavior)
+    restart: "no"
     environment:
       - NODE_ENV=production
       - PERSONAS_DIR=/app/personas

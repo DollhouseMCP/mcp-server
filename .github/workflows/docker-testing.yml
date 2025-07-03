@@ -226,62 +226,46 @@ jobs:
       - name: Test Docker Compose startup
         run: |
           echo "🚀 Testing Docker Compose startup..."
-          docker compose up -d dollhousemcp
           
-          # Wait for service to be ready
-          sleep 15
+          # Run MCP server and capture logs (MCP servers exit after initialization)
+          docker compose run --rm dollhousemcp &
+          compose_pid=$!
           
-          # Check if service is running
-          if docker compose ps dollhousemcp | grep "Up"; then
-            echo "✅ Docker Compose service started successfully"
+          # Wait for container to start and initialize
+          sleep 5
+          
+          # Check if initialization completed successfully
+          if docker compose logs dollhousemcp 2>/dev/null | grep -q "DollhouseMCP server running on stdio"; then
+            echo "✅ Docker Compose MCP server initialized successfully"
           else
-            echo "❌ Docker Compose service failed to start"
+            echo "❌ Docker Compose MCP server failed to initialize"
             docker compose logs dollhousemcp
             exit 1
           fi
 
-      - name: Test Docker Compose health
+      - name: Test Docker Compose functionality
         run: |
-          echo "🔍 Testing Docker Compose health..."
+          echo "🔍 Testing Docker Compose MCP server functionality..."
           
-          # Get container ID with error handling
-          container_id=$(docker compose ps -q dollhousemcp 2>/dev/null || echo "")
+          # Test that server can load personas and initialize properly
+          echo "Testing MCP server persona loading..."
           
-          if [ -z "$container_id" ]; then
-            echo "❌ Could not find Docker Compose container"
-            docker compose ps
+          if docker compose logs dollhousemcp 2>/dev/null | grep -q "Loaded persona:"; then
+            echo "✅ MCP server loaded personas successfully"
+            persona_count=$(docker compose logs dollhousemcp 2>/dev/null | grep -c "Loaded persona:" || echo "0")
+            echo "📊 Loaded $persona_count personas"
+          else
+            echo "❌ MCP server failed to load personas"
+            docker compose logs dollhousemcp
             exit 1
           fi
           
-          echo "Container ID: $container_id"
-          
-          # Robust health status check
-          health_status=$(docker inspect $container_id 2>/dev/null | \
-            python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
-          
-          echo "Health status: $health_status"
-          
-          # Wait up to 1 minute for health check
-          timeout=60
-          elapsed=0
-          
-          while [ $elapsed -lt $timeout ] && [ "$health_status" != "healthy" ]; do
-            if [ "$health_status" = "unhealthy" ]; then
-              echo "❌ Docker Compose health check failed"
-              docker compose logs dollhousemcp
-              exit 1
-            fi
-            
-            sleep 5
-            elapsed=$((elapsed + 5))
-            health_status=$(docker inspect $container_id 2>/dev/null | \
-              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
-          done
-          
-          if [ "$health_status" = "healthy" ]; then
-            echo "✅ Docker Compose health check passed"
+          # Verify no critical errors during initialization
+          if docker compose logs dollhousemcp 2>/dev/null | grep -i "error\|failed\|exception"; then
+            echo "❌ Critical errors found during MCP server initialization"
+            exit 1
           else
-            echo "⚠️ Health check not available or pending (final status: $health_status)"
+            echo "✅ No critical errors during initialization"
           fi
 
       - name: Cleanup Docker Compose
