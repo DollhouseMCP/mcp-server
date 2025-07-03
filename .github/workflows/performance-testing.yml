@@ -1,12 +1,12 @@
 ---
 name: Performance Testing
 
-on:
+'on':
   # Run on schedule for regular performance monitoring
   schedule:
     # Daily at 6 AM UTC (during low-traffic hours)
     - cron: '0 6 * * *'
-  
+
   # Manual trigger for performance analysis
   workflow_dispatch:
     inputs:
@@ -30,7 +30,7 @@ jobs:
     name: Performance Benchmarks on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    
+
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +58,9 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: >
+            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+            ${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
             typescript-build-${{ runner.os }}-
@@ -71,7 +73,9 @@ jobs:
             .jest-cache/
             coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: >
+            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
+            ${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
@@ -90,21 +94,21 @@ jobs:
           echo "Platform: ${{ runner.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
           echo ""
-          
+
           # Create performance results directory
           mkdir -p .performance-results
-          
+
           # Cache Python3 detection for performance optimization
           HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
           echo "⏱️  Timing method: $([ "$HAS_PYTHON3" = "true" ] && echo 'Python3 (millisecond precision)' || echo 'Date (second precision)')"
           echo ""
-          
+
           # Test 1: Node.js startup performance (5 iterations for averaging)
           echo "📊 Test 1: Node.js Startup Performance"
           echo "-------------------------------------"
           TOTAL_NODE_TIME=0
           ITERATIONS=5
-          
+
           for i in $(seq 1 $ITERATIONS); do
             if [ "$HAS_PYTHON3" = "true" ]; then
               START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
@@ -120,7 +124,7 @@ jobs:
             echo "  Iteration $i: ${ITERATION_TIME}ms"
             TOTAL_NODE_TIME=$((TOTAL_NODE_TIME + ITERATION_TIME))
           done
-          
+
           AVG_NODE_TIME=$((TOTAL_NODE_TIME / ITERATIONS))
           echo "  Average Node.js startup: ${AVG_NODE_TIME}ms"
           echo "NODE_STARTUP_AVG=${AVG_NODE_TIME}" >> .performance-results/metrics.txt
@@ -131,12 +135,12 @@ jobs:
         run: |
           echo "📊 Test 2: Build Performance Analysis"
           echo "------------------------------------"
-          
+
           # Clean build for accurate timing
           rm -rf dist/ 2>/dev/null || true
-          
+
           HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
-          
+
           if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             npm run build > build-perf.log 2>&1
@@ -148,10 +152,10 @@ jobs:
             END_TIME=$(date +%s)
             BUILD_TIME=$(((END_TIME - START_TIME) * 1000))
           fi
-          
+
           echo "  TypeScript build time: ${BUILD_TIME}ms"
           echo "BUILD_TIME=${BUILD_TIME}" >> .performance-results/metrics.txt
-          
+
           # Analyze build output size
           if [ -d "dist" ]; then
             DIST_SIZE=$(du -sk dist/ | cut -f1)
@@ -165,9 +169,9 @@ jobs:
         run: |
           echo "📊 Test 3: Test Suite Performance"
           echo "---------------------------------"
-          
+
           HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
-          
+
           if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             npm test > test-perf.log 2>&1
@@ -179,7 +183,7 @@ jobs:
             END_TIME=$(date +%s)
             TEST_TIME=$(((END_TIME - START_TIME) * 1000))
           fi
-          
+
           echo "  Test suite execution: ${TEST_TIME}ms"
           echo "TEST_TIME=${TEST_TIME}" >> .performance-results/metrics.txt
           echo ""
@@ -189,20 +193,20 @@ jobs:
         run: |
           echo "📊 Test 4: MCP Server Performance"
           echo "---------------------------------"
-          
+
           HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
-          
+
           # Test server startup time
           if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
           else
             START_TIME=$(date +%s)
           fi
-          
-          # Start server in background with timeout  
+
+          # Start server in background with timeout
           timeout 10s node dist/index.js > server-perf.log 2>&1 &
           SERVER_PID=$!
-          
+
           # Wait for startup indicators or timeout
           SUCCESS=false
           for i in {1..10}; do
@@ -221,12 +225,12 @@ jobs:
             fi
             sleep 1
           done
-          
+
           if [ "$SUCCESS" = "false" ]; then
             echo "  MCP server startup: timeout (>10s)"
             echo "SERVER_STARTUP=timeout" >> .performance-results/metrics.txt
           fi
-          
+
           # Cleanup
           kill $SERVER_PID 2>/dev/null || true
           wait $SERVER_PID 2>/dev/null || true
@@ -237,7 +241,7 @@ jobs:
         run: |
           echo "🎯 Performance Summary for ${{ runner.os }}"
           echo "==========================================="
-          
+
           if [ -f ".performance-results/metrics.txt" ]; then
             echo "📈 Performance Metrics:"
             while IFS='=' read -r key value; do
@@ -249,7 +253,7 @@ jobs:
                 "SERVER_STARTUP") echo "  - MCP server startup: ${value}ms" ;;
               esac
             done < .performance-results/metrics.txt
-            
+
             echo ""
             echo "🎯 Performance analysis completed for ${{ runner.os }}"
           else

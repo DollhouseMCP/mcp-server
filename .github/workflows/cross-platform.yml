@@ -6,7 +6,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-  workflow_dispatch:
+  workflow_dispatch: true
   schedule:
     - cron: '0 2 * * 0'
 
@@ -47,7 +47,9 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: >
+            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+            ${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
             typescript-build-${{ runner.os }}-
@@ -66,7 +68,9 @@ jobs:
             .jest-cache/
             coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: >
+            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
+            ${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
@@ -78,9 +82,12 @@ jobs:
         shell: bash
         run: |
           echo "Verifying build artifacts..."
-          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
-          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
-          [ -d "personas" ] && echo "✅ Personas directory exists" || { echo "❌ Missing personas directory"; exit 1; }
+          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" ||
+            { echo "❌ Missing dist/index.js"; exit 1; }
+          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" ||
+            { echo "❌ Missing dist/index.d.ts"; exit 1; }
+          [ -d "personas" ] && echo "✅ Personas directory exists" ||
+            { echo "❌ Missing personas directory"; exit 1; }
 
       - name: Final validation
         run: |
