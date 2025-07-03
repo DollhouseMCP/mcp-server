@@ -32,7 +32,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
@@ -42,12 +42,10 @@ COPY --from=builder /app/personas ./personas
 RUN chown -R dollhouse:nodejs /app
 USER dollhouse
 
-# Expose port (if needed for future HTTP interface)
-EXPOSE 3000
+# No ports needed for stdio-based MCP servers
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "console.log('Health check passed')" || exit 1
+# No health check needed for stdio-based MCP servers
+# MCP servers initialize, load personas, and exit when no input stream available
 
 # Set environment variables
 ENV NODE_ENV=production

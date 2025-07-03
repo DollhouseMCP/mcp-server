@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose configuration for DollhouseMCP
+# Note: version field is obsolete and removed per Docker Compose v2
 
 services:
   dollhousemcp:
@@ -8,31 +9,20 @@ services:
       target: production
     image: dollhousemcp:latest
     container_name: dollhousemcp
-    restart: unless-stopped
+    # MCP servers are stdio-based and exit after initialization (expected behavior)
+    restart: "no"
     environment:
       - NODE_ENV=production
       - PERSONAS_DIR=/app/personas
     volumes:
-      # Mount custom personas directory (optional)
-      - ./custom-personas:/app/custom-personas:ro
-    # Network mode for MCP communication
-    network_mode: "host"
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
-    # Health check
-    healthcheck:
-      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      # Mount custom personas directory (optional - extends default personas)
+      - ./custom-personas:/app/personas/custom:ro
+    # Resource limits for standalone Docker Compose
+    mem_limit: 512m
+    cpus: 0.5
+    # Note: MCP servers use stdio communication, no special network mode needed
+    # No health check needed for stdio-based MCP servers
+    # MCP servers initialize, load personas, and exit (expected behavior)
 
   # Development service
   dollhousemcp-dev:
