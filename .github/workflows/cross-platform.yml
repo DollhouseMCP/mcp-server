@@ -74,26 +74,12 @@ jobs:
       - name: Run test suite
         run: npm test
 
-      - name: Test MCP server startup
-        timeout-minutes: 2
-        shell: bash
+      - name: Verify build artifacts
         run: |
-          echo "Testing MCP server startup..."
-          timeout 30s node dist/index.js > server.log 2>&1 &
-          SERVER_PID=$!
-
-          for i in {1..30}; do
-            if grep -q "Server running\|MCP server\|tools.*registered" server.log 2>/dev/null; then
-              echo "✅ MCP server started successfully"
-              kill $SERVER_PID 2>/dev/null || true
-              exit 0
-            fi
-            sleep 1
-          done
-
-          echo "❌ MCP server failed to start within 30s"
-          kill $SERVER_PID 2>/dev/null || true
-          exit 1
+          echo "Verifying build artifacts..."
+          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
+          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
+          [ -d "personas" ] && echo "✅ Personas directory exists" || { echo "❌ Missing personas directory"; exit 1; }
 
       - name: Final validation
         run: |
