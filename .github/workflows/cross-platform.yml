@@ -75,6 +75,7 @@ jobs:
         run: npm test
 
       - name: Verify build artifacts
+        shell: bash
         run: |
           echo "Verifying build artifacts..."
           [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
