@@ -1,6 +1,7 @@
+---
 name: Cross-Platform Testing
 
-'on':
+on:
   push:
     branches: [main, develop]
   pull_request:
