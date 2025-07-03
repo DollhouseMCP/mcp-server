@@ -87,9 +87,9 @@ jobs:
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           
-          # Run MCP server with security constraints and capture logs
-          docker run \
-            --name dollhousemcp-test \
+          # Run MCP server with security constraints and capture output directly
+          echo "⏳ Running MCP server with security constraints..."
+          docker_output=$(docker run \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
             --security-opt no-new-privileges \
@@ -97,18 +97,19 @@ jobs:
             --tmpfs /tmp \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${PLATFORM_TAG} &
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
+          exit_code=$?
           
-          # Wait for container to complete initialization
-          echo "⏳ Waiting for MCP server initialization..."
-          docker wait dollhousemcp-test || true
+          echo "Docker run completed with exit code: $exit_code"
+          echo "Output captured:"
+          echo "$docker_output"
           
-          # Check logs for successful initialization
-          if docker logs dollhousemcp-test 2>&1 | grep -q "DollhouseMCP server running on stdio"; then
+          # Check for successful initialization in the captured output
+          if echo "$docker_output" | grep -q "DollhouseMCP server running on stdio"; then
             echo "✅ MCP server initialized successfully"
           else
             echo "❌ MCP server failed to initialize"
-            docker logs dollhousemcp-test
+            echo "Expected to find 'DollhouseMCP server running on stdio' in output"
             exit 1
           fi
 
@@ -116,33 +117,49 @@ jobs:
         run: |
           echo "🔍 Testing MCP server functionality for ${{ matrix.platform }}..."
           
+          # Convert platform to tag-safe format (replace / with -)
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          
+          # Run MCP server again to test functionality
+          echo "⏳ Running MCP server again for functionality testing..."
+          docker_output=$(docker run \
+            --platform ${{ matrix.platform }} \
+            --user 1001:1001 \
+            --security-opt no-new-privileges \
+            --read-only \
+            --tmpfs /tmp \
+            --memory 512m \
+            --cpus 0.5 \
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
+          
           # Test persona loading
-          if docker logs dollhousemcp-test 2>&1 | grep -q "Loaded persona:"; then
+          if echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ MCP server loaded personas successfully"
-            persona_count=$(docker logs dollhousemcp-test 2>&1 | grep -c "Loaded persona:" || echo "0")
+            persona_count=$(echo "$docker_output" | grep -c "Loaded persona:" || echo "0")
             echo "📊 Loaded $persona_count personas"
           else
             echo "❌ MCP server failed to load personas"
-            docker logs dollhousemcp-test
+            echo "Output was:"
+            echo "$docker_output"
             exit 1
           fi
           
           # Verify no critical errors during initialization
-          if docker logs dollhousemcp-test 2>&1 | grep -i "error\|failed\|exception"; then
+          if echo "$docker_output" | grep -i "error\|failed\|exception"; then
             echo "❌ Critical errors found during MCP server initialization"
-            docker logs dollhousemcp-test
+            echo "Error output:"
+            echo "$docker_output"
             exit 1
           else
             echo "✅ No critical errors during initialization"
           fi
 
 
-      - name: Cleanup container
+      - name: Cleanup containers
         if: always()
         run: |
-          echo "🧹 Cleaning up test container..."
-          docker stop dollhousemcp-test || true
-          docker rm dollhousemcp-test || true
+          echo "🧹 Cleaning up any dangling containers..."
+          docker system prune -f --volumes || true
 
       - name: Move cache
         if: always()
