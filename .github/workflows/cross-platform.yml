@@ -579,8 +579,13 @@ jobs:
           echo "-------------------------------"
           echo "⏱️  Performance measurements:"
           
+          # Cache Python3 detection for performance optimization (avoids repeated command checks)
+          # Timing precision: Python3 provides millisecond accuracy, date +%s provides second accuracy
+          HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
+          echo "  - Timing method: $([ "$HAS_PYTHON3" = "true" ] && echo 'Python3 (millisecond)' || echo 'Date (second)')"
+          
           # Test Node.js startup time (cross-platform timing)
-          if command -v python3 &> /dev/null; then
+          if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             node --version > /dev/null
             END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
@@ -594,7 +599,7 @@ jobs:
           echo "  - Node.js startup: ${NODE_STARTUP_TIME}ms"
           
           # Test npm command time (cross-platform timing)
-          if command -v python3 &> /dev/null; then
+          if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             npm --version > /dev/null
             END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
@@ -608,7 +613,7 @@ jobs:
           echo "  - npm startup: ${NPM_STARTUP_TIME}ms"
           
           # Test file system performance (cross-platform timing)
-          if command -v python3 &> /dev/null; then
+          if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
             END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
