@@ -45,6 +45,17 @@ jobs:
         with:
           fetch-depth: 1  # Shallow clone for faster CI
 
+      # Cache global tools and system dependencies
+      - name: Cache system tools
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            ~/.cache/
+            /tmp/
+          key: system-tools-${{ runner.os }}-${{ hashFiles('.github/workflows/cross-platform.yml') }}
+          restore-keys: |
+            system-tools-${{ runner.os }}-
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
         with:
@@ -132,6 +143,19 @@ jobs:
           echo "📦 Installing dependencies..."
           npm ci
           echo "✅ Dependencies installed successfully"
+
+      # Cache TypeScript build artifacts
+      - name: Cache TypeScript build
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            dist/
+            build/
+            *.tsbuildinfo
+          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          restore-keys: |
+            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+            typescript-build-${{ runner.os }}-
 
       # Build the project
       - name: Build project
@@ -417,6 +441,19 @@ jobs:
             exit 1
           fi
           echo "✅ Main entry correct: $MAIN"
+
+      # Cache Jest test results and coverage
+      - name: Cache Jest
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            .jest-cache/
+            coverage/
+            node_modules/.cache/jest/
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          restore-keys: |
+            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
+            jest-cache-${{ runner.os }}-
 
       # Run tests
       - name: Run test suite
