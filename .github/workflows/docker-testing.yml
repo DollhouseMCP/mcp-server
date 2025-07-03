@@ -38,10 +38,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ matrix.platform }}-${{ hashFiles('Dockerfile', 'package*.json', 'src/**') }}
+          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ github.sha }}
           restore-keys: |
-            docker-buildx-${{ matrix.platform }}-
-            docker-buildx-
+            docker-buildx-${{ runner.os }}-${{ matrix.platform }}-
+            docker-buildx-${{ runner.os }}-
 
       - name: Build Docker image (builder stage)
         run: |
@@ -67,14 +67,28 @@ jobs:
             --load \
             .
 
-      - name: Test container startup
+      - name: Scan Docker image for vulnerabilities
+        uses: anchore/scan-action@v3
+        with:
+          image: dollhousemcp:latest-${{ matrix.platform }}
+          fail-build: false  # Don't fail build on vulnerabilities, just report
+          severity-cutoff: high
+        continue-on-error: true
+
+      - name: Test container startup (with security constraints)
         run: |
           echo "🚀 Testing container startup for ${{ matrix.platform }}..."
           
-          # Start container in background
+          # Start container in background with security constraints
           docker run -d \
             --name dollhousemcp-test \
             --platform ${{ matrix.platform }} \
+            --user 1001:1001 \
+            --security-opt no-new-privileges \
+            --read-only \
+            --tmpfs /tmp \
+            --memory 512m \
+            --cpus 0.5 \
             dollhousemcp:latest-${{ matrix.platform }}
           
           # Wait for container to initialize
@@ -99,7 +113,23 @@ jobs:
           elapsed=0
           
           while [ $elapsed -lt $timeout ]; do
-            health_status=$(docker inspect --format='{{.State.Health.Status}}' dollhousemcp-test 2>/dev/null || echo "none")
+            # Robust health status parsing for different Docker versions
+            health_status=$(docker inspect dollhousemcp-test 2>/dev/null | \
+              python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data and len(data) > 0:
+        container = data[0]
+        if 'State' in container and 'Health' in container['State']:
+            print(container['State']['Health'].get('Status', 'none'))
+        else:
+            print('none')
+    else:
+        print('none')
+except:
+    print('none')
+" || echo "none")
             
             if [ "$health_status" = "healthy" ]; then
               echo "✅ Health check passed"
@@ -109,14 +139,14 @@ jobs:
               docker logs dollhousemcp-test
               exit 1
             else
-              echo "⏳ Waiting for health check... ($elapsed/$timeout seconds)"
+              echo "⏳ Waiting for health check... ($elapsed/$timeout seconds, status: $health_status)"
               sleep 5
               elapsed=$((elapsed + 5))
             fi
           done
           
           if [ $elapsed -ge $timeout ]; then
-            echo "❌ Health check timeout"
+            echo "❌ Health check timeout (final status: $health_status)"
             docker logs dollhousemcp-test
             exit 1
           fi
@@ -159,11 +189,17 @@ jobs:
           echo "📝 Checking container logs for ${{ matrix.platform }}..."
           docker logs dollhousemcp-test
           
-          # Check for any error messages in logs
-          if docker logs dollhousemcp-test 2>&1 | grep -i "error\|failed\|exception"; then
-            echo "⚠️ Found error messages in logs (may be expected)"
+          # Check for critical error patterns (excluding expected/harmless errors)
+          error_count=$(docker logs dollhousemcp-test 2>&1 | \
+            grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" | \
+            wc -l || echo "0")
+          
+          if [ "$error_count" -gt 0 ]; then
+            echo "❌ Found $error_count critical error(s) in logs"
+            docker logs dollhousemcp-test 2>&1 | grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" || true
+            exit 1
           else
-            echo "✅ No error messages found in logs"
+            echo "✅ No critical errors found in logs"
           fi
 
       - name: Cleanup container
@@ -222,9 +258,34 @@ jobs:
         run: |
           echo "🔍 Testing Docker Compose health..."
           
-          # Check container health
-          container_id=$(docker-compose ps -q dollhousemcp)
-          health_status=$(docker inspect --format='{{.State.Health.Status}}' $container_id 2>/dev/null || echo "none")
+          # Get container ID with error handling
+          container_id=$(docker-compose ps -q dollhousemcp 2>/dev/null || echo "")
+          
+          if [ -z "$container_id" ]; then
+            echo "❌ Could not find Docker Compose container"
+            docker-compose ps
+            exit 1
+          fi
+          
+          echo "Container ID: $container_id"
+          
+          # Robust health status check
+          health_status=$(docker inspect $container_id 2>/dev/null | \
+            python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data and len(data) > 0:
+        container = data[0]
+        if 'State' in container and 'Health' in container['State']:
+            print(container['State']['Health'].get('Status', 'none'))
+        else:
+            print('none')
+    else:
+        print('none')
+except:
+    print('none')
+" || echo "none")
           
           echo "Health status: $health_status"
           
@@ -241,13 +302,28 @@ jobs:
             
             sleep 5
             elapsed=$((elapsed + 5))
-            health_status=$(docker inspect --format='{{.State.Health.Status}}' $container_id 2>/dev/null || echo "none")
+            health_status=$(docker inspect $container_id 2>/dev/null | \
+              python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data and len(data) > 0:
+        container = data[0]
+        if 'State' in container and 'Health' in container['State']:
+            print(container['State']['Health'].get('Status', 'none'))
+        else:
+            print('none')
+    else:
+        print('none')
+except:
+    print('none')
+" || echo "none")
           done
           
           if [ "$health_status" = "healthy" ]; then
             echo "✅ Docker Compose health check passed"
           else
-            echo "⚠️ Health check not available or pending"
+            echo "⚠️ Health check not available or pending (final status: $health_status)"
           fi
 
       - name: Cleanup Docker Compose
