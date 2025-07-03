@@ -2162,5 +2162,8 @@ ${instructions}
   }
 }
 
+// Export for testing
+export { DollhouseMCPServer };
+
 const server = new DollhouseMCPServer();
 server.run().catch(console.error);
