@@ -59,6 +59,20 @@ const REPO_NAME = 'DollhouseMCP';
 const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
 const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 
+// Dependency version requirements
+const DEPENDENCY_REQUIREMENTS = {
+  git: {
+    minimum: '2.20.0',    // Required for modern features and security
+    maximum: '2.50.0',    // Latest tested working version
+    recommended: '2.40.0' // Optimal version for stability
+  },
+  npm: {
+    minimum: '8.0.0',     // Required for package-lock v2 and modern features  
+    maximum: '12.0.0',    // Latest tested working version
+    recommended: '10.0.0' // Optimal version for stability
+  }
+};
+
 interface PersonaMetadata {
   name: string;
   description: string;
@@ -2224,41 +2238,200 @@ ${instructions}
   }
 
   /**
-   * Verifies that required dependencies (git, npm) are available
+   * Extracts version number from dependency version output
+   */
+  private parseVersionFromOutput(output: string, tool: string): string | null {
+    // Git version output: "git version 2.39.2"
+    // npm version output: "8.19.2" or JSON with version info
+    
+    if (tool === 'git') {
+      const match = output.match(/git version (\d+\.\d+\.\d+)/);
+      return match ? match[1] : null;
+    } else if (tool === 'npm') {
+      // npm might return just the version number or JSON
+      const cleanOutput = output.trim();
+      if (cleanOutput.match(/^\d+\.\d+\.\d+/)) {
+        return cleanOutput.split('\n')[0]; // First line if multiple lines
+      }
+      // Try to parse as JSON if it looks like JSON
+      try {
+        const parsed = JSON.parse(cleanOutput);
+        return parsed.npm || parsed.version || null;
+      } catch {
+        // If not JSON, try to extract version pattern
+        const match = cleanOutput.match(/(\d+\.\d+\.\d+)/);
+        return match ? match[1] : null;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Validates that a dependency version meets requirements
+   */
+  private validateDependencyVersion(
+    actualVersion: string, 
+    requirements: { minimum: string; maximum: string; recommended: string },
+    toolName: string
+  ): { valid: boolean; warning?: string; error?: string } {
+    const minComparison = this.compareVersions(actualVersion, requirements.minimum);
+    const maxComparison = this.compareVersions(actualVersion, requirements.maximum);
+    
+    // Check minimum version requirement
+    if (minComparison < 0) {
+      return {
+        valid: false,
+        error: `${toolName} version ${actualVersion} is below minimum required version ${requirements.minimum}`
+      };
+    }
+    
+    // Check maximum version (warning for newer versions)
+    if (maxComparison > 0) {
+      return {
+        valid: true,
+        warning: `${toolName} version ${actualVersion} is newer than tested version ${requirements.maximum}. May cause compatibility issues.`
+      };
+    }
+    
+    // Check if it's the recommended version
+    const recComparison = this.compareVersions(actualVersion, requirements.recommended);
+    if (recComparison !== 0) {
+      return {
+        valid: true,
+        warning: `${toolName} version ${actualVersion} works but ${requirements.recommended} is recommended for optimal stability.`
+      };
+    }
+    
+    return { valid: true }; // Perfect version
+  }
+
+  /**
+   * Verifies that required dependencies (git, npm) are available with proper versions
    */
   private async verifyDependencies(): Promise<{ valid: boolean; message?: string }> {
+    const warnings: string[] = [];
+    
+    // Check Git availability and version
     try {
-      // Check git availability
-      await safeExec('git', ['--version']);
+      const { stdout: gitOutput } = await safeExec('git', ['--version']);
+      const gitVersion = this.parseVersionFromOutput(gitOutput, 'git');
+      
+      if (!gitVersion) {
+        return {
+          valid: false,
+          message: this.getPersonaIndicator() + 
+            '❌ **Git Version Detection Failed**\n\n' +
+            'Could not parse Git version from output: ' + gitOutput + '\n' +
+            'Please ensure Git is properly installed and accessible.'
+        };
+      }
+      
+      const gitValidation = this.validateDependencyVersion(
+        gitVersion, 
+        DEPENDENCY_REQUIREMENTS.git, 
+        'Git'
+      );
+      
+      if (!gitValidation.valid) {
+        return {
+          valid: false,
+          message: this.getPersonaIndicator() + 
+            '❌ **Git Version Incompatible**\n\n' +
+            gitValidation.error + '\n\n' +
+            `**Current:** Git ${gitVersion}\n` +
+            `**Required:** ${DEPENDENCY_REQUIREMENTS.git.minimum} - ${DEPENDENCY_REQUIREMENTS.git.maximum}\n` +
+            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.git.recommended}\n\n` +
+            '**Update Git:**\n' +
+            '• macOS: `brew upgrade git`\n' +
+            '• Ubuntu/Debian: `sudo apt update && sudo apt upgrade git`\n' +
+            '• Windows: Download latest from git-scm.com'
+        };
+      }
+      
+      if (gitValidation.warning) {
+        warnings.push('⚠️ **Git:** ' + gitValidation.warning);
+      }
+      
     } catch (error) {
       return {
         valid: false,
         message: this.getPersonaIndicator() + 
-          '❌ **Dependency Check Failed**\n\n' +
-          'Git is not available or not installed.\n' +
+          '❌ **Git Not Available**\n\n' +
+          'Git is not installed or not accessible.\n' +
           'Git is required for auto-update functionality.\n\n' +
           '**Installation:**\n' +
           '• macOS: `brew install git` or download from git-scm.com\n' +
           '• Ubuntu/Debian: `sudo apt install git`\n' +
           '• Windows: Download from git-scm.com\n\n' +
-          'Please install Git and try again.'
+          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.git.minimum}+`
       };
     }
 
+    // Check npm availability and version
     try {
-      // Check npm availability
-      await safeExec('npm', ['--version']);
+      const { stdout: npmOutput } = await safeExec('npm', ['--version']);
+      const npmVersion = this.parseVersionFromOutput(npmOutput, 'npm');
+      
+      if (!npmVersion) {
+        return {
+          valid: false,
+          message: this.getPersonaIndicator() + 
+            '❌ **npm Version Detection Failed**\n\n' +
+            'Could not parse npm version from output: ' + npmOutput + '\n' +
+            'Please ensure npm is properly installed and accessible.'
+        };
+      }
+      
+      const npmValidation = this.validateDependencyVersion(
+        npmVersion, 
+        DEPENDENCY_REQUIREMENTS.npm, 
+        'npm'
+      );
+      
+      if (!npmValidation.valid) {
+        return {
+          valid: false,
+          message: this.getPersonaIndicator() + 
+            '❌ **npm Version Incompatible**\n\n' +
+            npmValidation.error + '\n\n' +
+            `**Current:** npm ${npmVersion}\n` +
+            `**Required:** ${DEPENDENCY_REQUIREMENTS.npm.minimum} - ${DEPENDENCY_REQUIREMENTS.npm.maximum}\n` +
+            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.npm.recommended}\n\n` +
+            '**Update npm:**\n' +
+            '• `npm install -g npm@latest` (or specific version)\n' +
+            '• Or update Node.js from nodejs.org\n' +
+            '• Use nvm/nvs for version management'
+        };
+      }
+      
+      if (npmValidation.warning) {
+        warnings.push('⚠️ **npm:** ' + npmValidation.warning);
+      }
+      
     } catch (error) {
       return {
         valid: false,
         message: this.getPersonaIndicator() + 
-          '❌ **Dependency Check Failed**\n\n' +
-          'npm is not available or not installed.\n' +
+          '❌ **npm Not Available**\n\n' +
+          'npm is not installed or not accessible.\n' +
           'npm is required for dependency management and building.\n\n' +
           '**Installation:**\n' +
           '• Install Node.js from nodejs.org (includes npm)\n' +
           '• Or use a package manager like brew, apt, or chocolatey\n\n' +
-          'Please install Node.js/npm and try again.'
+          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.npm.minimum}+`
+      };
+    }
+
+    // If there are warnings, include them in success message
+    if (warnings.length > 0) {
+      return {
+        valid: true,
+        message: this.getPersonaIndicator() + 
+          '✅ **Dependencies Available**\n\n' +
+          'All required dependencies are available, but there are some recommendations:\n\n' +
+          warnings.join('\n') + '\n\n' +
+          'These are non-blocking warnings. Update at your convenience for optimal stability.'
       };
     }
 

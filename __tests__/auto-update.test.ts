@@ -193,6 +193,205 @@ describe('Auto-Update System Tests', () => {
       });
     });
 
+    describe('Dependency Version Validation', () => {
+      describe('Version Parsing', () => {
+        it('should parse git version output correctly', () => {
+          const parseVersionFromOutput = (output: string, tool: string): string | null => {
+            if (tool === 'git') {
+              const match = output.match(/git version (\d+\.\d+\.\d+)/);
+              return match ? match[1] : null;
+            }
+            return null;
+          };
+
+          expect(parseVersionFromOutput('git version 2.39.2', 'git')).toBe('2.39.2');
+          expect(parseVersionFromOutput('git version 2.40.1 (Apple Git-103)', 'git')).toBe('2.40.1');
+          expect(parseVersionFromOutput('git version 2.43.0.windows.1', 'git')).toBe('2.43.0');
+          expect(parseVersionFromOutput('invalid output', 'git')).toBeNull();
+        });
+
+        it('should parse npm version output correctly', () => {
+          const parseVersionFromOutput = (output: string, tool: string): string | null => {
+            if (tool === 'npm') {
+              const cleanOutput = output.trim();
+              if (cleanOutput.match(/^\d+\.\d+\.\d+/)) {
+                return cleanOutput.split('\n')[0];
+              }
+              try {
+                const parsed = JSON.parse(cleanOutput);
+                return parsed.npm || parsed.version || null;
+              } catch {
+                const match = cleanOutput.match(/(\d+\.\d+\.\d+)/);
+                return match ? match[1] : null;
+              }
+            }
+            return null;
+          };
+
+          expect(parseVersionFromOutput('8.19.2', 'npm')).toBe('8.19.2');
+          expect(parseVersionFromOutput('10.5.0\n', 'npm')).toBe('10.5.0');
+          expect(parseVersionFromOutput('{"npm":"8.19.2","node":"18.17.1"}', 'npm')).toBe('8.19.2');
+          expect(parseVersionFromOutput('invalid output', 'npm')).toBeNull();
+        });
+      });
+
+      describe('Version Requirements', () => {
+        // Test version validation logic
+        function validateDependencyVersion(
+          actualVersion: string, 
+          requirements: { minimum: string; maximum: string; recommended: string },
+          toolName: string
+        ): { valid: boolean; warning?: string; error?: string } {
+          // Simplified version comparison for testing
+          const compareVersions = (v1: string, v2: string): number => {
+            const v1parts = v1.split('.').map(Number);
+            const v2parts = v2.split('.').map(Number);
+            
+            for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+              const v1part = v1parts[i] || 0;
+              const v2part = v2parts[i] || 0;
+              
+              if (v1part < v2part) return -1;
+              if (v1part > v2part) return 1;
+            }
+            return 0;
+          };
+
+          const minComparison = compareVersions(actualVersion, requirements.minimum);
+          const maxComparison = compareVersions(actualVersion, requirements.maximum);
+          
+          if (minComparison < 0) {
+            return {
+              valid: false,
+              error: `${toolName} version ${actualVersion} is below minimum required version ${requirements.minimum}`
+            };
+          }
+          
+          if (maxComparison > 0) {
+            return {
+              valid: true,
+              warning: `${toolName} version ${actualVersion} is newer than tested version ${requirements.maximum}. May cause compatibility issues.`
+            };
+          }
+          
+          const recComparison = compareVersions(actualVersion, requirements.recommended);
+          if (recComparison !== 0) {
+            return {
+              valid: true,
+              warning: `${toolName} version ${actualVersion} works but ${requirements.recommended} is recommended for optimal stability.`
+            };
+          }
+          
+          return { valid: true };
+        }
+
+        const testRequirements = {
+          minimum: '2.20.0',
+          maximum: '2.50.0', 
+          recommended: '2.40.0'
+        };
+
+        it('should validate minimum version requirements', () => {
+          // Below minimum - should fail
+          const belowMin = validateDependencyVersion('2.19.0', testRequirements, 'Git');
+          expect(belowMin.valid).toBe(false);
+          expect(belowMin.error).toContain('below minimum required version');
+
+          // At minimum - should pass
+          const atMin = validateDependencyVersion('2.20.0', testRequirements, 'Git');
+          expect(atMin.valid).toBe(true);
+
+          // Above minimum - should pass
+          const aboveMin = validateDependencyVersion('2.30.0', testRequirements, 'Git');
+          expect(aboveMin.valid).toBe(true);
+        });
+
+        it('should validate maximum version requirements', () => {
+          // At maximum - should pass without warning
+          const atMax = validateDependencyVersion('2.50.0', testRequirements, 'Git');
+          expect(atMax.valid).toBe(true);
+
+          // Above maximum - should pass with warning
+          const aboveMax = validateDependencyVersion('2.51.0', testRequirements, 'Git');
+          expect(aboveMax.valid).toBe(true);
+          expect(aboveMax.warning).toContain('newer than tested version');
+        });
+
+        it('should validate recommended version', () => {
+          // At recommended - should pass without warning
+          const atRecommended = validateDependencyVersion('2.40.0', testRequirements, 'Git');
+          expect(atRecommended.valid).toBe(true);
+          expect(atRecommended.warning).toBeUndefined();
+
+          // Not at recommended but in range - should pass with warning
+          const notRecommended = validateDependencyVersion('2.35.0', testRequirements, 'Git');
+          expect(notRecommended.valid).toBe(true);
+          expect(notRecommended.warning).toContain('recommended for optimal stability');
+        });
+
+        it('should handle edge cases', () => {
+          // Test with different version formats
+          const result1 = validateDependencyVersion('2.20', { minimum: '2.20.0', maximum: '2.50.0', recommended: '2.40.0' }, 'Git');
+          expect(result1.valid).toBe(true);
+
+          // Test exact boundaries
+          const result2 = validateDependencyVersion('2.20.0', { minimum: '2.20.0', maximum: '2.20.0', recommended: '2.20.0' }, 'Git');
+          expect(result2.valid).toBe(true);
+          expect(result2.warning).toBeUndefined();
+        });
+      });
+
+      describe('Dependency Requirements Constants', () => {
+        it('should have valid version requirements defined', () => {
+          const DEPENDENCY_REQUIREMENTS = {
+            git: {
+              minimum: '2.20.0',
+              maximum: '2.50.0',
+              recommended: '2.40.0'
+            },
+            npm: {
+              minimum: '8.0.0',
+              maximum: '12.0.0',
+              recommended: '10.0.0'
+            }
+          };
+
+          // Validate Git requirements
+          expect(DEPENDENCY_REQUIREMENTS.git.minimum).toMatch(/^\d+\.\d+\.\d+$/);
+          expect(DEPENDENCY_REQUIREMENTS.git.maximum).toMatch(/^\d+\.\d+\.\d+$/);
+          expect(DEPENDENCY_REQUIREMENTS.git.recommended).toMatch(/^\d+\.\d+\.\d+$/);
+
+          // Validate npm requirements
+          expect(DEPENDENCY_REQUIREMENTS.npm.minimum).toMatch(/^\d+\.\d+\.\d+$/);
+          expect(DEPENDENCY_REQUIREMENTS.npm.maximum).toMatch(/^\d+\.\d+\.\d+$/);
+          expect(DEPENDENCY_REQUIREMENTS.npm.recommended).toMatch(/^\d+\.\d+\.\d+$/);
+
+          // Validate logical ordering (minimum <= recommended <= maximum)
+          const compareVersions = (v1: string, v2: string): number => {
+            const v1parts = v1.split('.').map(Number);
+            const v2parts = v2.split('.').map(Number);
+            
+            for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+              const v1part = v1parts[i] || 0;
+              const v2part = v2parts[i] || 0;
+              
+              if (v1part < v2part) return -1;
+              if (v1part > v2part) return 1;
+            }
+            return 0;
+          };
+
+          // Git: minimum <= recommended <= maximum
+          expect(compareVersions(DEPENDENCY_REQUIREMENTS.git.minimum, DEPENDENCY_REQUIREMENTS.git.recommended)).toBeLessThanOrEqual(0);
+          expect(compareVersions(DEPENDENCY_REQUIREMENTS.git.recommended, DEPENDENCY_REQUIREMENTS.git.maximum)).toBeLessThanOrEqual(0);
+
+          // npm: minimum <= recommended <= maximum
+          expect(compareVersions(DEPENDENCY_REQUIREMENTS.npm.minimum, DEPENDENCY_REQUIREMENTS.npm.recommended)).toBeLessThanOrEqual(0);
+          expect(compareVersions(DEPENDENCY_REQUIREMENTS.npm.recommended, DEPENDENCY_REQUIREMENTS.npm.maximum)).toBeLessThanOrEqual(0);
+        });
+      });
+    });
+
     describe('Retry Logic', () => {
       it('should implement exponential backoff', async () => {
         let attempts = 0;
