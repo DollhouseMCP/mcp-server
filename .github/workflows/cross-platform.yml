@@ -82,12 +82,9 @@ jobs:
         shell: bash
         run: |
           echo "Verifying build artifacts..."
-          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" ||
-            { echo "❌ Missing dist/index.js"; exit 1; }
-          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" ||
-            { echo "❌ Missing dist/index.d.ts"; exit 1; }
-          [ -d "personas" ] && echo "✅ Personas directory exists" ||
-            { echo "❌ Missing personas directory"; exit 1; }
+          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
+          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
+          [ -d "personas" ] && echo "✅ Personas directory exists" || { echo "❌ Missing personas directory"; exit 1; }
 
       - name: Final validation
         run: |
