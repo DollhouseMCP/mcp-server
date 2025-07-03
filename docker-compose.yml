@@ -15,8 +15,8 @@ services:
       - NODE_ENV=production
       - PERSONAS_DIR=/app/personas
     volumes:
-      # Mount custom personas directory (optional)
-      - ./custom-personas:/app/custom-personas:ro
+      # Mount custom personas directory (optional - extends default personas)
+      - ./custom-personas:/app/personas/custom:ro
     # Resource limits for standalone Docker Compose
     mem_limit: 512m
     cpus: 0.5
