@@ -115,21 +115,7 @@ jobs:
           while [ $elapsed -lt $timeout ]; do
             # Robust health status parsing for different Docker versions
             health_status=$(docker inspect dollhousemcp-test 2>/dev/null | \
-              python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if data and len(data) > 0:
-        container = data[0]
-        if 'State' in container and 'Health' in container['State']:
-            print(container['State']['Health'].get('Status', 'none'))
-        else:
-            print('none')
-    else:
-        print('none')
-except:
-    print('none')
-" || echo "none")
+              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
             
             if [ "$health_status" = "healthy" ]; then
               echo "✅ Health check passed"
@@ -271,21 +257,7 @@ except:
           
           # Robust health status check
           health_status=$(docker inspect $container_id 2>/dev/null | \
-            python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if data and len(data) > 0:
-        container = data[0]
-        if 'State' in container and 'Health' in container['State']:
-            print(container['State']['Health'].get('Status', 'none'))
-        else:
-            print('none')
-    else:
-        print('none')
-except:
-    print('none')
-" || echo "none")
+            python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
           
           echo "Health status: $health_status"
           
@@ -303,21 +275,7 @@ except:
             sleep 5
             elapsed=$((elapsed + 5))
             health_status=$(docker inspect $container_id 2>/dev/null | \
-              python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if data and len(data) > 0:
-        container = data[0]
-        if 'State' in container and 'Health' in container['State']:
-            print(container['State']['Health'].get('Status', 'none'))
-        else:
-            print('none')
-    else:
-        print('none')
-except:
-    print('none')
-" || echo "none")
+              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
           done
           
           if [ "$health_status" = "healthy" ]; then
