@@ -545,7 +545,7 @@ jobs:
           case "${{ matrix.platform }}" in
             "windows")
               echo "🪟 Windows-specific checks:"
-              echo "  - PowerShell version: $PSVersionTable.PSVersion"
+              echo "  - PowerShell version: Available (context: bash)"
               echo "  - Path separator: \\"
               echo "  - Line endings: CRLF expected"
               ;;
