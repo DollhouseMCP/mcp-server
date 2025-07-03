@@ -147,8 +147,18 @@ jobs:
         shell: pwsh
         run: |
           Write-Output "🔍 Verifying build artifacts..."
-          if (Test-Path "dist/index.js") { Write-Output "✅ dist/index.js exists" } else { Write-Output "❌ Missing dist/index.js"; exit 1 }
-          if (Test-Path "dist/index.d.ts") { Write-Output "✅ dist/index.d.ts exists" } else { Write-Output "❌ Missing dist/index.d.ts"; exit 1 }
+          
+          if (-not (Test-Path "dist/index.js")) {
+            Write-Output "❌ Missing dist/index.js"
+            exit 1
+          }
+          Write-Output "✅ dist/index.js exists"
+          
+          if (-not (Test-Path "dist/index.d.ts")) {
+            Write-Output "❌ Missing dist/index.d.ts"
+            exit 1
+          }
+          Write-Output "✅ dist/index.d.ts exists"
           
       - name: Verify build artifacts (Unix)
         if: matrix.platform != 'windows'
@@ -261,8 +271,19 @@ jobs:
           Write-Output "📋 Testing package.json integrity..."
           try {
             $pkg = Get-Content package.json | ConvertFrom-Json
-            if ($pkg.name -eq "dollhousemcp") { Write-Output "✅ Package name correct" } else { Write-Output "❌ Invalid package name: $($pkg.name)"; exit 1 }
-            if ($pkg.main -eq "dist/index.js") { Write-Output "✅ Main entry correct" } else { Write-Output "❌ Invalid main entry: $($pkg.main)"; exit 1 }
+            
+            if ($pkg.name -ne "dollhousemcp") {
+              Write-Output "❌ Invalid package name: '$($pkg.name)', expected 'dollhousemcp'"
+              exit 1
+            }
+            Write-Output "✅ Package name correct: $($pkg.name)"
+            
+            if ($pkg.main -ne "dist/index.js") {
+              Write-Output "❌ Invalid main entry: '$($pkg.main)', expected 'dist/index.js'"
+              exit 1
+            }
+            Write-Output "✅ Main entry correct: $($pkg.main)"
+            
           } catch {
             Write-Output "❌ Failed to parse package.json: $_"
             exit 1
@@ -273,15 +294,40 @@ jobs:
         shell: bash
         run: |
           echo "📋 Testing package.json integrity..."
-          # Robust JSON parsing with error handling
-          if ! NAME=$(node -p "require('./package.json').name" 2>/dev/null); then
-            echo "❌ Failed to parse package.json name"; exit 1
+          
+          # Ultra-robust JSON parsing with multiple fallbacks
+          if command -v jq &> /dev/null; then
+            # Use jq if available (most reliable)
+            NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
+            MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
+          else
+            # Fallback to node with enhanced error handling
+            NAME=$(node -e 'try { console.log(require("./package.json").name || "") } catch(e) { console.log(""); process.exit(1) }' 2>/dev/null || echo "")
+            MAIN=$(node -e 'try { console.log(require("./package.json").main || "") } catch(e) { console.log(""); process.exit(1) }' 2>/dev/null || echo "")
           fi
-          if ! MAIN=$(node -p "require('./package.json').main" 2>/dev/null); then
-            echo "❌ Failed to parse package.json main"; exit 1
+          
+          # Validate parsed values
+          if [ -z "$NAME" ]; then
+            echo "❌ Failed to parse package.json name or name is empty"
+            exit 1
           fi
-          [ "$NAME" = "dollhousemcp" ] && echo "✅ Package name correct" || { echo "❌ Invalid package name: $NAME"; exit 1; }
-          [ "$MAIN" = "dist/index.js" ] && echo "✅ Main entry correct" || { echo "❌ Invalid main entry: $MAIN"; exit 1; }
+          if [ -z "$MAIN" ]; then
+            echo "❌ Failed to parse package.json main or main is empty"
+            exit 1
+          fi
+          
+          # Validate expected values
+          if [ "$NAME" != "dollhousemcp" ]; then
+            echo "❌ Invalid package name: '$NAME', expected 'dollhousemcp'"
+            exit 1
+          fi
+          echo "✅ Package name correct: $NAME"
+          
+          if [ "$MAIN" != "dist/index.js" ]; then
+            echo "❌ Invalid main entry: '$MAIN', expected 'dist/index.js'"
+            exit 1
+          fi
+          echo "✅ Main entry correct: $MAIN"
 
       # Run tests
       - name: Run test suite
