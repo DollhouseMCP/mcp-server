@@ -48,7 +48,6 @@ temp/
 test-personas/
 __tests__/
 jest.config.js
-jest.setup.mjs
 
 # Docker (optional - comment out if you want to include Docker files)
 Dockerfile
