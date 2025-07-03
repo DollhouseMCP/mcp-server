@@ -73,6 +73,165 @@ const DEPENDENCY_REQUIREMENTS = {
   }
 };
 
+// Security and performance configuration
+const SECURITY_LIMITS = {
+  MAX_PERSONA_SIZE_BYTES: 1024 * 1024 * 2,  // 2MB max persona file size
+  MAX_FILENAME_LENGTH: 255,                  // Max filename length
+  MAX_PATH_DEPTH: 10,                       // Max directory depth for paths
+  MAX_CONTENT_LENGTH: 500000,               // Max persona content length (500KB)
+  RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
+  RATE_LIMIT_WINDOW_MS: 60 * 1000,         // 1 minute window
+  CACHE_TTL_MS: 5 * 60 * 1000,             // 5 minute cache TTL
+  MAX_SEARCH_RESULTS: 50                    // Max search results to return
+};
+
+// Input validation patterns
+const VALIDATION_PATTERNS = {
+  SAFE_FILENAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,250}[a-zA-Z0-9]$/,
+  SAFE_PATH: /^[a-zA-Z0-9\/\-_.]{1,500}$/,
+  SAFE_USERNAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,30}[a-zA-Z0-9]$/,
+  SAFE_CATEGORY: /^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$/,
+  SAFE_EMAIL: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+};
+
+// Cache for GitHub API responses
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+
+class APICache {
+  private cache = new Map<string, CacheEntry>();
+  
+  get(key: string): any | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    
+    if (Date.now() - entry.timestamp > SECURITY_LIMITS.CACHE_TTL_MS) {
+      this.cache.delete(key);
+      return null;
+    }
+    
+    return entry.data;
+  }
+  
+  set(key: string, data: any): void {
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+  }
+  
+  clear(): void {
+    this.cache.clear();
+  }
+  
+  size(): number {
+    return this.cache.size;
+  }
+}
+
+// Input sanitization and validation functions
+function validateFilename(filename: string): string {
+  if (!filename || typeof filename !== 'string') {
+    throw new Error('Filename must be a non-empty string');
+  }
+  
+  if (filename.length > SECURITY_LIMITS.MAX_FILENAME_LENGTH) {
+    throw new Error(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`);
+  }
+  
+  // Remove any path separators and dangerous characters
+  const sanitized = filename.replace(/[\/\\:*?"<>|]/g, '').replace(/^\.+/, '');
+  
+  if (!VALIDATION_PATTERNS.SAFE_FILENAME.test(sanitized)) {
+    throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
+  }
+  
+  return sanitized;
+}
+
+function validatePath(inputPath: string): string {
+  if (!inputPath || typeof inputPath !== 'string') {
+    throw new Error('Path must be a non-empty string');
+  }
+  
+  // Remove leading/trailing slashes and normalize
+  const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+  
+  if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
+    throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
+  }
+  
+  // Check for path traversal attempts
+  if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
+    throw new Error('Path traversal not allowed');
+  }
+  
+  // Validate path depth
+  const depth = normalized.split('/').length;
+  if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
+    throw new Error(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
+  }
+  
+  return normalized;
+}
+
+function validateUsername(username: string): string {
+  if (!username || typeof username !== 'string') {
+    throw new Error('Username must be a non-empty string');
+  }
+  
+  if (!VALIDATION_PATTERNS.SAFE_USERNAME.test(username)) {
+    throw new Error('Invalid username format. Use alphanumeric characters, hyphens, underscores, and dots only.');
+  }
+  
+  return username.toLowerCase();
+}
+
+function validateCategory(category: string): string {
+  if (!category || typeof category !== 'string') {
+    throw new Error('Category must be a non-empty string');
+  }
+  
+  if (!VALIDATION_PATTERNS.SAFE_CATEGORY.test(category)) {
+    throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
+  }
+  
+  const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
+  const normalized = category.toLowerCase();
+  
+  if (!validCategories.includes(normalized)) {
+    throw new Error(`Invalid category. Must be one of: ${validCategories.join(', ')}`);
+  }
+  
+  return normalized;
+}
+
+function validateContentSize(content: string, maxSize: number = SECURITY_LIMITS.MAX_CONTENT_LENGTH): void {
+  if (!content || typeof content !== 'string') {
+    throw new Error('Content must be a non-empty string');
+  }
+  
+  const sizeBytes = Buffer.byteLength(content, 'utf8');
+  if (sizeBytes > maxSize) {
+    throw new Error(`Content too large (${sizeBytes} bytes, max ${maxSize} bytes)`);
+  }
+}
+
+function sanitizeInput(input: string, maxLength: number = 1000): string {
+  if (!input || typeof input !== 'string') {
+    return '';
+  }
+  
+  // Remove potentially dangerous characters and limit length
+  return input
+    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
+    .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
+    .substring(0, maxLength)
+    .trim();
+}
+
 interface PersonaMetadata {
   name: string;
   description: string;
@@ -129,6 +288,8 @@ class DollhouseMCPServer {
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
   private currentUser: string | null = null;
+  private apiCache: APICache = new APICache();
+  private rateLimitTracker = new Map<string, number[]>();
 
   constructor() {
     this.server = new Server(
@@ -750,21 +911,68 @@ class DollhouseMCPServer {
     };
   }
 
-  // GitHub API marketplace integration
+  // Rate limiting helper
+  private checkRateLimit(key: string = 'default'): void {
+    const now = Date.now();
+    const requests = this.rateLimitTracker.get(key) || [];
+    
+    // Remove requests outside the window
+    const validRequests = requests.filter(time => now - time < SECURITY_LIMITS.RATE_LIMIT_WINDOW_MS);
+    
+    if (validRequests.length >= SECURITY_LIMITS.RATE_LIMIT_REQUESTS) {
+      throw new Error(`Rate limit exceeded. Max ${SECURITY_LIMITS.RATE_LIMIT_REQUESTS} requests per minute.`);
+    }
+    
+    validRequests.push(now);
+    this.rateLimitTracker.set(key, validRequests);
+  }
+
+  // GitHub API marketplace integration with caching and rate limiting
   private async fetchFromGitHub(url: string): Promise<any> {
     try {
+      // Check rate limit
+      this.checkRateLimit('github_api');
+      
+      // Check cache first
+      const cached = this.apiCache.get(url);
+      if (cached) {
+        return cached;
+      }
+      
+      // Add GitHub token if available for higher rate limits
+      const headers: Record<string, string> = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'DollhouseMCP/1.0'
+      };
+      
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+      }
+      
+      // Create fetch with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
       const response = await fetch(url, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'DollhouseMCP/1.0'
-        }
+        headers,
+        signal: controller.signal
       });
       
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error('GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.');
+        }
         throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
       }
       
-      return await response.json();
+      const data = await response.json();
+      
+      // Cache the successful response
+      this.apiCache.set(url, data);
+      
+      return data;
     } catch (error) {
       throw new McpError(
         ErrorCode.InternalError,
@@ -949,24 +1157,46 @@ class DollhouseMCPServer {
     }
   }
 
-  private async installPersona(path: string) {
-    const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${path}`;
-    
+  private async installPersona(inputPath: string) {
     try {
+      // Validate and sanitize the input path
+      const sanitizedPath = validatePath(inputPath);
+      
+      // Ensure the path ends with .md
+      if (!sanitizedPath.endsWith('.md')) {
+        throw new Error('Invalid file type. Only .md files are allowed.');
+      }
+      
+      const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${sanitizedPath}`;
       const data = await this.fetchFromGitHub(url);
       
       if (data.type !== 'file') {
         throw new Error('Path does not point to a file');
       }
 
+      // Check file size before downloading
+      if (data.size > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+        throw new Error(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
+      }
+
       // Decode Base64 content
       const content = Buffer.from(data.content, 'base64').toString('utf-8');
+      
+      // Validate content size after decoding
+      validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
+      
       const parsed = matter(content);
       const metadata = parsed.data as PersonaMetadata;
 
-      // Generate local filename (remove path directories)
-      const filename = path.split('/').pop() || 'downloaded-persona.md';
-      const localPath = `${this.personasDir}/${filename}`;
+      // Validate metadata
+      if (!metadata.name || !metadata.description) {
+        throw new Error('Invalid persona: missing required name or description');
+      }
+
+      // Generate and validate local filename
+      const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-persona.md';
+      const filename = validateFilename(originalFilename);
+      const localPath = path.join(this.personasDir, filename);
 
       // Check if file already exists
       try {
@@ -1085,47 +1315,64 @@ ${persona.content}
 
   // User identity management
   private async setUserIdentity(username: string, email?: string) {
-    if (!username || username.trim().length === 0) {
+    try {
+      if (!username || username.trim().length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Username cannot be empty`,
+            },
+          ],
+        };
+      }
+
+      // Validate and sanitize username
+      const validatedUsername = validateUsername(username);
+      
+      // Validate email if provided
+      let validatedEmail: string | undefined;
+      if (email) {
+        const sanitizedEmail = sanitizeInput(email, 100);
+        if (!VALIDATION_PATTERNS.SAFE_EMAIL.test(sanitizedEmail)) {
+          throw new Error('Invalid email format');
+        }
+        validatedEmail = sanitizedEmail;
+      }
+
+      // Set the validated user identity
+      this.currentUser = validatedUsername;
+      if (validatedEmail) {
+        process.env.DOLLHOUSE_EMAIL = validatedEmail;
+      }
+
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Username cannot be empty`,
+            text: `${this.getPersonaIndicator()}✅ **User Identity Set**\n\n` +
+            `👤 **Username:** ${validatedUsername}\n` +
+            `${validatedEmail ? `📧 **Email:** ${validatedEmail}\n` : ''}` +
+            `\n🎯 **Next Steps:**\n` +
+            `• New personas you create will be attributed to "${validatedUsername}"\n` +
+            `• Set environment variable \`DOLLHOUSE_USER=${validatedUsername}\` to persist this setting\n` +
+            `${validatedEmail ? `• Set environment variable \`DOLLHOUSE_EMAIL=${validatedEmail}\` for contact info\n` : ''}` +
+            `• Use \`clear_user_identity\` to return to anonymous mode`,
           },
         ],
       };
-    }
-
-    // Validate username format (alphanumeric, dashes, underscores)
-    const validUsername = /^[a-zA-Z0-9_-]+$/.test(username);
-    if (!validUsername) {
+    } catch (error) {
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Username can only contain letters, numbers, dashes, and underscores`,
+            text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
+              `${error}\n\n` +
+              `Please provide a valid username (alphanumeric characters, hyphens, underscores, dots only).`,
           },
         ],
       };
     }
-
-    this.currentUser = username;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}✅ **User Identity Set**\n\n` +
-          `👤 **Username:** ${username}\n` +
-          `${email ? `📧 **Email:** ${email}\n` : ''}` +
-          `\n🎯 **Next Steps:**\n` +
-          `• New personas you create will be attributed to "${username}"\n` +
-          `• Set environment variable \`DOLLHOUSE_USER=${username}\` to persist this setting\n` +
-          `${email ? `• Set environment variable \`DOLLHOUSE_EMAIL=${email}\` for contact info\n` : ''}` +
-          `• Use \`clear_user_identity\` to return to anonymous mode`,
-        },
-      ],
-    };
   }
 
   private async getUserIdentity() {
@@ -1197,44 +1444,49 @@ ${persona.content}
 
   // Chat-based persona management tools
   private async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
-    if (!name || !description || !category || !instructions) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Missing Required Fields**\n\n` +
-              `Please provide all required fields:\n` +
-              `• **name**: Display name for the persona\n` +
-              `• **description**: Brief description of what it does\n` +
-              `• **category**: creative, professional, educational, gaming, or personal\n` +
-              `• **instructions**: The persona's behavioral guidelines\n\n` +
-              `**Optional:**\n` +
-              `• **triggers**: Comma-separated keywords for activation`,
-          },
-        ],
-      };
-    }
+    try {
+      // Validate required fields
+      if (!name || !description || !category || !instructions) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ **Missing Required Fields**\n\n` +
+                `Please provide all required fields:\n` +
+                `• **name**: Display name for the persona\n` +
+                `• **description**: Brief description of what it does\n` +
+                `• **category**: creative, professional, educational, gaming, or personal\n` +
+                `• **instructions**: The persona's behavioral guidelines\n\n` +
+                `**Optional:**\n` +
+                `• **triggers**: Comma-separated keywords for activation`,
+            },
+          ],
+        };
+      }
 
-    // Validate category
-    const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
-    if (!validCategories.includes(category.toLowerCase())) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Invalid Category**\n\n` +
-              `Category must be one of: ${validCategories.join(', ')}\n` +
-              `You provided: "${category}"`,
-          },
-        ],
-      };
-    }
+      // Sanitize and validate inputs
+      const sanitizedName = sanitizeInput(name, 100);
+      const sanitizedDescription = sanitizeInput(description, 500);
+      const sanitizedInstructions = sanitizeInput(instructions);
+      const sanitizedTriggers = triggers ? sanitizeInput(triggers, 200) : '';
 
-    // Generate metadata
-    const author = this.getCurrentUserForAttribution();
-    const uniqueId = generateUniqueId(name, this.currentUser || undefined);
-    const filename = `${slugify(name)}.md`;
-    const filePath = path.join(this.personasDir, filename);
+      // Validate name length and format
+      if (sanitizedName.length < 2) {
+        throw new Error('Persona name must be at least 2 characters long');
+      }
+
+      // Validate category
+      const validatedCategory = validateCategory(category);
+
+      // Validate content sizes
+      validateContentSize(sanitizedInstructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
+      validateContentSize(sanitizedDescription, 2000); // 2KB max for description
+
+      // Generate metadata
+      const author = this.getCurrentUserForAttribution();
+      const uniqueId = generateUniqueId(sanitizedName, this.currentUser || undefined);
+      const filename = validateFilename(`${slugify(sanitizedName)}.md`);
+      const filePath = path.join(this.personasDir, filename);
 
     // Check if file already exists
     try {
@@ -1253,42 +1505,42 @@ ${persona.content}
       // File doesn't exist, proceed with creation
     }
 
-    // Parse triggers
-    const triggerList = triggers ? 
-      triggers.split(',').map(t => t.trim()).filter(t => t.length > 0) : 
-      [];
+      // Parse and sanitize triggers
+      const triggerList = sanitizedTriggers ? 
+        sanitizedTriggers.split(',').map(t => sanitizeInput(t.trim(), 50)).filter(t => t.length > 0) : 
+        [];
 
-    // Create persona metadata
-    const metadata: PersonaMetadata = {
-      name,
-      description,
-      unique_id: uniqueId,
-      author,
-      triggers: triggerList,
-      version: "1.0",
-      category: category.toLowerCase(),
-      age_rating: "all",
-      content_flags: ["user-created"],
-      ai_generated: true,
-      generation_method: "Claude",
-      price: "free",
-      revenue_split: "80/20",
-      license: "CC-BY-SA-4.0",
-      created_date: new Date().toISOString().slice(0, 10)
-    };
+      // Create persona metadata with sanitized values
+      const metadata: PersonaMetadata = {
+        name: sanitizedName,
+        description: sanitizedDescription,
+        unique_id: uniqueId,
+        author,
+        triggers: triggerList,
+        version: "1.0",
+        category: validatedCategory,
+        age_rating: "all",
+        content_flags: ["user-created"],
+        ai_generated: true,
+        generation_method: "Claude",
+        price: "free",
+        revenue_split: "80/20",
+        license: "CC-BY-SA-4.0",
+        created_date: new Date().toISOString().slice(0, 10)
+      };
 
-    // Create full persona content
-    const frontmatter = Object.entries(metadata)
-      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-      .join('\n');
+      // Create full persona content with sanitized values
+      const frontmatter = Object.entries(metadata)
+        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+        .join('\n');
 
-    const personaContent = `---
+      const personaContent = `---
 ${frontmatter}
 ---
 
-# ${name}
+# ${sanitizedName}
 
-${instructions}
+${sanitizedInstructions}
 
 ## Response Style
 - Follow the behavioral guidelines above
@@ -1299,6 +1551,9 @@ ${instructions}
 - Created via DollhouseMCP chat interface
 - Author: ${author}
 - Version: 1.0`;
+
+      // Validate final content size
+      validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
 
     try {
       // Write the file
@@ -1331,6 +1586,18 @@ ${instructions}
             text: `${this.getPersonaIndicator()}❌ **Error Creating Persona**\n\n` +
               `Failed to write persona file: ${error}\n\n` +
               `Please check permissions and try again.`,
+          },
+        ],
+      };
+      }
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
+              `${error}\n\n` +
+              `Please fix the issue and try again.`,
           },
         ],
       };
