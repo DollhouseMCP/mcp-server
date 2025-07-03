@@ -295,24 +295,23 @@ jobs:
         run: |
           echo "📋 Testing package.json integrity..."
           
-          # Use reusable JSON validation script if available, otherwise use inline validation
-          if [ -f "./.github/scripts/validate-package-json.sh" ]; then
-            echo "✅ Using reusable JSON validation script"
-            ./.github/scripts/validate-package-json.sh "dollhousemcp" "dist/index.js"
-          else
-            echo "⚠️  Fallback to inline JSON validation"
-            # Fallback inline validation for compatibility
-            if command -v jq &> /dev/null; then
-              NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
-              MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
-              if [ "$NAME" = "dollhousemcp" ] && [ "$MAIN" = "dist/index.js" ]; then
-                echo "✅ Package.json validation passed"
-              else
-                echo "❌ Package.json validation failed"
-                exit 1
-              fi
+          # Simple JSON validation (will be enhanced with reusable script in future)
+          if command -v jq &> /dev/null; then
+            NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
+            MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
+            if [ "$NAME" = "dollhousemcp" ] && [ "$MAIN" = "dist/index.js" ]; then
+              echo "✅ Package.json validation passed"
             else
-              echo "⚠️  Skipping JSON validation - jq not available"
+              echo "❌ Package.json validation failed: name='$NAME', main='$MAIN'"
+              exit 1
+            fi
+          else
+            echo "⚠️  jq not available, using basic validation"
+            if grep -q '"name": "dollhousemcp"' package.json && grep -q '"main": "dist/index.js"' package.json; then
+              echo "✅ Basic package.json validation passed"
+            else
+              echo "❌ Basic package.json validation failed"
+              exit 1
             fi
           fi
 
