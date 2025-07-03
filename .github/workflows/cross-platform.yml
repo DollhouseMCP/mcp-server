@@ -633,12 +633,16 @@ jobs:
           echo "-------------------------"
           echo "💾 Resource information:"
           # Cross-platform disk space check (BSD vs GNU df compatibility)
-          if df -h . | head -1 | grep -q "Avail"; then
-            # GNU df format (Linux): Filesystem Size Used Avail Use% Mounted
-            echo "  - Disk space: $(df -h . | tail -1 | awk '{print $4}') available"
+          if ! df -h . >/dev/null 2>&1; then
+            echo "  - Disk space: Unable to determine"
           else
-            # BSD df format (macOS): Filesystem Size Used Avail Capacity Mounted
-            echo "  - Disk space: $(df -h . | tail -1 | awk '{print $4}') available"
+            if df -h . | head -1 | grep -q "Avail"; then
+              # GNU df format (Linux): Filesystem Size Used Avail Use% Mounted
+              echo "  - Disk space: $(df -h . | tail -1 | awk '{print $4}') available (GNU format)"
+            else
+              # BSD df format (macOS): Filesystem Size Used Avail Capacity Mounted
+              echo "  - Disk space: $(df -h . | tail -1 | awk '{print $4}') available (BSD format)"
+            fi
           fi
           echo "  - Process ID: $$"
           echo "  - Working directory: $(pwd)"
