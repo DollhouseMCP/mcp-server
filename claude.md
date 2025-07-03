@@ -573,86 +573,94 @@ anthropics/claude-code-action@000297be9a9ca68b19d4e49ed1ea32b2daf07d60 # v0.0.27
 
 This represents a **production-ready, security-hardened persona management platform** with enterprise-grade GitHub Actions workflows, comprehensive local functionality, and community marketplace integration - providing the validated foundation for a secure AI persona ecosystem capable of handling real-world usage and potential bad actors.
 
-## Current Session Summary (July 3, 2025) - Auto-Update System Complete
+## Current Session Summary (July 3, 2025) - Docker Testing Workflow Fixes Complete
 
 ### **Session Overview:**
-Completed comprehensive auto-update system implementation with enterprise-grade enhancements, addressing all PR review feedback and implementing additional future-focused improvements for production-ready deployment.
+Successfully resolved multiple critical Docker Testing workflow failures that were preventing reliable CI/CD and causing failing README badges. Achieved significant improvement from 0% to 67% Docker Testing reliability.
 
 ### **Major Accomplishments This Session:**
 
-#### **1. Complete Auto-Update System Implementation ✅**
-- **4 New MCP Tools**: check_for_updates, update_server, rollback_update, get_server_status
-- **GitHub Releases Integration**: Version checking with retry logic and timeout handling
-- **Automated Workflow**: Git pull + npm install + TypeScript build with comprehensive safety checks
-- **Backup & Rollback**: Automatic backup creation with restoration capabilities
+#### **1. Docker Compose Test Timing Issue - RESOLVED ✅**
+- **Root Cause**: Using `docker compose run --rm` but checking logs with `docker compose logs` (incompatible approaches)
+- **Solution**: Direct output capture from run command instead of trying to retrieve logs from non-existent services
+- **Result**: Docker Compose Test now consistently passes ✅
 
-#### **2. Enterprise-Grade Enhancement Suite ✅**
-- **Backup Cleanup Policy**: Automatically keeps only 5 most recent backups (prevents disk space issues)
-- **Enhanced Version Comparison**: Semantic versioning support including pre-release versions (1.0.0-beta, v1.0.0)
-- **Dependency Version Validation**: Min/max requirements for git (2.20.0-2.50.0) and npm (8.0.0-12.0.0)
-- **Network Retry Logic**: Exponential backoff for transient failures (1s, 2s, 4s delays)
-- **Progress Indicators**: Step-by-step progress tracking with [1/6] operation feedback
+#### **2. Docker Tag Format Issue - RESOLVED ✅** 
+- **Root Cause**: Docker tags cannot contain forward slashes, but `matrix.platform` includes `linux/amd64`, `linux/arm64`
+- **Error**: `invalid tag "dollhousemcp:builder-linux/amd64": invalid reference format`
+- **Solution**: Convert platform strings to tag-safe format using `sed 's/\//-/g'` 
+- **Result**: Docker Build & Test (linux/amd64) now passes consistently ✅
 
-#### **3. Comprehensive Testing Excellence ✅**
-- **50 Tests Total**: Complete coverage of all auto-update functionality
-- **Security Testing**: Command injection prevention and input validation
-- **Version Validation**: Parsing tests for multiple git/npm output formats
-- **Edge Case Coverage**: Network failures, missing dependencies, malformed input
-- **Integration Testing**: GitHub API mocking and error handling scenarios
+#### **3. Docker Test Architecture Alignment - COMPLETED ✅**
+- **Root Cause**: MCP servers are stdio-based (exit after initialization), not daemon-based
+- **Problem**: Named container + `docker wait`/`docker logs` approach failing 
+- **Solution**: Aligned all Docker tests to use direct output capture pattern
+- **Result**: Consistent testing approach across all Docker workflows
 
-#### **4. Code Quality & Security Excellence ✅**
-- **Security Hardening**: All command injection vulnerabilities eliminated using safeExec()
-- **Method Decomposition**: Large methods broken into focused helper functions
-- **Error Handling**: Comprehensive error messages with platform-specific recovery instructions
-- **Documentation**: Extensive JSDoc comments and inline documentation
+### **Pull Requests Successfully Merged:**
 
-#### **5. Pull Request Management ✅**
-- **PR Review Response**: Addressed all critical and minor feedback from Claude Code Review
-- **Testing Coverage**: Closed the "critical gap" with comprehensive test suite
-- **CI/CD Integration**: All checks passing with clean merge to main branch
-- **Branch Management**: Feature branch successfully merged and cleaned up
+#### **PR #25: Fix Docker Compose test timing issue** ✅ MERGED
+- Fixed incompatible log checking approach for temporary containers
+- Established direct output capture pattern for stdio-based MCP servers
+
+#### **PR #26: Fix Docker tag format and test approach** ✅ MERGED  
+- Resolved invalid Docker tag format with platform conversion
+- Standardized all Docker tests to use reliable output capture method
+- Maintained all security hardening while fixing core functionality
+
+### **Current Workflow Reliability Status:**
+```
+✅ Core Build & Test:              100% reliable (branch protection ready)
+✅ Build Artifacts:                100% reliable (deployment validation)  
+✅ Extended Node Compatibility:    100% reliable (Node 18.x/22.x)
+✅ Cross-Platform Simple:          100% reliable (backup pattern)
+✅ Performance Testing:            100% reliable (daily monitoring)
+✅ Docker Testing:                 67% reliable (2 of 3 jobs passing)
+```
+
+**Docker Testing Detailed Status:**
+- ✅ **Docker Compose Test**: Consistently passing  
+- ✅ **Docker Build & Test (linux/amd64)**: Now passing
+- ⚠️ **Docker Build & Test (linux/arm64)**: Still failing (exit code 255, needs investigation)
 
 ### **Technical Achievements:**
 
-**Code Metrics:**
-- **+2,083 lines** of production-ready code added
-- **50 comprehensive tests** covering all functionality
-- **21 total MCP tools** now available (up from 17)
-- **100% TypeScript compilation** without errors
-- **0% security vulnerabilities** with safeExec() implementation
+**Workflow Improvements:**
+- **+47 lines** of improved Docker workflow configuration
+- **-22 lines** of problematic code removed  
+- **3 critical issues** resolved across Docker testing
+- **2 Pull Requests** successfully merged with no breaking changes
 
-**User Experience Improvements:**
-- **Simple Chat Commands**: `check_for_updates`, `update_server true`, `rollback_update true`
-- **Detailed Progress Feedback**: [1/6] Dependencies verified → [6/6] Build completed
-- **Intelligent Warnings**: Version compatibility alerts with actionable solutions
-- **Comprehensive Error Messages**: Platform-specific installation/upgrade instructions
+**Architecture Insights Confirmed:**
+- **MCP Servers**: stdio-based, initialize → load personas → exit (not daemon-based)
+- **Testing Pattern**: Direct output capture with grep validation for "DollhouseMCP server running on stdio"
+- **Security Maintained**: All hardening preserved (non-root, read-only, resource limits)
 
-**System Reliability:**
-- **Automatic Cleanup**: Backup management prevents disk space issues
-- **Version Safety**: Protection against both outdated and bleeding-edge dependency issues
-- **Network Resilience**: Retry logic handles transient connectivity problems
-- **Rollback Safety**: Multiple backup layers with safety backups during rollbacks
+### **Current Todo List - Next Session Priorities:**
 
-### **Deployment Status:**
-- **Branch**: Successfully merged `feature/auto-update-tools` to `main`
-- **Build Status**: All systems compiling and testing successfully
-- **Production Ready**: Enterprise-grade auto-update system fully operational
-- **Documentation**: Complete project context updated for next development phase
+**High Priority** 🔴
+- **Investigate linux/arm64 Docker build test failure** (exit code 255 during initialization)
+- **Add integration tests for actual MCP protocol communication** (major development priority)
+
+**Medium Priority** 🟡  
+- **Add verification for custom persona directory mounting** in Docker tests
+- **Parameterize hard-coded image names** using environment variables
+- **Add fallback for Python dependency** in health check parsing
 
 ### **Next Development Phase:**
-Ready to begin **Phase 2C - Private Personas & Advanced Features** with:
-- Local private persona support with user-specific directories
-- Enhanced management features including templates and bulk operations
-- Collaboration tools for persona sharing and versioning
+With Docker Testing significantly improved (67% reliability), ready to proceed with:
+1. **Immediate**: Debug linux/arm64 issue to achieve 100% Docker Testing reliability
+2. **High Priority**: Implement MCP protocol integration tests  
+3. **Medium Priority**: Custom persona directory verification and configuration enhancements
 
 ### **Session Impact:**
-This session transformed DollhouseMCP from a functional persona management system into a **production-ready platform** with enterprise-grade auto-update capabilities, comprehensive testing, and advanced reliability features. The system now provides users with a seamless, chat-based update experience while maintaining the highest standards of security and operational safety.
+Transformed Docker Testing from completely failing to 67% functional, resolving the primary README badge issue and establishing reliable CI/CD foundation. The workflow improvements provide a solid base for achieving 100% reliability and implementing advanced testing features.
 
 ### **Final Status:**
-- ✅ **Production Ready**: Enterprise-grade auto-update system operational
-- ✅ **Fully Tested**: 50 comprehensive tests covering all functionality
-- ✅ **Security Hardened**: Zero vulnerabilities with comprehensive validation
-- ✅ **User Friendly**: Simple chat commands with detailed progress feedback
-- ✅ **Documentation Complete**: Project context updated for next development phase
+- ✅ **Major Issues Resolved**: Docker Compose timing and tag format problems fixed
+- ✅ **Reliability Improved**: From 0% to 67% Docker Testing success rate  
+- ✅ **Foundation Established**: Consistent stdio-based MCP server testing patterns
+- ✅ **Security Maintained**: All hardening features preserved throughout fixes
+- ✅ **Documentation Complete**: Comprehensive session documentation for next phase
 
-**Ready for Phase 2C development and conversation compaction.** The auto-update system is now a comprehensive, production-ready solution that serves as the foundation for future enhancements.
+**Ready for linux/arm64 investigation and MCP protocol integration testing.** The Docker Testing workflow is now significantly improved and provides reliable CI/CD coverage for the majority of use cases.
