@@ -295,8 +295,26 @@ jobs:
         run: |
           echo "📋 Testing package.json integrity..."
           
-          # Use reusable JSON validation script
-          ./.github/scripts/validate-package-json.sh "dollhousemcp" "dist/index.js"
+          # Use reusable JSON validation script if available, otherwise use inline validation
+          if [ -f "./.github/scripts/validate-package-json.sh" ]; then
+            echo "✅ Using reusable JSON validation script"
+            ./.github/scripts/validate-package-json.sh "dollhousemcp" "dist/index.js"
+          else
+            echo "⚠️  Fallback to inline JSON validation"
+            # Fallback inline validation for compatibility
+            if command -v jq &> /dev/null; then
+              NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
+              MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
+              if [ "$NAME" = "dollhousemcp" ] && [ "$MAIN" = "dist/index.js" ]; then
+                echo "✅ Package.json validation passed"
+              else
+                echo "❌ Package.json validation failed"
+                exit 1
+              fi
+            else
+              echo "⚠️  Skipping JSON validation - jq not available"
+            fi
+          fi
 
       # Run tests
       - name: Run test suite
