@@ -71,3 +71,58 @@
 - **failure** = Tests running but failing (normal CI debugging)
 - Jest requires .cjs extension when package.json has "type": "module"
 - yamllint is essential for validating GitHub Actions YAML
+
+## 🚨 PR #13 MERGE STRATEGY (POST-COMPACTION TASK)
+
+### Conflict Analysis:
+- **PR #13**: Adds caching to old complex cross-platform.yml (586 lines)
+- **Current State**: Clean simplified workflows (~60 lines each)
+- **Conflict Reason**: PR based on commit 5a7097b, we're now at 25af343+
+- **Status**: CONFLICTING (confirmed via `gh pr view 13 --json mergeable`)
+
+### Resolution Strategy:
+1. **Checkout PR branch**: `gh pr checkout 13`
+2. **Rebase approach**: `git rebase main` (will show conflicts)
+3. **Selective merge strategy**:
+   - ❌ DISCARD: Old workflow structure changes
+   - ✅ EXTRACT: Caching logic and strategy  
+   - ✅ APPLY: To current clean workflows
+
+### Caching Elements to Extract from PR #13:
+```yaml
+# TypeScript build cache
+- name: Cache TypeScript build
+  uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319
+  with:
+    path: |
+      dist/
+      *.tsbuildinfo
+    key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+    restore-keys: |
+      typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+
+# Jest cache
+- name: Cache Jest
+  with:
+    path: |
+      .jest-cache/
+      coverage/
+      node_modules/.cache/jest/
+    key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+```
+
+### Target Files for Caching:
+- `.github/workflows/cross-platform-simple.yml` (proven reliable - 4/4 success)
+- `.github/workflows/cross-platform.yml` (main workflow)
+
+### Expected Benefits (from PR #13):
+- Build time reduction: 30-50%
+- Test execution: 20-40% faster  
+- Overall workflow: 15-30% improvement
+
+### Post-Compaction Execution Steps:
+1. Checkout PR #13 branch locally
+2. Rebase onto main (handle conflicts by keeping current workflow structure)
+3. Extract caching logic and apply to current clean workflows
+4. Test and validate cache keys work with current structure
+5. Update PR and merge
