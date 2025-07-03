@@ -46,10 +46,12 @@ jobs:
       - name: Build Docker image (builder stage)
         run: |
           echo "🔨 Building Docker image for ${{ matrix.platform }}..."
+          # Convert platform to tag-safe format (replace / with -)
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target builder \
-            --tag dollhousemcp:builder-${{ matrix.platform }} \
+            --tag dollhousemcp:builder-${PLATFORM_TAG} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --load \
@@ -58,10 +60,12 @@ jobs:
       - name: Build Docker image (production stage)
         run: |
           echo "🏗️ Building production Docker image for ${{ matrix.platform }}..."
+          # Convert platform to tag-safe format (replace / with -)
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target production \
-            --tag dollhousemcp:latest-${{ matrix.platform }} \
+            --tag dollhousemcp:latest-${PLATFORM_TAG} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --load \
@@ -70,14 +74,18 @@ jobs:
       - name: Scan Docker image for vulnerabilities
         uses: anchore/scan-action@v3
         with:
-          image: dollhousemcp:latest-${{ matrix.platform }}
+          image: dollhousemcp:latest-linux-amd64
           fail-build: false  # Don't fail build on vulnerabilities, just report
           severity-cutoff: high
         continue-on-error: true
+        if: matrix.platform == 'linux/amd64'  # Only scan one platform to avoid duplication
 
       - name: Test MCP server initialization (with security constraints)
         run: |
           echo "🚀 Testing MCP server initialization for ${{ matrix.platform }}..."
+          
+          # Convert platform to tag-safe format (replace / with -)
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           
           # Run MCP server with security constraints and capture logs
           docker run \
@@ -89,7 +97,7 @@ jobs:
             --tmpfs /tmp \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${{ matrix.platform }} &
+            dollhousemcp:latest-${PLATFORM_TAG} &
           
           # Wait for container to complete initialization
           echo "⏳ Waiting for MCP server initialization..."
