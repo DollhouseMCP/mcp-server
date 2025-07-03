@@ -38,7 +38,7 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: typescript-build-${{ runner.os }}-20.x-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: typescript-build-${{ runner.os }}-20.x-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-20.x-
             typescript-build-${{ runner.os }}-
@@ -82,3 +82,12 @@ jobs:
           ls -lh dist/
           
           echo "✅ All build artifacts verified successfully!"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            personas/
+          retention-days: 30
