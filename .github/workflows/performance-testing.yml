@@ -1,0 +1,323 @@
+name: Performance Testing
+
+on:
+  # Run on schedule for regular performance monitoring
+  schedule:
+    # Daily at 6 AM UTC (during low-traffic hours)
+    - cron: '0 6 * * *'
+  
+  # Manual trigger for performance analysis
+  workflow_dispatch:
+    inputs:
+      detailed_analysis:
+        description: 'Run detailed performance analysis'
+        required: false
+        default: 'false'
+        type: boolean
+      baseline_comparison:
+        description: 'Compare against baseline metrics'
+        required: false
+        default: 'true'
+        type: boolean
+
+  # Run on release tags for performance benchmarking
+  push:
+    tags:
+      - 'v*'
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  CI: true
+
+jobs:
+  performance-benchmarks:
+    name: Performance Benchmarks on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30  # Longer timeout for detailed performance analysis
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ['20.x']  # Focus on LTS for performance testing
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            shell: bash
+          - os: windows-latest  
+            platform: windows
+            shell: pwsh
+          - os: macos-latest
+            platform: macos
+            shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af  # v4.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      # Cache performance test artifacts
+      - name: Cache performance artifacts
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            dist/
+            node_modules/
+            .performance-cache/
+          key: perf-cache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'src/**/*.ts') }}
+          restore-keys: |
+            perf-cache-${{ runner.os }}-
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          echo "📦 Installing dependencies for performance testing..."
+          npm ci
+          echo "✅ Dependencies installed"
+
+      - name: Build project
+        shell: bash
+        run: |
+          echo "🔨 Building project for performance testing..."
+          npm run build
+          echo "✅ Build completed"
+
+      - name: Performance Baseline Testing
+        shell: bash
+        run: |
+          echo "🔍 Performance Baseline Testing"
+          echo "================================"
+          echo "Platform: ${{ matrix.platform }}"
+          echo "Node.js: ${{ matrix.node-version }}"
+          echo "OS: ${{ runner.os }}"
+          echo ""
+          
+          # Create performance results directory
+          mkdir -p .performance-results
+          
+          # Cache Python3 detection for performance optimization
+          HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
+          echo "⏱️  Timing method: $([ "$HAS_PYTHON3" = "true" ] && echo 'Python3 (millisecond precision)' || echo 'Date (second precision)')"
+          echo ""
+          
+          # Test 1: Node.js startup performance
+          echo "📊 Test 1: Node.js Startup Performance"
+          echo "-------------------------------------"
+          TOTAL_NODE_TIME=0
+          ITERATIONS=5
+          
+          for i in $(seq 1 $ITERATIONS); do
+            if [ "$HAS_PYTHON3" = "true" ]; then
+              START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              node --version > /dev/null 2>&1
+              END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              ITERATION_TIME=$((END_TIME - START_TIME))
+            else
+              START_TIME=$(date +%s)
+              node --version > /dev/null 2>&1
+              END_TIME=$(date +%s)
+              ITERATION_TIME=$(((END_TIME - START_TIME) * 1000))
+            fi
+            echo "  Iteration $i: ${ITERATION_TIME}ms"
+            TOTAL_NODE_TIME=$((TOTAL_NODE_TIME + ITERATION_TIME))
+          done
+          
+          AVG_NODE_TIME=$((TOTAL_NODE_TIME / ITERATIONS))
+          echo "  Average Node.js startup: ${AVG_NODE_TIME}ms"
+          echo "NODE_STARTUP_AVG=${AVG_NODE_TIME}" >> .performance-results/metrics.txt
+          echo ""
+          
+          # Test 2: npm command performance
+          echo "📊 Test 2: npm Command Performance"
+          echo "----------------------------------"
+          TOTAL_NPM_TIME=0
+          
+          for i in $(seq 1 $ITERATIONS); do
+            if [ "$HAS_PYTHON3" = "true" ]; then
+              START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              npm --version > /dev/null 2>&1
+              END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              ITERATION_TIME=$((END_TIME - START_TIME))
+            else
+              START_TIME=$(date +%s)
+              npm --version > /dev/null 2>&1
+              END_TIME=$(date +%s)
+              ITERATION_TIME=$(((END_TIME - START_TIME) * 1000))
+            fi
+            echo "  Iteration $i: ${ITERATION_TIME}ms"
+            TOTAL_NPM_TIME=$((TOTAL_NPM_TIME + ITERATION_TIME))
+          done
+          
+          AVG_NPM_TIME=$((TOTAL_NPM_TIME / ITERATIONS))
+          echo "  Average npm startup: ${AVG_NPM_TIME}ms"
+          echo "NPM_STARTUP_AVG=${AVG_NPM_TIME}" >> .performance-results/metrics.txt
+          echo ""
+          
+          # Test 3: File system scan performance
+          echo "📊 Test 3: File System Scan Performance"
+          echo "---------------------------------------"
+          TOTAL_FS_TIME=0
+          
+          for i in $(seq 1 $ITERATIONS); do
+            if [ "$HAS_PYTHON3" = "true" ]; then
+              START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              find . -name "*.js" -o -name "*.ts" -o -name "*.json" | head -200 > /dev/null 2>&1
+              END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+              ITERATION_TIME=$((END_TIME - START_TIME))
+            else
+              START_TIME=$(date +%s)
+              find . -name "*.js" -o -name "*.ts" -o -name "*.json" | head -200 > /dev/null 2>&1
+              END_TIME=$(date +%s)
+              ITERATION_TIME=$(((END_TIME - START_TIME) * 1000))
+            fi
+            echo "  Iteration $i: ${ITERATION_TIME}ms"
+            TOTAL_FS_TIME=$((TOTAL_FS_TIME + ITERATION_TIME))
+          done
+          
+          AVG_FS_TIME=$((TOTAL_FS_TIME / ITERATIONS))
+          echo "  Average file scan: ${AVG_FS_TIME}ms"
+          echo "FILE_SCAN_AVG=${AVG_FS_TIME}" >> .performance-results/metrics.txt
+          echo ""
+
+      - name: MCP Server Performance Testing
+        shell: bash
+        run: |
+          echo "📊 Test 4: MCP Server Performance"
+          echo "---------------------------------"
+          
+          # Test server startup time
+          if [ "$HAS_PYTHON3" = "true" ]; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+          else
+            START_TIME=$(date +%s)
+          fi
+          
+          # Start server in background with timeout
+          timeout 10s node dist/index.js > server-perf.log 2>&1 &
+          SERVER_PID=$!
+          
+          # Wait for startup indicators or timeout
+          for i in {1..10}; do
+            if grep -q "Server running\|MCP server\|tools.*registered" server-perf.log 2>/dev/null; then
+              if [ "$HAS_PYTHON3" = "true" ]; then
+                END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+                SERVER_STARTUP_TIME=$((END_TIME - START_TIME))
+              else
+                END_TIME=$(date +%s)
+                SERVER_STARTUP_TIME=$(((END_TIME - START_TIME) * 1000))
+              fi
+              echo "  MCP server startup: ${SERVER_STARTUP_TIME}ms"
+              echo "SERVER_STARTUP=${SERVER_STARTUP_TIME}" >> .performance-results/metrics.txt
+              break
+            fi
+            sleep 1
+          done
+          
+          # Cleanup
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+      - name: Build Performance Analysis
+        shell: bash
+        run: |
+          echo "📊 Test 5: Build Performance Analysis"
+          echo "------------------------------------"
+          
+          # Clean build for accurate timing
+          rm -rf dist/ 2>/dev/null || true
+          
+          if [ "$HAS_PYTHON3" = "true" ]; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            npm run build > build-perf.log 2>&1
+            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            BUILD_TIME=$((END_TIME - START_TIME))
+          else
+            START_TIME=$(date +%s)
+            npm run build > build-perf.log 2>&1
+            END_TIME=$(date +%s)
+            BUILD_TIME=$(((END_TIME - START_TIME) * 1000))
+          fi
+          
+          echo "  TypeScript build time: ${BUILD_TIME}ms"
+          echo "BUILD_TIME=${BUILD_TIME}" >> .performance-results/metrics.txt
+          
+          # Analyze build output size
+          if [ -d "dist" ]; then
+            DIST_SIZE=$(du -sk dist/ | cut -f1)
+            echo "  Build output size: ${DIST_SIZE}KB"
+            echo "BUILD_SIZE_KB=${DIST_SIZE}" >> .performance-results/metrics.txt
+          fi
+
+      - name: Test Suite Performance
+        shell: bash
+        run: |
+          echo "📊 Test 6: Test Suite Performance"
+          echo "---------------------------------"
+          
+          if [ "$HAS_PYTHON3" = "true" ]; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            npm test > test-perf.log 2>&1
+            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            TEST_TIME=$((END_TIME - START_TIME))
+          else
+            START_TIME=$(date +%s)
+            npm test > test-perf.log 2>&1
+            END_TIME=$(date +%s)
+            TEST_TIME=$(((END_TIME - START_TIME) * 1000))
+          fi
+          
+          echo "  Test suite execution: ${TEST_TIME}ms"
+          echo "TEST_TIME=${TEST_TIME}" >> .performance-results/metrics.txt
+
+      - name: Performance Summary and Analysis
+        shell: bash
+        run: |
+          echo ""
+          echo "🎯 Performance Summary for ${{ matrix.platform }}"
+          echo "================================================"
+          
+          if [ -f ".performance-results/metrics.txt" ]; then
+            echo "📈 Metrics:"
+            while IFS='=' read -r key value; do
+              case $key in
+                "NODE_STARTUP_AVG") echo "  - Node.js startup (avg): ${value}ms" ;;
+                "NPM_STARTUP_AVG") echo "  - npm startup (avg): ${value}ms" ;;
+                "FILE_SCAN_AVG") echo "  - File scan (avg): ${value}ms" ;;
+                "SERVER_STARTUP") echo "  - MCP server startup: ${value}ms" ;;
+                "BUILD_TIME") echo "  - TypeScript build: ${value}ms" ;;
+                "BUILD_SIZE_KB") echo "  - Build output size: ${value}KB" ;;
+                "TEST_TIME") echo "  - Test suite: ${value}ms" ;;
+              esac
+            done < .performance-results/metrics.txt
+          fi
+          
+          echo ""
+          echo "✅ Performance analysis completed for ${{ matrix.platform }}"
+
+      - name: Upload Performance Results
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a  # v4.3.6
+        if: always()
+        with:
+          name: performance-results-${{ matrix.platform }}-${{ matrix.node-version }}
+          path: |
+            .performance-results/
+            *.log
+          retention-days: 30
+
+      - name: Performance Regression Check
+        if: github.event.inputs.baseline_comparison == 'true'
+        shell: bash
+        run: |
+          echo "🔍 Performance Regression Analysis"
+          echo "================================="
+          echo "Note: Baseline comparison would be implemented here"
+          echo "This would compare current metrics against historical data"
+          echo "and flag significant performance regressions"

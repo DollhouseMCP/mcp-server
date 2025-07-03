@@ -575,58 +575,9 @@ jobs:
           echo "  - PATH length: ${#PATH} characters"
           echo ""
           
-          # Test 7: Performance baseline
-          echo "🔍 Test 7: Performance Baseline"
-          echo "-------------------------------"
-          echo "⏱️  Performance measurements:"
-          
-          # Cache Python3 detection for performance optimization (avoids repeated command checks)
-          # Timing precision: Python3 provides millisecond accuracy, date +%s provides second accuracy
-          HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
-          echo "  - Timing method: $([ "$HAS_PYTHON3" = "true" ] && echo 'Python3 (millisecond)' || echo 'Date (second)')"
-          
-          # Test Node.js startup time (cross-platform timing)
-          if [ "$HAS_PYTHON3" = "true" ]; then
-            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            node --version > /dev/null
-            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            NODE_STARTUP_TIME=$((END_TIME - START_TIME))
-          else
-            START_TIME=$(date +%s)
-            node --version > /dev/null
-            END_TIME=$(date +%s)
-            NODE_STARTUP_TIME=$(((END_TIME - START_TIME) * 1000))
-          fi
-          echo "  - Node.js startup: ${NODE_STARTUP_TIME}ms"
-          
-          # Test npm command time (cross-platform timing)
-          if [ "$HAS_PYTHON3" = "true" ]; then
-            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            npm --version > /dev/null
-            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            NPM_STARTUP_TIME=$((END_TIME - START_TIME))
-          else
-            START_TIME=$(date +%s)
-            npm --version > /dev/null
-            END_TIME=$(date +%s)
-            NPM_STARTUP_TIME=$(((END_TIME - START_TIME) * 1000))
-          fi
-          echo "  - npm startup: ${NPM_STARTUP_TIME}ms"
-          
-          # Test file system performance (cross-platform timing)
-          if [ "$HAS_PYTHON3" = "true" ]; then
-            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
-            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            FILE_SCAN_TIME=$((END_TIME - START_TIME))
-          else
-            START_TIME=$(date +%s)
-            find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
-            END_TIME=$(date +%s)
-            FILE_SCAN_TIME=$(((END_TIME - START_TIME) * 1000))
-          fi
-          echo "  - File system scan: ${FILE_SCAN_TIME}ms"
-          echo ""
+          # Note: Performance testing moved to dedicated workflow (.github/workflows/performance-testing.yml)
+          # This improves main workflow reliability by separating performance measurements
+          # which can be inconsistent in CI environments
           
           # Test 8: Resource usage check
           echo "🔍 Test 8: Resource Usage"
@@ -658,7 +609,7 @@ jobs:
           echo "✅ Build system: Functional"
           echo "✅ Dependencies: Resolved"
           echo "✅ Cross-platform: Compatible"
-          echo "✅ Performance: Within acceptable ranges"
+          echo "✅ Cross-platform compatibility: Verified"
           echo "✅ Resource usage: Normal"
           echo ""
           
