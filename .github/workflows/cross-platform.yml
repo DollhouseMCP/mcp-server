@@ -39,11 +39,37 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # Cache TypeScript build artifacts
+      - name: Cache TypeScript build
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            dist/
+            build/
+            *.tsbuildinfo
+          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          restore-keys: |
+            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+            typescript-build-${{ runner.os }}-
+
       - name: Install dependencies
         run: npm ci
 
       - name: Build project
         run: npm run build
+
+      # Cache Jest test results and coverage
+      - name: Cache Jest
+        uses: actions/cache@ab5e6d0c87105b4c9c2047343972218f562e4319  # v4.0.1
+        with:
+          path: |
+            .jest-cache/
+            coverage/
+            node_modules/.cache/jest/
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          restore-keys: |
+            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
+            jest-cache-${{ runner.os }}-
 
       - name: Run test suite
         run: npm test
