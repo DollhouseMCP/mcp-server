@@ -221,12 +221,12 @@ jobs:
       - name: Test Docker Compose build
         run: |
           echo "🐳 Testing Docker Compose build..."
-          docker-compose build dollhousemcp
+          docker compose build dollhousemcp
 
       - name: Test Docker Compose startup
         run: |
           echo "🚀 Testing Docker Compose startup..."
-          docker-compose up -d dollhousemcp
+          docker compose up -d dollhousemcp
           
           # Wait for service to be ready
           sleep 15
@@ -288,8 +288,8 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker-compose down
-          docker-compose rm -f
+          docker compose down
+          docker compose rm -f
 
       - name: Docker Compose testing complete
         run: |
