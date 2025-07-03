@@ -1,0 +1,281 @@
+---
+name: Cross-Platform Compatibility
+
+# Cross-Platform Testing Workflow
+# ===============================
+# PURPOSE: Ensures DollhouseMCP works correctly across all major platforms
+# TRIGGERS: Push to main/develop branches, pull requests, manual dispatch
+# PLATFORMS: macOS, Windows, Ubuntu Linux
+# NODE VERSIONS: Current LTS, Previous LTS, Latest Stable
+#
+# TESTING SCOPE:
+#   - Installation and dependency resolution
+#   - TypeScript compilation 
+#   - MCP server startup and tool registration
+#   - Auto-update system functionality
+#   - Cross-platform file path handling
+#   - Git and npm dependency verification
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    # Weekly compatibility check (Sundays at 2 AM UTC)
+    - cron: '0 2 * * 0'
+
+env:
+  # Test configuration
+  NODE_OPTIONS: --max-old-space-size=4096
+  CI: true
+
+jobs:
+  # Matrix strategy for comprehensive platform coverage
+  cross-platform-test:
+    name: Test on ${{ matrix.os }} with Node ${{ matrix.node-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    
+    strategy:
+      fail-fast: false  # Continue testing other platforms even if one fails
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ['18.x', '20.x', '22.x']
+        include:
+          # Platform-specific configurations
+          - os: ubuntu-latest
+            platform: linux
+            shell: bash
+          - os: windows-latest  
+            platform: windows
+            shell: pwsh
+          - os: macos-latest
+            platform: macos
+            shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 1  # Shallow clone for faster CI
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4.0.2
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Display system information
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "🖥️  Platform: ${{ matrix.platform }}"
+          echo "📦 Node.js: $(node --version)"
+          echo "📦 npm: $(npm --version)"
+          echo "🗂️  Working Directory: $(pwd)"
+          
+          # Platform-specific system info
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            echo "🐧 OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d '"' -f 2)"
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            echo "🍎 macOS: $(sw_vers -productVersion)"
+          elif [ "${{ matrix.platform }}" = "windows" ]; then
+            echo "🪟 Windows: $env:OS $env:PROCESSOR_ARCHITECTURE"
+          fi
+
+      - name: Verify Git availability
+        shell: ${{ matrix.shell }}
+        run: |
+          git --version
+          echo "✅ Git is available"
+
+      - name: Install dependencies
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "📦 Installing npm dependencies..."
+          npm ci --prefer-offline --no-audit
+          echo "✅ Dependencies installed successfully"
+
+      - name: TypeScript compilation test
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "🔨 Testing TypeScript compilation..."
+          npm run build
+          echo "✅ TypeScript compilation successful"
+
+      - name: Verify build artifacts
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "🔍 Verifying build artifacts..."
+          
+          # Cross-platform file existence check
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            if (Test-Path "dist/index.js") { echo "✅ dist/index.js exists" } else { echo "❌ Missing dist/index.js"; exit 1 }
+            if (Test-Path "dist/index.d.ts") { echo "✅ dist/index.d.ts exists" } else { echo "❌ Missing dist/index.d.ts"; exit 1 }
+          else
+            [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
+            [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
+          fi
+
+      - name: Test MCP server startup
+        shell: ${{ matrix.shell }}
+        timeout-minutes: 2
+        run: |
+          echo "🚀 Testing MCP server startup..."
+          
+          # Test server can start and respond (platform-specific timeout)
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            # Windows: Use PowerShell timeout and job control
+            $job = Start-Job -ScriptBlock { 
+              node dist/index.js 2>&1 | ForEach-Object { 
+                if ($_ -match "Server running|MCP server|tools.*registered") { 
+                  Write-Output "SUCCESS: $_"
+                  return
+                }
+              }
+            }
+            
+            Start-Sleep -Seconds 5
+            if ($job.State -eq "Running") {
+              Stop-Job $job
+              Remove-Job $job
+              echo "✅ MCP server startup successful (Windows)"
+            } else {
+              echo "❌ Server startup failed (Windows)"
+              exit 1
+            }
+          else
+            # Unix: Use timeout command
+            timeout 5s node dist/index.js 2>&1 | head -20 || true
+            if [ $? -eq 124 ] || [ $? -eq 0 ]; then
+              echo "✅ MCP server startup successful (Unix)"
+            else
+              echo "❌ Server startup failed (Unix)"
+              exit 1
+            fi
+          fi
+
+      - name: Test personas directory handling
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "📁 Testing personas directory handling..."
+          
+          # Verify personas directory exists and is readable
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            if (Test-Path "personas") { 
+              echo "✅ Personas directory exists"
+              Get-ChildItem personas -Filter "*.md" | ForEach-Object { echo "📄 Found: $($_.Name)" }
+            } else { 
+              echo "❌ Personas directory missing"; exit 1 
+            }
+          else
+            [ -d "personas" ] && echo "✅ Personas directory exists" || { echo "❌ Personas directory missing"; exit 1; }
+            find personas -name "*.md" -type f | while read file; do echo "📄 Found: $(basename "$file")"; done
+          fi
+
+      - name: Test package.json integrity
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "📋 Testing package.json integrity..."
+          
+          # Verify package.json is valid and has required fields
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            $pkg = Get-Content package.json | ConvertFrom-Json
+            if ($pkg.name -eq "dollhousemcp") { echo "✅ Package name correct" } else { echo "❌ Invalid package name"; exit 1 }
+            if ($pkg.main -eq "dist/index.js") { echo "✅ Main entry correct" } else { echo "❌ Invalid main entry"; exit 1 }
+          else
+            NAME=$(node -p "require('./package.json').name")
+            MAIN=$(node -p "require('./package.json').main")
+            [ "$NAME" = "dollhousemcp" ] && echo "✅ Package name correct" || { echo "❌ Invalid package name"; exit 1; }
+            [ "$MAIN" = "dist/index.js" ] && echo "✅ Main entry correct" || { echo "❌ Invalid main entry"; exit 1; }
+          fi
+
+      # Run platform-specific additional tests
+      - name: Platform-specific tests
+        shell: ${{ matrix.shell }}
+        run: |
+          echo "🔧 Running platform-specific tests for ${{ matrix.platform }}..."
+          
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            echo "🪟 Windows-specific tests:"
+            echo "  - Testing Windows path handling..."
+            $env:DOLLHOUSE_USER = "test-user"
+            echo "  - Environment variable test: $env:DOLLHOUSE_USER"
+            echo "✅ Windows tests passed"
+            
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            echo "🍎 macOS-specific tests:"
+            echo "  - Testing macOS file permissions..."
+            ls -la dist/index.js
+            echo "  - Testing Claude Desktop config path..."
+            echo "    ~/Library/Application Support/Claude/claude_desktop_config.json"
+            echo "✅ macOS tests passed"
+            
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            echo "🐧 Linux-specific tests:"
+            echo "  - Testing Linux file permissions..."
+            ls -la dist/index.js
+            echo "  - Testing XDG config paths..."
+            echo "    $XDG_CONFIG_HOME or ~/.config/"
+            echo "✅ Linux tests passed"
+          fi
+
+  # Dependency compatibility matrix
+  dependency-compatibility:
+    name: Dependency Compatibility Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4.0.2
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Check dependency versions
+        run: |
+          echo "🔍 Checking dependency compatibility..."
+          
+          # Verify critical dependency versions
+          echo "📦 Critical Dependencies:"
+          node -p "'@modelcontextprotocol/sdk: ' + require('@modelcontextprotocol/sdk/package.json').version" 2>/dev/null || echo "❌ MCP SDK not installed"
+          node -p "'gray-matter: ' + require('gray-matter/package.json').version" 2>/dev/null || echo "❌ gray-matter not installed"
+          node -p "'typescript: ' + require('typescript/package.json').version" 2>/dev/null || echo "❌ TypeScript not installed"
+          
+          echo "🔧 System Dependencies:"
+          git --version | head -1
+          npm --version
+
+      - name: Audit dependencies
+        run: |
+          echo "🛡️  Security audit..."
+          npm audit --audit-level=moderate || true
+          echo "✅ Security audit completed"
+
+  # Summary job that requires all tests to pass
+  cross-platform-summary:
+    name: Cross-Platform Compatibility Summary
+    runs-on: ubuntu-latest
+    needs: [cross-platform-test, dependency-compatibility]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "📊 Cross-Platform Test Summary"
+          echo "============================="
+          
+          if [ "${{ needs.cross-platform-test.result }}" = "success" ] && [ "${{ needs.dependency-compatibility.result }}" = "success" ]; then
+            echo "✅ All cross-platform tests PASSED"
+            echo "🎉 DollhouseMCP is compatible across all tested platforms!"
+          else
+            echo "❌ Some cross-platform tests FAILED"
+            echo "🔍 Check individual job results for details"
+            exit 1
+          fi

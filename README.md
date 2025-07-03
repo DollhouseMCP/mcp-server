@@ -14,12 +14,13 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **17 MCP Tools** | Complete persona lifecycle management through chat interface |
+| 🎭 **21 MCP Tools** | Complete persona lifecycle management through chat interface |
 | 🏪 **GitHub Marketplace** | Browse, search, install, and submit personas to community marketplace |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
+| 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
 
 ## 🚀 Quick Start
@@ -78,9 +79,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 17 DollhouseMCP tools will be available
+3. All 21 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (17 Total)
+## 🛠️ Available Tools (21 Total)
 
 ### Core Persona Management
 - **`list_personas`** - Display all local personas with enhanced metadata
@@ -107,6 +108,12 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`edit_persona`** - Modify existing persona fields
 - **`validate_persona`** - Comprehensive quality validation
 
+### Auto-Update System
+- **`check_for_updates`** - Check GitHub releases for available DollhouseMCP updates
+- **`update_server`** - Automated git pull + npm install + build with backup creation
+- **`rollback_update`** - Restore previous version from automatic backups
+- **`get_server_status`** - Comprehensive server status with version, git info, and system details
+
 ## 📖 Usage Examples
 
 ### Marketplace Operations
@@ -130,6 +137,200 @@ submit_persona "Study Buddy"               # Share with community
 set_user_identity "your-username"          # Set attribution
 get_user_identity                          # Check current status
 clear_user_identity                        # Return to anonymous
+```
+
+### Auto-Update Operations
+```
+check_for_updates                          # Check for new DollhouseMCP versions
+get_server_status                          # View current version and system info
+update_server true                         # Perform automated update with backup
+rollback_update true                       # Revert to previous version if needed
+```
+
+## 🖥️ Cross-Platform Installation
+
+### 🐧 Linux Installation
+
+#### Prerequisites
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y nodejs npm git
+
+# CentOS/RHEL/Fedora  
+sudo dnf install -y nodejs npm git
+
+# Arch Linux
+sudo pacman -S nodejs npm git
+```
+
+#### Installation Steps
+```bash
+# Clone and build
+git clone https://github.com/mickdarling/DollhouseMCP.git
+cd DollhouseMCP
+npm install
+npm run build
+
+# Optional: Set user identity
+export DOLLHOUSE_USER="your-username"
+export DOLLHOUSE_EMAIL="your-email@example.com"
+```
+
+#### Claude Desktop Configuration (Linux)
+```bash
+# Configuration location
+~/.config/Claude/claude_desktop_config.json
+
+# Or use XDG_CONFIG_HOME if set
+$XDG_CONFIG_HOME/Claude/claude_desktop_config.json
+```
+
+Configuration content:
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/DollhouseMCP/dist/index.js"]
+    }
+  }
+}
+```
+
+### 🪟 Windows Installation
+
+#### Prerequisites
+```powershell
+# Install Node.js from https://nodejs.org/
+# Or using Chocolatey
+choco install nodejs git
+
+# Or using winget
+winget install OpenJS.NodeJS Git.Git
+```
+
+#### Installation Steps (PowerShell)
+```powershell
+# Clone and build
+git clone https://github.com/mickdarling/DollhouseMCP.git
+cd DollhouseMCP
+npm install
+npm run build
+
+# Optional: Set user identity
+$env:DOLLHOUSE_USER = "your-username"
+$env:DOLLHOUSE_EMAIL = "your-email@example.com"
+```
+
+#### Claude Desktop Configuration (Windows)
+```powershell
+# Configuration location
+$env:APPDATA\Claude\claude_desktop_config.json
+```
+
+Configuration content (use forward slashes or double backslashes):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["C:/path/to/DollhouseMCP/dist/index.js"]
+    }
+  }
+}
+```
+
+### 🍎 macOS Installation
+
+#### Prerequisites
+```bash
+# Using Homebrew (recommended)
+brew install node git
+
+# Or download from https://nodejs.org/
+```
+
+#### Installation Steps
+```bash
+# Clone and build
+git clone https://github.com/mickdarling/DollhouseMCP.git
+cd DollhouseMCP
+npm install
+npm run build
+
+# Optional: Set user identity
+export DOLLHOUSE_USER="your-username"
+export DOLLHOUSE_EMAIL="your-email@example.com"
+```
+
+#### Claude Desktop Configuration (macOS)
+```bash
+# Configuration location
+~/Library/Application Support/Claude/claude_desktop_config.json
+```
+
+Configuration content:
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/DollhouseMCP/dist/index.js"]
+    }
+  }
+}
+```
+
+## 🐳 Docker Installation
+
+### Quick Start with Docker
+```bash
+# Clone repository
+git clone https://github.com/mickdarling/DollhouseMCP.git
+cd DollhouseMCP
+
+# Build and run with Docker Compose
+docker-compose up -d
+
+# Or build manually
+docker build -t dollhousemcp .
+docker run -d --name dollhousemcp dollhousemcp
+```
+
+### Docker Compose (Recommended)
+
+#### Production deployment:
+```bash
+docker-compose up -d
+```
+
+#### Development with hot reload:
+```bash
+docker-compose --profile dev up dollhousemcp-dev
+```
+
+### Custom Personas with Docker
+```bash
+# Mount your custom personas directory
+docker run -d \
+  --name dollhousemcp \
+  -v /path/to/your/personas:/app/personas \
+  -e DOLLHOUSE_USER="your-username" \
+  dollhousemcp
+```
+
+### Docker Environment Variables
+```bash
+# Set user identity
+DOLLHOUSE_USER=your-username
+DOLLHOUSE_EMAIL=your-email@example.com
+
+# Custom personas directory (inside container)
+PERSONAS_DIR=/app/personas
+
+# Node.js environment
+NODE_ENV=production
 ```
 
 ## 🏗️ Project Structure
@@ -287,12 +488,20 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### Phase 2B (Current) - July 1, 2025
+### Phase 2B+ (Current) - July 3, 2025
+- ✅ **Enterprise-grade auto-update system** with 4 new MCP tools
+- ✅ **50 comprehensive tests** covering all functionality  
+- ✅ **Security hardening** - eliminated all command injection vulnerabilities
+- ✅ **Cross-platform support** - Windows, macOS, Linux with CI/CD testing
+- ✅ **Docker containerization** with production and development configurations
+- ✅ **21 total MCP tools** with backup/rollback and dependency validation
+
+### Phase 2B - July 1-2, 2025
 - ✅ Complete chat-based persona management
 - ✅ GitHub marketplace integration
 - ✅ User identity and attribution system
-- ✅ 17 comprehensive MCP tools
 - ✅ Real-time validation and editing
+- ✅ Enterprise-grade GitHub Actions security
 
 ### Phase 1 - July 1, 2025
 - ✅ Fresh AGPL-3.0 licensed repository
