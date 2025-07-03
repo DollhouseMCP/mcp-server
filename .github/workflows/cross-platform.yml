@@ -19,7 +19,7 @@ jobs:
     name: Test on ${{ matrix.os }} with Node ${{ matrix.node-version }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
-    
+
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +55,7 @@ jobs:
           echo "Testing MCP server startup..."
           timeout 30s node dist/index.js > server.log 2>&1 &
           SERVER_PID=$!
-          
+
           for i in {1..30}; do
             if grep -q "Server running\|MCP server\|tools.*registered" server.log 2>/dev/null; then
               echo "✅ MCP server started successfully"
@@ -64,7 +64,7 @@ jobs:
             fi
             sleep 1
           done
-          
+
           echo "❌ MCP server failed to start within 30s"
           kill $SERVER_PID 2>/dev/null || true
           exit 1
