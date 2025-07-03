@@ -68,8 +68,7 @@ docs/
 .travis.yml
 .gitlab-ci.yml
 
-# Package manager files (copied separately)
-package-lock.json
+# Package manager files (yarn.lock excluded, package-lock.json needed for npm ci)
 yarn.lock
 
 # Backup files

@@ -221,22 +221,22 @@ jobs:
       - name: Test Docker Compose build
         run: |
           echo "🐳 Testing Docker Compose build..."
-          docker-compose build dollhousemcp
+          docker compose build dollhousemcp
 
       - name: Test Docker Compose startup
         run: |
           echo "🚀 Testing Docker Compose startup..."
-          docker-compose up -d dollhousemcp
+          docker compose up -d dollhousemcp
           
           # Wait for service to be ready
           sleep 15
           
           # Check if service is running
-          if docker-compose ps dollhousemcp | grep "Up"; then
+          if docker compose ps dollhousemcp | grep "Up"; then
             echo "✅ Docker Compose service started successfully"
           else
             echo "❌ Docker Compose service failed to start"
-            docker-compose logs dollhousemcp
+            docker compose logs dollhousemcp
             exit 1
           fi
 
@@ -245,11 +245,11 @@ jobs:
           echo "🔍 Testing Docker Compose health..."
           
           # Get container ID with error handling
-          container_id=$(docker-compose ps -q dollhousemcp 2>/dev/null || echo "")
+          container_id=$(docker compose ps -q dollhousemcp 2>/dev/null || echo "")
           
           if [ -z "$container_id" ]; then
             echo "❌ Could not find Docker Compose container"
-            docker-compose ps
+            docker compose ps
             exit 1
           fi
           
@@ -268,7 +268,7 @@ jobs:
           while [ $elapsed -lt $timeout ] && [ "$health_status" != "healthy" ]; do
             if [ "$health_status" = "unhealthy" ]; then
               echo "❌ Docker Compose health check failed"
-              docker-compose logs dollhousemcp
+              docker compose logs dollhousemcp
               exit 1
             fi
             
@@ -288,8 +288,8 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker-compose down
-          docker-compose rm -f
+          docker compose down
+          docker compose rm -f
 
       - name: Docker Compose testing complete
         run: |
