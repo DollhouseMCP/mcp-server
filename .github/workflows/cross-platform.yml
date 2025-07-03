@@ -579,25 +579,46 @@ jobs:
           echo "-------------------------------"
           echo "⏱️  Performance measurements:"
           
-          # Test Node.js startup time
-          START_TIME=$(date +%s%N)
-          node --version > /dev/null
-          END_TIME=$(date +%s%N)
-          NODE_STARTUP_TIME=$(( (END_TIME - START_TIME) / 1000000 ))
+          # Test Node.js startup time (cross-platform timing)
+          if command -v python3 &> /dev/null; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            node --version > /dev/null
+            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            NODE_STARTUP_TIME=$((END_TIME - START_TIME))
+          else
+            START_TIME=$(date +%s)
+            node --version > /dev/null
+            END_TIME=$(date +%s)
+            NODE_STARTUP_TIME=$(((END_TIME - START_TIME) * 1000))
+          fi
           echo "  - Node.js startup: ${NODE_STARTUP_TIME}ms"
           
-          # Test npm command time
-          START_TIME=$(date +%s%N)
-          npm --version > /dev/null
-          END_TIME=$(date +%s%N)
-          NPM_STARTUP_TIME=$(( (END_TIME - START_TIME) / 1000000 ))
+          # Test npm command time (cross-platform timing)
+          if command -v python3 &> /dev/null; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            npm --version > /dev/null
+            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            NPM_STARTUP_TIME=$((END_TIME - START_TIME))
+          else
+            START_TIME=$(date +%s)
+            npm --version > /dev/null
+            END_TIME=$(date +%s)
+            NPM_STARTUP_TIME=$(((END_TIME - START_TIME) * 1000))
+          fi
           echo "  - npm startup: ${NPM_STARTUP_TIME}ms"
           
-          # Test file system performance
-          START_TIME=$(date +%s%N)
-          find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
-          END_TIME=$(date +%s%N)
-          FILE_SCAN_TIME=$(( (END_TIME - START_TIME) / 1000000 ))
+          # Test file system performance (cross-platform timing)
+          if command -v python3 &> /dev/null; then
+            START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
+            END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
+            FILE_SCAN_TIME=$((END_TIME - START_TIME))
+          else
+            START_TIME=$(date +%s)
+            find . -name "*.js" -o -name "*.ts" | head -100 > /dev/null
+            END_TIME=$(date +%s)
+            FILE_SCAN_TIME=$(((END_TIME - START_TIME) * 1000))
+          fi
           echo "  - File system scan: ${FILE_SCAN_TIME}ms"
           echo ""
           
