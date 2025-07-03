@@ -1,11 +1,13 @@
 # DollhouseMCP
 
-[![CI/CD Pipeline](https://github.com/mickdarling/DollhouseMCP/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/cross-platform.yml)
+[![Core Build & Test](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml)
+[![Build Artifacts](https://github.com/mickdarling/DollhouseMCP/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/build-artifacts.yml)
+[![Extended Node Compatibility](https://github.com/mickdarling/DollhouseMCP/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/extended-node-compatibility.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 
-[![Platform Support](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/cross-platform.yml)
+[![Platform Support](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/blob/main/Dockerfile)
 [![Test Coverage](https://img.shields.io/badge/Coverage-50%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/mickdarling/DollhouseMCP)

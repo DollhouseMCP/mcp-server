@@ -44,7 +44,7 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
             typescript-build-${{ runner.os }}-
@@ -62,7 +62,7 @@ jobs:
             .jest-cache/
             coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-

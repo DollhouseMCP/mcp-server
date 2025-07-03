@@ -3,7 +3,7 @@ name: Extended Node Compatibility
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
             typescript-build-${{ runner.os }}-
@@ -62,7 +62,7 @@ jobs:
             .jest-cache/
             coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
@@ -75,3 +75,10 @@ jobs:
           echo "✅ Extended Node Compatibility Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
+
+      - name: Notify on scheduled failure
+        if: failure() && github.event_name == 'schedule'
+        run: |
+          echo "🚨 Extended Node Compatibility failed on scheduled run"
+          echo "This indicates a potential compatibility issue with Node.js ${{ matrix.node-version }} on ${{ matrix.os }}"
+          echo "Please investigate: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
