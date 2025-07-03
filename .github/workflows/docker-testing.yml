@@ -75,12 +75,12 @@ jobs:
           severity-cutoff: high
         continue-on-error: true
 
-      - name: Test container startup (with security constraints)
+      - name: Test MCP server initialization (with security constraints)
         run: |
-          echo "🚀 Testing container startup for ${{ matrix.platform }}..."
+          echo "🚀 Testing MCP server initialization for ${{ matrix.platform }}..."
           
-          # Start container in background with security constraints
-          docker run -d \
+          # Run MCP server with security constraints and capture logs
+          docker run \
             --name dollhousemcp-test \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
@@ -89,104 +89,45 @@ jobs:
             --tmpfs /tmp \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${{ matrix.platform }}
+            dollhousemcp:latest-${{ matrix.platform }} &
           
-          # Wait for container to initialize
-          echo "⏳ Waiting for container to initialize..."
-          sleep 10
+          # Wait for container to complete initialization
+          echo "⏳ Waiting for MCP server initialization..."
+          docker wait dollhousemcp-test || true
           
-          # Check if container is running
-          if docker ps | grep dollhousemcp-test; then
-            echo "✅ Container started successfully"
+          # Check logs for successful initialization
+          if docker logs dollhousemcp-test 2>&1 | grep -q "DollhouseMCP server running on stdio"; then
+            echo "✅ MCP server initialized successfully"
           else
-            echo "❌ Container failed to start"
-            docker logs dollhousemcp-test
-            exit 1
-          fi
-
-      - name: Test health check
-        run: |
-          echo "🔍 Testing health check for ${{ matrix.platform }}..."
-          
-          # Wait for health check to pass (up to 2 minutes)
-          timeout=120
-          elapsed=0
-          
-          while [ $elapsed -lt $timeout ]; do
-            # Robust health status parsing for different Docker versions
-            health_status=$(docker inspect dollhousemcp-test 2>/dev/null | \
-              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
-            
-            if [ "$health_status" = "healthy" ]; then
-              echo "✅ Health check passed"
-              break
-            elif [ "$health_status" = "unhealthy" ]; then
-              echo "❌ Health check failed"
-              docker logs dollhousemcp-test
-              exit 1
-            else
-              echo "⏳ Waiting for health check... ($elapsed/$timeout seconds, status: $health_status)"
-              sleep 5
-              elapsed=$((elapsed + 5))
-            fi
-          done
-          
-          if [ $elapsed -ge $timeout ]; then
-            echo "❌ Health check timeout (final status: $health_status)"
+            echo "❌ MCP server failed to initialize"
             docker logs dollhousemcp-test
             exit 1
           fi
 
       - name: Test MCP server functionality
         run: |
-          echo "🧪 Testing MCP server functionality for ${{ matrix.platform }}..."
+          echo "🔍 Testing MCP server functionality for ${{ matrix.platform }}..."
           
-          # Test if the server is responsive (basic check)
-          docker exec dollhousemcp-test node -e "
-            const fs = require('fs');
-            const path = require('path');
-            
-            // Check if dist/index.js exists and is readable
-            const serverPath = path.join('/app', 'dist', 'index.js');
-            if (!fs.existsSync(serverPath)) {
-              console.error('❌ Server file not found');
-              process.exit(1);
-            }
-            
-            // Check if personas directory exists
-            const personasPath = path.join('/app', 'personas');
-            if (!fs.existsSync(personasPath)) {
-              console.error('❌ Personas directory not found');
-              process.exit(1);
-            }
-            
-            // Check if we can require the server module
-            try {
-              require(serverPath);
-              console.log('✅ MCP server module loads successfully');
-            } catch (error) {
-              console.error('❌ MCP server module failed to load:', error.message);
-              process.exit(1);
-            }
-          "
-
-      - name: Test container logs
-        run: |
-          echo "📝 Checking container logs for ${{ matrix.platform }}..."
-          docker logs dollhousemcp-test
+          # Test persona loading
+          if docker logs dollhousemcp-test 2>&1 | grep -q "Loaded persona:"; then
+            echo "✅ MCP server loaded personas successfully"
+            persona_count=$(docker logs dollhousemcp-test 2>&1 | grep -c "Loaded persona:" || echo "0")
+            echo "📊 Loaded $persona_count personas"
+          else
+            echo "❌ MCP server failed to load personas"
+            docker logs dollhousemcp-test
+            exit 1
+          fi
           
-          # Check for critical error patterns (excluding expected/harmless errors)
-          error_count=$(docker logs dollhousemcp-test 2>&1 | \
-            grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" | \
-            wc -l || echo "0")
-          
-          if [ "$error_count" -gt 0 ]; then
-            echo "❌ Found $error_count critical error(s) in logs"
-            docker logs dollhousemcp-test 2>&1 | grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" || true
+          # Verify no critical errors during initialization
+          if docker logs dollhousemcp-test 2>&1 | grep -i "error\|failed\|exception"; then
+            echo "❌ Critical errors found during MCP server initialization"
+            docker logs dollhousemcp-test
             exit 1
           else
-            echo "✅ No critical errors found in logs"
+            echo "✅ No critical errors during initialization"
           fi
+
 
       - name: Cleanup container
         if: always()
@@ -231,14 +172,25 @@ jobs:
           docker compose run --rm dollhousemcp &
           compose_pid=$!
           
-          # Wait for container to start and initialize
-          sleep 5
+          # Wait for initialization with retry logic
+          echo "⏳ Waiting for MCP server initialization..."
+          timeout=30
+          elapsed=0
+          initialized=false
           
-          # Check if initialization completed successfully
-          if docker compose logs dollhousemcp 2>/dev/null | grep -q "DollhouseMCP server running on stdio"; then
-            echo "✅ Docker Compose MCP server initialized successfully"
-          else
-            echo "❌ Docker Compose MCP server failed to initialize"
+          while [ $elapsed -lt $timeout ]; do
+            if docker compose logs dollhousemcp 2>/dev/null | grep -q "DollhouseMCP server running on stdio"; then
+              echo "✅ Docker Compose MCP server initialized successfully"
+              initialized=true
+              break
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+            echo "⏳ Waiting... ($elapsed/$timeout seconds)"
+          done
+          
+          if [ "$initialized" = false ]; then
+            echo "❌ Docker Compose MCP server failed to initialize within $timeout seconds"
             docker compose logs dollhousemcp
             exit 1
           fi

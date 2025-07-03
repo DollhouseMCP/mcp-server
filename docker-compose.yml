@@ -28,13 +28,8 @@ services:
         reservations:
           memory: 128M
           cpus: '0.1'
-    # Health check
-    healthcheck:
-      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    # No health check needed for stdio-based MCP servers
+    # MCP servers initialize, load personas, and exit (expected behavior)
 
   # Development service
   dollhousemcp-dev:

@@ -45,9 +45,8 @@ USER dollhouse
 # Expose port (if needed for future HTTP interface)
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "console.log('Health check passed')" || exit 1
+# No health check needed for stdio-based MCP servers
+# MCP servers initialize, load personas, and exit when no input stream available
 
 # Set environment variables
 ENV NODE_ENV=production
