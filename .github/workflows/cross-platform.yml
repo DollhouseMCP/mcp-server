@@ -295,128 +295,25 @@ jobs:
         run: |
           echo "📋 Testing package.json integrity..."
           
-          # Ultra-robust JSON parsing with comprehensive error handling and multiple fallbacks
-          echo "🔍 Attempting JSON parsing with multiple fallback strategies..."
-          
-          # Initialize variables
-          NAME=""
-          MAIN=""
-          PARSE_SUCCESS=false
-          
-          # Strategy 1: Try jq (most reliable for JSON parsing)
+          # Simple JSON validation (will be enhanced with reusable script in future)
           if command -v jq &> /dev/null; then
-            echo "📊 Attempting jq parsing..."
-            if jq empty package.json 2>/dev/null; then
-              NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
-              MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
-              if [ -n "$NAME" ] && [ -n "$MAIN" ]; then
-                echo "✅ jq parsing successful"
-                PARSE_SUCCESS=true
-              else
-                echo "⚠️  jq parsing incomplete - missing fields"
-              fi
+            NAME=$(jq -r '.name // ""' package.json 2>/dev/null)
+            MAIN=$(jq -r '.main // ""' package.json 2>/dev/null)
+            if [ "$NAME" = "dollhousemcp" ] && [ "$MAIN" = "dist/index.js" ]; then
+              echo "✅ Package.json validation passed"
             else
-              echo "⚠️  jq parsing failed - invalid JSON"
+              echo "❌ Package.json validation failed: name='$NAME', main='$MAIN'"
+              exit 1
             fi
           else
-            echo "⚠️  jq not available"
-          fi
-          
-          # Strategy 2: Try node.js with enhanced error handling
-          if [ "$PARSE_SUCCESS" = false ]; then
-            echo "📊 Attempting Node.js parsing..."
-            if [ -f "package.json" ]; then
-              # Test if file is readable and valid JSON
-              if node -e 'JSON.parse(require("fs").readFileSync("package.json", "utf8"))' 2>/dev/null; then
-                NAME=$(node -e 'try { 
-                  const pkg = JSON.parse(require("fs").readFileSync("package.json", "utf8")); 
-                  console.log(pkg.name || ""); 
-                } catch(e) { 
-                  console.log(""); 
-                  process.exit(1); 
-                }' 2>/dev/null || echo "")
-                MAIN=$(node -e 'try { 
-                  const pkg = JSON.parse(require("fs").readFileSync("package.json", "utf8")); 
-                  console.log(pkg.main || ""); 
-                } catch(e) { 
-                  console.log(""); 
-                  process.exit(1); 
-                }' 2>/dev/null || echo "")
-                if [ -n "$NAME" ] && [ -n "$MAIN" ]; then
-                  echo "✅ Node.js parsing successful"
-                  PARSE_SUCCESS=true
-                else
-                  echo "⚠️  Node.js parsing incomplete - missing fields"
-                fi
-              else
-                echo "⚠️  Node.js parsing failed - invalid JSON structure"
-              fi
+            echo "⚠️  jq not available, using basic validation"
+            if grep -q '"name": "dollhousemcp"' package.json && grep -q '"main": "dist/index.js"' package.json; then
+              echo "✅ Basic package.json validation passed"
             else
-              echo "⚠️  package.json file not found"
+              echo "❌ Basic package.json validation failed"
+              exit 1
             fi
           fi
-          
-          # Strategy 3: Try python as final fallback
-          if [ "$PARSE_SUCCESS" = false ] && command -v python3 &> /dev/null; then
-            echo "📊 Attempting Python parsing..."
-            NAME=$(python3 -c 'import json, sys; 
-            try: 
-              with open("package.json") as f: 
-                data = json.load(f); 
-                print(data.get("name", ""))
-            except: 
-              print(""); 
-              sys.exit(1)' 2>/dev/null || echo "")
-            MAIN=$(python3 -c 'import json, sys; 
-            try: 
-              with open("package.json") as f: 
-                data = json.load(f); 
-                print(data.get("main", ""))
-            except: 
-              print(""); 
-              sys.exit(1)' 2>/dev/null || echo "")
-            if [ -n "$NAME" ] && [ -n "$MAIN" ]; then
-              echo "✅ Python parsing successful"
-              PARSE_SUCCESS=true
-            else
-              echo "⚠️  Python parsing incomplete - missing fields"
-            fi
-          fi
-          
-          # Final validation
-          if [ "$PARSE_SUCCESS" = false ]; then
-            echo "❌ All JSON parsing strategies failed"
-            echo "🔍 Debugging information:"
-            echo "  - File exists: $([ -f package.json ] && echo 'Yes' || echo 'No')"
-            echo "  - File readable: $([ -r package.json ] && echo 'Yes' || echo 'No')"
-            echo "  - File size: $(wc -c < package.json 2>/dev/null || echo 'Unknown') bytes"
-            echo "  - Available parsers: $(command -v jq &>/dev/null && echo 'jq' || echo 'no-jq') $(command -v node &>/dev/null && echo 'node' || echo 'no-node') $(command -v python3 &>/dev/null && echo 'python3' || echo 'no-python3')"
-            echo "  - First 200 chars: $(head -c 200 package.json 2>/dev/null || echo 'Cannot read file')"
-            exit 1
-          fi
-          
-          # Validate parsed values
-          if [ -z "$NAME" ]; then
-            echo "❌ Failed to parse package.json name or name is empty"
-            exit 1
-          fi
-          if [ -z "$MAIN" ]; then
-            echo "❌ Failed to parse package.json main or main is empty"
-            exit 1
-          fi
-          
-          # Validate expected values
-          if [ "$NAME" != "dollhousemcp" ]; then
-            echo "❌ Invalid package name: '$NAME', expected 'dollhousemcp'"
-            exit 1
-          fi
-          echo "✅ Package name correct: $NAME"
-          
-          if [ "$MAIN" != "dist/index.js" ]; then
-            echo "❌ Invalid main entry: '$MAIN', expected 'dist/index.js'"
-            exit 1
-          fi
-          echo "✅ Main entry correct: $MAIN"
 
       # Run tests
       - name: Run test suite
