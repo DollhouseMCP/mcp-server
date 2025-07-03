@@ -168,33 +168,21 @@ jobs:
         run: |
           echo "🚀 Testing Docker Compose startup..."
           
-          # Run MCP server and capture logs (MCP servers exit after initialization)
-          docker compose run --rm dollhousemcp &
-          compose_pid=$!
+          # Run MCP server and capture logs directly (MCP servers exit after initialization)
+          echo "⏳ Running MCP server via Docker Compose..."
+          docker_output=$(docker compose run --rm dollhousemcp 2>&1)
+          exit_code=$?
           
-          # Initial wait to prevent race conditions (recommended 3-5 seconds)
-          sleep 5
+          echo "Docker Compose run completed with exit code: $exit_code"
+          echo "Output captured:"
+          echo "$docker_output"
           
-          # Wait for initialization with retry logic
-          echo "⏳ Waiting for MCP server initialization..."
-          timeout=30
-          elapsed=0
-          initialized=false
-          
-          while [ $elapsed -lt $timeout ]; do
-            if docker compose logs dollhousemcp 2>/dev/null | grep -q "DollhouseMCP server running on stdio"; then
-              echo "✅ Docker Compose MCP server initialized successfully"
-              initialized=true
-              break
-            fi
-            sleep 2
-            elapsed=$((elapsed + 2))
-            echo "⏳ Waiting... ($elapsed/$timeout seconds)"
-          done
-          
-          if [ "$initialized" = false ]; then
-            echo "❌ Docker Compose MCP server failed to initialize within $timeout seconds"
-            docker compose logs dollhousemcp
+          # Check for successful initialization in the captured output
+          if echo "$docker_output" | grep -q "DollhouseMCP server running on stdio"; then
+            echo "✅ Docker Compose MCP server initialized successfully"
+          else
+            echo "❌ Docker Compose MCP server failed to initialize"
+            echo "Expected to find 'DollhouseMCP server running on stdio' in output"
             exit 1
           fi
 
@@ -202,25 +190,29 @@ jobs:
         run: |
           echo "🔍 Testing Docker Compose MCP server functionality..."
           
-          # Cache logs once for efficiency
-          compose_logs=$(docker compose logs dollhousemcp 2>/dev/null || echo "")
+          # Run MCP server again to capture output for functionality testing
+          echo "⏳ Running MCP server again for functionality testing..."
+          docker_output=$(docker compose run --rm dollhousemcp 2>&1)
           
           # Test that server can load personas and initialize properly
           echo "Testing MCP server persona loading..."
           
-          if echo "$compose_logs" | grep -q "Loaded persona:"; then
+          if echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ MCP server loaded personas successfully"
-            persona_count=$(echo "$compose_logs" | grep -c "Loaded persona:" || echo "0")
+            persona_count=$(echo "$docker_output" | grep -c "Loaded persona:" || echo "0")
             echo "📊 Loaded $persona_count personas"
           else
             echo "❌ MCP server failed to load personas"
-            echo "$compose_logs"
+            echo "Output was:"
+            echo "$docker_output"
             exit 1
           fi
           
           # Verify no critical errors during initialization
-          if echo "$compose_logs" | grep -i "error\|failed\|exception"; then
+          if echo "$docker_output" | grep -i "error\|failed\|exception"; then
             echo "❌ Critical errors found during MCP server initialization"
+            echo "Error output:"
+            echo "$docker_output"
             exit 1
           else
             echo "✅ No critical errors during initialization"
