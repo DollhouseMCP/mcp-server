@@ -1,0 +1,93 @@
+# DollhouseMCP Docker Build Exclusions
+# ====================================
+# Optimize Docker build by excluding unnecessary files
+
+# Development files
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts (rebuilt in container)
+dist/
+*.tsbuildinfo
+
+# Git repository
+.git/
+.gitignore
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Testing and coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Runtime data
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Environment files (should be passed as Docker secrets)
+.env
+.env.local
+.env.*.local
+
+# Documentation (not needed in runtime)
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+docs/
+
+# CI/CD files
+.github/
+.circleci/
+.travis.yml
+.gitlab-ci.yml
+
+# Package manager files (copied separately)
+package-lock.json
+yarn.lock
+
+# Backup files
+backup-*/
+.backup-*
+
+# Test files
+__tests__/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+
+# Docker files (avoid recursive Docker builds)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Temporary files
+tmp/
+temp/

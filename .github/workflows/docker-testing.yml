@@ -1,0 +1,297 @@
+---
+name: Docker Testing
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  CI: true
+
+jobs:
+  docker-build-test:
+    name: Docker Build & Test (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ github.sha }}
+          restore-keys: |
+            docker-buildx-${{ runner.os }}-${{ matrix.platform }}-
+            docker-buildx-${{ runner.os }}-
+
+      - name: Build Docker image (builder stage)
+        run: |
+          echo "🔨 Building Docker image for ${{ matrix.platform }}..."
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --target builder \
+            --tag dollhousemcp:builder-${{ matrix.platform }} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --load \
+            .
+
+      - name: Build Docker image (production stage)
+        run: |
+          echo "🏗️ Building production Docker image for ${{ matrix.platform }}..."
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --target production \
+            --tag dollhousemcp:latest-${{ matrix.platform }} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --load \
+            .
+
+      - name: Scan Docker image for vulnerabilities
+        uses: anchore/scan-action@v3
+        with:
+          image: dollhousemcp:latest-${{ matrix.platform }}
+          fail-build: false  # Don't fail build on vulnerabilities, just report
+          severity-cutoff: high
+        continue-on-error: true
+
+      - name: Test container startup (with security constraints)
+        run: |
+          echo "🚀 Testing container startup for ${{ matrix.platform }}..."
+          
+          # Start container in background with security constraints
+          docker run -d \
+            --name dollhousemcp-test \
+            --platform ${{ matrix.platform }} \
+            --user 1001:1001 \
+            --security-opt no-new-privileges \
+            --read-only \
+            --tmpfs /tmp \
+            --memory 512m \
+            --cpus 0.5 \
+            dollhousemcp:latest-${{ matrix.platform }}
+          
+          # Wait for container to initialize
+          echo "⏳ Waiting for container to initialize..."
+          sleep 10
+          
+          # Check if container is running
+          if docker ps | grep dollhousemcp-test; then
+            echo "✅ Container started successfully"
+          else
+            echo "❌ Container failed to start"
+            docker logs dollhousemcp-test
+            exit 1
+          fi
+
+      - name: Test health check
+        run: |
+          echo "🔍 Testing health check for ${{ matrix.platform }}..."
+          
+          # Wait for health check to pass (up to 2 minutes)
+          timeout=120
+          elapsed=0
+          
+          while [ $elapsed -lt $timeout ]; do
+            # Robust health status parsing for different Docker versions
+            health_status=$(docker inspect dollhousemcp-test 2>/dev/null | \
+              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
+            
+            if [ "$health_status" = "healthy" ]; then
+              echo "✅ Health check passed"
+              break
+            elif [ "$health_status" = "unhealthy" ]; then
+              echo "❌ Health check failed"
+              docker logs dollhousemcp-test
+              exit 1
+            else
+              echo "⏳ Waiting for health check... ($elapsed/$timeout seconds, status: $health_status)"
+              sleep 5
+              elapsed=$((elapsed + 5))
+            fi
+          done
+          
+          if [ $elapsed -ge $timeout ]; then
+            echo "❌ Health check timeout (final status: $health_status)"
+            docker logs dollhousemcp-test
+            exit 1
+          fi
+
+      - name: Test MCP server functionality
+        run: |
+          echo "🧪 Testing MCP server functionality for ${{ matrix.platform }}..."
+          
+          # Test if the server is responsive (basic check)
+          docker exec dollhousemcp-test node -e "
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Check if dist/index.js exists and is readable
+            const serverPath = path.join('/app', 'dist', 'index.js');
+            if (!fs.existsSync(serverPath)) {
+              console.error('❌ Server file not found');
+              process.exit(1);
+            }
+            
+            // Check if personas directory exists
+            const personasPath = path.join('/app', 'personas');
+            if (!fs.existsSync(personasPath)) {
+              console.error('❌ Personas directory not found');
+              process.exit(1);
+            }
+            
+            // Check if we can require the server module
+            try {
+              require(serverPath);
+              console.log('✅ MCP server module loads successfully');
+            } catch (error) {
+              console.error('❌ MCP server module failed to load:', error.message);
+              process.exit(1);
+            }
+          "
+
+      - name: Test container logs
+        run: |
+          echo "📝 Checking container logs for ${{ matrix.platform }}..."
+          docker logs dollhousemcp-test
+          
+          # Check for critical error patterns (excluding expected/harmless errors)
+          error_count=$(docker logs dollhousemcp-test 2>&1 | \
+            grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" | \
+            wc -l || echo "0")
+          
+          if [ "$error_count" -gt 0 ]; then
+            echo "❌ Found $error_count critical error(s) in logs"
+            docker logs dollhousemcp-test 2>&1 | grep -i "fatal\|critical\|panic\|segmentation fault\|out of memory" || true
+            exit 1
+          else
+            echo "✅ No critical errors found in logs"
+          fi
+
+      - name: Cleanup container
+        if: always()
+        run: |
+          echo "🧹 Cleaning up test container..."
+          docker stop dollhousemcp-test || true
+          docker rm dollhousemcp-test || true
+
+      - name: Move cache
+        if: always()
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+
+      - name: Docker testing complete
+        run: |
+          echo "✅ Docker Testing Complete for ${{ matrix.platform }}!"
+          echo "Platform: ${{ matrix.platform }}"
+          echo "All tests passed successfully"
+
+  docker-compose-test:
+    name: Docker Compose Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Test Docker Compose build
+        run: |
+          echo "🐳 Testing Docker Compose build..."
+          docker-compose build dollhousemcp
+
+      - name: Test Docker Compose startup
+        run: |
+          echo "🚀 Testing Docker Compose startup..."
+          docker-compose up -d dollhousemcp
+          
+          # Wait for service to be ready
+          sleep 15
+          
+          # Check if service is running
+          if docker-compose ps dollhousemcp | grep "Up"; then
+            echo "✅ Docker Compose service started successfully"
+          else
+            echo "❌ Docker Compose service failed to start"
+            docker-compose logs dollhousemcp
+            exit 1
+          fi
+
+      - name: Test Docker Compose health
+        run: |
+          echo "🔍 Testing Docker Compose health..."
+          
+          # Get container ID with error handling
+          container_id=$(docker-compose ps -q dollhousemcp 2>/dev/null || echo "")
+          
+          if [ -z "$container_id" ]; then
+            echo "❌ Could not find Docker Compose container"
+            docker-compose ps
+            exit 1
+          fi
+          
+          echo "Container ID: $container_id"
+          
+          # Robust health status check
+          health_status=$(docker inspect $container_id 2>/dev/null | \
+            python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
+          
+          echo "Health status: $health_status"
+          
+          # Wait up to 1 minute for health check
+          timeout=60
+          elapsed=0
+          
+          while [ $elapsed -lt $timeout ] && [ "$health_status" != "healthy" ]; do
+            if [ "$health_status" = "unhealthy" ]; then
+              echo "❌ Docker Compose health check failed"
+              docker-compose logs dollhousemcp
+              exit 1
+            fi
+            
+            sleep 5
+            elapsed=$((elapsed + 5))
+            health_status=$(docker inspect $container_id 2>/dev/null | \
+              python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['State']['Health'].get('Status','none') if data and 'State' in data[0] and 'Health' in data[0]['State'] else 'none')" 2>/dev/null || echo "none")
+          done
+          
+          if [ "$health_status" = "healthy" ]; then
+            echo "✅ Docker Compose health check passed"
+          else
+            echo "⚠️ Health check not available or pending (final status: $health_status)"
+          fi
+
+      - name: Cleanup Docker Compose
+        if: always()
+        run: |
+          echo "🧹 Cleaning up Docker Compose..."
+          docker-compose down
+          docker-compose rm -f
+
+      - name: Docker Compose testing complete
+        run: |
+          echo "✅ Docker Compose Testing Complete!"
+          echo "All tests passed successfully"

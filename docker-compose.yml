@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  dollhousemcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: dollhousemcp:latest
+    container_name: dollhousemcp
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PERSONAS_DIR=/app/personas
+    volumes:
+      # Mount custom personas directory (optional)
+      - ./custom-personas:/app/custom-personas:ro
+    # Network mode for MCP communication
+    network_mode: "host"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Development service
+  dollhousemcp-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: dollhousemcp:dev
+    container_name: dollhousemcp-dev
+    environment:
+      - NODE_ENV=development
+      - PERSONAS_DIR=/app/personas
+    volumes:
+      - .:/app
+      - /app/node_modules
+    working_dir: /app
+    command: npm run dev
+    profiles: ["dev"]

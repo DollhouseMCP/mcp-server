@@ -3,6 +3,7 @@
 [![Core Build & Test](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/mickdarling/DollhouseMCP/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/build-artifacts.yml)
 [![Extended Node Compatibility](https://github.com/mickdarling/DollhouseMCP/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/extended-node-compatibility.yml)
+[![Docker Testing](https://github.com/mickdarling/DollhouseMCP/actions/workflows/docker-testing.yml/badge.svg)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/docker-testing.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)

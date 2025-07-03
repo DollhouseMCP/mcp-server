@@ -50,9 +50,9 @@ __tests__/
 jest.config.js
 
 # Docker (optional - comment out if you want to include Docker files)
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Dockerfile
+# docker-compose.yml
+# .dockerignore
 
 # Windows installer (keep the shell script, ignore PowerShell for now)
 install.ps1
