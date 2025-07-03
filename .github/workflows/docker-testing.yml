@@ -172,6 +172,9 @@ jobs:
           docker compose run --rm dollhousemcp &
           compose_pid=$!
           
+          # Brief initial wait to prevent race conditions
+          sleep 3
+          
           # Wait for initialization with retry logic
           echo "⏳ Waiting for MCP server initialization..."
           timeout=30
@@ -199,21 +202,24 @@ jobs:
         run: |
           echo "🔍 Testing Docker Compose MCP server functionality..."
           
+          # Cache logs once for efficiency
+          compose_logs=$(docker compose logs dollhousemcp 2>/dev/null || echo "")
+          
           # Test that server can load personas and initialize properly
           echo "Testing MCP server persona loading..."
           
-          if docker compose logs dollhousemcp 2>/dev/null | grep -q "Loaded persona:"; then
+          if echo "$compose_logs" | grep -q "Loaded persona:"; then
             echo "✅ MCP server loaded personas successfully"
-            persona_count=$(docker compose logs dollhousemcp 2>/dev/null | grep -c "Loaded persona:" || echo "0")
+            persona_count=$(echo "$compose_logs" | grep -c "Loaded persona:" || echo "0")
             echo "📊 Loaded $persona_count personas"
           else
             echo "❌ MCP server failed to load personas"
-            docker compose logs dollhousemcp
+            echo "$compose_logs"
             exit 1
           fi
           
           # Verify no critical errors during initialization
-          if docker compose logs dollhousemcp 2>/dev/null | grep -i "error\|failed\|exception"; then
+          if echo "$compose_logs" | grep -i "error\|failed\|exception"; then
             echo "❌ Critical errors found during MCP server initialization"
             exit 1
           else

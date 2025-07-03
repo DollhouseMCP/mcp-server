@@ -17,17 +17,10 @@ services:
     volumes:
       # Mount custom personas directory (optional)
       - ./custom-personas:/app/custom-personas:ro
-    # Network mode for MCP communication
-    network_mode: "host"
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
+    # Resource limits for standalone Docker Compose
+    mem_limit: 512m
+    cpus: 0.5
+    # Note: MCP servers use stdio communication, no special network mode needed
     # No health check needed for stdio-based MCP servers
     # MCP servers initialize, load personas, and exit (expected behavior)
 
