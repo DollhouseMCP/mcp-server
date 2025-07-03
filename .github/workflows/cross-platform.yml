@@ -112,8 +112,8 @@ jobs:
           
           # Cross-platform file existence check
           if [ "${{ matrix.platform }}" = "windows" ]; then
-            if (Test-Path "dist/index.js") { echo "✅ dist/index.js exists" } else { echo "❌ Missing dist/index.js"; exit 1 }
-            if (Test-Path "dist/index.d.ts") { echo "✅ dist/index.d.ts exists" } else { echo "❌ Missing dist/index.d.ts"; exit 1 }
+            if (Test-Path "dist/index.js") { Write-Output "✅ dist/index.js exists" } else { Write-Output "❌ Missing dist/index.js"; exit 1 }
+            if (Test-Path "dist/index.d.ts") { Write-Output "✅ dist/index.d.ts exists" } else { Write-Output "❌ Missing dist/index.d.ts"; exit 1 }
           else
             [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
             [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
@@ -186,10 +186,15 @@ jobs:
             if ($pkg.name -eq "dollhousemcp") { echo "✅ Package name correct" } else { echo "❌ Invalid package name"; exit 1 }
             if ($pkg.main -eq "dist/index.js") { echo "✅ Main entry correct" } else { echo "❌ Invalid main entry"; exit 1 }
           else
-            NAME=$(node -p "require('./package.json').name")
-            MAIN=$(node -p "require('./package.json').main")
-            [ "$NAME" = "dollhousemcp" ] && echo "✅ Package name correct" || { echo "❌ Invalid package name"; exit 1; }
-            [ "$MAIN" = "dist/index.js" ] && echo "✅ Main entry correct" || { echo "❌ Invalid main entry"; exit 1; }
+            # Robust JSON parsing with error handling
+            if ! NAME=$(node -p "require('./package.json').name" 2>/dev/null); then
+              echo "❌ Failed to parse package.json name"; exit 1
+            fi
+            if ! MAIN=$(node -p "require('./package.json').main" 2>/dev/null); then
+              echo "❌ Failed to parse package.json main"; exit 1
+            fi
+            [ "$NAME" = "dollhousemcp" ] && echo "✅ Package name correct" || { echo "❌ Invalid package name: $NAME"; exit 1; }
+            [ "$MAIN" = "dist/index.js" ] && echo "✅ Main entry correct" || { echo "❌ Invalid main entry: $MAIN"; exit 1; }
           fi
 
       # Run platform-specific additional tests
