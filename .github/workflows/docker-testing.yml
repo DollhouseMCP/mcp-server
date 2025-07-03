@@ -172,8 +172,8 @@ jobs:
           docker compose run --rm dollhousemcp &
           compose_pid=$!
           
-          # Brief initial wait to prevent race conditions
-          sleep 3
+          # Initial wait to prevent race conditions (recommended 3-5 seconds)
+          sleep 5
           
           # Wait for initialization with retry logic
           echo "⏳ Waiting for MCP server initialization..."
