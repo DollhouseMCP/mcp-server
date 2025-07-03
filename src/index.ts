@@ -1595,6 +1595,41 @@ ${instructions}
     };
   }
 
+  /**
+   * Executes a network operation with retry logic and exponential backoff
+   */
+  private async retryNetworkOperation<T>(
+    operation: () => Promise<T>, 
+    maxRetries: number = 3,
+    baseDelay: number = 1000
+  ): Promise<T> {
+    let lastError: Error;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+        
+        // Don't retry on the last attempt
+        if (attempt === maxRetries) {
+          break;
+        }
+        
+        // Don't retry certain errors (like 404, 401)
+        if (error instanceof Error && error.message.includes('404')) {
+          break;
+        }
+        
+        // Calculate delay with exponential backoff
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw lastError!;
+  }
+
   // Auto-update management tools
   private async checkForUpdates() {
     try {
@@ -1604,20 +1639,29 @@ ${instructions}
       const packageData = JSON.parse(packageContent);
       const currentVersion = packageData.version;
 
-      // Check GitHub releases API for latest version
+      // Check GitHub releases API for latest version with retry logic
       const releasesUrl = RELEASES_API_URL;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
-      const response = await fetch(releasesUrl, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'DollhouseMCP/1.0'
-        },
-        signal: controller.signal
+      const response = await this.retryNetworkOperation(async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
+        try {
+          const response = await fetch(releasesUrl, {
+            headers: {
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'DollhouseMCP/1.0'
+            },
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          return response;
+        } catch (error) {
+          clearTimeout(timeoutId);
+          throw error;
+        }
       });
-      
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         if (response.status === 404) {
@@ -1744,7 +1788,31 @@ ${instructions}
   private async createUpdateBackup(rootDir: string): Promise<string> {
     const backupDir = path.join(path.dirname(rootDir), '.backup-' + Date.now());
     await safeExec('cp', ['-r', rootDir, backupDir]);
+    
+    // Clean up old backups (keep only last 5)
+    await this.cleanupOldBackups(path.dirname(rootDir));
+    
     return backupDir;
+  }
+
+  /**
+   * Removes old backup directories, keeping only the 5 most recent
+   */
+  private async cleanupOldBackups(parentDir: string): Promise<void> {
+    try {
+      const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
+      const backupDirs = lsOutput.split('\n')
+        .filter(dir => dir.startsWith('.backup-') && dir.match(/\.backup-\d+$/))
+        .slice(5); // Keep first 5, remove the rest
+
+      for (const oldBackup of backupDirs) {
+        const backupPath = path.join(parentDir, oldBackup);
+        await safeExec('rm', ['-rf', backupPath]);
+      }
+    } catch (error) {
+      // Don't fail the backup creation if cleanup fails
+      console.error('Warning: Failed to cleanup old backups:', error);
+    }
   }
 
   /**
@@ -1765,17 +1833,19 @@ ${instructions}
   }
 
   /**
-   * Formats the success message for completed updates
+   * Formats the success message for completed updates with progress indicators
    */
   private formatUpdateSuccessMessage(pullOutput: string, backupDir: string): string {
     const parts = [
-      this.getPersonaIndicator() + '🔄 **Starting DollhouseMCP Update**\n',
-      '✅ Repository status clean\n',
-      '✅ Backup created: ' + path.basename(backupDir) + '\n',
-      '✅ Git pull completed\n',
-      '✅ Dependencies updated\n',
-      '✅ Build completed\n',
-      '\n🎉 **Update Complete!**\n\n',
+      this.getPersonaIndicator() + '🔄 **DollhouseMCP Update Complete**\n\n',
+      '**Progress Summary:**\n',
+      '✅ [1/6] Dependencies verified (git, npm)\n',
+      '✅ [2/6] Repository status validated\n',
+      '✅ [3/6] Backup created: ' + path.basename(backupDir) + '\n',
+      '✅ [4/6] Git pull completed\n',
+      '✅ [5/6] Dependencies updated (npm install)\n',
+      '✅ [6/6] TypeScript build completed\n',
+      '\n🎉 **Update Successful!**\n\n',
       '**Changes Applied:**\n' + pullOutput + '\n\n',
       '**Next Steps:**\n',
       '• Server will restart automatically\n',
@@ -1811,6 +1881,12 @@ ${instructions}
     }
 
     try {
+      // Check that required dependencies are available
+      const depCheck = await this.verifyDependencies();
+      if (!depCheck.valid) {
+        return { content: [{ type: "text", text: depCheck.message! }] };
+      }
+
       const rootDir = path.join(__dirname, "..");
 
       // Validate prerequisites (git repo + clean working tree)
@@ -1931,21 +2007,22 @@ ${instructions}
    */
   private formatRollbackSuccessMessage(latestBackup: string, safetyBackup: string, buildSuccess: boolean): string {
     const parts = [
-      this.getPersonaIndicator() + '🔄 **Starting Rollback**\n',
-      '📁 **Using backup:** ' + path.basename(latestBackup) + '\n',
-      '✅ Safety backup created\n',
-      '✅ Current version removed\n',
-      '✅ Previous version restored\n',
-      buildSuccess ? '✅ Rebuild completed\n' : '⚠️ Rebuild skipped (may not be needed)\n',
-      '\n🎉 **Rollback Complete!**\n\n',
+      this.getPersonaIndicator() + '🔄 **DollhouseMCP Rollback Complete**\n\n',
+      '**Progress Summary:**\n',
+      '✅ [1/5] Dependencies verified (git, npm)\n',
+      '✅ [2/5] Safety backup created\n',
+      '✅ [3/5] Current version removed\n',
+      '✅ [4/5] Previous version restored from: ' + path.basename(latestBackup) + '\n',
+      buildSuccess ? '✅ [5/5] TypeScript rebuild completed\n' : '⚠️ [5/5] Rebuild skipped (may not be needed)\n',
+      '\n🎉 **Rollback Successful!**\n\n',
       '**Status:**\n',
-      '• Previous version restored\n',
+      '• Previous version restored successfully\n',
       '• Server will restart automatically\n',
       '• Use `get_server_status` to verify rollback\n\n',
-      '**Cleanup:**\n',
+      '**Backup Information:**\n',
       '• Safety backup: ' + path.basename(safetyBackup) + '\n',
       '• Original backup: ' + path.basename(latestBackup) + '\n',
-      'Remove these manually when satisfied with rollback.'
+      '• Remove manually when satisfied with rollback result'
     ];
     return parts.join('');
   }
@@ -1970,6 +2047,12 @@ ${instructions}
     }
 
     try {
+      // Check that required dependencies are available
+      const depCheck = await this.verifyDependencies();
+      if (!depCheck.valid) {
+        return { content: [{ type: "text", text: depCheck.message! }] };
+      }
+
       const rootDir = path.join(__dirname, "..");
       const parentDir = path.dirname(rootDir);
 
@@ -2140,11 +2223,67 @@ ${instructions}
     }
   }
 
+  /**
+   * Verifies that required dependencies (git, npm) are available
+   */
+  private async verifyDependencies(): Promise<{ valid: boolean; message?: string }> {
+    try {
+      // Check git availability
+      await safeExec('git', ['--version']);
+    } catch (error) {
+      return {
+        valid: false,
+        message: this.getPersonaIndicator() + 
+          '❌ **Dependency Check Failed**\n\n' +
+          'Git is not available or not installed.\n' +
+          'Git is required for auto-update functionality.\n\n' +
+          '**Installation:**\n' +
+          '• macOS: `brew install git` or download from git-scm.com\n' +
+          '• Ubuntu/Debian: `sudo apt install git`\n' +
+          '• Windows: Download from git-scm.com\n\n' +
+          'Please install Git and try again.'
+      };
+    }
+
+    try {
+      // Check npm availability
+      await safeExec('npm', ['--version']);
+    } catch (error) {
+      return {
+        valid: false,
+        message: this.getPersonaIndicator() + 
+          '❌ **Dependency Check Failed**\n\n' +
+          'npm is not available or not installed.\n' +
+          'npm is required for dependency management and building.\n\n' +
+          '**Installation:**\n' +
+          '• Install Node.js from nodejs.org (includes npm)\n' +
+          '• Or use a package manager like brew, apt, or chocolatey\n\n' +
+          'Please install Node.js/npm and try again.'
+      };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Enhanced semantic version comparison supporting pre-release versions
+   * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+   */
   private compareVersions(version1: string, version2: string): number {
-    const v1parts = version1.split('.').map(Number);
-    const v2parts = version2.split('.').map(Number);
+    // Normalize versions by removing 'v' prefix
+    const v1 = version1.replace(/^v/, '');
+    const v2 = version2.replace(/^v/, '');
     
-    for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+    // Split version and pre-release parts
+    const [v1main, v1pre] = v1.split('-');
+    const [v2main, v2pre] = v2.split('-');
+    
+    // Compare main version parts (x.y.z)
+    const v1parts = v1main.split('.').map(part => parseInt(part) || 0);
+    const v2parts = v2main.split('.').map(part => parseInt(part) || 0);
+    
+    const maxLength = Math.max(v1parts.length, v2parts.length);
+    for (let i = 0; i < maxLength; i++) {
       const v1part = v1parts[i] || 0;
       const v2part = v2parts[i] || 0;
       
@@ -2152,7 +2291,14 @@ ${instructions}
       if (v1part > v2part) return 1;
     }
     
-    return 0;
+    // If main versions are equal, compare pre-release versions
+    // Version without pre-release is greater than version with pre-release
+    if (!v1pre && v2pre) return 1;   // 1.0.0 > 1.0.0-beta
+    if (v1pre && !v2pre) return -1;  // 1.0.0-beta < 1.0.0
+    if (!v1pre && !v2pre) return 0;  // 1.0.0 == 1.0.0
+    
+    // Both have pre-release, compare lexicographically
+    return v1pre.localeCompare(v2pre);
   }
 
   async run() {

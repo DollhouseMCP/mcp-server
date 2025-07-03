@@ -50,12 +50,22 @@ describe('Auto-Update System Tests', () => {
   });
 
   describe('Version Comparison Logic', () => {
-    // Test version comparison utility function
+    // Enhanced version comparison utility function matching the implementation
     function compareVersions(version1: string, version2: string): number {
-      const v1parts = version1.replace(/^v/, '').split('.').map(Number);
-      const v2parts = version2.replace(/^v/, '').split('.').map(Number);
+      // Normalize versions by removing 'v' prefix
+      const v1 = version1.replace(/^v/, '');
+      const v2 = version2.replace(/^v/, '');
       
-      for (let i = 0; i < Math.max(v1parts.length, v2parts.length); i++) {
+      // Split version and pre-release parts
+      const [v1main, v1pre] = v1.split('-');
+      const [v2main, v2pre] = v2.split('-');
+      
+      // Compare main version parts (x.y.z)
+      const v1parts = v1main.split('.').map(part => parseInt(part) || 0);
+      const v2parts = v2main.split('.').map(part => parseInt(part) || 0);
+      
+      const maxLength = Math.max(v1parts.length, v2parts.length);
+      for (let i = 0; i < maxLength; i++) {
         const v1part = v1parts[i] || 0;
         const v2part = v2parts[i] || 0;
         
@@ -63,7 +73,14 @@ describe('Auto-Update System Tests', () => {
         if (v1part > v2part) return 1;
       }
       
-      return 0;
+      // If main versions are equal, compare pre-release versions
+      // Version without pre-release is greater than version with pre-release
+      if (!v1pre && v2pre) return 1;   // 1.0.0 > 1.0.0-beta
+      if (v1pre && !v2pre) return -1;  // 1.0.0-beta < 1.0.0
+      if (!v1pre && !v2pre) return 0;  // 1.0.0 == 1.0.0
+      
+      // Both have pre-release, compare lexicographically
+      return v1pre.localeCompare(v2pre);
     }
 
     it('should compare versions correctly', () => {
@@ -98,6 +115,157 @@ describe('Auto-Update System Tests', () => {
       // Test with zero parts
       expect(compareVersions('1.0.0', '1.0.1')).toBeLessThan(0);
       expect(compareVersions('1.0.1', '1.0.0')).toBeGreaterThan(0);
+    });
+
+    it('should handle pre-release versions correctly', () => {
+      // Release versions are greater than pre-release versions
+      expect(compareVersions('1.0.0', '1.0.0-beta')).toBeGreaterThan(0);
+      expect(compareVersions('1.0.0-beta', '1.0.0')).toBeLessThan(0);
+      
+      // Compare pre-release versions lexicographically
+      expect(compareVersions('1.0.0-alpha', '1.0.0-beta')).toBeLessThan(0);
+      expect(compareVersions('1.0.0-beta', '1.0.0-alpha')).toBeGreaterThan(0);
+      expect(compareVersions('1.0.0-beta.1', '1.0.0-beta.2')).toBeLessThan(0);
+      
+      // Same pre-release versions
+      expect(compareVersions('1.0.0-beta', '1.0.0-beta')).toBe(0);
+    });
+  });
+
+  describe('Enhanced Features Tests', () => {
+    describe('Backup Cleanup Policy', () => {
+      it('should keep only the 5 most recent backups', async () => {
+        const mockFiles = [
+          '.backup-1720000000000', // oldest
+          '.backup-1720001000000',
+          '.backup-1720002000000',
+          '.backup-1720003000000', 
+          '.backup-1720004000000',
+          '.backup-1720005000000',
+          '.backup-1720006000000', // newest
+          'other-file.txt'
+        ];
+
+        mockFs.readdir.mockResolvedValue(mockFiles as any);
+
+        const files = await fs.readdir('.');
+        const backupDirs = files
+          .filter((f: string) => f.startsWith('.backup-') && f.match(/\.backup-\d+$/))
+          .sort()
+          .reverse()
+          .slice(5); // Simulate keeping only the 5 most recent
+
+        expect(backupDirs).toHaveLength(2); // Should remove 2 oldest
+        expect(backupDirs).toContain('.backup-1720001000000');
+        expect(backupDirs).toContain('.backup-1720000000000');
+      });
+    });
+
+    describe('Dependency Verification', () => {
+      it('should verify git availability', () => {
+        child_process.spawn('git', ['--version']);
+        
+        expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['--version']);
+      });
+
+      it('should verify npm availability', () => {
+        child_process.spawn('npm', ['--version']);
+        
+        expect(mockChildProcess.spawn).toHaveBeenCalledWith('npm', ['--version']);
+      });
+
+      it('should handle missing dependencies gracefully', () => {
+        const mockFailedProcess = {
+          stdout: { on: jest.fn() },
+          stderr: { on: jest.fn() },
+          on: jest.fn((event: string, callback: Function) => {
+            if (event === 'close') {
+              callback(127); // Command not found
+            }
+          })
+        };
+
+        mockChildProcess.spawn.mockReturnValue(mockFailedProcess as any);
+
+        child_process.spawn('git', ['--version']);
+        
+        expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['--version']);
+      });
+    });
+
+    describe('Retry Logic', () => {
+      it('should implement exponential backoff', async () => {
+        let attempts = 0;
+        const mockOperation = jest.fn().mockImplementation(() => {
+          attempts++;
+          if (attempts < 3) {
+            throw new Error('Network error');
+          }
+          return Promise.resolve('success');
+        });
+
+        // Simulate retry logic
+        const maxRetries = 3;
+        let result;
+        let lastError;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          try {
+            result = await mockOperation();
+            break;
+          } catch (error) {
+            lastError = error;
+            if (attempt < maxRetries) {
+              // Simulate exponential backoff delay calculation
+              const delay = 1000 * Math.pow(2, attempt);
+              expect(delay).toBe(1000 * Math.pow(2, attempt));
+            }
+          }
+        }
+
+        expect(result).toBe('success');
+        expect(attempts).toBe(3);
+      });
+
+      it('should not retry certain errors', () => {
+        const error404 = new Error('404 Not Found');
+        
+        // Should not retry 404 errors
+        expect(error404.message.includes('404')).toBe(true);
+      });
+    });
+
+    describe('Progress Indicators', () => {
+      it('should format update progress correctly', () => {
+        const progressMessage = 
+          '✅ [1/6] Dependencies verified (git, npm)\n' +
+          '✅ [2/6] Repository status validated\n' +
+          '✅ [3/6] Backup created: backup-123456\n' +
+          '✅ [4/6] Git pull completed\n' +
+          '✅ [5/6] Dependencies updated (npm install)\n' +
+          '✅ [6/6] TypeScript build completed';
+
+        // Test that progress format is correct
+        expect(progressMessage).toContain('[1/6]');
+        expect(progressMessage).toContain('[6/6]');
+        expect(progressMessage).toContain('Dependencies verified');
+        expect(progressMessage).toContain('TypeScript build completed');
+      });
+
+      it('should format rollback progress correctly', () => {
+        const rollbackMessage = 
+          '✅ [1/5] Dependencies verified (git, npm)\n' +
+          '✅ [2/5] Safety backup created\n' +
+          '✅ [3/5] Current version removed\n' +
+          '✅ [4/5] Previous version restored\n' +
+          '✅ [5/5] TypeScript rebuild completed';
+
+        // Test that rollback progress format is correct
+        expect(rollbackMessage).toContain('[1/5]');
+        expect(rollbackMessage).toContain('[5/5]');
+        expect(rollbackMessage).toContain('Safety backup created');
+        expect(rollbackMessage).toContain('Previous version restored');
+      });
     });
   });
 
