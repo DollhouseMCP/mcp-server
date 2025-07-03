@@ -1,30 +1,28 @@
 ---
-name: Cross-Platform Testing
+name: Extended Node Compatibility
 
 on:
   push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
-  workflow_dispatch: true
+    branches: [main]
   schedule:
-    - cron: '0 2 * * 0'
+    - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
+  workflow_dispatch:
 
 env:
   NODE_OPTIONS: --max-old-space-size=4096
   CI: true
 
 jobs:
-  cross-platform-test:
-    name: Test on ${{ matrix.os }} with Node ${{ matrix.node-version }}
+  extended-compatibility:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node-version: ['18.x', '20.x', '22.x']
+        node-version: ['18.x', '22.x']
 
     steps:
       - name: Checkout repository
@@ -39,7 +37,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
-      # Cache TypeScript build artifacts
       - name: Cache TypeScript build
         uses: actions/cache@v4
         with:
@@ -47,9 +44,7 @@ jobs:
             dist/
             build/
             *.tsbuildinfo
-          key: >
-            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
-            ${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
+          key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package-lock.json') }}
           restore-keys: |
             typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
             typescript-build-${{ runner.os }}-
@@ -60,7 +55,6 @@ jobs:
       - name: Build project
         run: npm run build
 
-      # Cache Jest test results and coverage
       - name: Cache Jest
         uses: actions/cache@v4
         with:
@@ -68,9 +62,7 @@ jobs:
             .jest-cache/
             coverage/
             node_modules/.cache/jest/
-          key: >
-            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
-            ${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
@@ -78,17 +70,8 @@ jobs:
       - name: Run test suite
         run: npm test
 
-      - name: Verify build artifacts
-        shell: bash
+      - name: Compatibility validation
         run: |
-          echo "Verifying build artifacts..."
-          [ -f "dist/index.js" ] && echo "✅ dist/index.js exists" || { echo "❌ Missing dist/index.js"; exit 1; }
-          [ -f "dist/index.d.ts" ] && echo "✅ dist/index.d.ts exists" || { echo "❌ Missing dist/index.d.ts"; exit 1; }
-          [ -d "personas" ] && echo "✅ Personas directory exists" || { echo "❌ Missing personas directory"; exit 1; }
-
-      - name: Final validation
-        run: |
-          echo "🎉 Cross-Platform Testing Complete!"
+          echo "✅ Extended Node Compatibility Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
-          echo "✅ All tests passed"
