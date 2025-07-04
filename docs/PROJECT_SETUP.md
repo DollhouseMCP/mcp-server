@@ -29,18 +29,24 @@ Add custom fields:
 
 ## Linking Existing Issues
 
-Run these commands to add all issues to the project:
+We've created a script to add all issues to your project. Run:
 
 ```bash
-# First, get your project number (shown in URL after creation)
-PROJECT_NUMBER=1  # Replace with your actual project number
+# Run the interactive script
+./scripts/add-issues-to-project.sh
 
-# Add all open issues to project
-gh issue list --limit 100 --state open --json number --jq '.[].number' | while read issue; do
-  echo "Adding issue #$issue to project..."
-  gh issue edit $issue --add-project "DollhouseMCP Roadmap"
-done
+# The script will:
+# 1. Ask for your project number (from the URL)
+# 2. Find all open issues
+# 3. Add them to your project board
+# 4. Show a summary of results
 ```
+
+**Alternative manual method:**
+1. Go to your project board
+2. Click "+ Add item" 
+3. Search for issues to add
+4. Or drag issues from the repository issues page
 
 ## Automation Rules
 
