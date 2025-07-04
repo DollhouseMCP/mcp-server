@@ -57,11 +57,12 @@ jobs:
           urls=$(grep -oE "https://img.shields.io/badge/[^)]*" README.md | head -3)
           
           for url in $urls; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "$url")
             if [ "$response" = "200" ]; then
               echo "✓ Badge image accessible: ${url:0:50}..."
             else
               echo "❌ Badge image failed (HTTP $response): $url"
+              echo "   Timeout settings: 5s connect, 10s total"
               exit 1
             fi
           done

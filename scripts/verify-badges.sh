@@ -50,11 +50,13 @@ echo -e "\n✅ Main Branch Query Verification:"
 echo "Testing if branch:main query parameter filters correctly..."
 if command -v curl &> /dev/null; then
     # Test if the URL with query parameter is valid
-    response=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main")
+    response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main")
     if [ "$response" = "200" ]; then
         echo "✓ Query parameter URL is valid (HTTP $response)"
     else
         echo "⚠️  Query parameter URL returned HTTP $response"
+        echo "   This may indicate workflow access issues or branch name changes"
+        echo "   Please verify the workflow exists and is accessible"
     fi
 else
     echo "curl not found. Skipping HTTP validation."

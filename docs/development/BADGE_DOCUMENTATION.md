@@ -13,6 +13,8 @@ Each platform badge follows this pattern:
 
 ### Current Badges
 
+**Note**: All platform badges currently link to the same `core-build-test.yml` workflow because it runs a matrix build that tests all platforms simultaneously. The workflow uses GitHub Actions' matrix strategy to test Windows, macOS, and Linux in parallel.
+
 #### Windows Badge
 ```markdown
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
