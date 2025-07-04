@@ -16,6 +16,16 @@ import matter from "gray-matter";
 import { fileURLToPath } from "url";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 
+// Import modularized components
+import { Persona, PersonaMetadata } from './types/persona.js';
+import { VALID_CATEGORIES } from './config/constants.js';
+import { SECURITY_LIMITS as SECURITY_LIMITS_MODULE } from './security/constants.js';
+import { APICache } from './cache/APICache.js';
+import { validateFilename, validatePath, sanitizeInput, validateContentSize } from './security/InputValidator.js';
+import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
+import { PersonaManager } from './persona/PersonaManager.js';
+import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
+
 const exec = promisify(child_process.exec);
 
 // Helper function for safe command execution
@@ -74,17 +84,8 @@ const DEPENDENCY_REQUIREMENTS = {
   }
 };
 
-// Security and performance configuration
-const SECURITY_LIMITS = {
-  MAX_PERSONA_SIZE_BYTES: 1024 * 1024 * 2,  // 2MB max persona file size
-  MAX_FILENAME_LENGTH: 255,                  // Max filename length
-  MAX_PATH_DEPTH: 10,                       // Max directory depth for paths
-  MAX_CONTENT_LENGTH: 500000,               // Max persona content length (500KB)
-  RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
-  RATE_LIMIT_WINDOW_MS: 60 * 1000,         // 1 minute window
-  CACHE_TTL_MS: 5 * 60 * 1000,             // 5 minute cache TTL
-  MAX_SEARCH_RESULTS: 50                    // Max search results to return
-};
+// Use imported SECURITY_LIMITS
+const SECURITY_LIMITS = SECURITY_LIMITS_MODULE;
 
 // Input validation patterns
 const VALIDATION_PATTERNS = {
@@ -95,88 +96,9 @@ const VALIDATION_PATTERNS = {
   SAFE_EMAIL: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 };
 
-// Cache for GitHub API responses
-interface CacheEntry {
-  data: any;
-  timestamp: number;
-}
+// APICache is now imported from ./cache/APICache.js
 
-class APICache {
-  private cache = new Map<string, CacheEntry>();
-  
-  get(key: string): any | null {
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-    
-    if (Date.now() - entry.timestamp > SECURITY_LIMITS.CACHE_TTL_MS) {
-      this.cache.delete(key);
-      return null;
-    }
-    
-    return entry.data;
-  }
-  
-  set(key: string, data: any): void {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
-  }
-  
-  clear(): void {
-    this.cache.clear();
-  }
-  
-  size(): number {
-    return this.cache.size;
-  }
-}
-
-// Input sanitization and validation functions
-function validateFilename(filename: string): string {
-  if (!filename || typeof filename !== 'string') {
-    throw new Error('Filename must be a non-empty string');
-  }
-  
-  if (filename.length > SECURITY_LIMITS.MAX_FILENAME_LENGTH) {
-    throw new Error(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`);
-  }
-  
-  // Remove any path separators and dangerous characters
-  const sanitized = filename.replace(/[\/\\:*?"<>|]/g, '').replace(/^\.+/, '');
-  
-  if (!VALIDATION_PATTERNS.SAFE_FILENAME.test(sanitized)) {
-    throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
-  }
-  
-  return sanitized;
-}
-
-function validatePath(inputPath: string): string {
-  if (!inputPath || typeof inputPath !== 'string') {
-    throw new Error('Path must be a non-empty string');
-  }
-  
-  // Remove leading/trailing slashes and normalize
-  const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
-  
-  if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
-    throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
-  }
-  
-  // Check for path traversal attempts
-  if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
-    throw new Error('Path traversal not allowed');
-  }
-  
-  // Validate path depth
-  const depth = normalized.split('/').length;
-  if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
-    throw new Error(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
-  }
-  
-  return normalized;
-}
+// Input validation functions are now imported from ./security/InputValidator.js
 
 function validateUsername(username: string): string {
   if (!username || typeof username !== 'string') {
@@ -209,79 +131,11 @@ function validateCategory(category: string): string {
   return normalized;
 }
 
-function validateContentSize(content: string, maxSize: number = SECURITY_LIMITS.MAX_CONTENT_LENGTH): void {
-  if (!content || typeof content !== 'string') {
-    throw new Error('Content must be a non-empty string');
-  }
-  
-  const sizeBytes = Buffer.byteLength(content, 'utf8');
-  if (sizeBytes > maxSize) {
-    throw new Error(`Content too large (${sizeBytes} bytes, max ${maxSize} bytes)`);
-  }
-}
+// validateContentSize and sanitizeInput are now imported from ./security/InputValidator.js
 
-function sanitizeInput(input: string, maxLength: number = 1000): string {
-  if (!input || typeof input !== 'string') {
-    return '';
-  }
-  
-  // Remove potentially dangerous characters and limit length
-  return input
-    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
-    .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-    .substring(0, maxLength)
-    .trim();
-}
+// PersonaMetadata and Persona interfaces are now imported from ./types/persona.js
 
-interface PersonaMetadata {
-  name: string;
-  description: string;
-  unique_id?: string;
-  author?: string;
-  triggers?: string[];
-  version?: string;
-  category?: string;
-  age_rating?: 'all' | '13+' | '18+';
-  content_flags?: string[];
-  ai_generated?: boolean;
-  generation_method?: 'human' | 'ChatGPT' | 'Claude' | 'hybrid';
-  price?: string;
-  revenue_split?: string;
-  license?: string;
-  created_date?: string;
-}
-
-interface Persona {
-  metadata: PersonaMetadata;
-  content: string;
-  filename: string;
-  unique_id: string;
-}
-
-// Anonymous ID generation
-const ADJECTIVES = ['clever', 'swift', 'bright', 'bold', 'wise', 'calm', 'keen', 'witty', 'sharp', 'cool'];
-const ANIMALS = ['fox', 'owl', 'cat', 'wolf', 'bear', 'hawk', 'deer', 'lion', 'eagle', 'tiger'];
-
-function generateAnonymousId(): string {
-  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-  const random = Math.random().toString(36).substring(2, 6);
-  return `anon-${adjective}-${animal}-${random}`;
-}
-
-function generateUniqueId(personaName: string, author?: string): string {
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
-  const whatItIs = personaName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  const whoMadeIt = author || generateAnonymousId();
-  
-  return `${whatItIs}_${dateStr}-${timeStr}_${whoMadeIt}`;
-}
-
-function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-}
+// generateAnonymousId, generateUniqueId, and slugify are now imported from ./utils/filesystem.js
 
 class DollhouseMCPServer {
   private server: Server;
@@ -292,6 +146,13 @@ class DollhouseMCPServer {
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
+  private personaManager: PersonaManager;
+  private githubClient: GitHubClient;
+  private marketplaceBrowser: MarketplaceBrowser;
+  private marketplaceSearch: MarketplaceSearch;
+  private personaDetails: PersonaDetails;
+  private personaInstaller: PersonaInstaller;
+  private personaSubmitter: PersonaSubmitter;
 
   constructor() {
     this.server = new Server(
@@ -314,6 +175,17 @@ class DollhouseMCPServer {
     
     // Load indicator configuration
     this.indicatorConfig = loadIndicatorConfig();
+    
+    // Initialize persona manager
+    this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
+    
+    // Initialize marketplace modules
+    this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
+    this.marketplaceBrowser = new MarketplaceBrowser(this.githubClient);
+    this.marketplaceSearch = new MarketplaceSearch(this.githubClient);
+    this.personaDetails = new PersonaDetails(this.githubClient);
+    this.personaInstaller = new PersonaInstaller(this.githubClient, this.personasDir);
+    this.personaSubmitter = new PersonaSubmitter();
     
     this.setupHandlers();
     this.loadPersonas();
@@ -976,121 +848,13 @@ class DollhouseMCPServer {
     };
   }
 
-  // Rate limiting helper
-  private checkRateLimit(key: string = 'default'): void {
-    const now = Date.now();
-    const requests = this.rateLimitTracker.get(key) || [];
-    
-    // Remove requests outside the window
-    const validRequests = requests.filter(time => now - time < SECURITY_LIMITS.RATE_LIMIT_WINDOW_MS);
-    
-    if (validRequests.length >= SECURITY_LIMITS.RATE_LIMIT_REQUESTS) {
-      throw new Error(`Rate limit exceeded. Max ${SECURITY_LIMITS.RATE_LIMIT_REQUESTS} requests per minute.`);
-    }
-    
-    validRequests.push(now);
-    this.rateLimitTracker.set(key, validRequests);
-  }
-
-  // GitHub API marketplace integration with caching and rate limiting
-  private async fetchFromGitHub(url: string): Promise<any> {
-    try {
-      // Check rate limit
-      this.checkRateLimit('github_api');
-      
-      // Check cache first
-      const cached = this.apiCache.get(url);
-      if (cached) {
-        return cached;
-      }
-      
-      // Add GitHub token if available for higher rate limits
-      const headers: Record<string, string> = {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'DollhouseMCP/1.0'
-      };
-      
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-      }
-      
-      // Create fetch with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      const response = await fetch(url, {
-        headers,
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.');
-        }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      // Cache the successful response
-      this.apiCache.set(url, data);
-      
-      return data;
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${error}`
-      );
-    }
-  }
+  // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
   private async browseMarketplace(category?: string) {
-    const baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
-    const url = category ? `${baseUrl}/${category}` : baseUrl;
-    
     try {
-      const data = await this.fetchFromGitHub(url);
+      const { items, categories } = await this.marketplaceBrowser.browseMarketplace(category);
+      const text = this.marketplaceBrowser.formatBrowseResults(items, categories, category, this.getPersonaIndicator());
       
-      if (!Array.isArray(data)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Invalid marketplace response. Expected directory listing.`,
-            },
-          ],
-        };
-      }
-
-      const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-      const categories = data.filter((item: any) => item.type === 'dir');
-
-      const textParts = [`${this.getPersonaIndicator()}🏪 **DollhouseMCP Marketplace**\n\n`];
-      
-      if (!category) {
-        textParts.push(`**📁 Categories (${categories.length}):**\n`);
-        categories.forEach((cat: any) => {
-          textParts.push(`   📂 **${cat.name}** - Browse with: \`browse_marketplace "${cat.name}"\`\n`);
-        });
-        textParts.push('\n');
-      }
-
-      if (items.length > 0) {
-        textParts.push(`**🎭 Personas in ${category || 'root'} (${items.length}):**\n`);
-        items.forEach((item: any) => {
-          const path = category ? `${category}/${item.name}` : item.name;
-          textParts.push(
-            `   ▫️ **${item.name}**\n`,
-            `      📥 Install: \`install_persona "${path}"\`\n`,
-            `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
-          );
-        });
-      }
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1112,36 +876,10 @@ class DollhouseMCPServer {
   }
 
   private async searchMarketplace(query: string) {
-    const searchUrl = `https://api.github.com/search/code?q=${encodeURIComponent(query)}+repo:mickdarling/DollhouseMCP-Personas+extension:md`;
-    
     try {
-      const data = await this.fetchFromGitHub(searchUrl);
+      const items = await this.marketplaceSearch.searchMarketplace(query);
+      const text = this.marketplaceSearch.formatSearchResults(items, query, this.getPersonaIndicator());
       
-      if (!data.items || data.items.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}🔍 No personas found for query: "${query}"`,
-            },
-          ],
-        };
-      }
-
-      const textParts = [`${this.getPersonaIndicator()}🔍 **Search Results for "${query}"** (${data.items.length} found)\n\n`];
-      
-      data.items.forEach((item: any) => {
-        const path = item.path.replace('personas/', '');
-        textParts.push(
-          `   🎭 **${item.name}**\n`,
-          `      📂 Path: ${path}\n`,
-          `      📥 Install: \`install_persona "${path}"\`\n`,
-          `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
-        );
-      });
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1163,45 +901,10 @@ class DollhouseMCPServer {
   }
 
   private async getMarketplacePersona(path: string) {
-    const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${path}`;
-    
     try {
-      const data = await this.fetchFromGitHub(url);
+      const { metadata, content } = await this.personaDetails.getMarketplacePersona(path);
+      const text = this.personaDetails.formatPersonaDetails(metadata, content, path, this.getPersonaIndicator());
       
-      if (data.type !== 'file') {
-        throw new Error('Path does not point to a file');
-      }
-
-      // Decode Base64 content
-      const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      const parsed = matter(content);
-      const metadata = parsed.data as PersonaMetadata;
-
-      const textParts = [
-        `${this.getPersonaIndicator()}🎭 **Marketplace Persona: ${metadata.name}**\n\n`,
-        `**📋 Details:**\n`,
-        `   🆔 ID: ${metadata.unique_id || 'Not specified'}\n`,
-        `   👤 Author: ${metadata.author || 'Unknown'}\n`,
-        `   📁 Category: ${metadata.category || 'General'}\n`,
-        `   🔖 Price: ${metadata.price || 'Free'}\n`,
-        `   📊 Version: ${metadata.version || '1.0'}\n`,
-        `   🔞 Age Rating: ${metadata.age_rating || 'All'}\n`,
-        `   ${metadata.ai_generated ? '🤖 AI Generated' : '👤 Human Created'}\n\n`,
-        `**📝 Description:**\n${metadata.description}\n\n`
-      ];
-      
-      if (metadata.triggers && metadata.triggers.length > 0) {
-        textParts.push(`**🔗 Triggers:** ${metadata.triggers.join(', ')}\n\n`);
-      }
-
-      textParts.push(
-        `**📥 Installation:**\n`,
-        `Use: \`install_persona "${path}"\`\n\n`,
-        `**📄 Full Content:**\n\`\`\`\n${parsed.content}\n\`\`\``
-      );
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1224,75 +927,34 @@ class DollhouseMCPServer {
 
   private async installPersona(inputPath: string) {
     try {
-      // Validate and sanitize the input path
-      const sanitizedPath = validatePath(inputPath);
+      const result = await this.personaInstaller.installPersona(inputPath);
       
-      // Ensure the path ends with .md
-      if (!sanitizedPath.endsWith('.md')) {
-        throw new Error('Invalid file type. Only .md files are allowed.');
-      }
-      
-      const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${sanitizedPath}`;
-      const data = await this.fetchFromGitHub(url);
-      
-      if (data.type !== 'file') {
-        throw new Error('Path does not point to a file');
-      }
-
-      // Check file size before downloading
-      if (data.size > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
-        throw new Error(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
-      }
-
-      // Decode Base64 content
-      const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      
-      // Validate content size after decoding
-      validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
-      
-      const parsed = matter(content);
-      const metadata = parsed.data as PersonaMetadata;
-
-      // Validate metadata
-      if (!metadata.name || !metadata.description) {
-        throw new Error('Invalid persona: missing required name or description');
-      }
-
-      // Generate and validate local filename
-      const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-persona.md';
-      const filename = validateFilename(originalFilename);
-      const localPath = path.join(this.personasDir, filename);
-
-      // Check if file already exists
-      try {
-        await fs.access(localPath);
+      if (!result.success) {
         return {
           content: [
             {
               type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ Persona already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`,
+              text: `${this.getPersonaIndicator()}⚠️ ${result.message}`,
             },
           ],
         };
-      } catch {
-        // File doesn't exist, proceed with installation
       }
-
-      // Write the file
-      await fs.writeFile(localPath, content, 'utf-8');
       
       // Reload personas to include the new one
       await this.loadPersonas();
-
+      
+      const text = this.personaInstaller.formatInstallSuccess(
+        result.metadata!, 
+        result.filename!, 
+        this.personas.size, 
+        this.getPersonaIndicator()
+      );
+      
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}✅ **Persona Installed Successfully!**\n\n` +
-            `🎭 **${metadata.name}** by ${metadata.author}\n` +
-            `📁 Saved as: ${filename}\n` +
-            `📊 Total personas: ${this.personas.size}\n\n` +
-            `🎯 **Ready to use:** \`activate_persona "${metadata.name}"\``,
+            text: text,
           },
         ],
       };
@@ -1330,49 +992,14 @@ class DollhouseMCPServer {
       };
     }
 
-    // Generate GitHub issue body
-    const issueTitle = `New Persona Submission: ${persona.metadata.name}`;
-    const issueBody = `## Persona Submission
-
-**Name:** ${persona.metadata.name}
-**Author:** ${persona.metadata.author || 'Unknown'}
-**Category:** ${persona.metadata.category || 'General'}
-**Description:** ${persona.metadata.description}
-
-### Persona Content:
-\`\`\`markdown
----
-${Object.entries(persona.metadata)
-  .map(([key, value]) => `${key}: ${Array.isArray(value) ? JSON.stringify(value) : JSON.stringify(value)}`)
-  .join('\n')}
----
-
-${persona.content}
-\`\`\`
-
-### Submission Details:
-- Submitted via DollhouseMCP client
-- Filename: ${persona.filename}
-- Unique ID: ${persona.unique_id}
-
----
-*Please review this persona for inclusion in the marketplace.*`;
-
-    const githubIssueUrl = `https://github.com/mickdarling/DollhouseMCP-Personas/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
+    const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
+    const text = this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
 
     return {
       content: [
         {
           type: "text",
-          text: `${this.getPersonaIndicator()}📤 **Persona Submission Prepared**\n\n` +
-          `🎭 **${persona.metadata.name}** is ready for marketplace submission!\n\n` +
-          `**Next Steps:**\n` +
-          `1. Click this link to create a GitHub issue: \n` +
-          `   ${githubIssueUrl}\n\n` +
-          `2. Review the pre-filled content\n` +
-          `3. Click "Submit new issue"\n` +
-          `4. The maintainers will review your submission\n\n` +
-          `⭐ **Tip:** You can also submit via pull request if you're familiar with Git!`,
+          text: text,
         },
       ],
     };

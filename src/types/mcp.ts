@@ -4,6 +4,9 @@
 
 import { z } from 'zod';
 
+// Re-export ErrorCode from MCP SDK
+export { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+
 // Tool parameter schemas
 export const ListPersonasArgsSchema = z.object({});
 
