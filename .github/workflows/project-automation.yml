@@ -1,0 +1,68 @@
+---
+name: Project Automation
+
+on:
+  issues:
+    types: [opened, closed, assigned, unassigned, labeled]
+  pull_request:
+    types: [opened, closed, ready_for_review, converted_to_draft]
+
+permissions:
+  issues: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  add-to-project:
+    name: Add to project
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    steps:
+      - name: Add issue to project
+        uses: actions/add-to-project@v0.5.0
+        with:
+          # You'll need to create the project first and update this URL
+          project-url: https://github.com/users/mickdarling/projects/1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  manage-labels:
+    name: Auto-label management
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues'
+    steps:
+      - name: Add triage label to new issues
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['status: needs-triage']
+            })
+
+      - name: Add in-progress label when assigned
+        if: github.event.action == 'assigned'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Remove needs-triage if present
+            try {
+              await github.rest.issues.removeLabel({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'status: needs-triage'
+              })
+            } catch (e) {
+              // Label might not exist, that's okay
+            }
+            
+            // Add in-progress
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['status: in-progress']
+            })
