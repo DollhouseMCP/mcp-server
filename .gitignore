@@ -46,7 +46,7 @@ temp/
 
 # Development and testing
 test-personas/
-__tests__/
+# __tests__/  # Tests should be tracked in version control
 jest.config.js
 
 # Docker (optional - comment out if you want to include Docker files)
