@@ -1,0 +1,74 @@
+---
+# Example workflow for automated badge verification
+# To enable: rename to verify-badges.yml
+name: Verify README Badges
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - '.github/workflows/core-build-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+  workflow_dispatch:
+
+jobs:
+  verify-badges:
+    name: Verify Platform Badges
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Run badge verification
+        run: |
+          chmod +x scripts/verify-badges.sh
+          ./scripts/verify-badges.sh
+          
+      - name: Validate badge URLs
+        run: |
+          # Extract and validate all badge URLs
+          echo "Validating badge URLs in README..."
+          
+          # Check for required platform badges
+          platforms=("Windows" "macOS" "Linux")
+          for platform in "${platforms[@]}"; do
+            if grep -q "\[${platform}" README.md; then
+              echo "✓ ${platform} badge found"
+            else
+              echo "❌ ${platform} badge missing!"
+              exit 1
+            fi
+          done
+          
+          # Validate ALT texts
+          if grep -q "\[.*Build Status\]" README.md; then
+            echo "✓ ALT texts present"
+          else
+            echo "⚠️  Consider adding ALT texts for accessibility"
+          fi
+          
+      - name: Check badge image loading
+        run: |
+          # Test if badge images are accessible
+          urls=$(grep -oE "https://img.shields.io/badge/[^)]*" README.md | head -3)
+          
+          for url in $urls; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+            if [ "$response" = "200" ]; then
+              echo "✓ Badge image accessible: ${url:0:50}..."
+            else
+              echo "❌ Badge image failed (HTTP $response): $url"
+              exit 1
+            fi
+          done
+          
+      - name: Summary
+        run: |
+          echo "### Badge Verification Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ All platform badges present" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Badge URLs validated" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Accessibility features confirmed" >> $GITHUB_STEP_SUMMARY

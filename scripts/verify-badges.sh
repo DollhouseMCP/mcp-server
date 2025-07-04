@@ -34,8 +34,40 @@ else
     echo "GitHub CLI not found. Install with: brew install gh"
 fi
 
+echo -e "\n🎨 Theme Testing URLs:"
+echo "Test badges in different GitHub themes:"
+echo "Light theme: https://github.com/mickdarling/DollhouseMCP/tree/feature/platform-specific-badges?theme=light"
+echo "Dark theme: https://github.com/mickdarling/DollhouseMCP/tree/feature/platform-specific-badges?theme=dark"
+
+echo -e "\n♿ Accessibility Testing:"
+echo "Badge ALT texts added:"
+echo "- Windows: 'Windows Build Status'"
+echo "- macOS: 'macOS Build Status'"
+echo "- Linux: 'Linux Build Status'"
+
+echo -e "\n✅ Main Branch Query Verification:"
+# Verify the query parameter works correctly
+echo "Testing if branch:main query parameter filters correctly..."
+if command -v curl &> /dev/null; then
+    # Test if the URL with query parameter is valid
+    response=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main")
+    if [ "$response" = "200" ]; then
+        echo "✓ Query parameter URL is valid (HTTP $response)"
+    else
+        echo "⚠️  Query parameter URL returned HTTP $response"
+    fi
+else
+    echo "curl not found. Skipping HTTP validation."
+fi
+
 echo -e "\n✨ Verification complete!"
-echo "Please manually verify:"
-echo "1. Click each badge link in the README"
-echo "2. Confirm badges display correctly in light/dark themes"
-echo "3. Test with a screen reader if possible"
+echo -e "\n📋 Manual Verification Checklist:"
+echo "[ ] 1. Click each badge link in the README"
+echo "[ ] 2. Verify links show only 'main' branch workflow runs"
+echo "[ ] 3. Test badges in light theme: append ?theme=light to GitHub URL"
+echo "[ ] 4. Test badges in dark theme: append ?theme=dark to GitHub URL"
+echo "[ ] 5. Hover over badges to see ALT text tooltips"
+echo "[ ] 6. Test with a screen reader if possible"
+
+echo -e "\n🚀 Integration Suggestions:"
+echo "Consider adding this script to CI/CD workflows for automated badge verification"
