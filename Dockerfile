@@ -1,5 +1,14 @@
 # Multi-stage build for production efficiency
-FROM node:20-alpine AS builder
+# Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
+FROM node:20-slim AS builder
+
+# Install build dependencies for better cross-platform compatibility
+# These are especially important for ARM64 builds
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -19,11 +28,19 @@ COPY personas/ ./personas/
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS production
+# Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
+FROM node:20-slim AS production
+
+# Install runtime dependencies
+# Minimal dependencies for production, helps with ARM64 compatibility
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S dollhouse -u 1001
+# Using Debian-style user creation instead of Alpine-style
+RUN groupadd -g 1001 nodejs && \
+    useradd -u 1001 -g nodejs -s /bin/bash -m dollhouse
 
 # Set working directory
 WORKDIR /app
