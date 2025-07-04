@@ -20,7 +20,11 @@ assignees: ''
 <!-- How should this feature work? Include any UI/UX considerations -->
 
 ## Acceptance Criteria
-<!-- What needs to be done for this feature to be considered complete? -->
+<!-- What needs to be done for this feature to be considered complete?
+Good criteria are specific, measurable, and testable. Example:
+- User can click a button to toggle dark mode
+- Dark mode preference persists between sessions
+- All UI elements have appropriate dark mode colors -->
 - [ ] 
 - [ ] 
 - [ ] 

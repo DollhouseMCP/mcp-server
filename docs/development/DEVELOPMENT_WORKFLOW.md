@@ -27,8 +27,9 @@ This document defines the development workflow for DollhouseMCP to support multi
 1. Use issue templates in `.github/ISSUE_TEMPLATE/`
 2. Apply appropriate labels:
    - Priority: `priority: critical`, `priority: high`, `priority: medium`, `priority: low`
-   - Area: `area: docker`, `area: testing`, `area: ux`, `area: marketplace`, `area: platform-compat`
+   - Area: `area: docker`, `area: testing`, `area: ux`, `area: marketplace`, `area: platform-compat`, `area: core`
    - Type: `bug`, `enhancement`, `type: research`, `type: task`
+   - Examples: `area: core` for MCP server changes, `area: ux` for interface improvements
 3. Assign to milestone if applicable
 4. Link to project board
 
@@ -84,9 +85,9 @@ Follow conventional commits:
 ### Before Creating PR
 1. **Run local tests**:
    ```bash
-   npm test
-   npm run lint
-   npm run build
+   npm test              # Run all tests
+   npm run test:coverage # Run tests with coverage report
+   npm run build         # Build TypeScript
    ```
 2. **Test Docker build** if changes affect containerization:
    ```bash
@@ -216,4 +217,5 @@ gh pr review --request-changes -b "Please address..."
 ---
 
 **Last Updated**: July 2025
+**Review Date**: January 2026
 **Maintainer**: @mickdarling

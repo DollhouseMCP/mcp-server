@@ -1,3 +1,5 @@
+# Disable blank issues to ensure users select an appropriate template
+# This helps maintain consistent issue quality and structure
 blank_issues_enabled: false
 contact_links:
   - name: "\ud83d\udcac Community Discussions"

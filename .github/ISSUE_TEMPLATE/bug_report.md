@@ -30,6 +30,7 @@ assignees: ''
 - **Node.js Version**: [e.g., 20.11.0]
 - **DollhouseMCP Version**: [e.g., 1.0.0]
 - **AI Platform**: [e.g., Claude Desktop, ChatGPT, BoltAI]
+- **Browser** (if web-related): [e.g., Chrome 120, Firefox 121, Safari 17]
 
 ## Error Logs
 <!-- If applicable, add error messages or logs -->
