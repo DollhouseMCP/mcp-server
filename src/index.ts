@@ -14,6 +14,7 @@ import * as child_process from "child_process";
 import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
+import { loadIndicatorConfig, formatIndicator, type IndicatorConfig } from './indicator-config.js';
 
 const exec = promisify(child_process.exec);
 
@@ -290,6 +291,7 @@ class DollhouseMCPServer {
   private currentUser: string | null = null;
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
+  private indicatorConfig: IndicatorConfig;
 
   constructor() {
     this.server = new Server(
@@ -309,6 +311,9 @@ class DollhouseMCPServer {
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
+    
+    // Load indicator configuration
+    this.indicatorConfig = loadIndicatorConfig();
     
     this.setupHandlers();
     this.loadPersonas();
@@ -591,6 +596,57 @@ class DollhouseMCPServer {
               properties: {},
             },
           },
+          {
+            name: "configure_indicator",
+            description: "Configure how persona indicators are displayed in responses",
+            inputSchema: {
+              type: "object",
+              properties: {
+                enabled: {
+                  type: "boolean",
+                  description: "Enable or disable persona indicators",
+                },
+                style: {
+                  type: "string",
+                  enum: ["full", "minimal", "compact", "custom"],
+                  description: "Indicator style: full, minimal, compact, or custom",
+                },
+                customFormat: {
+                  type: "string",
+                  description: "Custom format template (use with style='custom'). Placeholders: {emoji}, {name}, {version}, {author}, {category}",
+                },
+                showVersion: {
+                  type: "boolean",
+                  description: "Show persona version in indicator",
+                },
+                showAuthor: {
+                  type: "boolean",
+                  description: "Show persona author in indicator",
+                },
+                showCategory: {
+                  type: "boolean",
+                  description: "Show persona category in indicator",
+                },
+                emoji: {
+                  type: "string",
+                  description: "Emoji to use in indicator (default: 🎭)",
+                },
+                bracketStyle: {
+                  type: "string",
+                  enum: ["square", "round", "curly", "angle", "none"],
+                  description: "Bracket style for indicator",
+                },
+              },
+            },
+          },
+          {
+            name: "get_indicator_config",
+            description: "Get current persona indicator configuration",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -652,6 +708,10 @@ class DollhouseMCPServer {
             return await this.rollbackUpdate((args as any)?.confirm as boolean);
           case "get_server_status":
             return await this.getServerStatus();
+          case "configure_indicator":
+            return await this.configureIndicator(args as any);
+          case "get_indicator_config":
+            return await this.getIndicatorConfig();
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -677,7 +737,12 @@ class DollhouseMCPServer {
       return "";
     }
 
-    return `🎭 ${persona.metadata.name} | `;
+    return formatIndicator(this.indicatorConfig, {
+      name: persona.metadata.name,
+      version: persona.metadata.version,
+      author: persona.metadata.author,
+      category: persona.metadata.category
+    });
   }
 
   private async loadPersonas() {
@@ -2703,6 +2768,163 @@ ${sanitizedInstructions}
     }
 
     return { valid: true };
+  }
+
+  /**
+   * Configure indicator settings
+   */
+  private async configureIndicator(config: Partial<IndicatorConfig>) {
+    try {
+      // Update the configuration
+      if (config.enabled !== undefined) {
+        this.indicatorConfig.enabled = config.enabled;
+      }
+      if (config.style !== undefined) {
+        this.indicatorConfig.style = config.style;
+      }
+      if (config.customFormat !== undefined) {
+        this.indicatorConfig.customFormat = config.customFormat;
+      }
+      if (config.showVersion !== undefined) {
+        this.indicatorConfig.showVersion = config.showVersion;
+      }
+      if (config.showAuthor !== undefined) {
+        this.indicatorConfig.showAuthor = config.showAuthor;
+      }
+      if (config.showCategory !== undefined) {
+        this.indicatorConfig.showCategory = config.showCategory;
+      }
+      if (config.emoji !== undefined) {
+        this.indicatorConfig.emoji = config.emoji;
+      }
+      if (config.bracketStyle !== undefined) {
+        this.indicatorConfig.bracketStyle = config.bracketStyle;
+      }
+
+      // Show example of what the indicator would look like
+      let exampleIndicator = "";
+      if (this.activePersona) {
+        const persona = this.personas.get(this.activePersona);
+        if (persona) {
+          exampleIndicator = formatIndicator(this.indicatorConfig, {
+            name: persona.metadata.name,
+            version: persona.metadata.version,
+            author: persona.metadata.author,
+            category: persona.metadata.category
+          });
+        }
+      } else {
+        // Show example with sample data
+        exampleIndicator = formatIndicator(this.indicatorConfig, {
+          name: "Example Persona",
+          version: "1.0",
+          author: "@username",
+          category: "creative"
+        });
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ Indicator configuration updated successfully!
+
+Current settings:
+- Enabled: ${this.indicatorConfig.enabled}
+- Style: ${this.indicatorConfig.style}
+- Show Version: ${this.indicatorConfig.showVersion}
+- Show Author: ${this.indicatorConfig.showAuthor}
+- Show Category: ${this.indicatorConfig.showCategory}
+- Emoji: ${this.indicatorConfig.emoji}
+- Brackets: ${this.indicatorConfig.bracketStyle}
+${this.indicatorConfig.customFormat ? `- Custom Format: ${this.indicatorConfig.customFormat}` : ''}
+
+Example indicator: ${exampleIndicator || "(none - indicators disabled)"}
+
+Note: Configuration is temporary for this session. To make permanent, set environment variables:
+- DOLLHOUSE_INDICATOR_ENABLED=true/false
+- DOLLHOUSE_INDICATOR_STYLE=full/minimal/compact/custom
+- DOLLHOUSE_INDICATOR_FORMAT="custom format template"
+- DOLLHOUSE_INDICATOR_SHOW_VERSION=true/false
+- DOLLHOUSE_INDICATOR_SHOW_AUTHOR=true/false
+- DOLLHOUSE_INDICATOR_SHOW_CATEGORY=true/false
+- DOLLHOUSE_INDICATOR_EMOJI=🎭
+- DOLLHOUSE_INDICATOR_BRACKETS=square/round/curly/angle/none`
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error configuring indicator: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ]
+      };
+    }
+  }
+
+  /**
+   * Get current indicator configuration
+   */
+  private async getIndicatorConfig() {
+    // Show current configuration and example
+    let exampleIndicator = "";
+    if (this.activePersona) {
+      const persona = this.personas.get(this.activePersona);
+      if (persona) {
+        exampleIndicator = formatIndicator(this.indicatorConfig, {
+          name: persona.metadata.name,
+          version: persona.metadata.version,
+          author: persona.metadata.author,
+          category: persona.metadata.category
+        });
+      }
+    } else {
+      // Show example with sample data
+      exampleIndicator = formatIndicator(this.indicatorConfig, {
+        name: "Example Persona",
+        version: "1.0",
+        author: "@username",
+        category: "creative"
+      });
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}📊 Current Indicator Configuration:
+
+Settings:
+- Enabled: ${this.indicatorConfig.enabled}
+- Style: ${this.indicatorConfig.style}
+- Show Version: ${this.indicatorConfig.showVersion}
+- Show Author: ${this.indicatorConfig.showAuthor}
+- Show Category: ${this.indicatorConfig.showCategory}
+- Emoji: ${this.indicatorConfig.emoji}
+- Brackets: ${this.indicatorConfig.bracketStyle}
+- Separator: "${this.indicatorConfig.separator}"
+${this.indicatorConfig.customFormat ? `- Custom Format: ${this.indicatorConfig.customFormat}` : ''}
+
+Available styles:
+- full: [🎭 Persona Name v1.0 by @author]
+- minimal: 🎭 Persona Name
+- compact: [Persona Name v1.0]
+- custom: Use your own format with placeholders
+
+Example with current settings: ${exampleIndicator || "(none - indicators disabled)"}
+
+Placeholders for custom format:
+- {emoji} - The configured emoji
+- {name} - Persona name
+- {version} - Persona version
+- {author} - Persona author
+- {category} - Persona category`
+        }
+      ]
+    };
   }
 
   /**

@@ -79,12 +79,18 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Management Tools** - Interactive scripts for issue management and metrics
 ✅ **Documentation** - CONTRIBUTING.md, PROJECT_SETUP.md, QUICK_START.md guides
 
+### Completed (Persona Active Indicator System - July 4, 2025):
+✅ **Configurable Persona Indicators** - Complete implementation of Issue #31
+✅ **Two New MCP Tools** - configure_indicator and get_indicator_config  
+✅ **Multiple Display Styles** - full, minimal, compact, and custom formats
+✅ **Environment Variable Support** - Persistent configuration across sessions
+✅ **Comprehensive Settings** - Control emoji, brackets, version, author, category display
+✅ **Backwards Compatible** - Maintains existing indicator functionality with enhanced options
+
 ### Current Active Issues (GitHub Project):
 🔴 **High Priority**:
-- #28: Fix linux/arm64 Docker build test failure (exit code 255)
 - #29: Add MCP protocol integration tests
 - #30: Research multi-platform MCP compatibility (ChatGPT, BoltAI, Gemini)
-- #31: Implement persona active indicator system
 - #32: Create universal installer for multi-platform support
 
 🟡 **Medium Priority**:
@@ -130,13 +136,14 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 2. **Docker Strategy**: stdio-based MCP servers (not daemon mode)
 3. **YAML Standards**: Document start markers, no trailing spaces
 4. **Project Tools**: GraphQL API for GitHub Projects (needs `gh auth refresh -s project`)
-## Current MCP Tools (21 Available)
+## Current MCP Tools (23 Available)
 
 1-6: Core persona management (list, activate, get, deactivate, details, reload)
 7-11: Marketplace integration (browse, search, get, install, submit)
 12-14: User identity (set, get, clear)
 15-17: Chat-based management (create, edit, validate)
 18-21: Auto-update system (check, update, rollback, status)
+22-23: Persona indicators (configure_indicator, get_indicator_config)
 
 ## Critical Session Context (July 3-4, 2025)
 
