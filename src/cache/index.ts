@@ -2,5 +2,4 @@
  * Cache module exports
  */
 
-// Export cache functionality when ready
-// export * from './APICache.js';
+export * from './APICache.js';
