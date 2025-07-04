@@ -67,6 +67,8 @@ USER dollhouse
 # Set environment variables
 ENV NODE_ENV=production
 ENV PERSONAS_DIR=/app/personas
+# Add Node.js heap size limit for ARM64 compatibility
+ENV NODE_OPTIONS="--max-old-space-size=256"
 
-# Default command
-CMD ["node", "dist/index.js"]
+# Default command with explicit platform handling
+CMD ["node", "--trace-warnings", "dist/index.js"]
