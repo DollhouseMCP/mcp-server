@@ -1,10 +1,14 @@
 ---
 name: Task
-about: Create a task for project work
+about: General project tasks including maintenance, documentation, refactoring, or other work. Include clear definition of done.
 title: '[TASK] '
-labels: ''
+labels: 'type: task'
 assignees: ''
 ---
+
+## Task Summary
+<!-- One-line summary for project board visibility -->
+**Quick Summary**: 
 
 ## Task Description
 <!-- What needs to be done? -->
@@ -30,6 +34,32 @@ assignees: ''
 
 ## Dependencies
 <!-- Does this task depend on other issues or PRs? -->
+
+## Priority & Classification
+<!-- Help us understand importance and type -->
+**Priority Level**:
+- [ ] 🔴 Critical - Urgent and important
+- [ ] 🟠 High - Important for current milestone
+- [ ] 🟡 Medium - Should be done soon
+- [ ] 🟢 Low - Can wait
+
+**Task Type**:
+- [ ] Maintenance/Cleanup
+- [ ] Documentation
+- [ ] Refactoring
+- [ ] Infrastructure
+- [ ] Testing
+- [ ] Tooling/Automation
+- [ ] Other: _______________
+
+**Component Area**:
+- [ ] Core MCP Server
+- [ ] Persona Management
+- [ ] GitHub Marketplace
+- [ ] Docker/Containerization
+- [ ] CI/CD Workflows
+- [ ] Documentation
+- [ ] Other: _______________
 
 ## Notes
 <!-- Any other relevant information -->

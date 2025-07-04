@@ -1,0 +1,13 @@
+# Disable blank issues to ensure users select an appropriate template
+# This helps maintain consistent issue quality and structure
+blank_issues_enabled: false
+contact_links:
+  - name: "\ud83d\udcac Community Discussions"
+    url: https://github.com/mickdarling/DollhouseMCP/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: "\ud83d\udcd6 Documentation"
+    url: https://github.com/mickdarling/DollhouseMCP/tree/main/docs
+    about: Check our documentation for setup and usage guides
+  - name: "\ud83c\udfa8 Persona Marketplace"
+    url: https://github.com/mickdarling/DollhouseMCP-Personas
+    about: Browse and submit personas to our community marketplace

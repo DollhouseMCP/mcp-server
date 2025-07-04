@@ -1,12 +1,16 @@
 ---
 name: Feature Request
-about: Suggest new functionality for DollhouseMCP
+about: Suggest new functionality, improvements, or enhancements. Include motivation, proposed solution, and acceptance criteria.
 title: '[FEATURE] '
 labels: 'type: feature'
 assignees: ''
 ---
 
-## Summary
+## Feature Summary
+<!-- One-line summary for project board visibility -->
+**Quick Summary**: 
+
+## Detailed Description
 <!-- Brief description of the feature -->
 
 ## Motivation
@@ -16,13 +20,40 @@ assignees: ''
 <!-- How should this feature work? Include any UI/UX considerations -->
 
 ## Acceptance Criteria
-<!-- What needs to be done for this feature to be considered complete? -->
+<!-- What needs to be done for this feature to be considered complete?
+Good criteria are specific, measurable, and testable. Example:
+- User can click a button to toggle dark mode
+- Dark mode preference persists between sessions
+- All UI elements have appropriate dark mode colors -->
 - [ ] 
 - [ ] 
 - [ ] 
 
 ## Technical Notes
 <!-- Any implementation considerations, dependencies, or constraints -->
+
+## Priority & Scope
+<!-- Help us understand importance and effort -->
+**Priority Level**:
+- [ ] 🔴 Critical - Blocking major use cases
+- [ ] 🟠 High - Significant user value
+- [ ] 🟡 Medium - Nice to have
+- [ ] 🟢 Low - Future consideration
+
+**Estimated Effort**:
+- [ ] Small (1-2 days)
+- [ ] Medium (3-5 days)
+- [ ] Large (1-2 weeks)
+- [ ] Extra Large (2+ weeks)
+
+**Component Area**:
+- [ ] Core MCP Server
+- [ ] Persona Management
+- [ ] GitHub Marketplace
+- [ ] User Experience
+- [ ] Developer Tools
+- [ ] Documentation
+- [ ] Other: _______________
 
 ## Additional Context
 <!-- Any other context, mockups, or examples -->

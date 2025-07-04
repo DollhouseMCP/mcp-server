@@ -1,10 +1,14 @@
 ---
 name: Research
-about: Investigation or research task
+about: Investigation tasks for exploring new technologies, patterns, or solutions. Include research questions, success criteria, and deliverables.
 title: '[RESEARCH] '
 labels: 'type: research'
 assignees: ''
 ---
+
+## Research Summary
+<!-- One-line summary for project board visibility -->
+**Quick Summary**: 
 
 ## Research Topic
 <!-- What needs to be investigated? -->
@@ -40,6 +44,24 @@ assignees: ''
 <!-- Links, documentation, or tools that might be helpful -->
 - 
 - 
+
+## Priority & Impact
+<!-- Help us understand importance -->
+**Priority Level**:
+- [ ] 🔴 Critical - Blocking decision needed
+- [ ] 🟠 High - Important for roadmap
+- [ ] 🟡 Medium - Would be valuable
+- [ ] 🟢 Low - Nice to know
+
+**Research Area**:
+- [ ] Architecture/Design
+- [ ] Platform Compatibility
+- [ ] Performance/Scalability
+- [ ] Security/Compliance
+- [ ] User Experience
+- [ ] Market/Competition
+- [ ] Technology/Tools
+- [ ] Other: _______________
 
 ## Notes
 <!-- Any additional context or constraints -->

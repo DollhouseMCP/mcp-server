@@ -65,89 +65,103 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Security Hardening** - Eliminated all command injection vulnerabilities using safeExec() with spawn()  
 ✅ **Code Quality Excellence** - Method decomposition, string optimization, and enterprise-grade error handling  
 
-### Next Steps (Phase 2C - Private Personas & Advanced Features):
-🔄 **Local Private Persona Support** - User-specific directories and privacy controls  
-🔄 **Enhanced Management Features** - Templates, bulk operations, advanced search  
-🔄 **Collaboration Tools** - Persona sharing, forking, versioning  
+### Completed (Docker Testing & Workflow Reliability - July 3-4, 2025):
+✅ **Docker Testing Fixes** - Resolved timing issues, tag format problems (67% → 100% goal)
+✅ **Jest Configuration Crisis** - Fixed ESM/CommonJS conflicts, all 79 tests passing
+✅ **Workflow Startup Failures** - Eliminated YAML parsing errors with syntax cleanup
+✅ **Branch Protection Readiness** - Cross-Platform Simple workflow 100% reliable
 
-### Future (Phase 3 - Business Platform):
-📋 **DollhouseMCP.com Website** - Classic web interface with user accounts  
-📋 **Payment Processing** - Premium persona monetization (80/20 creator/platform split)  
-📋 **Cloud Sync & Storage** - Cross-device private persona synchronization  
-📋 **Community Features** - Reviews, ratings, advanced search, recommendations  
+### Completed (GitHub Project Management - July 4, 2025):
+✅ **Issue Templates** - 4 templates (feature, bug, task, research) for organized tracking
+✅ **Label System** - Priority (critical/high/medium/low) and area-based categorization
+✅ **Milestones** - v1.1.0 through v1.4.0 with clear timelines and goals
+✅ **Project Automation** - Workflow for auto-adding issues and status tracking
+✅ **Management Tools** - Interactive scripts for issue management and metrics
+✅ **Documentation** - CONTRIBUTING.md, PROJECT_SETUP.md, QUICK_START.md guides
 
-## Current Project Structure
+### Current Active Issues (GitHub Project):
+🔴 **High Priority**:
+- #28: Fix linux/arm64 Docker build test failure (exit code 255)
+- #29: Add MCP protocol integration tests
+- #30: Research multi-platform MCP compatibility (ChatGPT, BoltAI, Gemini)
+- #31: Implement persona active indicator system
+- #32: Create universal installer for multi-platform support
 
-```
-DollhouseMCP/
-├── .github/
-│   ├── actions/
-│   │   └── validate-yaml/
-│   │       └── action.yml    # Reusable YAML validation composite action
-│   └── workflows/
-│       ├── claude.yml        # Interactive Claude Code workflow (mentions @claude)
-│       └── claude-code-review.yml  # Automated PR review workflow
-├── src/
-│   └── index.ts              # Main MCP server (DollhouseMCPServer class)
-├── dist/                     # Compiled JavaScript (auto-generated)
-├── personas/                 # Local persona collection
-│   ├── creative-writer.md    # Enhanced with unique ID system
-│   ├── technical-analyst.md
-│   ├── eli5-explainer.md
-│   ├── business-consultant.md
-│   └── debug-detective.md
-├── package.json              # Project config (dollhousemcp, AGPL-3.0)
-├── tsconfig.json             # TypeScript configuration
-├── LICENSE                   # AGPL-3.0 with platform stability terms
-├── README.md                 # User documentation (needs updating)
-└── claude.md                 # This context file
-```
+🟡 **Medium Priority**:
+- #33: Add custom persona directory Docker verification
+- #34: Marketplace bi-directional sync infrastructure
 
-```
-DollhouseMCP-Personas/         # Marketplace repository (GitHub)
-├── README.md                  # Marketplace documentation
-├── personas/
-│   ├── creative/             # Category-based organization
-│   ├── professional/
-│   ├── educational/
-│   ├── gaming/
-│   └── personal/
-├── marketplace.json           # Marketplace metadata
-└── submission-guidelines.md   # Contribution guidelines
-```
+### Next Strategic Priorities:
+1. **Universal MCP Compatibility** - Support ChatGPT, BoltAI, Gemini, and other AI tools
+2. **Persona Active Indicators** - Visual safety/transparency when personas are active
+3. **Pre-Prompt System** - Modular components for style/language/content modifiers
+4. **Enhanced Marketplace** - Bi-directional sync, analytics, collaborative features  
 
+## Current Workflow Status (July 4, 2025)
+
+| Workflow | Status | Reliability | Purpose |
+|----------|--------|-------------|---------|
+| Core Build & Test | ✅ Passing | 100% | Main CI/CD pipeline |
+| Build Artifacts | ✅ Passing | 100% | Release preparation |
+| Extended Node Compatibility | ✅ Passing | 100% | Node 18/20/22 testing |
+| Cross-Platform Simple | ✅ Passing | 100% | Simplified cross-platform |
+| Performance Testing | ✅ Passing | 100% | Daily performance checks |
+| Docker Testing | ⚠️ Partial | 67% | 2/3 passing (ARM64 fails) |
+
+**Branch Protection**: Ready with Cross-Platform Simple as required check
+
+## GitHub Project Management
+
+**Project Board**: https://github.com/users/mickdarling/projects/1
+**Milestones**:
+- v1.1.0 - CI/CD Reliability (Due: July 18, 2025)
+- v1.2.0 - Universal Platform Support (Due: Aug 15, 2025)
+- v1.3.0 - Enhanced UX (Due: Sep 5, 2025)
+- v1.4.0 - Marketplace Evolution (Due: Oct 3, 2025)
+
+**Management Tools**:
+- `./scripts/project-management.sh` - Interactive issue management
+- `./scripts/link-issues-to-project.sh` - Add issues to project board
+- Issue templates in `.github/ISSUE_TEMPLATE/`
+
+## Key Technical Decisions
+
+1. **Jest Configuration**: `jest.config.cjs` with CommonJS for ESM compatibility
+2. **Docker Strategy**: stdio-based MCP servers (not daemon mode)
+3. **YAML Standards**: Document start markers, no trailing spaces
+4. **Project Tools**: GraphQL API for GitHub Projects (needs `gh auth refresh -s project`)
 ## Current MCP Tools (21 Available)
 
-### **Core Persona Management**
-1. **`list_personas`** - Display all local personas with enhanced metadata
-2. **`activate_persona`** - Activate by name, filename, or unique ID
-3. **`get_active_persona`** - Get current persona info
-4. **`deactivate_persona`** - Return to default mode
-5. **`get_persona_details`** - View complete persona details
-6. **`reload_personas`** - Refresh from filesystem
+1-6: Core persona management (list, activate, get, deactivate, details, reload)
+7-11: Marketplace integration (browse, search, get, install, submit)
+12-14: User identity (set, get, clear)
+15-17: Chat-based management (create, edit, validate)
+18-21: Auto-update system (check, update, rollback, status)
 
-### **GitHub Marketplace Integration** ⭐ NEW
-7. **`browse_marketplace`** - Browse personas by category using GitHub API
-8. **`search_marketplace`** - Search across all personas with GitHub Search
-9. **`get_marketplace_persona`** - View detailed persona info from marketplace
-10. **`install_persona`** - One-click download and local installation
-11. **`submit_persona`** - Submit via automated GitHub issue creation
+## Critical Session Context (July 3-4, 2025)
 
-### **User Identity Management** ⭐ NEW
-12. **`set_user_identity`** - Set username for persona attribution
-13. **`get_user_identity`** - View current identity status
-14. **`clear_user_identity`** - Return to anonymous mode
+**Docker Testing Journey**: 0% → 67% reliability
+- Fixed Docker Compose timing issues (PR #25)
+- Fixed Docker tag format (linux/amd64 → linux-amd64) (PR #26)
+- ARM64 still failing (exit code 255) - Issue #28
 
-### **Chat-Based Persona Management** ⭐ NEW (Phase 2B)
-15. **`create_persona`** - Guided persona creation through chat interface
-16. **`edit_persona`** - Modify existing persona metadata and content
-17. **`validate_persona`** - Comprehensive format and quality validation
+**Workflow Reliability Journey**: All failing → 100% (except Docker)
+- Fixed Jest ESM/CommonJS conflicts (jest.config.js → jest.config.cjs)
+- Fixed YAML parsing (trailing spaces, document start markers)
+- Cross-Platform Simple workflow now 100% reliable for branch protection
 
-### **Auto-Update System** ⭐ NEW (Phase 2B+)
-18. **`check_for_updates`** - Check GitHub releases for available DollhouseMCP updates
-19. **`update_server`** - Automated git pull + npm install + build with backup creation
-20. **`rollback_update`** - Restore previous version from automatic backups
-21. **`get_server_status`** - Comprehensive server status with version, git info, and system details
+**GitHub Project Management Implementation**:
+- Created comprehensive issue tracking system
+- 7 prioritized issues (#28-#34)
+- 4 milestones with clear deadlines
+- Interactive management scripts (needs `gh auth refresh -s project`)
+
+## Next Session Must-Do
+
+1. **Fix ARM64 Docker** - Issue #28 is blocking 100% CI/CD
+2. **MCP Integration Tests** - Issue #29 for protocol validation
+3. **Multi-Platform Research** - Issue #30 for universal compatibility
+4. **Continue Project Board** - Add remaining medium/low priority issues
 
 ## Technical Architecture
 
