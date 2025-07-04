@@ -1,10 +1,14 @@
 ---
 name: Bug Report
-about: Report a problem with DollhouseMCP
+about: Report crashes, errors, unexpected behavior, or functionality not working as documented. Include impact level and affected components.
 title: '[BUG] '
 labels: 'type: bug'
 assignees: ''
 ---
+
+## Bug Summary
+<!-- One-line summary for project board visibility -->
+**Quick Summary**: 
 
 ## Description
 <!-- Clear description of what's broken -->
@@ -32,6 +36,23 @@ assignees: ''
 ```
 Paste any error messages here
 ```
+
+## Impact & Priority
+<!-- Help us understand the severity -->
+**Impact Level**:
+- [ ] 🔴 Critical - System is unusable
+- [ ] 🟠 High - Major functionality broken
+- [ ] 🟡 Medium - Feature partially working
+- [ ] 🟢 Low - Minor inconvenience
+
+**Affected Component**:
+- [ ] Core MCP Server
+- [ ] Persona Management
+- [ ] GitHub Marketplace
+- [ ] Docker/Containerization
+- [ ] CI/CD Workflows
+- [ ] Documentation
+- [ ] Other: _______________
 
 ## Additional Context
 <!-- Any other context about the problem -->
