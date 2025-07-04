@@ -10,8 +10,8 @@
 - **Phase 2**: ✅ COMPLETE - Core utilities extracted
 - **Phase 3**: ✅ COMPLETE - Persona module extracted
 - **Phase 4**: ✅ COMPLETE - Marketplace module extracted
-- **Phase 5**: ⏳ PENDING - Update module (next task)
-- **Phase 6**: ⏳ PENDING - Server refactor
+- **Phase 5**: ✅ COMPLETE - Update module extracted
+- **Phase 6**: ⏳ PENDING - Server refactor (next task)
 - **Phase 7**: ⏳ PENDING - Cleanup
 
 ## Commits So Far
@@ -25,20 +25,20 @@
 - Phase 2: ~400 lines (utilities)
 - Phase 3: ~630 lines (persona logic)
 - Phase 4: ~380 lines (marketplace functions)
-- **Total**: ~1,410 lines removed from index.ts (2,615 lines remaining)
+- Phase 5: ~784 lines (update/version management)
+- **Total**: ~2,194 lines removed from index.ts (1,831 lines remaining)
 
-## Next Steps for Phase 5
-Extract update/version management functions from index.ts:
-1. Create `src/update/UpdateManager.ts`
-2. Create `src/update/BackupManager.ts`  
-3. Create `src/update/DependencyChecker.ts`
+## Next Steps for Phase 6
+Refactor the main server class and handlers:
+1. Extract tool handlers into separate modules
+2. Create a cleaner server initialization pattern
+3. Separate concerns for better maintainability
 
-Functions to move:
-- Version checking and comparison logic
-- Backup creation and management
-- Dependency validation
-- Update installation logic
-- Rollback functionality
+Main focus areas:
+- Tool registration and handling
+- Server lifecycle management
+- Error handling patterns
+- Configuration management
 
 ## Key Files to Check
 - `src/index.ts` - Still contains remaining code

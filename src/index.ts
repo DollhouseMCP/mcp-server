@@ -25,6 +25,7 @@ import { validateFilename, validatePath, sanitizeInput, validateContentSize } fr
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
+import { UpdateManager } from './update/index.js';
 
 const exec = promisify(child_process.exec);
 
@@ -153,6 +154,7 @@ class DollhouseMCPServer {
   private personaDetails: PersonaDetails;
   private personaInstaller: PersonaInstaller;
   private personaSubmitter: PersonaSubmitter;
+  private updateManager: UpdateManager;
 
   constructor() {
     this.server = new Server(
@@ -186,6 +188,9 @@ class DollhouseMCPServer {
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.personaInstaller = new PersonaInstaller(this.githubClient, this.personasDir);
     this.personaSubmitter = new PersonaSubmitter();
+    
+    // Initialize update manager
+    this.updateManager = new UpdateManager();
     
     this.setupHandlers();
     this.loadPersonas();
@@ -1568,267 +1573,17 @@ ${sanitizedInstructions}
     };
   }
 
-  /**
-   * Executes a network operation with retry logic and exponential backoff
-   */
-  private async retryNetworkOperation<T>(
-    operation: () => Promise<T>, 
-    maxRetries: number = 3,
-    baseDelay: number = 1000
-  ): Promise<T> {
-    let lastError: Error;
-    
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation();
-      } catch (error) {
-        lastError = error as Error;
-        
-        // Don't retry on the last attempt
-        if (attempt === maxRetries) {
-          break;
-        }
-        
-        // Don't retry certain errors (like 404, 401)
-        if (error instanceof Error && error.message.includes('404')) {
-          break;
-        }
-        
-        // Calculate delay with exponential backoff
-        const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    
-    throw lastError!;
-  }
+  // retryNetworkOperation is now handled by UpdateChecker
 
   // Auto-update management tools
   private async checkForUpdates() {
-    try {
-      // Get current version from package.json
-      const packageJsonPath = path.join(__dirname, "..", "package.json");
-      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
-      const packageData = JSON.parse(packageContent);
-      const currentVersion = packageData.version;
-
-      // Check GitHub releases API for latest version with retry logic
-      const releasesUrl = RELEASES_API_URL;
-      
-      const response = await this.retryNetworkOperation(async () => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
-        try {
-          const response = await fetch(releasesUrl, {
-            headers: {
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'DollhouseMCP/1.0'
-            },
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
-          return response;
-        } catch (error) {
-          clearTimeout(timeoutId);
-          throw error;
-        }
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            content: [{
-              type: "text",
-              text: this.getPersonaIndicator() + 
-                '📦 **Update Check Complete**\n\n' +
-                '🔄 **Current Version:** ' + currentVersion + '\n' +
-                '📡 **Remote Status:** No releases found on GitHub\n' +
-                'ℹ️ **Note:** This may be a development version or releases haven\'t been published yet.\n\n' +
-                '**Manual Update:**\n' +
-                'Use `update_server true` to pull latest changes from main branch.'
-            }]
-          };
-        }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-      }
-
-      const releaseData = await response.json();
-      const latestVersion = releaseData.tag_name?.replace(/^v/, '') || releaseData.name;
-      const publishedAt = new Date(releaseData.published_at).toLocaleDateString();
-
-      // Simple version comparison (assumes semantic versioning)
-      const isUpdateAvailable = this.compareVersions(currentVersion, latestVersion) < 0;
-
-      const releaseNotes = releaseData.body 
-        ? releaseData.body.substring(0, 500) + (releaseData.body.length > 500 ? '...' : '')
-        : 'See release notes on GitHub';
-
-      const statusParts = [
-        this.getPersonaIndicator() + '📦 **Update Check Complete**\n\n',
-        '🔄 **Current Version:** ' + currentVersion + '\n',
-        '📡 **Latest Version:** ' + latestVersion + '\n',
-        '📅 **Released:** ' + publishedAt + '\n\n'
-      ];
-
-      if (isUpdateAvailable) {
-        statusParts.push(
-          '✨ **Update Available!**\n\n',
-          '**What\'s New:**\n' + releaseNotes + '\n\n',
-          '**To Update:**\n',
-          '• Use: `update_server true`\n',
-          '• Or visit: ' + releaseData.html_url + '\n\n',
-          '⚠️ **Note:** Update will restart the server and reload all personas.'
-        );
-      } else {
-        statusParts.push(
-          '✅ **You\'re Up to Date!**\n\n',
-          'Your DollhouseMCP installation is current.\n',
-          'Check back later for new features and improvements.'
-        );
-      }
-
-      const statusText = statusParts.join('');
-
-      return {
-        content: [{ type: "text", text: statusText }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isAbortError = error instanceof Error && error.name === 'AbortError';
-      
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Update Check Failed**\n\n' +
-            'Error: ' + errorMessage + '\n\n' +
-            '**Possible causes:**\n' +
-            (isAbortError ? '• Request timed out (>10 seconds)\n' : '') +
-            '• Network connectivity issues\n' +
-            '• GitHub API rate limiting\n' +
-            '• Repository access problems\n\n' +
-            'Try again later or check manually at:\n' +
-            REPO_URL + '/releases'
-        }]
-      };
-    }
+    const { text } = await this.updateManager.checkForUpdates();
+    return {
+      content: [{ type: "text", text: this.getPersonaIndicator() + text }]
+    };
   }
 
-  /**
-   * Validates prerequisites for server update (git repo + clean working tree)
-   */
-  private async validateUpdatePrerequisites(rootDir: string): Promise<{ valid: boolean; message?: string }> {
-    // Check if we're in a git repository
-    try {
-      await safeExec('git', ['status'], { cwd: rootDir });
-    } catch {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Update Failed**\n\n' +
-          'This directory is not a Git repository.\n' +
-          'DollhouseMCP can only be updated if installed via Git clone.\n\n' +
-          '**Manual Update Steps:**\n' +
-          '1. Download latest code from GitHub\n' +
-          '2. Replace installation files\n' +
-          '3. Run `npm install && npm run build`'
-      };
-    }
-
-    // Check for uncommitted changes
-    const { stdout: statusOutput } = await safeExec('git', ['status', '--porcelain'], { cwd: rootDir });
-    if (statusOutput.trim()) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Update Blocked**\n\n' +
-          'Uncommitted changes detected:\n```\n' + statusOutput + '```\n\n' +
-          '**Resolution:**\n' +
-          '• Commit your changes: `git add . && git commit -m "Save local changes"`\n' +
-          '• Or stash them: `git stash`\n' +
-          '• Then retry the update'
-      };
-    }
-
-    return { valid: true };
-  }
-
-  /**
-   * Creates a timestamped backup of the current installation
-   */
-  private async createUpdateBackup(rootDir: string): Promise<string> {
-    const backupDir = path.join(path.dirname(rootDir), '.backup-' + Date.now());
-    await safeExec('cp', ['-r', rootDir, backupDir]);
-    
-    // Clean up old backups (keep only last 5)
-    await this.cleanupOldBackups(path.dirname(rootDir));
-    
-    return backupDir;
-  }
-
-  /**
-   * Removes old backup directories, keeping only the 5 most recent
-   */
-  private async cleanupOldBackups(parentDir: string): Promise<void> {
-    try {
-      const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
-      const backupDirs = lsOutput.split('\n')
-        .filter(dir => dir.startsWith('.backup-') && dir.match(/\.backup-\d+$/))
-        .slice(5); // Keep first 5, remove the rest
-
-      for (const oldBackup of backupDirs) {
-        const backupPath = path.join(parentDir, oldBackup);
-        await safeExec('rm', ['-rf', backupPath]);
-      }
-    } catch (error) {
-      // Don't fail the backup creation if cleanup fails
-      console.error('Warning: Failed to cleanup old backups:', error);
-    }
-  }
-
-  /**
-   * Pulls latest changes from git and checks if updates are available
-   */
-  private async pullLatestChanges(rootDir: string): Promise<{ hasUpdates: boolean; output: string }> {
-    const { stdout: pullOutput } = await safeExec('git', ['pull', 'origin', 'main'], { cwd: rootDir });
-    const hasUpdates = !pullOutput.includes('Already up to date');
-    return { hasUpdates, output: pullOutput };
-  }
-
-  /**
-   * Updates npm dependencies and rebuilds the project
-   */
-  private async updateDependenciesAndBuild(rootDir: string): Promise<void> {
-    await safeExec('npm', ['install'], { cwd: rootDir });
-    await safeExec('npm', ['run', 'build'], { cwd: rootDir });
-  }
-
-  /**
-   * Formats the success message for completed updates with progress indicators
-   */
-  private formatUpdateSuccessMessage(pullOutput: string, backupDir: string): string {
-    const parts = [
-      this.getPersonaIndicator() + '🔄 **DollhouseMCP Update Complete**\n\n',
-      '**Progress Summary:**\n',
-      '✅ [1/6] Dependencies verified (git, npm)\n',
-      '✅ [2/6] Repository status validated\n',
-      '✅ [3/6] Backup created: ' + path.basename(backupDir) + '\n',
-      '✅ [4/6] Git pull completed\n',
-      '✅ [5/6] Dependencies updated (npm install)\n',
-      '✅ [6/6] TypeScript build completed\n',
-      '\n🎉 **Update Successful!**\n\n',
-      '**Changes Applied:**\n' + pullOutput + '\n\n',
-      '**Next Steps:**\n',
-      '• Server will restart automatically\n',
-      '• All personas will be reloaded\n',
-      '• Use `get_server_status` to verify update\n\n',
-      '**Backup Location:** ' + backupDir + '\n',
-      'Use `rollback_update true` if issues occur.'
-    ];
-    return parts.join('');
-  }
+  // Update helper methods are now handled by UpdateManager
 
   private async updateServer(confirm: boolean) {
     if (!confirm) {
@@ -1853,549 +1608,45 @@ ${sanitizedInstructions}
       };
     }
 
-    try {
-      // Check that required dependencies are available
-      const depCheck = await this.verifyDependencies();
-      if (!depCheck.valid) {
-        return { content: [{ type: "text", text: depCheck.message! }] };
-      }
-
-      const rootDir = path.join(__dirname, "..");
-
-      // Validate prerequisites (git repo + clean working tree)
-      const validation = await this.validateUpdatePrerequisites(rootDir);
-      if (!validation.valid) {
-        return {
-          content: [{ type: "text", text: validation.message! }]
-        };
-      }
-
-      // Create backup before making changes
-      const backupDir = await this.createUpdateBackup(rootDir);
-
-      // Pull latest changes and check if updates exist
-      const { hasUpdates, output: pullOutput } = await this.pullLatestChanges(rootDir);
-      
-      // If no updates, clean up backup and return
-      if (!hasUpdates) {
-        await safeExec('rm', ['-rf', backupDir]);
-        return {
-          content: [{
-            type: "text",
-            text: this.getPersonaIndicator() + 
-              'ℹ️ **Already Up to Date**\n\n' +
-              'No updates were available.\n' +
-              'Your DollhouseMCP installation is current.\n\n' +
-              'Use `check_for_updates` to see version information.'
-          }]
-        };
-      }
-
-      // Update dependencies and rebuild
-      await this.updateDependenciesAndBuild(rootDir);
-
-      // Format and return success message
-      const successMessage = this.formatUpdateSuccessMessage(pullOutput, backupDir);
-      return {
-        content: [{ type: "text", text: successMessage }]
-      };
-
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Update Failed**\n\n' +
-            'Error during auto-update: ' + errorMessage + '\n\n' +
-            '**Recovery:**\n' +
-            'If the server is in an unstable state:\n' +
-            '1. Use `rollback_update true` to restore previous version\n' +
-            '2. Or manually restore from backup directory\n' +
-            '3. Report the issue on GitHub if it persists'
-        }]
-      };
-    }
+    const { text } = await this.updateManager.updateServer(confirm, this.getPersonaIndicator());
+    return {
+      content: [{ type: "text", text }]
+    };
   }
 
-  /**
-   * Finds available backup directories for rollback
-   */
-  private async findAvailableBackups(parentDir: string): Promise<{ success: boolean; backups?: string[]; message?: string }> {
-    const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
-    const backupDirs = lsOutput.split('\n')
-      .filter(dir => dir.startsWith('.backup-'))
-      .map(dir => path.join(parentDir, dir));
-
-    if (backupDirs.length === 0) {
-      return {
-        success: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **No Backups Found**\n\n' +
-          'No backup directories found for rollback.\n' +
-          'Backups are created automatically during updates.\n\n' +
-          '**Manual Recovery:**\n' +
-          'You may need to manually restore from:\n' +
-          '• Git history: `git reset --hard HEAD~1`\n' +
-          '• External backup\n' +
-          '• Fresh installation'
-      };
-    }
-
-    return { success: true, backups: backupDirs };
-  }
-
-  /**
-   * Performs safe rollback with safety backup creation
-   */
-  private async performSafeRollback(rootDir: string, parentDir: string, latestBackup: string): Promise<string> {
-    // Create safety backup of current state
-    const safetyBackup = path.join(parentDir, '.rollback-safety-' + Date.now());
-    await safeExec('cp', ['-r', rootDir, safetyBackup]);
-
-    // Remove current installation
-    await safeExec('rm', ['-rf', rootDir]);
-
-    // Restore from backup
-    await safeExec('cp', ['-r', latestBackup, rootDir]);
-
-    return safetyBackup;
-  }
-
-  /**
-   * Attempts to rebuild after rollback (non-critical)
-   */
-  private async attemptPostRollbackBuild(rootDir: string): Promise<boolean> {
-    try {
-      await safeExec('npm', ['run', 'build'], { cwd: rootDir });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Formats the success message for completed rollbacks
-   */
-  private formatRollbackSuccessMessage(latestBackup: string, safetyBackup: string, buildSuccess: boolean): string {
-    const parts = [
-      this.getPersonaIndicator() + '🔄 **DollhouseMCP Rollback Complete**\n\n',
-      '**Progress Summary:**\n',
-      '✅ [1/5] Dependencies verified (git, npm)\n',
-      '✅ [2/5] Safety backup created\n',
-      '✅ [3/5] Current version removed\n',
-      '✅ [4/5] Previous version restored from: ' + path.basename(latestBackup) + '\n',
-      buildSuccess ? '✅ [5/5] TypeScript rebuild completed\n' : '⚠️ [5/5] Rebuild skipped (may not be needed)\n',
-      '\n🎉 **Rollback Successful!**\n\n',
-      '**Status:**\n',
-      '• Previous version restored successfully\n',
-      '• Server will restart automatically\n',
-      '• Use `get_server_status` to verify rollback\n\n',
-      '**Backup Information:**\n',
-      '• Safety backup: ' + path.basename(safetyBackup) + '\n',
-      '• Original backup: ' + path.basename(latestBackup) + '\n',
-      '• Remove manually when satisfied with rollback result'
-    ];
-    return parts.join('');
-  }
+  // Rollback helper methods are now handled by UpdateManager
 
   private async rollbackUpdate(confirm: boolean) {
-    if (!confirm) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '⚠️ **Rollback Confirmation Required**\n\n' +
-            'To proceed with rollback, you must confirm:\n' +
-            '`rollback_update true`\n\n' +
-            '**What will happen:**\n' +
-            '• Find most recent backup\n' +
-            '• Restore previous version\n' +
-            '• Rebuild if necessary\n' +
-            '• Restart server\n\n' +
-            '⚠️ **Warning:** This will undo recent updates and changes.'
-        }]
-      };
-    }
-
-    try {
-      // Check that required dependencies are available
-      const depCheck = await this.verifyDependencies();
-      if (!depCheck.valid) {
-        return { content: [{ type: "text", text: depCheck.message! }] };
-      }
-
-      const rootDir = path.join(__dirname, "..");
-      const parentDir = path.dirname(rootDir);
-
-      // Find available backups
-      const backupResult = await this.findAvailableBackups(parentDir);
-      if (!backupResult.success) {
-        return {
-          content: [{ type: "text", text: backupResult.message! }]
-        };
-      }
-
-      // Use the most recent backup
-      const latestBackup = backupResult.backups![0];
-
-      // Perform the rollback with safety backup
-      const safetyBackup = await this.performSafeRollback(rootDir, parentDir, latestBackup);
-
-      // Attempt to rebuild (non-critical)
-      const buildSuccess = await this.attemptPostRollbackBuild(rootDir);
-
-      // Format and return success message
-      const successMessage = this.formatRollbackSuccessMessage(latestBackup, safetyBackup, buildSuccess);
-      return {
-        content: [{ type: "text", text: successMessage }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Rollback Failed**\n\n' +
-            'Error during rollback: ' + error + '\n\n' +
-            '**Emergency Recovery:**\n' +
-            '1. Check for safety backup directories\n' +
-            '2. Manually restore from backup\n' +
-            '3. Or reinstall DollhouseMCP from GitHub\n' +
-            '4. Report this issue if it persists'
-        }]
-      };
-    }
+    const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
+    return {
+      content: [{ type: "text", text }]
+    };
   }
 
-  /**
-   * Reads version information from package.json
-   */
-  private async getVersionInfo(rootDir: string): Promise<{ version: string; name: string }> {
-    const packageJsonPath = path.join(rootDir, "package.json");
-    const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
-    const packageData = JSON.parse(packageContent);
-    return { version: packageData.version, name: packageData.name };
-  }
+  // Version and git info methods are now handled by UpdateManager
 
-  /**
-   * Gathers git repository information
-   */
-  private async getGitInfo(rootDir: string): Promise<{ gitInfo: string; lastCommit: string }> {
-    try {
-      const { stdout: branchOutput } = await safeExec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootDir });
-      const { stdout: commitOutput } = await safeExec('git', ['rev-parse', '--short', 'HEAD'], { cwd: rootDir });
-      const { stdout: dateOutput } = await safeExec('git', ['log', '-1', '--format=%cd', '--date=short'], { cwd: rootDir });
-      
-      const gitInfo = branchOutput.trim() + ' (' + commitOutput.trim() + ')';
-      const lastCommit = dateOutput.trim();
-      
-      return { gitInfo, lastCommit };
-    } catch {
-      return { gitInfo: "Not available", lastCommit: "Unknown" };
-    }
-  }
-
-  /**
-   * Checks for backup directories
-   */
-  private async getBackupInfo(rootDir: string): Promise<string> {
-    try {
-      const parentDir = path.dirname(rootDir);
-      const { stdout: lsOutput } = await safeExec('ls', ['-1'], { cwd: parentDir });
-      const backupCount = lsOutput.split('\n').filter(dir => dir.startsWith('.backup-')).length;
-      
-      if (backupCount > 0) {
-        return backupCount + ' backup(s) available';
-      }
-      return "None found";
-    } catch {
-      return "Check failed";
-    }
-  }
-
-  /**
-   * Collects system information
-   */
-  private getSystemInfo(): { nodeVersion: string; platform: string; arch: string; uptimeString: string } {
-    const nodeVersion = process.version;
-    const platform = process.platform;
-    const arch = process.arch;
-    const uptime = process.uptime();
-    const uptimeString = Math.floor(uptime / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm ' + Math.floor(uptime % 60) + 's';
-    
-    return { nodeVersion, platform, arch, uptimeString };
-  }
-
-  /**
-   * Formats the complete server status message
-   */
-  private formatServerStatusMessage(
-    versionInfo: { version: string; name: string },
-    gitInfo: { gitInfo: string; lastCommit: string },
-    backupInfo: string,
-    systemInfo: { nodeVersion: string; platform: string; arch: string; uptimeString: string },
-    rootDir: string
-  ): string {
-    const parts = [
-      this.getPersonaIndicator() + '📊 **DollhouseMCP Server Status**\n\n',
-      '**📦 Version Information:**\n',
-      '• **Version:** ' + versionInfo.version + '\n',
-      '• **Git Branch:** ' + gitInfo.gitInfo + '\n',
-      '• **Last Update:** ' + gitInfo.lastCommit + '\n\n',
-      '**⚙️ System Information:**\n',
-      '• **Node.js:** ' + systemInfo.nodeVersion + '\n',
-      '• **Platform:** ' + systemInfo.platform + ' (' + systemInfo.arch + ')\n',
-      '• **Uptime:** ' + systemInfo.uptimeString + '\n',
-      '• **Installation:** ' + rootDir + '\n\n',
-      '**🎭 Persona Information:**\n',
-      '• **Total Personas:** ' + this.personas.size + '\n',
-      '• **Active Persona:** ' + (this.activePersona || 'None') + '\n',
-      '• **User Identity:** ' + (this.currentUser || 'Anonymous') + '\n',
-      '• **Personas Directory:** ' + this.personasDir + '\n\n',
-      '**🔄 Update Information:**\n',
-      '• **Backups:** ' + backupInfo + '\n',
-      '• **Check Updates:** `check_for_updates`\n',
-      '• **Update Server:** `update_server true`\n',
-      '• **Rollback:** `rollback_update true`\n\n',
-      '**🛠️ Tools Available:** 21 MCP tools registered'
-    ];
-    return parts.join('');
-  }
+  // Status helper methods are now handled by UpdateManager
 
   private async getServerStatus() {
-    try {
-      const rootDir = path.join(__dirname, "..");
-
-      // Gather all status information using helper functions
-      const versionInfo = await this.getVersionInfo(rootDir);
-      const gitInfo = await this.getGitInfo(rootDir);
-      const backupInfo = await this.getBackupInfo(rootDir);
-      const systemInfo = this.getSystemInfo();
-
-      // Format and return the complete status message
-      const statusMessage = this.formatServerStatusMessage(versionInfo, gitInfo, backupInfo, systemInfo, rootDir);
-      return {
-        content: [{ type: "text", text: statusMessage }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Status Check Failed**\n\n' +
-            'Error gathering system information: ' + error + '\n\n' +
-            'Basic information:\n' +
-            '• Server is running (you received this message)\n' +
-            '• Personas loaded: ' + this.personas.size + '\n' +
-            '• Active persona: ' + (this.activePersona || 'None')
-        }]
-      };
-    }
+    // Add persona information to the status
+    const personaInfo = `
+**🎭 Persona Information:**
+• **Total Personas:** ${this.personas.size}
+• **Active Persona:** ${this.activePersona || 'None'}
+• **User Identity:** ${this.currentUser || 'Anonymous'}
+• **Personas Directory:** ${this.personasDir}`;
+    
+    const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
+    // Insert persona info into the status text
+    const updatedText = text.replace('**Available Commands:**', personaInfo + '\n\n**Available Commands:**');
+    
+    return {
+      content: [{ type: "text", text: updatedText }]
+    };
   }
 
-  /**
-   * Extracts version number from dependency version output
-   */
-  private parseVersionFromOutput(output: string, tool: string): string | null {
-    // Git version output: "git version 2.39.2"
-    // npm version output: "8.19.2" or JSON with version info
-    
-    if (tool === 'git') {
-      const match = output.match(/git version (\d+\.\d+\.\d+)/);
-      return match ? match[1] : null;
-    } else if (tool === 'npm') {
-      // npm might return just the version number or JSON
-      const cleanOutput = output.trim();
-      if (cleanOutput.match(/^\d+\.\d+\.\d+/)) {
-        return cleanOutput.split('\n')[0]; // First line if multiple lines
-      }
-      // Try to parse as JSON if it looks like JSON
-      try {
-        const parsed = JSON.parse(cleanOutput);
-        return parsed.npm || parsed.version || null;
-      } catch {
-        // If not JSON, try to extract version pattern
-        const match = cleanOutput.match(/(\d+\.\d+\.\d+)/);
-        return match ? match[1] : null;
-      }
-    }
-    
-    return null;
-  }
+  // Version and dependency methods are now handled by UpdateManager
 
-  /**
-   * Validates that a dependency version meets requirements
-   */
-  private validateDependencyVersion(
-    actualVersion: string, 
-    requirements: { minimum: string; maximum: string; recommended: string },
-    toolName: string
-  ): { valid: boolean; warning?: string; error?: string } {
-    const minComparison = this.compareVersions(actualVersion, requirements.minimum);
-    const maxComparison = this.compareVersions(actualVersion, requirements.maximum);
-    
-    // Check minimum version requirement
-    if (minComparison < 0) {
-      return {
-        valid: false,
-        error: `${toolName} version ${actualVersion} is below minimum required version ${requirements.minimum}`
-      };
-    }
-    
-    // Check maximum version (warning for newer versions)
-    if (maxComparison > 0) {
-      return {
-        valid: true,
-        warning: `${toolName} version ${actualVersion} is newer than tested version ${requirements.maximum}. May cause compatibility issues.`
-      };
-    }
-    
-    // Check if it's the recommended version
-    const recComparison = this.compareVersions(actualVersion, requirements.recommended);
-    if (recComparison !== 0) {
-      return {
-        valid: true,
-        warning: `${toolName} version ${actualVersion} works but ${requirements.recommended} is recommended for optimal stability.`
-      };
-    }
-    
-    return { valid: true }; // Perfect version
-  }
-
-  /**
-   * Verifies that required dependencies (git, npm) are available with proper versions
-   */
-  private async verifyDependencies(): Promise<{ valid: boolean; message?: string }> {
-    const warnings: string[] = [];
-    
-    // Check Git availability and version
-    try {
-      const { stdout: gitOutput } = await safeExec('git', ['--version']);
-      const gitVersion = this.parseVersionFromOutput(gitOutput, 'git');
-      
-      if (!gitVersion) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **Git Version Detection Failed**\n\n' +
-            'Could not parse Git version from output: ' + gitOutput + '\n' +
-            'Please ensure Git is properly installed and accessible.'
-        };
-      }
-      
-      const gitValidation = this.validateDependencyVersion(
-        gitVersion, 
-        DEPENDENCY_REQUIREMENTS.git, 
-        'Git'
-      );
-      
-      if (!gitValidation.valid) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **Git Version Incompatible**\n\n' +
-            gitValidation.error + '\n\n' +
-            `**Current:** Git ${gitVersion}\n` +
-            `**Required:** ${DEPENDENCY_REQUIREMENTS.git.minimum} - ${DEPENDENCY_REQUIREMENTS.git.maximum}\n` +
-            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.git.recommended}\n\n` +
-            '**Update Git:**\n' +
-            '• macOS: `brew upgrade git`\n' +
-            '• Ubuntu/Debian: `sudo apt update && sudo apt upgrade git`\n' +
-            '• Windows: Download latest from git-scm.com'
-        };
-      }
-      
-      if (gitValidation.warning) {
-        warnings.push('⚠️ **Git:** ' + gitValidation.warning);
-      }
-      
-    } catch (error) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Git Not Available**\n\n' +
-          'Git is not installed or not accessible.\n' +
-          'Git is required for auto-update functionality.\n\n' +
-          '**Installation:**\n' +
-          '• macOS: `brew install git` or download from git-scm.com\n' +
-          '• Ubuntu/Debian: `sudo apt install git`\n' +
-          '• Windows: Download from git-scm.com\n\n' +
-          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.git.minimum}+`
-      };
-    }
-
-    // Check npm availability and version
-    try {
-      const { stdout: npmOutput } = await safeExec('npm', ['--version']);
-      const npmVersion = this.parseVersionFromOutput(npmOutput, 'npm');
-      
-      if (!npmVersion) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **npm Version Detection Failed**\n\n' +
-            'Could not parse npm version from output: ' + npmOutput + '\n' +
-            'Please ensure npm is properly installed and accessible.'
-        };
-      }
-      
-      const npmValidation = this.validateDependencyVersion(
-        npmVersion, 
-        DEPENDENCY_REQUIREMENTS.npm, 
-        'npm'
-      );
-      
-      if (!npmValidation.valid) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **npm Version Incompatible**\n\n' +
-            npmValidation.error + '\n\n' +
-            `**Current:** npm ${npmVersion}\n` +
-            `**Required:** ${DEPENDENCY_REQUIREMENTS.npm.minimum} - ${DEPENDENCY_REQUIREMENTS.npm.maximum}\n` +
-            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.npm.recommended}\n\n` +
-            '**Update npm:**\n' +
-            '• `npm install -g npm@latest` (or specific version)\n' +
-            '• Or update Node.js from nodejs.org\n' +
-            '• Use nvm/nvs for version management'
-        };
-      }
-      
-      if (npmValidation.warning) {
-        warnings.push('⚠️ **npm:** ' + npmValidation.warning);
-      }
-      
-    } catch (error) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **npm Not Available**\n\n' +
-          'npm is not installed or not accessible.\n' +
-          'npm is required for dependency management and building.\n\n' +
-          '**Installation:**\n' +
-          '• Install Node.js from nodejs.org (includes npm)\n' +
-          '• Or use a package manager like brew, apt, or chocolatey\n\n' +
-          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.npm.minimum}+`
-      };
-    }
-
-    // If there are warnings, include them in success message
-    if (warnings.length > 0) {
-      return {
-        valid: true,
-        message: this.getPersonaIndicator() + 
-          '✅ **Dependencies Available**\n\n' +
-          'All required dependencies are available, but there are some recommendations:\n\n' +
-          warnings.join('\n') + '\n\n' +
-          'These are non-blocking warnings. Update at your convenience for optimal stability.'
-      };
-    }
-
-    return { valid: true };
-  }
 
   /**
    * Configure indicator settings
@@ -2566,41 +1817,6 @@ Placeholders for custom format:
     };
   }
 
-  /**
-   * Enhanced semantic version comparison supporting pre-release versions
-   * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
-   */
-  private compareVersions(version1: string, version2: string): number {
-    // Normalize versions by removing 'v' prefix
-    const v1 = version1.replace(/^v/, '');
-    const v2 = version2.replace(/^v/, '');
-    
-    // Split version and pre-release parts
-    const [v1main, v1pre] = v1.split('-');
-    const [v2main, v2pre] = v2.split('-');
-    
-    // Compare main version parts (x.y.z)
-    const v1parts = v1main.split('.').map(part => parseInt(part) || 0);
-    const v2parts = v2main.split('.').map(part => parseInt(part) || 0);
-    
-    const maxLength = Math.max(v1parts.length, v2parts.length);
-    for (let i = 0; i < maxLength; i++) {
-      const v1part = v1parts[i] || 0;
-      const v2part = v2parts[i] || 0;
-      
-      if (v1part < v2part) return -1;
-      if (v1part > v2part) return 1;
-    }
-    
-    // If main versions are equal, compare pre-release versions
-    // Version without pre-release is greater than version with pre-release
-    if (!v1pre && v2pre) return 1;   // 1.0.0 > 1.0.0-beta
-    if (v1pre && !v2pre) return -1;  // 1.0.0-beta < 1.0.0
-    if (!v1pre && !v2pre) return 0;  // 1.0.0 == 1.0.0
-    
-    // Both have pre-release, compare lexicographically
-    return v1pre.localeCompare(v2pre);
-  }
 
   async run() {
     const transport = new StdioServerTransport();
