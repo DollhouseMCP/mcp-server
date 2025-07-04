@@ -14,7 +14,7 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-50%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-102%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/mickdarling/DollhouseMCP)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
@@ -42,7 +42,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 #### Automated Setup (Recommended) - Claude Desktop Only
 
-> **Important**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
+> [!WARNING]
+> **Claude Desktop Only**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
 
 ```bash
 # Clone the repository
@@ -61,6 +62,9 @@ The setup script will:
 - 📋 Provide step-by-step setup instructions
 
 #### Manual Installation
+
+> **Note**: Manual installation works with all MCP-compatible platforms including Claude Desktop, Claude Code, ChatGPT, BoltAI, Gemini, and custom implementations.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mickdarling/DollhouseMCP.git
