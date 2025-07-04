@@ -14,7 +14,7 @@ import * as child_process from "child_process";
 import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
-import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './indicator-config.js';
+import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 
 const exec = promisify(child_process.exec);
 
