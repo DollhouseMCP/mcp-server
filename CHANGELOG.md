@@ -5,6 +5,20 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Persona active indicator system with 2 new MCP tools (Issue #31)
+- `configure_indicator` tool for customizing persona indicator display
+- `get_indicator_config` tool for viewing current indicator settings
+- Environment variable support for persistent indicator configuration
+- Multiple indicator styles: full, minimal, compact, and custom
+- 23 new tests for indicator functionality (102 total tests)
+
+### Changed
+- Total MCP tools increased from 21 to 23
+- Enhanced documentation with Claude Desktop setup clarifications
+
 ## [1.1.0] - 2025-07-04
 
 ### Added

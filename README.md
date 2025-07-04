@@ -836,7 +836,21 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### Phase 2B+ (Current) - July 3, 2025
+### Unreleased (Current)
+- ✅ **Persona active indicator system** with 2 new MCP tools (Issue #31)
+- ✅ **102 comprehensive tests** covering all functionality
+- ✅ **23 total MCP tools** including configure_indicator and get_indicator_config
+- ✅ **Enhanced documentation** with Claude Desktop setup clarifications
+
+### v1.1.0 - July 4, 2025
+- ✅ **Platform-specific badges** for Windows, macOS, Linux visibility
+- ✅ **GitHub Project management** with issue templates and milestones
+- ✅ **ARM64 Docker fix** switching from Alpine to Debian base images
+- ✅ **100% workflow reliability** (except Docker ARM64)
+- ✅ **First GitHub release** with CHANGELOG.md
+- ✅ **21 total MCP tools** at time of release
+
+### Phase 2B+ - July 3, 2025
 - ✅ **Enterprise-grade auto-update system** with 4 new MCP tools
 - ✅ **50 comprehensive tests** covering all functionality  
 - ✅ **Security hardening** - eliminated all command injection vulnerabilities
