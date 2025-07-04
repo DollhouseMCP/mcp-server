@@ -27,7 +27,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **21 MCP Tools** | Complete persona lifecycle management through chat interface |
+| 🎭 **23 MCP Tools** | Complete persona lifecycle management through chat interface |
 | 🏪 **GitHub Marketplace** | Browse, search, install, and submit personas to community marketplace |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` |
@@ -158,6 +158,31 @@ check_for_updates                          # Check for new DollhouseMCP versions
 get_server_status                          # View current version and system info
 update_server true                         # Perform automated update with backup
 rollback_update true                       # Revert to previous version if needed
+```
+
+### Persona Indicators
+DollhouseMCP adds visual indicators to AI responses when a persona is active:
+```
+[🎭 Creative Writer v2.1 by @mickdarling] Your creative response here...
+```
+
+Configure indicators:
+```
+get_indicator_config                       # View current settings
+configure_indicator enabled:false          # Disable indicators
+configure_indicator style:"minimal"        # Use minimal format: 🎭 Creative Writer
+configure_indicator style:"compact"        # Use compact: [Creative Writer v2.1]
+configure_indicator style:"full"           # Full format (default)
+configure_indicator emoji:"🤖"             # Change emoji
+configure_indicator showAuthor:false       # Hide author attribution
+configure_indicator bracketStyle:"round"   # Use (parentheses) instead of [brackets]
+```
+
+Environment variables for persistent configuration:
+```bash
+export DOLLHOUSE_INDICATOR_ENABLED=true
+export DOLLHOUSE_INDICATOR_STYLE=minimal
+export DOLLHOUSE_INDICATOR_EMOJI=🎨
 ```
 
 ## 🖥️ Cross-Platform Installation
