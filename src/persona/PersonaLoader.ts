@@ -1,0 +1,132 @@
+/**
+ * Persona loading and file management
+ */
+
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import matter from 'gray-matter';
+import { Persona, PersonaMetadata } from '../types/persona.js';
+import { ensureDirectory, generateUniqueId } from '../utils/filesystem.js';
+
+export class PersonaLoader {
+  private personasDir: string;
+  
+  constructor(personasDir: string) {
+    this.personasDir = personasDir;
+  }
+  
+  /**
+   * Load all personas from the personas directory
+   */
+  async loadAll(getCurrentUser: () => string | null): Promise<Map<string, Persona>> {
+    // Ensure directory exists
+    await ensureDirectory(this.personasDir);
+    
+    const personas = new Map<string, Persona>();
+    
+    try {
+      const files = await fs.readdir(this.personasDir);
+      const markdownFiles = files.filter(file => file.endsWith('.md'));
+      
+      for (const file of markdownFiles) {
+        try {
+          const persona = await this.loadPersona(file, getCurrentUser);
+          if (persona) {
+            personas.set(file, persona);
+            console.error(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
+          }
+        } catch (error) {
+          console.error(`Error loading persona ${file}: ${error}`);
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading personas directory: ${error}`);
+    }
+    
+    return personas;
+  }
+  
+  /**
+   * Load a single persona from file
+   */
+  async loadPersona(filename: string, getCurrentUser: () => string | null): Promise<Persona | null> {
+    try {
+      const filePath = path.join(this.personasDir, filename);
+      const fileContent = await fs.readFile(filePath, 'utf-8');
+      const parsed = matter(fileContent);
+      
+      const metadata = parsed.data as PersonaMetadata;
+      const content = parsed.content;
+      
+      if (!metadata.name) {
+        metadata.name = path.basename(filename, '.md');
+      }
+      
+      // Generate unique ID if not present
+      let uniqueId = metadata.unique_id;
+      if (!uniqueId) {
+        const authorForId = metadata.author || getCurrentUser() || undefined;
+        uniqueId = generateUniqueId(metadata.name, authorForId);
+        console.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
+      }
+      
+      // Set default values for metadata fields
+      this.setDefaultMetadata(metadata);
+      
+      const persona: Persona = {
+        metadata,
+        content,
+        filename,
+        unique_id: uniqueId,
+      };
+      
+      return persona;
+    } catch (error) {
+      console.error(`Error loading persona ${filename}: ${error}`);
+      return null;
+    }
+  }
+  
+  /**
+   * Save a persona to file
+   */
+  async savePersona(persona: Persona): Promise<void> {
+    const filePath = path.join(this.personasDir, persona.filename);
+    const fileContent = matter.stringify(persona.content, persona.metadata);
+    await fs.writeFile(filePath, fileContent, 'utf-8');
+  }
+  
+  /**
+   * Delete a persona file
+   */
+  async deletePersona(filename: string): Promise<void> {
+    const filePath = path.join(this.personasDir, filename);
+    await fs.unlink(filePath);
+  }
+  
+  /**
+   * Check if a persona file exists
+   */
+  async personaExists(filename: string): Promise<boolean> {
+    try {
+      const filePath = path.join(this.personasDir, filename);
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  
+  /**
+   * Set default metadata values
+   */
+  private setDefaultMetadata(metadata: PersonaMetadata): void {
+    if (!metadata.category) metadata.category = 'general';
+    if (!metadata.age_rating) metadata.age_rating = 'all';
+    if (!metadata.content_flags) metadata.content_flags = [];
+    if (metadata.ai_generated === undefined) metadata.ai_generated = false;
+    if (!metadata.generation_method) metadata.generation_method = 'human';
+    if (!metadata.price) metadata.price = 'free';
+    if (!metadata.license) metadata.license = 'CC-BY-SA-4.0';
+  }
+}
