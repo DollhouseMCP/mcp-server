@@ -40,13 +40,16 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ### Installation
 
-#### Automated Setup (Recommended)
+#### Automated Setup (Recommended) - Claude Desktop Only
+
+> **Important**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mickdarling/DollhouseMCP.git
 cd DollhouseMCP
 
-# Run automated setup script
+# Run automated setup script (Claude Desktop only)
 ./setup.sh
 ```
 
@@ -92,9 +95,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 21 DollhouseMCP tools will be available
+3. All 23 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (21 Total)
+## 🛠️ Available Tools (23 Total)
 
 ### Core Persona Management
 - **`list_personas`** - Display all local personas with enhanced metadata
@@ -126,6 +129,10 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`update_server`** - Automated git pull + npm install + build with backup creation
 - **`rollback_update`** - Restore previous version from automatic backups
 - **`get_server_status`** - Comprehensive server status with version, git info, and system details
+
+### Persona Indicators
+- **`configure_indicator`** - Configure how persona indicators appear in AI responses
+- **`get_indicator_config`** - View current indicator configuration settings
 
 ## 📖 Usage Examples
 
@@ -482,7 +489,7 @@ DollhouseMCP/
 │       ├── claude.yml             # Interactive Claude Code workflow
 │       └── claude-code-review.yml # Automated PR review workflow
 ├── __tests__/
-│   └── auto-update.test.ts   # Comprehensive test suite (50 tests)
+│   └── auto-update.test.ts   # Comprehensive test suite (102 tests total)
 ├── src/
 │   └── index.ts              # Main MCP server (DollhouseMCPServer class)
 ├── dist/                     # Compiled JavaScript (auto-generated)
