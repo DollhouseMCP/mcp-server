@@ -7,14 +7,24 @@ set -e
 
 PROJECT_NUMBER=${1:-1}
 
-echo "Adding issues to project #$PROJECT_NUMBER..."
+# Ensure PROJECT_NUMBER is an integer
+if ! [[ "$PROJECT_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "Error: Project number must be a number, got: $PROJECT_NUMBER"
+    echo "Usage: $0 <PROJECT_NUMBER>"
+    exit 1
+fi
+
+# Convert to integer explicitly
+PROJECT_NUM=$((PROJECT_NUMBER))
+
+echo "Adding issues to project #$PROJECT_NUM..."
 echo ""
 
 # Get current user
 OWNER=$(gh api user --jq .login)
 echo "Project owner: $OWNER"
 
-# Get project ID
+# Get project ID - use -F for integer field
 PROJECT_ID=$(gh api graphql -f query='
   query($owner: String!, $number: Int!) {
     user(login: $owner) {
@@ -23,13 +33,22 @@ PROJECT_ID=$(gh api graphql -f query='
       }
     }
   }
-' -f owner="$OWNER" -f number="$PROJECT_NUMBER" --jq .data.user.projectV2.id)
+' -f owner="$OWNER" -F number=$PROJECT_NUM --jq .data.user.projectV2.id)
 
 if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+    echo ""
     echo "Error: Could not find project #$PROJECT_NUMBER"
-    echo "Please make sure:"
-    echo "1. The project exists at https://github.com/users/$OWNER/projects/$PROJECT_NUMBER"
-    echo "2. You have the necessary permissions"
+    echo ""
+    echo "This could be because:"
+    echo "1. The project doesn't exist at https://github.com/users/$OWNER/projects/$PROJECT_NUMBER"
+    echo "2. Your GitHub token needs additional permissions"
+    echo ""
+    echo "To fix token permissions:"
+    echo "  gh auth refresh -s project"
+    echo ""
+    echo "Or if you see a permissions error above, run:"
+    echo "  gh auth refresh -s read:project,project,write:org"
+    echo ""
     exit 1
 fi
 

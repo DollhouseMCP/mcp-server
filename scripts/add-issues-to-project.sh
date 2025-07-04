@@ -33,6 +33,8 @@ echo -e "${GREEN}Detected owner: $OWNER${NC}"
 
 # Get project ID using GraphQL
 echo -e "\n${YELLOW}Finding project...${NC}"
+# Convert to integer
+PROJECT_NUM=$((PROJECT_NUMBER))
 PROJECT_ID=$(gh api graphql -f query='
   query($owner: String!, $number: Int!) {
     user(login: $owner) {
@@ -41,7 +43,7 @@ PROJECT_ID=$(gh api graphql -f query='
       }
     }
   }
-' -f owner="$OWNER" -f number="$PROJECT_NUMBER" --jq .data.user.projectV2.id)
+' -f owner="$OWNER" -F number=$PROJECT_NUM --jq .data.user.projectV2.id)
 
 if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
     echo -e "${RED}Error: Could not find project #$PROJECT_NUMBER for user $OWNER${NC}"
