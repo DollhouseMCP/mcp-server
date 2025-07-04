@@ -14,7 +14,7 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-50%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-102%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/mickdarling/DollhouseMCP)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
@@ -40,13 +40,17 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ### Installation
 
-#### Automated Setup (Recommended)
+#### Automated Setup (Recommended) - Claude Desktop Only
+
+> [!WARNING]
+> **Claude Desktop Only**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mickdarling/DollhouseMCP.git
 cd DollhouseMCP
 
-# Run automated setup script
+# Run automated setup script (Claude Desktop only)
 ./setup.sh
 ```
 
@@ -58,6 +62,9 @@ The setup script will:
 - 📋 Provide step-by-step setup instructions
 
 #### Manual Installation
+
+> **Note**: Manual installation works with all MCP-compatible platforms including Claude Desktop, Claude Code, ChatGPT, BoltAI, Gemini, and custom implementations.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mickdarling/DollhouseMCP.git
@@ -92,9 +99,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 21 DollhouseMCP tools will be available
+3. All 23 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (21 Total)
+## 🛠️ Available Tools (23 Total)
 
 ### Core Persona Management
 - **`list_personas`** - Display all local personas with enhanced metadata
@@ -126,6 +133,10 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`update_server`** - Automated git pull + npm install + build with backup creation
 - **`rollback_update`** - Restore previous version from automatic backups
 - **`get_server_status`** - Comprehensive server status with version, git info, and system details
+
+### Persona Indicators
+- **`configure_indicator`** - Configure how persona indicators appear in AI responses
+- **`get_indicator_config`** - View current indicator configuration settings
 
 ## 📖 Usage Examples
 
@@ -396,7 +407,7 @@ npm run test:marketplace
 ### Test Coverage
 
 Current test coverage includes:
-- ✅ **50 comprehensive tests** covering all functionality
+- ✅ **102 comprehensive tests** covering all functionality
 - ✅ **Auto-update system** - GitHub API, backup/rollback, dependency validation
 - ✅ **Security testing** - Command injection prevention, input validation
 - ✅ **Cross-platform compatibility** - Windows, macOS, Linux path handling
@@ -482,7 +493,7 @@ DollhouseMCP/
 │       ├── claude.yml             # Interactive Claude Code workflow
 │       └── claude-code-review.yml # Automated PR review workflow
 ├── __tests__/
-│   └── auto-update.test.ts   # Comprehensive test suite (50 tests)
+│   └── auto-update.test.ts   # Comprehensive test suite (102 tests total)
 ├── src/
 │   └── index.ts              # Main MCP server (DollhouseMCPServer class)
 ├── dist/                     # Compiled JavaScript (auto-generated)
