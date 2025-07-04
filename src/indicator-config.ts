@@ -1,32 +1,51 @@
 /**
- * Configuration for persona active indicator system
+ * Configuration interface for the persona active indicator system.
+ * Controls how persona information is displayed in AI responses.
+ * 
+ * @interface IndicatorConfig
+ * @example
+ * ```typescript
+ * const config: IndicatorConfig = {
+ *   enabled: true,
+ *   style: 'full',
+ *   showEmoji: true,
+ *   showName: true,
+ *   showVersion: true,
+ *   showAuthor: true,
+ *   showCategory: false,
+ *   separator: ' | ',
+ *   emoji: '🎭',
+ *   bracketStyle: 'square'
+ * };
+ * ```
  */
-
 export interface IndicatorConfig {
-  // Whether to show the indicator at all
+  /** Whether to show the indicator at all */
   enabled: boolean;
   
-  // Format style: 'full', 'minimal', 'compact', 'custom'
+  /** Format style: 'full', 'minimal', 'compact', 'custom' */
   style: 'full' | 'minimal' | 'compact' | 'custom';
   
-  // Custom format template (used when style is 'custom')
-  // Available placeholders: {emoji}, {name}, {version}, {author}, {category}
+  /** 
+   * Custom format template (used when style is 'custom')
+   * Available placeholders: {emoji}, {name}, {version}, {author}, {category}
+   */
   customFormat?: string;
   
-  // Whether to include specific elements
+  /** Whether to include specific elements */
   showEmoji: boolean;
   showName: boolean;
   showVersion: boolean;
   showAuthor: boolean;
   showCategory: boolean;
   
-  // Separator between indicator and response
+  /** Separator between indicator and response */
   separator: string;
   
-  // Emoji to use (defaults to 🎭)
+  /** Emoji to use (defaults to 🎭) */
   emoji: string;
   
-  // Bracket style: 'square', 'round', 'curly', 'angle', 'none'
+  /** Bracket style: 'square', 'round', 'curly', 'angle', 'none' */
   bracketStyle: 'square' | 'round' | 'curly' | 'angle' | 'none';
 }
 
@@ -62,7 +81,20 @@ export const BRACKETS = {
 };
 
 /**
- * Load indicator configuration from environment or use defaults
+ * Load indicator configuration from environment variables or use defaults.
+ * Environment variables take precedence over default values.
+ * 
+ * @returns {IndicatorConfig} The loaded configuration
+ * @example
+ * ```typescript
+ * // Set environment variables before loading
+ * process.env.DOLLHOUSE_INDICATOR_STYLE = 'minimal';
+ * process.env.DOLLHOUSE_INDICATOR_EMOJI = '🤖';
+ * 
+ * const config = loadIndicatorConfig();
+ * // config.style === 'minimal'
+ * // config.emoji === '🤖'
+ * ```
  */
 export function loadIndicatorConfig(): IndicatorConfig {
   const config = { ...DEFAULT_INDICATOR_CONFIG };
@@ -73,7 +105,10 @@ export function loadIndicatorConfig(): IndicatorConfig {
   }
   
   if (process.env.DOLLHOUSE_INDICATOR_STYLE) {
-    config.style = process.env.DOLLHOUSE_INDICATOR_STYLE as any;
+    const style = process.env.DOLLHOUSE_INDICATOR_STYLE;
+    if (['full', 'minimal', 'compact', 'custom'].includes(style)) {
+      config.style = style as IndicatorConfig['style'];
+    }
   }
   
   if (process.env.DOLLHOUSE_INDICATOR_FORMAT) {
@@ -86,7 +121,10 @@ export function loadIndicatorConfig(): IndicatorConfig {
   }
   
   if (process.env.DOLLHOUSE_INDICATOR_BRACKETS) {
-    config.bracketStyle = process.env.DOLLHOUSE_INDICATOR_BRACKETS as any;
+    const bracketStyle = process.env.DOLLHOUSE_INDICATOR_BRACKETS;
+    if (['square', 'round', 'curly', 'angle', 'none'].includes(bracketStyle)) {
+      config.bracketStyle = bracketStyle as IndicatorConfig['bracketStyle'];
+    }
   }
   
   // Parse show flags from environment
@@ -103,6 +141,26 @@ export function loadIndicatorConfig(): IndicatorConfig {
   }
   
   return config;
+}
+
+/**
+ * Validate custom format template for valid placeholders
+ */
+export function validateCustomFormat(format: string): { valid: boolean; error?: string } {
+  const validPlaceholders = ['{emoji}', '{name}', '{version}', '{author}', '{category}'];
+  const placeholderRegex = /\{[^}]*\}/g;  // Changed + to * to catch empty placeholders
+  const foundPlaceholders = format.match(placeholderRegex) || [];
+  
+  for (const placeholder of foundPlaceholders) {
+    if (!validPlaceholders.includes(placeholder)) {
+      return {
+        valid: false,
+        error: `Invalid placeholder: ${placeholder}. Valid placeholders are: ${validPlaceholders.join(', ')}`
+      };
+    }
+  }
+  
+  return { valid: true };
 }
 
 /**
@@ -124,7 +182,14 @@ export function formatIndicator(
   // Get the format template based on style
   let template = INDICATOR_STYLES[config.style];
   if (config.style === 'custom' && config.customFormat) {
-    template = config.customFormat;
+    // Validate custom format
+    const validation = validateCustomFormat(config.customFormat);
+    if (!validation.valid) {
+      // Fall back to full style if custom format is invalid
+      template = INDICATOR_STYLES.full;
+    } else {
+      template = config.customFormat;
+    }
   }
   
   // Replace placeholders with values or empty strings

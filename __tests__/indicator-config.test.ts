@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { 
   loadIndicatorConfig, 
-  formatIndicator, 
+  formatIndicator,
+  validateCustomFormat,
   DEFAULT_INDICATOR_CONFIG,
   INDICATOR_STYLES,
   BRACKETS,
@@ -203,6 +204,63 @@ describe('Indicator Configuration', () => {
         emoji: '🎭',
         bracketStyle: 'square'
       });
+    });
+  });
+
+  describe('validateCustomFormat', () => {
+    it('should validate valid placeholders', () => {
+      const validFormats = [
+        '{name}',
+        '{emoji} {name}',
+        '[{emoji} {name} v{version} by {author}]',
+        'Persona: {name} | Category: {category}',
+        '{emoji} {name} {version} {author} {category}'
+      ];
+
+      for (const format of validFormats) {
+        const result = validateCustomFormat(format);
+        expect(result.valid).toBe(true);
+        expect(result.error).toBeUndefined();
+      }
+    });
+
+    it('should reject invalid placeholders', () => {
+      const invalidFormats = [
+        '{invalid}',
+        '{name} {badplaceholder}',
+        '{emoji} {Name}', // case sensitive
+        '{description}',
+        '{timestamp}'
+      ];
+
+      for (const format of invalidFormats) {
+        const result = validateCustomFormat(format);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('Invalid placeholder');
+        expect(result.error).toContain('Valid placeholders are');
+      }
+    });
+
+    it('should handle formats with no placeholders', () => {
+      const result = validateCustomFormat('Static text with no placeholders');
+      expect(result.valid).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
+    it('should handle malformed placeholders', () => {
+      // Missing braces don't create placeholders, so they're valid
+      expect(validateCustomFormat('{name')).toEqual({ valid: true });
+      expect(validateCustomFormat('name}')).toEqual({ valid: true });
+      
+      // Empty placeholder is caught as invalid
+      const emptyResult = validateCustomFormat('{}');
+      expect(emptyResult.valid).toBe(false);
+      expect(emptyResult.error).toContain('Invalid placeholder: {}');
+      
+      // Spaces inside make it invalid
+      const spacesResult = validateCustomFormat('{ name }');
+      expect(spacesResult.valid).toBe(false);
+      expect(spacesResult.error).toContain('Invalid placeholder: { name }');
     });
   });
 });

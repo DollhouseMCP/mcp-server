@@ -14,7 +14,7 @@ import * as child_process from "child_process";
 import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
-import { loadIndicatorConfig, formatIndicator, type IndicatorConfig } from './indicator-config.js';
+import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './indicator-config.js';
 
 const exec = promisify(child_process.exec);
 
@@ -2783,6 +2783,18 @@ ${sanitizedInstructions}
         this.indicatorConfig.style = config.style;
       }
       if (config.customFormat !== undefined) {
+        // Validate custom format before applying
+        const validation = validateCustomFormat(config.customFormat);
+        if (!validation.valid) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${this.getPersonaIndicator()}❌ Invalid custom format: ${validation.error}`
+              }
+            ]
+          };
+        }
         this.indicatorConfig.customFormat = config.customFormat;
       }
       if (config.showVersion !== undefined) {
