@@ -83,17 +83,32 @@ export class GitHubClient {
       
       return data;
     } catch (error) {
-      // Preserve original error information
+      // Preserve original error information with proper error chaining
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorDetails: any = {
+        originalMessage: errorMessage,
+        url
+      };
+      
+      // Preserve stack trace and error type information
+      if (error instanceof Error) {
+        errorDetails.errorType = error.constructor.name;
+        errorDetails.stack = error.stack;
+        
+        // Special handling for common error types
+        if (error.name === 'AbortError') {
+          errorDetails.timeout = true;
+        }
+      }
+      
       const mcpError = new McpError(
         ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${errorMessage}`
+        `Failed to fetch from GitHub: ${errorMessage}`,
+        errorDetails
       );
       
-      // Attach original error as cause if supported
-      if (error instanceof Error && 'cause' in mcpError) {
-        (mcpError as any).cause = error;
-      }
+      // Also preserve original error for debugging
+      (mcpError as any).cause = error;
       
       throw mcpError;
     }
