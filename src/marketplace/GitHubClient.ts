@@ -2,8 +2,7 @@
  * GitHub API client for marketplace integration
  */
 
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
-import { ErrorCode } from '../types/mcp.js';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 
