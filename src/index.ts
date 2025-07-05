@@ -2,142 +2,28 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import * as child_process from "child_process";
-import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
-import { VALID_CATEGORIES } from './config/constants.js';
-import { SECURITY_LIMITS as SECURITY_LIMITS_MODULE } from './security/constants.js';
 import { APICache } from './cache/APICache.js';
 import { validateFilename, validatePath, sanitizeInput, validateContentSize } from './security/InputValidator.js';
+import { VALIDATION_PATTERNS, validateUsername, validateCategory } from './utils/validation.js';
+import { SECURITY_LIMITS } from './security/constants.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup } from './server/index.js';
 
-const exec = promisify(child_process.exec);
-
-// Helper function for safe command execution
-function safeExec(command: string, args: string[], options: { cwd?: string } = {}): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const proc = child_process.spawn(command, args, {
-      cwd: options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    let stdout = '';
-    let stderr = '';
-    
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(new Error(`Command failed with exit code ${code}: ${stderr}`));
-      }
-    });
-    
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
-}
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Repository configuration constants
-const REPO_OWNER = 'mickdarling';
-const REPO_NAME = 'DollhouseMCP';
-const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
-const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
-
-// Dependency version requirements
-const DEPENDENCY_REQUIREMENTS = {
-  git: {
-    minimum: '2.20.0',    // Required for modern features and security
-    maximum: '2.50.0',    // Latest tested working version
-    recommended: '2.40.0' // Optimal version for stability
-  },
-  npm: {
-    minimum: '8.0.0',     // Required for package-lock v2 and modern features  
-    maximum: '12.0.0',    // Latest tested working version
-    recommended: '10.0.0' // Optimal version for stability
-  }
-};
-
-// Use imported SECURITY_LIMITS
-const SECURITY_LIMITS = SECURITY_LIMITS_MODULE;
-
-// Input validation patterns
-const VALIDATION_PATTERNS = {
-  SAFE_FILENAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,250}[a-zA-Z0-9]$/,
-  SAFE_PATH: /^[a-zA-Z0-9\/\-_.]{1,500}$/,
-  SAFE_USERNAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,30}[a-zA-Z0-9]$/,
-  SAFE_CATEGORY: /^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$/,
-  SAFE_EMAIL: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-};
-
-// APICache is now imported from ./cache/APICache.js
-
-// Input validation functions are now imported from ./security/InputValidator.js
-
-function validateUsername(username: string): string {
-  if (!username || typeof username !== 'string') {
-    throw new Error('Username must be a non-empty string');
-  }
-  
-  if (!VALIDATION_PATTERNS.SAFE_USERNAME.test(username)) {
-    throw new Error('Invalid username format. Use alphanumeric characters, hyphens, underscores, and dots only.');
-  }
-  
-  return username.toLowerCase();
-}
-
-function validateCategory(category: string): string {
-  if (!category || typeof category !== 'string') {
-    throw new Error('Category must be a non-empty string');
-  }
-  
-  if (!VALIDATION_PATTERNS.SAFE_CATEGORY.test(category)) {
-    throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
-  }
-  
-  const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
-  const normalized = category.toLowerCase();
-  
-  if (!validCategories.includes(normalized)) {
-    throw new Error(`Invalid category. Must be one of: ${validCategories.join(', ')}`);
-  }
-  
-  return normalized;
-}
-
-// validateContentSize and sanitizeInput are now imported from ./security/InputValidator.js
-
-// PersonaMetadata and Persona interfaces are now imported from ./types/persona.js
-
-// generateAnonymousId, generateUniqueId, and slugify are now imported from ./utils/filesystem.js
 
 export class DollhouseMCPServer {
   private server: Server;
