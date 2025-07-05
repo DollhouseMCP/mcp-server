@@ -96,23 +96,23 @@ describe('PersonaManager', () => {
       (personaManager as any).personas = new Map([['Test Persona', testPersona]]);
     });
 
-    it('should activate a persona by name', async () => {
-      const result = await personaManager.activatePersona('Test Persona');
+    it('should activate a persona by name', () => {
+      const result = personaManager.activatePersona('Test Persona');
 
       expect(result).toBeDefined();
       expect(result.message).toContain('Test Persona');
       expect((personaManager as any).activePersona).toBe('test.md');
     });
 
-    it('should activate a persona by unique_id', async () => {
-      const result = await personaManager.activatePersona('test-persona_20250101-120000_tester');
+    it('should activate a persona by unique_id', () => {
+      const result = personaManager.activatePersona('test-persona_20250101-120000_tester');
 
       expect(result).toBeDefined();
       expect(result.message).toContain('Activated');
       expect((personaManager as any).activePersona).toBe('test.md');
     });
 
-    it('should throw error for non-existent persona', async () => {
+    it('should throw error for non-existent persona', () => {
       const result = personaManager.activatePersona('Non-existent');
       expect(result.success).toBe(false);
       expect(result.message).toBe('Persona not found: "Non-existent"');
@@ -133,17 +133,17 @@ describe('PersonaManager', () => {
       };
 
       (personaManager as any).personas = new Map([['Test Persona', testPersona]]);
-      await personaManager.activatePersona('Test Persona');
+      personaManager.activatePersona('Test Persona');
 
-      const result = await personaManager.deactivatePersona();
+      const result = personaManager.deactivatePersona();
 
       expect(result).toBeDefined();
       expect(result.message).toContain('Deactivated persona:');
       expect((personaManager as any).activePersona).toBeNull();
     });
 
-    it('should handle deactivation when no persona is active', async () => {
-      const result = await personaManager.deactivatePersona();
+    it('should handle deactivation when no persona is active', () => {
+      const result = personaManager.deactivatePersona();
 
       expect(result).toBeDefined();
       expect(result.message).toBe('No persona is currently active');
@@ -393,12 +393,12 @@ describe('PersonaManager', () => {
       mockLoader.loadAll.mockResolvedValue(mockPersonas);
       await personaManager.initialize();
 
-      // Simulate concurrent activations
-      const results = await Promise.all([
+      // Simulate concurrent activations (these are synchronous)
+      const results = [
         personaManager.activatePersona('Test 1'),
         personaManager.activatePersona('Test 2'),
         personaManager.activatePersona('Test 1')
-      ]);
+      ];
 
       // All should succeed
       expect(results.every(r => r.success)).toBe(true);
