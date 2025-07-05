@@ -197,7 +197,7 @@ describe('Persona Lifecycle Integration', () => {
       // Simulate concurrent edits
       const edits = [
         testServer.personaManager.editPersona('Creative Writer', 'description', 'Edit 1'),
-        testServer.personaManager.editPersona('Creative Writer', 'category', 'enhanced'),
+        testServer.personaManager.editPersona('Creative Writer', 'category', 'professional'),
         testServer.personaManager.editPersona('Creative Writer', 'version', '2.0')
       ];
       

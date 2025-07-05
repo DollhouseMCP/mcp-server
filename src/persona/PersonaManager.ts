@@ -241,7 +241,7 @@ export class PersonaManager {
     }
     
     try {
-      const oldVersion = persona.metadata.version || '1.0';
+      const oldVersion = String(persona.metadata.version || '1.0');
       
       switch (field.toLowerCase()) {
         case 'name':
@@ -389,8 +389,16 @@ export class PersonaManager {
   /**
    * Increment version number
    */
-  private incrementVersion(version: string): string {
-    const parts = version.split('.');
+  private incrementVersion(version: string | number): string {
+    // Handle both string and number versions
+    const versionStr = String(version);
+    const parts = versionStr.split('.');
+    
+    // If it's just a number like "1", make it "1.0" 
+    if (parts.length === 1) {
+      parts.push('0');
+    }
+    
     const patch = parseInt(parts[parts.length - 1]) || 0;
     parts[parts.length - 1] = (patch + 1).toString();
     return parts.join('.');
