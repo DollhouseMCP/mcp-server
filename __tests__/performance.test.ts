@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-// Create manual mocks
-const mockReaddir = (jest.fn() as any);
-const mockReadFile = (jest.fn() as any);
-const mockWriteFile = (jest.fn() as any);
+// Create manual mocks (using 'as any' for ESM compatibility)
+const mockReaddir = jest.fn() as any;
+const mockReadFile = jest.fn() as any;
+const mockWriteFile = jest.fn() as any;
 
 // Mock external dependencies
 jest.mock('fs/promises', () => ({
@@ -20,7 +20,7 @@ describe('Performance Tests', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    // Cleanup is handled by clearAllMocks in beforeEach
   });
 
   describe('Large Persona Collection Performance', () => {

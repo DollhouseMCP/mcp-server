@@ -3,12 +3,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 
-// Create manual mocks
-const mockMkdir = (jest.fn() as any);
-const mockWriteFile = (jest.fn() as any);
-const mockReadFile = (jest.fn() as any);
-const mockUnlink = (jest.fn() as any);
-const mockAccess = (jest.fn() as any);
+// Create manual mocks (using 'as any' for ESM compatibility)
+const mockMkdir = jest.fn() as any;
+const mockWriteFile = jest.fn() as any;
+const mockReadFile = jest.fn() as any;
+const mockUnlink = jest.fn() as any;
+const mockAccess = jest.fn() as any;
 
 // Mock external dependencies
 jest.mock('fs/promises', () => ({
@@ -28,7 +28,7 @@ describe('Cross-Platform Integration Tests', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    // Cleanup is handled by clearAllMocks in beforeEach
   });
 
   describe('Path Handling', () => {

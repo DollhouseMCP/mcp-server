@@ -4,14 +4,27 @@ import * as path from 'path';
 import * as child_process from 'child_process';
 import { Buffer } from 'buffer';
 
-// Create manual mocks
-const mockReadFile = (jest.fn() as any);
-const mockReaddir = (jest.fn() as any);
-const mockStat = (jest.fn() as any);
-const mockMkdir = (jest.fn() as any);
-const mockRm = (jest.fn() as any);
+// Create manual mocks (using 'as any' for ESM compatibility)
+const mockReadFile = jest.fn() as any;
+const mockReaddir = jest.fn() as any;
+const mockStat = jest.fn() as any;
+const mockMkdir = jest.fn() as any;
+const mockRm = jest.fn() as any;
 
-const mockSpawn = (jest.fn() as any);
+const mockSpawn = jest.fn() as any;
+
+// Helper function to create mock spawn process
+const createMockSpawnProcess = (exitCode = 0, output = 'mock output') => ({
+  stdout: {
+    on: jest.fn().mockImplementation((event: string, callback: Function) => {
+      if (event === 'data') callback(Buffer.from(output));
+    })
+  },
+  stderr: { on: jest.fn() },
+  on: jest.fn().mockImplementation((event: string, callback: Function) => {
+    if (event === 'close') callback(exitCode);
+  })
+});
 
 // Mock external dependencies
 jest.mock('fs/promises', () => ({
@@ -26,9 +39,8 @@ jest.mock('child_process', () => ({
   spawn: mockSpawn
 }));
 
-// Mock fetch for GitHub API calls
-const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-(globalThis as any).fetch = mockFetch;
+// Mock fetch for GitHub API calls using spyOn for better isolation
+const mockFetch = jest.spyOn(globalThis, 'fetch').mockImplementation(jest.fn() as jest.MockedFunction<typeof fetch>);
 
 describe('Auto-Update System Tests', () => {
   beforeEach(() => {
@@ -36,29 +48,11 @@ describe('Auto-Update System Tests', () => {
     jest.clearAllMocks();
 
     // Mock spawn to return a successful process
-    const mockProcess = {
-      stdout: {
-        on: (jest.fn() as any).mockImplementation((event: string, callback: Function) => {
-          if (event === 'data') {
-            callback(Buffer.from('mock output'));
-          }
-        })
-      },
-      stderr: {
-        on: (jest.fn() as any)
-      },
-      on: (jest.fn() as any).mockImplementation((event: string, callback: Function) => {
-        if (event === 'close') {
-          callback(0); // Success exit code
-        }
-      })
-    };
-    
-    mockSpawn.mockReturnValue(mockProcess as any);
+    mockSpawn.mockReturnValue(createMockSpawnProcess() as any);
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    // Cleanup is handled by clearAllMocks in beforeEach
   });
 
   describe('Version Comparison Logic', () => {
