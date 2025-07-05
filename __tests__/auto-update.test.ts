@@ -4,45 +4,57 @@ import * as path from 'path';
 import * as child_process from 'child_process';
 import { Buffer } from 'buffer';
 
+// Create manual mocks
+const mockReadFile = (jest.fn() as any);
+const mockReaddir = (jest.fn() as any);
+const mockStat = (jest.fn() as any);
+const mockMkdir = (jest.fn() as any);
+const mockRm = (jest.fn() as any);
+
+const mockSpawn = (jest.fn() as any);
+
 // Mock external dependencies
-jest.mock('fs/promises');
-jest.mock('child_process');
+jest.mock('fs/promises', () => ({
+  readFile: mockReadFile,
+  readdir: mockReaddir,
+  stat: mockStat,
+  mkdir: mockMkdir,
+  rm: mockRm
+}));
+
+jest.mock('child_process', () => ({
+  spawn: mockSpawn
+}));
 
 // Mock fetch for GitHub API calls
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 (globalThis as any).fetch = mockFetch;
 
 describe('Auto-Update System Tests', () => {
-  let mockFs: jest.Mocked<typeof fs>;
-  let mockChildProcess: jest.Mocked<typeof child_process>;
-
   beforeEach(() => {
     // Reset all mocks
     jest.clearAllMocks();
-    
-    mockFs = fs as jest.Mocked<typeof fs>;
-    mockChildProcess = child_process as jest.Mocked<typeof child_process>;
 
     // Mock spawn to return a successful process
     const mockProcess = {
       stdout: {
-        on: jest.fn((event: string, callback: Function) => {
+        on: (jest.fn() as any).mockImplementation((event: string, callback: Function) => {
           if (event === 'data') {
             callback(Buffer.from('mock output'));
           }
         })
       },
       stderr: {
-        on: jest.fn()
+        on: (jest.fn() as any)
       },
-      on: jest.fn((event: string, callback: Function) => {
+      on: (jest.fn() as any).mockImplementation((event: string, callback: Function) => {
         if (event === 'close') {
           callback(0); // Success exit code
         }
       })
     };
     
-    mockChildProcess.spawn.mockReturnValue(mockProcess as any);
+    mockSpawn.mockReturnValue(mockProcess as any);
   });
 
   afterEach(() => {
@@ -146,7 +158,7 @@ describe('Auto-Update System Tests', () => {
           'other-file.txt'
         ];
 
-        mockFs.readdir.mockResolvedValue(mockFiles as any);
+        mockReaddir.mockResolvedValue(mockFiles as any);
 
         const files = await fs.readdir('.');
         const backupDirs = files
@@ -165,13 +177,13 @@ describe('Auto-Update System Tests', () => {
       it('should verify git availability', () => {
         child_process.spawn('git', ['--version']);
         
-        expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['--version']);
+        expect(mockSpawn).toHaveBeenCalledWith('git', ['--version']);
       });
 
       it('should verify npm availability', () => {
         child_process.spawn('npm', ['--version']);
         
-        expect(mockChildProcess.spawn).toHaveBeenCalledWith('npm', ['--version']);
+        expect(mockSpawn).toHaveBeenCalledWith('npm', ['--version']);
       });
 
       it('should handle missing dependencies gracefully', () => {
@@ -185,11 +197,11 @@ describe('Auto-Update System Tests', () => {
           })
         };
 
-        mockChildProcess.spawn.mockReturnValue(mockFailedProcess as any);
+        mockSpawn.mockReturnValue(mockFailedProcess as any);
 
         child_process.spawn('git', ['--version']);
         
-        expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['--version']);
+        expect(mockSpawn).toHaveBeenCalledWith('git', ['--version']);
       });
     });
 
@@ -535,7 +547,7 @@ describe('Auto-Update System Tests', () => {
         description: 'Test package'
       };
 
-      mockFs.readFile.mockResolvedValue(JSON.stringify(mockPackageData));
+      mockReadFile.mockResolvedValue(JSON.stringify(mockPackageData));
 
       const packagePath = path.join(process.cwd(), 'package.json');
       const content = await fs.readFile(packagePath, 'utf-8');
@@ -543,11 +555,11 @@ describe('Auto-Update System Tests', () => {
 
       expect(packageData.name).toBe('dollhousemcp');
       expect(packageData.version).toBe('1.0.0');
-      expect(mockFs.readFile).toHaveBeenCalledWith(packagePath, 'utf-8');
+      expect(mockReadFile).toHaveBeenCalledWith(packagePath, 'utf-8');
     });
 
     it('should handle file read errors', async () => {
-      mockFs.readFile.mockRejectedValue(new Error('File not found'));
+      mockReadFile.mockRejectedValue(new Error('File not found'));
 
       await expect(fs.readFile('nonexistent.json', 'utf-8'))
         .rejects
@@ -564,7 +576,7 @@ describe('Auto-Update System Tests', () => {
         'dist'
       ];
 
-      mockFs.readdir.mockResolvedValue(mockFiles as any);
+      mockReaddir.mockResolvedValue(mockFiles as any);
 
       const files = await fs.readdir('.');
       const backupDirs = files.filter((f: string) => f.startsWith('backup-') && f.match(/backup-\d{8}-\d{6}/));
@@ -582,7 +594,7 @@ describe('Auto-Update System Tests', () => {
         'backup-20250703-110000'
       ];
 
-      mockFs.readdir.mockResolvedValue(mockFiles as any);
+      mockReaddir.mockResolvedValue(mockFiles as any);
 
       const files = await fs.readdir('.');
       const backupDirs = files.filter((f: string) => f.startsWith('backup-')).sort().reverse();
@@ -598,7 +610,7 @@ describe('Auto-Update System Tests', () => {
       // Test that spawn is called with proper argument separation
       child_process.spawn('git', ['status'], { cwd: '/test' });
       
-      expect(mockChildProcess.spawn).toHaveBeenCalledWith(
+      expect(mockSpawn).toHaveBeenCalledWith(
         'git',
         ['status'],
         { cwd: '/test' }
@@ -609,13 +621,13 @@ describe('Auto-Update System Tests', () => {
       // Verify that commands are not concatenated into shell strings
       child_process.spawn('cp', ['-r', '/source', '/destination']);
       
-      expect(mockChildProcess.spawn).toHaveBeenCalledWith(
+      expect(mockSpawn).toHaveBeenCalledWith(
         'cp',
         ['-r', '/source', '/destination']
       );
       
       // Verify no shell injection patterns
-      const calls = mockChildProcess.spawn.mock.calls;
+      const calls = mockSpawn.mock.calls;
       for (const call of calls) {
         const [command, args] = call;
         expect(command).not.toMatch(/[;&|`$]/);
@@ -637,12 +649,12 @@ describe('Auto-Update System Tests', () => {
         })
       };
 
-      mockChildProcess.spawn.mockReturnValue(mockFailedProcess as any);
+      mockSpawn.mockReturnValue(mockFailedProcess as any);
 
       // Test that error handling doesn't expose sensitive information
       child_process.spawn('git', ['status']);
       
-      expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['status']);
+      expect(mockSpawn).toHaveBeenCalledWith('git', ['status']);
     });
   });
 
@@ -711,7 +723,7 @@ describe('Auto-Update System Tests', () => {
     });
 
     it('should handle file system permissions errors', async () => {
-      mockFs.readFile.mockRejectedValue(new Error('EACCES: permission denied'));
+      mockReadFile.mockRejectedValue(new Error('EACCES: permission denied'));
 
       await expect(fs.readFile('/restricted/file.txt'))
         .rejects
@@ -735,11 +747,11 @@ describe('Auto-Update System Tests', () => {
         })
       };
 
-      mockChildProcess.spawn.mockReturnValue(mockFailedProcess as any);
+      mockSpawn.mockReturnValue(mockFailedProcess as any);
 
       child_process.spawn('git', ['status']);
       
-      expect(mockChildProcess.spawn).toHaveBeenCalledWith('git', ['status']);
+      expect(mockSpawn).toHaveBeenCalledWith('git', ['status']);
     });
   });
 

@@ -3,16 +3,27 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 
+// Create manual mocks
+const mockMkdir = (jest.fn() as any);
+const mockWriteFile = (jest.fn() as any);
+const mockReadFile = (jest.fn() as any);
+const mockUnlink = (jest.fn() as any);
+const mockAccess = (jest.fn() as any);
+
 // Mock external dependencies
-jest.mock('fs/promises');
+jest.mock('fs/promises', () => ({
+  mkdir: mockMkdir,
+  writeFile: mockWriteFile,
+  readFile: mockReadFile,
+  unlink: mockUnlink,
+  access: mockAccess
+}));
 
 describe('Cross-Platform Integration Tests', () => {
-  let mockFs: jest.Mocked<typeof fs>;
   let tempDir: string;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockFs = fs as jest.Mocked<typeof fs>;
     tempDir = path.join(os.tmpdir(), 'dollhousemcp-test');
   });
 
@@ -152,8 +163,8 @@ describe('Cross-Platform Integration Tests', () => {
       ];
 
       // Mock successful directory creation
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.access.mockRejectedValue(new Error('Directory does not exist'));
+      mockMkdir.mockResolvedValue(undefined);
+      mockAccess.mockRejectedValue(new Error('Directory does not exist'));
 
       for (const dir of testDirs) {
         try {
@@ -163,30 +174,30 @@ describe('Cross-Platform Integration Tests', () => {
         }
       }
 
-      expect(mockFs.mkdir).toHaveBeenCalledTimes(testDirs.length);
+      expect(mockMkdir).toHaveBeenCalledTimes(testDirs.length);
     });
 
     it('should handle file read/write with different encodings', async () => {
       const testContent = '# Test Persona\n\nThis is a test persona with unicode: café 🎭';
       const testFile = path.join(tempDir, 'test-persona.md');
 
-      mockFs.writeFile.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(testContent);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockReadFile.mockResolvedValue(testContent);
 
       // Write and read file
       await fs.writeFile(testFile, testContent, 'utf-8');
       const readContent = await fs.readFile(testFile, 'utf-8');
 
-      expect(mockFs.writeFile).toHaveBeenCalledWith(testFile, testContent, 'utf-8');
-      expect(mockFs.readFile).toHaveBeenCalledWith(testFile, 'utf-8');
+      expect(mockWriteFile).toHaveBeenCalledWith(testFile, testContent, 'utf-8');
+      expect(mockReadFile).toHaveBeenCalledWith(testFile, 'utf-8');
       expect(readContent).toBe(testContent);
     });
 
     it('should handle permission errors gracefully', async () => {
       const restrictedFile = path.join(tempDir, 'restricted.md');
       
-      mockFs.writeFile.mockRejectedValue(new Error('EACCES: permission denied'));
-      mockFs.readFile.mockRejectedValue(new Error('EACCES: permission denied'));
+      mockWriteFile.mockRejectedValue(new Error('EACCES: permission denied'));
+      mockReadFile.mockRejectedValue(new Error('EACCES: permission denied'));
 
       await expect(fs.writeFile(restrictedFile, 'content', 'utf-8'))
         .rejects.toThrow('EACCES: permission denied');
