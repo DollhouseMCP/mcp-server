@@ -1,9 +1,15 @@
 /** @type {import('jest').Config} */
 const config = {
-  preset: 'ts-jest',
+  preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
+  extensionsToTreatAsEsm: ['.ts'],
+  globals: {
+    'ts-jest': {
+      useESM: true
+    }
+  },
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.tsx?$': ['ts-jest', { useESM: true }]
   },
   testMatch: [
     '**/__tests__/**/*.test.ts',
@@ -23,12 +29,11 @@ const config = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.mjs'],
   testTimeout: 10000,
   transformIgnorePatterns: [
-    'node_modules/(?!(@modelcontextprotocol)/)'
+    'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1'
-  },
-  extensionsToTreatAsEsm: ['.ts']
+  }
 };
 
 module.exports = config;
