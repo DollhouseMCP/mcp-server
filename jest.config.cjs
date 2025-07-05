@@ -20,7 +20,11 @@ const config = {
   testTimeout: 10000,
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol)/)'
-  ]
+  ],
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1'
+  },
+  extensionsToTreatAsEsm: ['.ts']
 };
 
 module.exports = config;
