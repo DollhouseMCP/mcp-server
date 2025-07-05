@@ -12,9 +12,8 @@ import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type Indica
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize } from './security/InputValidator.js';
-import { VALIDATION_PATTERNS, validateUsername, validateCategory } from './utils/validation.js';
-import { SECURITY_LIMITS } from './security/constants.js';
+import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory } from './security/InputValidator.js';
+import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
