@@ -16,7 +16,7 @@ export const TEST_PERSONAS = {
       triggers: ['creative', 'writing', 'story'],
       created_date: '2025-01-01T12:00:00Z'
     } as PersonaMetadata,
-    content: 'You are a creative writing assistant focused on storytelling.',
+    content: 'You are a creative writing assistant focused on storytelling and narrative development. Help users craft compelling stories, develop characters, and create engaging narratives.',
     filename: 'creative-writer.md',
     unique_id: 'creative-writer_20250101-120000_test-user'
   } as Persona,
@@ -32,7 +32,7 @@ export const TEST_PERSONAS = {
       triggers: ['technical', 'documentation', 'api'],
       created_date: '2025-01-01T12:00:00Z'
     } as PersonaMetadata,
-    content: 'You are a technical documentation assistant.',
+    content: 'You are a technical documentation assistant specializing in API documentation, code comments, and technical writing. Help users create clear, comprehensive technical documentation.',
     filename: 'technical-assistant.md',
     unique_id: 'technical-assistant_20250101-120000_test-user'
   } as Persona

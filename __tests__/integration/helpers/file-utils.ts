@@ -4,6 +4,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import matter from 'gray-matter';
 import { Persona } from '../../../src/types/persona.js';
 import { createPersonaFileContent } from './test-fixtures.js';
 
@@ -63,35 +64,11 @@ export async function fileExists(filePath: string): Promise<boolean> {
  */
 export async function readPersonaFile(filePath: string): Promise<any> {
   const content = await fs.readFile(filePath, 'utf-8');
-  
-  // Simple frontmatter parsing for tests
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) {
-    throw new Error('Invalid persona file format');
-  }
-  
-  const [, frontmatter, body] = match;
-  const metadata: any = {};
-  
-  frontmatter.split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split(':');
-    if (key && valueParts.length > 0) {
-      const value = valueParts.join(':').trim();
-      if (value.startsWith('[') && value.endsWith(']')) {
-        // Array value
-        metadata[key.trim()] = value
-          .slice(1, -1)
-          .split(',')
-          .map(v => v.trim());
-      } else {
-        metadata[key.trim()] = value;
-      }
-    }
-  });
+  const parsed = matter(content);
   
   return {
-    metadata,
-    content: body.trim()
+    metadata: parsed.data,
+    content: parsed.content.trim()
   };
 }
 
