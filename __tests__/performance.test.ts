@@ -236,7 +236,7 @@ You are a helpful assistant designed to test performance with large persona coll
 
       // Simulate loading all personas
       const files = await mockReaddir('.');
-      const readPromises = files.map(file => mockReadFile(file, 'utf-8'));
+      const readPromises = files.map((file: any) => mockReadFile(file, 'utf-8'));
       const contents = await Promise.all(readPromises);
 
       const endTime = performance.now();
