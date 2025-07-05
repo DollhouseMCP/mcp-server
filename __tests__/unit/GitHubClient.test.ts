@@ -4,9 +4,9 @@ import { APICache } from '../../src/cache/APICache';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { SECURITY_LIMITS } from '../../src/security/constants';
 
-// Mock fetch globally with proper typing
-const mockFetch = jest.fn();
-global.fetch = mockFetch as any;
+// Create a properly typed mock for fetch
+const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+global.fetch = mockFetch;
 
 describe('GitHubClient', () => {
   let githubClient: GitHubClient;
@@ -39,10 +39,10 @@ describe('GitHubClient', () => {
       const mockData = { name: 'test-repo', stars: 100 };
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(mockData)
-      };
+        json: (jest.fn() as any).mockResolvedValue(mockData)
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       const result = await githubClient.fetchFromGitHub(testUrl);
@@ -75,9 +75,9 @@ describe('GitHubClient', () => {
         ok: false,
         status: 403,
         statusText: 'Forbidden'
-      };
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub(testUrl))
@@ -126,10 +126,10 @@ describe('GitHubClient', () => {
       process.env.GITHUB_TOKEN = 'test-token';
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({})
-      };
+        json: (jest.fn() as any).mockResolvedValue({})
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await githubClient.fetchFromGitHub(testUrl);
@@ -168,9 +168,9 @@ describe('GitHubClient', () => {
 
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({})
-      };
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+        json: (jest.fn() as any).mockResolvedValue({})
+      } as unknown as Response;
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       // Should not throw rate limit error
@@ -184,9 +184,9 @@ describe('GitHubClient', () => {
     it('should track requests per key', async () => {
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({})
-      };
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+        json: (jest.fn() as any).mockResolvedValue({})
+      } as unknown as Response;
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       // Make multiple requests
@@ -202,10 +202,10 @@ describe('GitHubClient', () => {
     it('should handle malformed JSON response', async () => {
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockRejectedValue(new Error('Invalid JSON'))
-      };
+        json: (jest.fn() as any).mockRejectedValue(new Error('Invalid JSON'))
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
@@ -218,10 +218,10 @@ describe('GitHubClient', () => {
     it('should handle JSON parsing with unexpected format', async () => {
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue('not an object')
-      };
+        json: (jest.fn() as any).mockResolvedValue('not an object')
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       const result = await githubClient.fetchFromGitHub('https://api.github.com/test');
@@ -236,9 +236,9 @@ describe('GitHubClient', () => {
         ok: false,
         status: 404,
         statusText: 'Not Found'
-      };
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
@@ -248,12 +248,12 @@ describe('GitHubClient', () => {
     it('should handle partial network failures', async () => {
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockImplementation(() => {
+        json: (jest.fn() as any).mockImplementation(() => {
           throw new Error('Connection reset');
         })
-      };
+      } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
       try {
@@ -278,7 +278,7 @@ describe('GitHubClient', () => {
         }
         return Promise.resolve({
           ok: true,
-          json: jest.fn().mockResolvedValue({ success: true })
+          json: (jest.fn() as any).mockResolvedValue({ success: true })
         } as unknown as Response);
       });
       
@@ -302,7 +302,7 @@ describe('GitHubClient', () => {
       mockApiCache.get.mockReturnValue(null);
       mockFetch.mockResolvedValue({
         ok: true,
-        json: jest.fn().mockResolvedValue(mockData)
+        json: (jest.fn() as any).mockResolvedValue(mockData)
       } as unknown as Response);
 
       const result1 = await githubClient.fetchFromGitHub(testUrl);
@@ -330,7 +330,7 @@ describe('GitHubClient', () => {
       const mockData = { fresh: 'data' };
       mockFetch.mockResolvedValue({
         ok: true,
-        json: jest.fn().mockResolvedValue(mockData)
+        json: (jest.fn() as any).mockResolvedValue(mockData)
       } as unknown as Response);
 
       const result = await githubClient.fetchFromGitHub(testUrl);
@@ -348,7 +348,7 @@ describe('GitHubClient', () => {
         setTimeout(() => {
           resolve({
             ok: true,
-            json: jest.fn().mockResolvedValue(mockData)
+            json: (jest.fn() as any).mockResolvedValue(mockData)
           } as unknown as Response);
         }, 100);
       }));
@@ -385,7 +385,7 @@ describe('GitHubClient', () => {
         const data = callCount === 1 ? mockData1 : mockData2;
         return Promise.resolve({
           ok: true,
-          json: jest.fn().mockResolvedValue(data)
+          json: (jest.fn() as any).mockResolvedValue(data)
         } as unknown as Response);
       });
 
