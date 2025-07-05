@@ -2,288 +2,29 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import * as child_process from "child_process";
-import { promisify } from "util";
 import matter from "gray-matter";
 import { fileURLToPath } from "url";
-import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './indicator-config.js';
+import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 
-const exec = promisify(child_process.exec);
-
-// Helper function for safe command execution
-function safeExec(command: string, args: string[], options: { cwd?: string } = {}): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const proc = child_process.spawn(command, args, {
-      cwd: options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    let stdout = '';
-    let stderr = '';
-    
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(new Error(`Command failed with exit code ${code}: ${stderr}`));
-      }
-    });
-    
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
-}
+// Import modularized components
+import { Persona, PersonaMetadata } from './types/persona.js';
+import { APICache } from './cache/APICache.js';
+import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory } from './security/InputValidator.js';
+import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
+import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
+import { PersonaManager } from './persona/PersonaManager.js';
+import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
+import { UpdateManager } from './update/index.js';
+import { ServerSetup, IToolHandler } from './server/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Repository configuration constants
-const REPO_OWNER = 'mickdarling';
-const REPO_NAME = 'DollhouseMCP';
-const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
-const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 
-// Dependency version requirements
-const DEPENDENCY_REQUIREMENTS = {
-  git: {
-    minimum: '2.20.0',    // Required for modern features and security
-    maximum: '2.50.0',    // Latest tested working version
-    recommended: '2.40.0' // Optimal version for stability
-  },
-  npm: {
-    minimum: '8.0.0',     // Required for package-lock v2 and modern features  
-    maximum: '12.0.0',    // Latest tested working version
-    recommended: '10.0.0' // Optimal version for stability
-  }
-};
-
-// Security and performance configuration
-const SECURITY_LIMITS = {
-  MAX_PERSONA_SIZE_BYTES: 1024 * 1024 * 2,  // 2MB max persona file size
-  MAX_FILENAME_LENGTH: 255,                  // Max filename length
-  MAX_PATH_DEPTH: 10,                       // Max directory depth for paths
-  MAX_CONTENT_LENGTH: 500000,               // Max persona content length (500KB)
-  RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
-  RATE_LIMIT_WINDOW_MS: 60 * 1000,         // 1 minute window
-  CACHE_TTL_MS: 5 * 60 * 1000,             // 5 minute cache TTL
-  MAX_SEARCH_RESULTS: 50                    // Max search results to return
-};
-
-// Input validation patterns
-const VALIDATION_PATTERNS = {
-  SAFE_FILENAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,250}[a-zA-Z0-9]$/,
-  SAFE_PATH: /^[a-zA-Z0-9\/\-_.]{1,500}$/,
-  SAFE_USERNAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,30}[a-zA-Z0-9]$/,
-  SAFE_CATEGORY: /^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$/,
-  SAFE_EMAIL: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-};
-
-// Cache for GitHub API responses
-interface CacheEntry {
-  data: any;
-  timestamp: number;
-}
-
-class APICache {
-  private cache = new Map<string, CacheEntry>();
-  
-  get(key: string): any | null {
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-    
-    if (Date.now() - entry.timestamp > SECURITY_LIMITS.CACHE_TTL_MS) {
-      this.cache.delete(key);
-      return null;
-    }
-    
-    return entry.data;
-  }
-  
-  set(key: string, data: any): void {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
-  }
-  
-  clear(): void {
-    this.cache.clear();
-  }
-  
-  size(): number {
-    return this.cache.size;
-  }
-}
-
-// Input sanitization and validation functions
-function validateFilename(filename: string): string {
-  if (!filename || typeof filename !== 'string') {
-    throw new Error('Filename must be a non-empty string');
-  }
-  
-  if (filename.length > SECURITY_LIMITS.MAX_FILENAME_LENGTH) {
-    throw new Error(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`);
-  }
-  
-  // Remove any path separators and dangerous characters
-  const sanitized = filename.replace(/[\/\\:*?"<>|]/g, '').replace(/^\.+/, '');
-  
-  if (!VALIDATION_PATTERNS.SAFE_FILENAME.test(sanitized)) {
-    throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
-  }
-  
-  return sanitized;
-}
-
-function validatePath(inputPath: string): string {
-  if (!inputPath || typeof inputPath !== 'string') {
-    throw new Error('Path must be a non-empty string');
-  }
-  
-  // Remove leading/trailing slashes and normalize
-  const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
-  
-  if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
-    throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
-  }
-  
-  // Check for path traversal attempts
-  if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
-    throw new Error('Path traversal not allowed');
-  }
-  
-  // Validate path depth
-  const depth = normalized.split('/').length;
-  if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
-    throw new Error(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
-  }
-  
-  return normalized;
-}
-
-function validateUsername(username: string): string {
-  if (!username || typeof username !== 'string') {
-    throw new Error('Username must be a non-empty string');
-  }
-  
-  if (!VALIDATION_PATTERNS.SAFE_USERNAME.test(username)) {
-    throw new Error('Invalid username format. Use alphanumeric characters, hyphens, underscores, and dots only.');
-  }
-  
-  return username.toLowerCase();
-}
-
-function validateCategory(category: string): string {
-  if (!category || typeof category !== 'string') {
-    throw new Error('Category must be a non-empty string');
-  }
-  
-  if (!VALIDATION_PATTERNS.SAFE_CATEGORY.test(category)) {
-    throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
-  }
-  
-  const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
-  const normalized = category.toLowerCase();
-  
-  if (!validCategories.includes(normalized)) {
-    throw new Error(`Invalid category. Must be one of: ${validCategories.join(', ')}`);
-  }
-  
-  return normalized;
-}
-
-function validateContentSize(content: string, maxSize: number = SECURITY_LIMITS.MAX_CONTENT_LENGTH): void {
-  if (!content || typeof content !== 'string') {
-    throw new Error('Content must be a non-empty string');
-  }
-  
-  const sizeBytes = Buffer.byteLength(content, 'utf8');
-  if (sizeBytes > maxSize) {
-    throw new Error(`Content too large (${sizeBytes} bytes, max ${maxSize} bytes)`);
-  }
-}
-
-function sanitizeInput(input: string, maxLength: number = 1000): string {
-  if (!input || typeof input !== 'string') {
-    return '';
-  }
-  
-  // Remove potentially dangerous characters and limit length
-  return input
-    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
-    .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-    .substring(0, maxLength)
-    .trim();
-}
-
-interface PersonaMetadata {
-  name: string;
-  description: string;
-  unique_id?: string;
-  author?: string;
-  triggers?: string[];
-  version?: string;
-  category?: string;
-  age_rating?: 'all' | '13+' | '18+';
-  content_flags?: string[];
-  ai_generated?: boolean;
-  generation_method?: 'human' | 'ChatGPT' | 'Claude' | 'hybrid';
-  price?: string;
-  revenue_split?: string;
-  license?: string;
-  created_date?: string;
-}
-
-interface Persona {
-  metadata: PersonaMetadata;
-  content: string;
-  filename: string;
-  unique_id: string;
-}
-
-// Anonymous ID generation
-const ADJECTIVES = ['clever', 'swift', 'bright', 'bold', 'wise', 'calm', 'keen', 'witty', 'sharp', 'cool'];
-const ANIMALS = ['fox', 'owl', 'cat', 'wolf', 'bear', 'hawk', 'deer', 'lion', 'eagle', 'tiger'];
-
-function generateAnonymousId(): string {
-  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-  const random = Math.random().toString(36).substring(2, 6);
-  return `anon-${adjective}-${animal}-${random}`;
-}
-
-function generateUniqueId(personaName: string, author?: string): string {
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
-  const whatItIs = personaName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  const whoMadeIt = author || generateAnonymousId();
-  
-  return `${whatItIs}_${dateStr}-${timeStr}_${whoMadeIt}`;
-}
-
-function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-}
-
-class DollhouseMCPServer {
+export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
   private personasDir: string;
   private personas: Map<string, Persona> = new Map();
@@ -292,6 +33,15 @@ class DollhouseMCPServer {
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
+  private personaManager: PersonaManager;
+  private githubClient: GitHubClient;
+  private marketplaceBrowser: MarketplaceBrowser;
+  private marketplaceSearch: MarketplaceSearch;
+  private personaDetails: PersonaDetails;
+  private personaInstaller: PersonaInstaller;
+  private personaSubmitter: PersonaSubmitter;
+  private updateManager: UpdateManager;
+  private serverSetup: ServerSetup;
 
   constructor() {
     this.server = new Server(
@@ -315,418 +65,29 @@ class DollhouseMCPServer {
     // Load indicator configuration
     this.indicatorConfig = loadIndicatorConfig();
     
-    this.setupHandlers();
+    // Initialize persona manager
+    this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
+    
+    // Initialize marketplace modules
+    this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
+    this.marketplaceBrowser = new MarketplaceBrowser(this.githubClient);
+    this.marketplaceSearch = new MarketplaceSearch(this.githubClient);
+    this.personaDetails = new PersonaDetails(this.githubClient);
+    this.personaInstaller = new PersonaInstaller(this.githubClient, this.personasDir);
+    this.personaSubmitter = new PersonaSubmitter();
+    
+    // Initialize update manager
+    this.updateManager = new UpdateManager();
+    
+    // Initialize server setup
+    this.serverSetup = new ServerSetup();
+    this.serverSetup.setupServer(this.server, this);
+    
     this.loadPersonas();
   }
 
-  private setupHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: "list_personas",
-            description: "List all available personas",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "activate_persona",
-            description: "Activate a specific persona by name or filename",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to activate",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "get_active_persona",
-            description: "Get information about the currently active persona",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "deactivate_persona",
-            description: "Deactivate the current persona",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "get_persona_details",
-            description: "Get detailed information about a specific persona",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to get details for",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "reload_personas",
-            description: "Reload all personas from the personas directory",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "browse_marketplace",
-            description: "Browse personas from the DollhouseMCP marketplace by category",
-            inputSchema: {
-              type: "object",
-              properties: {
-                category: {
-                  type: "string",
-                  description: "Category to browse (creative, professional, educational, gaming, personal)",
-                },
-              },
-            },
-          },
-          {
-            name: "search_marketplace",
-            description: "Search for personas in the marketplace by keywords",
-            inputSchema: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description: "Search query for finding personas",
-                },
-              },
-              required: ["query"],
-            },
-          },
-          {
-            name: "get_marketplace_persona",
-            description: "Get detailed information about a persona from the marketplace",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "The marketplace path to the persona (e.g., 'creative/storyteller_20250701_alice.md')",
-                },
-              },
-              required: ["path"],
-            },
-          },
-          {
-            name: "install_persona",
-            description: "Install a persona from the marketplace to your local collection",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "The marketplace path to the persona to install",
-                },
-              },
-              required: ["path"],
-            },
-          },
-          {
-            name: "submit_persona",
-            description: "Submit a persona to the marketplace for community review",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to submit",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "set_user_identity",
-            description: "Set your user identity for persona creation and attribution",
-            inputSchema: {
-              type: "object",
-              properties: {
-                username: {
-                  type: "string",
-                  description: "Your username for persona attribution",
-                },
-                email: {
-                  type: "string",
-                  description: "Your email (optional, for contact)",
-                },
-              },
-              required: ["username"],
-            },
-          },
-          {
-            name: "get_user_identity",
-            description: "Get your current user identity",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "clear_user_identity",
-            description: "Clear your user identity (return to anonymous mode)",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "create_persona",
-            description: "Create a new persona through guided chat interface",
-            inputSchema: {
-              type: "object",
-              properties: {
-                name: {
-                  type: "string",
-                  description: "The name for the new persona",
-                },
-                description: {
-                  type: "string",
-                  description: "Brief description of what this persona does",
-                },
-                category: {
-                  type: "string",
-                  description: "Category (creative, professional, educational, gaming, personal)",
-                },
-                instructions: {
-                  type: "string",
-                  description: "The persona's behavioral instructions and guidelines",
-                },
-                triggers: {
-                  type: "string",
-                  description: "Comma-separated list of trigger keywords (optional)",
-                },
-              },
-              required: ["name", "description", "category", "instructions"],
-            },
-          },
-          {
-            name: "edit_persona",
-            description: "Edit an existing persona's metadata or content",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to edit",
-                },
-                field: {
-                  type: "string",
-                  description: "Field to edit: name, description, category, instructions, triggers, version",
-                },
-                value: {
-                  type: "string",
-                  description: "New value for the field",
-                },
-              },
-              required: ["persona", "field", "value"],
-            },
-          },
-          {
-            name: "validate_persona",
-            description: "Validate a persona's format and metadata",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to validate",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "check_for_updates",
-            description: "Check GitHub releases for available DollhouseMCP updates",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "update_server",
-            description: "Update DollhouseMCP server to the latest version",
-            inputSchema: {
-              type: "object",
-              properties: {
-                confirm: {
-                  type: "boolean",
-                  description: "Confirm you want to proceed with the update",
-                },
-              },
-              required: ["confirm"],
-            },
-          },
-          {
-            name: "rollback_update",
-            description: "Rollback to the previous version of DollhouseMCP",
-            inputSchema: {
-              type: "object",
-              properties: {
-                confirm: {
-                  type: "boolean",
-                  description: "Confirm you want to rollback to the previous version",
-                },
-              },
-              required: ["confirm"],
-            },
-          },
-          {
-            name: "get_server_status",
-            description: "Get current DollhouseMCP server version and status information",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "configure_indicator",
-            description: "Configure how persona indicators are displayed in responses",
-            inputSchema: {
-              type: "object",
-              properties: {
-                enabled: {
-                  type: "boolean",
-                  description: "Enable or disable persona indicators",
-                },
-                style: {
-                  type: "string",
-                  enum: ["full", "minimal", "compact", "custom"],
-                  description: "Indicator style: full, minimal, compact, or custom",
-                },
-                customFormat: {
-                  type: "string",
-                  description: "Custom format template (use with style='custom'). Placeholders: {emoji}, {name}, {version}, {author}, {category}",
-                },
-                showVersion: {
-                  type: "boolean",
-                  description: "Show persona version in indicator",
-                },
-                showAuthor: {
-                  type: "boolean",
-                  description: "Show persona author in indicator",
-                },
-                showCategory: {
-                  type: "boolean",
-                  description: "Show persona category in indicator",
-                },
-                emoji: {
-                  type: "string",
-                  description: "Emoji to use in indicator (default: 🎭)",
-                },
-                bracketStyle: {
-                  type: "string",
-                  enum: ["square", "round", "curly", "angle", "none"],
-                  description: "Bracket style for indicator",
-                },
-              },
-            },
-          },
-          {
-            name: "get_indicator_config",
-            description: "Get current persona indicator configuration",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-        ],
-      };
-    });
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      try {
-        switch (name) {
-          case "list_personas":
-            return await this.listPersonas();
-          case "activate_persona":
-            return await this.activatePersona((args as any)?.persona as string);
-          case "get_active_persona":
-            return await this.getActivePersona();
-          case "deactivate_persona":
-            return await this.deactivatePersona();
-          case "get_persona_details":
-            return await this.getPersonaDetails((args as any)?.persona as string);
-          case "reload_personas":
-            return await this.reloadPersonas();
-          case "browse_marketplace":
-            return await this.browseMarketplace((args as any)?.category as string);
-          case "search_marketplace":
-            return await this.searchMarketplace((args as any)?.query as string);
-          case "get_marketplace_persona":
-            return await this.getMarketplacePersona((args as any)?.path as string);
-          case "install_persona":
-            return await this.installPersona((args as any)?.path as string);
-          case "submit_persona":
-            return await this.submitPersona((args as any)?.persona as string);
-          case "set_user_identity":
-            return await this.setUserIdentity((args as any)?.username as string, (args as any)?.email as string);
-          case "get_user_identity":
-            return await this.getUserIdentity();
-          case "clear_user_identity":
-            return await this.clearUserIdentity();
-          case "create_persona":
-            return await this.createPersona(
-              (args as any)?.name as string,
-              (args as any)?.description as string,
-              (args as any)?.category as string,
-              (args as any)?.instructions as string,
-              (args as any)?.triggers as string
-            );
-          case "edit_persona":
-            return await this.editPersona(
-              (args as any)?.persona as string,
-              (args as any)?.field as string,
-              (args as any)?.value as string
-            );
-          case "validate_persona":
-            return await this.validatePersona((args as any)?.persona as string);
-          case "check_for_updates":
-            return await this.checkForUpdates();
-          case "update_server":
-            return await this.updateServer((args as any)?.confirm as boolean);
-          case "rollback_update":
-            return await this.rollbackUpdate((args as any)?.confirm as boolean);
-          case "get_server_status":
-            return await this.getServerStatus();
-          case "configure_indicator":
-            return await this.configureIndicator(args as any);
-          case "get_indicator_config":
-            return await this.getIndicatorConfig();
-          default:
-            throw new McpError(
-              ErrorCode.MethodNotFound,
-              `Unknown tool: ${name}`
-            );
-        }
-      } catch (error) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Error executing tool ${name}: ${error}`
-        );
-      }
-    });
-  }
-
+  // Tool handler methods - now public for access from tool modules
+  
   private getPersonaIndicator(): string {
     if (!this.activePersona) {
       return "";
@@ -809,7 +170,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async listPersonas() {
+  async listPersonas() {
     const personaList = Array.from(this.personas.values()).map(persona => ({
       filename: persona.filename,
       unique_id: persona.unique_id,
@@ -842,7 +203,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async activatePersona(personaIdentifier: string) {
+  async activatePersona(personaIdentifier: string) {
     // Try to find persona by filename first, then by name
     let persona = this.personas.get(personaIdentifier);
     
@@ -874,7 +235,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async getActivePersona() {
+  async getActivePersona() {
     if (!this.activePersona) {
       return {
         content: [
@@ -913,7 +274,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async deactivatePersona() {
+  async deactivatePersona() {
     const wasActive = this.activePersona !== null;
     const indicator = this.getPersonaIndicator();
     this.activePersona = null;
@@ -930,7 +291,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async getPersonaDetails(personaIdentifier: string) {
+  async getPersonaDetails(personaIdentifier: string) {
     // Try to find persona by filename first, then by name
     let persona = this.personas.get(personaIdentifier);
     
@@ -964,7 +325,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async reloadPersonas() {
+  async reloadPersonas() {
     await this.loadPersonas();
     return {
       content: [
@@ -976,121 +337,13 @@ class DollhouseMCPServer {
     };
   }
 
-  // Rate limiting helper
-  private checkRateLimit(key: string = 'default'): void {
-    const now = Date.now();
-    const requests = this.rateLimitTracker.get(key) || [];
-    
-    // Remove requests outside the window
-    const validRequests = requests.filter(time => now - time < SECURITY_LIMITS.RATE_LIMIT_WINDOW_MS);
-    
-    if (validRequests.length >= SECURITY_LIMITS.RATE_LIMIT_REQUESTS) {
-      throw new Error(`Rate limit exceeded. Max ${SECURITY_LIMITS.RATE_LIMIT_REQUESTS} requests per minute.`);
-    }
-    
-    validRequests.push(now);
-    this.rateLimitTracker.set(key, validRequests);
-  }
+  // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
-  // GitHub API marketplace integration with caching and rate limiting
-  private async fetchFromGitHub(url: string): Promise<any> {
+  async browseMarketplace(category?: string) {
     try {
-      // Check rate limit
-      this.checkRateLimit('github_api');
+      const { items, categories } = await this.marketplaceBrowser.browseMarketplace(category);
+      const text = this.marketplaceBrowser.formatBrowseResults(items, categories, category, this.getPersonaIndicator());
       
-      // Check cache first
-      const cached = this.apiCache.get(url);
-      if (cached) {
-        return cached;
-      }
-      
-      // Add GitHub token if available for higher rate limits
-      const headers: Record<string, string> = {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'DollhouseMCP/1.0'
-      };
-      
-      if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
-      }
-      
-      // Create fetch with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      const response = await fetch(url, {
-        headers,
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.');
-        }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      // Cache the successful response
-      this.apiCache.set(url, data);
-      
-      return data;
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${error}`
-      );
-    }
-  }
-
-  private async browseMarketplace(category?: string) {
-    const baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
-    const url = category ? `${baseUrl}/${category}` : baseUrl;
-    
-    try {
-      const data = await this.fetchFromGitHub(url);
-      
-      if (!Array.isArray(data)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Invalid marketplace response. Expected directory listing.`,
-            },
-          ],
-        };
-      }
-
-      const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-      const categories = data.filter((item: any) => item.type === 'dir');
-
-      const textParts = [`${this.getPersonaIndicator()}🏪 **DollhouseMCP Marketplace**\n\n`];
-      
-      if (!category) {
-        textParts.push(`**📁 Categories (${categories.length}):**\n`);
-        categories.forEach((cat: any) => {
-          textParts.push(`   📂 **${cat.name}** - Browse with: \`browse_marketplace "${cat.name}"\`\n`);
-        });
-        textParts.push('\n');
-      }
-
-      if (items.length > 0) {
-        textParts.push(`**🎭 Personas in ${category || 'root'} (${items.length}):**\n`);
-        items.forEach((item: any) => {
-          const path = category ? `${category}/${item.name}` : item.name;
-          textParts.push(
-            `   ▫️ **${item.name}**\n`,
-            `      📥 Install: \`install_persona "${path}"\`\n`,
-            `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
-          );
-        });
-      }
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1111,37 +364,11 @@ class DollhouseMCPServer {
     }
   }
 
-  private async searchMarketplace(query: string) {
-    const searchUrl = `https://api.github.com/search/code?q=${encodeURIComponent(query)}+repo:mickdarling/DollhouseMCP-Personas+extension:md`;
-    
+  async searchMarketplace(query: string) {
     try {
-      const data = await this.fetchFromGitHub(searchUrl);
+      const items = await this.marketplaceSearch.searchMarketplace(query);
+      const text = this.marketplaceSearch.formatSearchResults(items, query, this.getPersonaIndicator());
       
-      if (!data.items || data.items.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}🔍 No personas found for query: "${query}"`,
-            },
-          ],
-        };
-      }
-
-      const textParts = [`${this.getPersonaIndicator()}🔍 **Search Results for "${query}"** (${data.items.length} found)\n\n`];
-      
-      data.items.forEach((item: any) => {
-        const path = item.path.replace('personas/', '');
-        textParts.push(
-          `   🎭 **${item.name}**\n`,
-          `      📂 Path: ${path}\n`,
-          `      📥 Install: \`install_persona "${path}"\`\n`,
-          `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
-        );
-      });
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1162,46 +389,11 @@ class DollhouseMCPServer {
     }
   }
 
-  private async getMarketplacePersona(path: string) {
-    const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${path}`;
-    
+  async getMarketplacePersona(path: string) {
     try {
-      const data = await this.fetchFromGitHub(url);
+      const { metadata, content } = await this.personaDetails.getMarketplacePersona(path);
+      const text = this.personaDetails.formatPersonaDetails(metadata, content, path, this.getPersonaIndicator());
       
-      if (data.type !== 'file') {
-        throw new Error('Path does not point to a file');
-      }
-
-      // Decode Base64 content
-      const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      const parsed = matter(content);
-      const metadata = parsed.data as PersonaMetadata;
-
-      const textParts = [
-        `${this.getPersonaIndicator()}🎭 **Marketplace Persona: ${metadata.name}**\n\n`,
-        `**📋 Details:**\n`,
-        `   🆔 ID: ${metadata.unique_id || 'Not specified'}\n`,
-        `   👤 Author: ${metadata.author || 'Unknown'}\n`,
-        `   📁 Category: ${metadata.category || 'General'}\n`,
-        `   🔖 Price: ${metadata.price || 'Free'}\n`,
-        `   📊 Version: ${metadata.version || '1.0'}\n`,
-        `   🔞 Age Rating: ${metadata.age_rating || 'All'}\n`,
-        `   ${metadata.ai_generated ? '🤖 AI Generated' : '👤 Human Created'}\n\n`,
-        `**📝 Description:**\n${metadata.description}\n\n`
-      ];
-      
-      if (metadata.triggers && metadata.triggers.length > 0) {
-        textParts.push(`**🔗 Triggers:** ${metadata.triggers.join(', ')}\n\n`);
-      }
-
-      textParts.push(
-        `**📥 Installation:**\n`,
-        `Use: \`install_persona "${path}"\`\n\n`,
-        `**📄 Full Content:**\n\`\`\`\n${parsed.content}\n\`\`\``
-      );
-
-      const text = textParts.join('');
-
       return {
         content: [
           {
@@ -1222,77 +414,36 @@ class DollhouseMCPServer {
     }
   }
 
-  private async installPersona(inputPath: string) {
+  async installPersona(inputPath: string) {
     try {
-      // Validate and sanitize the input path
-      const sanitizedPath = validatePath(inputPath);
+      const result = await this.personaInstaller.installPersona(inputPath);
       
-      // Ensure the path ends with .md
-      if (!sanitizedPath.endsWith('.md')) {
-        throw new Error('Invalid file type. Only .md files are allowed.');
-      }
-      
-      const url = `https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas/${sanitizedPath}`;
-      const data = await this.fetchFromGitHub(url);
-      
-      if (data.type !== 'file') {
-        throw new Error('Path does not point to a file');
-      }
-
-      // Check file size before downloading
-      if (data.size > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
-        throw new Error(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
-      }
-
-      // Decode Base64 content
-      const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      
-      // Validate content size after decoding
-      validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
-      
-      const parsed = matter(content);
-      const metadata = parsed.data as PersonaMetadata;
-
-      // Validate metadata
-      if (!metadata.name || !metadata.description) {
-        throw new Error('Invalid persona: missing required name or description');
-      }
-
-      // Generate and validate local filename
-      const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-persona.md';
-      const filename = validateFilename(originalFilename);
-      const localPath = path.join(this.personasDir, filename);
-
-      // Check if file already exists
-      try {
-        await fs.access(localPath);
+      if (!result.success) {
         return {
           content: [
             {
               type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ Persona already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`,
+              text: `${this.getPersonaIndicator()}⚠️ ${result.message}`,
             },
           ],
         };
-      } catch {
-        // File doesn't exist, proceed with installation
       }
-
-      // Write the file
-      await fs.writeFile(localPath, content, 'utf-8');
       
       // Reload personas to include the new one
       await this.loadPersonas();
-
+      
+      const text = this.personaInstaller.formatInstallSuccess(
+        result.metadata!, 
+        result.filename!, 
+        this.personas.size, 
+        this.getPersonaIndicator()
+      );
+      
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}✅ **Persona Installed Successfully!**\n\n` +
-            `🎭 **${metadata.name}** by ${metadata.author}\n` +
-            `📁 Saved as: ${filename}\n` +
-            `📊 Total personas: ${this.personas.size}\n\n` +
-            `🎯 **Ready to use:** \`activate_persona "${metadata.name}"\``,
+            text: text,
           },
         ],
       };
@@ -1308,7 +459,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async submitPersona(personaIdentifier: string) {
+  async submitPersona(personaIdentifier: string) {
     // Find the persona in local collection
     let persona = this.personas.get(personaIdentifier);
     
@@ -1330,56 +481,21 @@ class DollhouseMCPServer {
       };
     }
 
-    // Generate GitHub issue body
-    const issueTitle = `New Persona Submission: ${persona.metadata.name}`;
-    const issueBody = `## Persona Submission
-
-**Name:** ${persona.metadata.name}
-**Author:** ${persona.metadata.author || 'Unknown'}
-**Category:** ${persona.metadata.category || 'General'}
-**Description:** ${persona.metadata.description}
-
-### Persona Content:
-\`\`\`markdown
----
-${Object.entries(persona.metadata)
-  .map(([key, value]) => `${key}: ${Array.isArray(value) ? JSON.stringify(value) : JSON.stringify(value)}`)
-  .join('\n')}
----
-
-${persona.content}
-\`\`\`
-
-### Submission Details:
-- Submitted via DollhouseMCP client
-- Filename: ${persona.filename}
-- Unique ID: ${persona.unique_id}
-
----
-*Please review this persona for inclusion in the marketplace.*`;
-
-    const githubIssueUrl = `https://github.com/mickdarling/DollhouseMCP-Personas/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
+    const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
+    const text = this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
 
     return {
       content: [
         {
           type: "text",
-          text: `${this.getPersonaIndicator()}📤 **Persona Submission Prepared**\n\n` +
-          `🎭 **${persona.metadata.name}** is ready for marketplace submission!\n\n` +
-          `**Next Steps:**\n` +
-          `1. Click this link to create a GitHub issue: \n` +
-          `   ${githubIssueUrl}\n\n` +
-          `2. Review the pre-filled content\n` +
-          `3. Click "Submit new issue"\n` +
-          `4. The maintainers will review your submission\n\n` +
-          `⭐ **Tip:** You can also submit via pull request if you're familiar with Git!`,
+          text: text,
         },
       ],
     };
   }
 
   // User identity management
-  private async setUserIdentity(username: string, email?: string) {
+  async setUserIdentity(username: string, email?: string) {
     try {
       if (!username || username.trim().length === 0) {
         return {
@@ -1440,7 +556,7 @@ ${persona.content}
     }
   }
 
-  private async getUserIdentity() {
+  async getUserIdentity() {
     const email = process.env.DOLLHOUSE_EMAIL;
     
     if (!this.currentUser) {
@@ -1479,7 +595,7 @@ ${persona.content}
     };
   }
 
-  private async clearUserIdentity() {
+  async clearUserIdentity() {
     const wasSet = this.currentUser !== null;
     const previousUser = this.currentUser;
     this.currentUser = null;
@@ -1508,7 +624,7 @@ ${persona.content}
   }
 
   // Chat-based persona management tools
-  private async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
+  async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
     try {
       // Validate required fields
       if (!name || !description || !category || !instructions) {
@@ -1669,7 +785,7 @@ ${sanitizedInstructions}
     }
   }
 
-  private async editPersona(personaIdentifier: string, field: string, value: string) {
+  async editPersona(personaIdentifier: string, field: string, value: string) {
     if (!personaIdentifier || !field || !value) {
       return {
         content: [
@@ -1807,7 +923,7 @@ ${sanitizedInstructions}
     }
   }
 
-  private async validatePersona(personaIdentifier: string) {
+  async validatePersona(personaIdentifier: string) {
     if (!personaIdentifier) {
       return {
         content: [
@@ -1941,269 +1057,19 @@ ${sanitizedInstructions}
     };
   }
 
-  /**
-   * Executes a network operation with retry logic and exponential backoff
-   */
-  private async retryNetworkOperation<T>(
-    operation: () => Promise<T>, 
-    maxRetries: number = 3,
-    baseDelay: number = 1000
-  ): Promise<T> {
-    let lastError: Error;
-    
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation();
-      } catch (error) {
-        lastError = error as Error;
-        
-        // Don't retry on the last attempt
-        if (attempt === maxRetries) {
-          break;
-        }
-        
-        // Don't retry certain errors (like 404, 401)
-        if (error instanceof Error && error.message.includes('404')) {
-          break;
-        }
-        
-        // Calculate delay with exponential backoff
-        const delay = baseDelay * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    
-    throw lastError!;
-  }
+  // retryNetworkOperation is now handled by UpdateChecker
 
   // Auto-update management tools
-  private async checkForUpdates() {
-    try {
-      // Get current version from package.json
-      const packageJsonPath = path.join(__dirname, "..", "package.json");
-      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
-      const packageData = JSON.parse(packageContent);
-      const currentVersion = packageData.version;
-
-      // Check GitHub releases API for latest version with retry logic
-      const releasesUrl = RELEASES_API_URL;
-      
-      const response = await this.retryNetworkOperation(async () => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
-        try {
-          const response = await fetch(releasesUrl, {
-            headers: {
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'DollhouseMCP/1.0'
-            },
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
-          return response;
-        } catch (error) {
-          clearTimeout(timeoutId);
-          throw error;
-        }
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            content: [{
-              type: "text",
-              text: this.getPersonaIndicator() + 
-                '📦 **Update Check Complete**\n\n' +
-                '🔄 **Current Version:** ' + currentVersion + '\n' +
-                '📡 **Remote Status:** No releases found on GitHub\n' +
-                'ℹ️ **Note:** This may be a development version or releases haven\'t been published yet.\n\n' +
-                '**Manual Update:**\n' +
-                'Use `update_server true` to pull latest changes from main branch.'
-            }]
-          };
-        }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-      }
-
-      const releaseData = await response.json();
-      const latestVersion = releaseData.tag_name?.replace(/^v/, '') || releaseData.name;
-      const publishedAt = new Date(releaseData.published_at).toLocaleDateString();
-
-      // Simple version comparison (assumes semantic versioning)
-      const isUpdateAvailable = this.compareVersions(currentVersion, latestVersion) < 0;
-
-      const releaseNotes = releaseData.body 
-        ? releaseData.body.substring(0, 500) + (releaseData.body.length > 500 ? '...' : '')
-        : 'See release notes on GitHub';
-
-      const statusParts = [
-        this.getPersonaIndicator() + '📦 **Update Check Complete**\n\n',
-        '🔄 **Current Version:** ' + currentVersion + '\n',
-        '📡 **Latest Version:** ' + latestVersion + '\n',
-        '📅 **Released:** ' + publishedAt + '\n\n'
-      ];
-
-      if (isUpdateAvailable) {
-        statusParts.push(
-          '✨ **Update Available!**\n\n',
-          '**What\'s New:**\n' + releaseNotes + '\n\n',
-          '**To Update:**\n',
-          '• Use: `update_server true`\n',
-          '• Or visit: ' + releaseData.html_url + '\n\n',
-          '⚠️ **Note:** Update will restart the server and reload all personas.'
-        );
-      } else {
-        statusParts.push(
-          '✅ **You\'re Up to Date!**\n\n',
-          'Your DollhouseMCP installation is current.\n',
-          'Check back later for new features and improvements.'
-        );
-      }
-
-      const statusText = statusParts.join('');
-
-      return {
-        content: [{ type: "text", text: statusText }]
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isAbortError = error instanceof Error && error.name === 'AbortError';
-      
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Update Check Failed**\n\n' +
-            'Error: ' + errorMessage + '\n\n' +
-            '**Possible causes:**\n' +
-            (isAbortError ? '• Request timed out (>10 seconds)\n' : '') +
-            '• Network connectivity issues\n' +
-            '• GitHub API rate limiting\n' +
-            '• Repository access problems\n\n' +
-            'Try again later or check manually at:\n' +
-            REPO_URL + '/releases'
-        }]
-      };
-    }
+  async checkForUpdates() {
+    const { text } = await this.updateManager.checkForUpdates();
+    return {
+      content: [{ type: "text", text: this.getPersonaIndicator() + text }]
+    };
   }
 
-  /**
-   * Validates prerequisites for server update (git repo + clean working tree)
-   */
-  private async validateUpdatePrerequisites(rootDir: string): Promise<{ valid: boolean; message?: string }> {
-    // Check if we're in a git repository
-    try {
-      await safeExec('git', ['status'], { cwd: rootDir });
-    } catch {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Update Failed**\n\n' +
-          'This directory is not a Git repository.\n' +
-          'DollhouseMCP can only be updated if installed via Git clone.\n\n' +
-          '**Manual Update Steps:**\n' +
-          '1. Download latest code from GitHub\n' +
-          '2. Replace installation files\n' +
-          '3. Run `npm install && npm run build`'
-      };
-    }
+  // Update helper methods are now handled by UpdateManager
 
-    // Check for uncommitted changes
-    const { stdout: statusOutput } = await safeExec('git', ['status', '--porcelain'], { cwd: rootDir });
-    if (statusOutput.trim()) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Update Blocked**\n\n' +
-          'Uncommitted changes detected:\n```\n' + statusOutput + '```\n\n' +
-          '**Resolution:**\n' +
-          '• Commit your changes: `git add . && git commit -m "Save local changes"`\n' +
-          '• Or stash them: `git stash`\n' +
-          '• Then retry the update'
-      };
-    }
-
-    return { valid: true };
-  }
-
-  /**
-   * Creates a timestamped backup of the current installation
-   */
-  private async createUpdateBackup(rootDir: string): Promise<string> {
-    const backupDir = path.join(path.dirname(rootDir), '.backup-' + Date.now());
-    await safeExec('cp', ['-r', rootDir, backupDir]);
-    
-    // Clean up old backups (keep only last 5)
-    await this.cleanupOldBackups(path.dirname(rootDir));
-    
-    return backupDir;
-  }
-
-  /**
-   * Removes old backup directories, keeping only the 5 most recent
-   */
-  private async cleanupOldBackups(parentDir: string): Promise<void> {
-    try {
-      const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
-      const backupDirs = lsOutput.split('\n')
-        .filter(dir => dir.startsWith('.backup-') && dir.match(/\.backup-\d+$/))
-        .slice(5); // Keep first 5, remove the rest
-
-      for (const oldBackup of backupDirs) {
-        const backupPath = path.join(parentDir, oldBackup);
-        await safeExec('rm', ['-rf', backupPath]);
-      }
-    } catch (error) {
-      // Don't fail the backup creation if cleanup fails
-      console.error('Warning: Failed to cleanup old backups:', error);
-    }
-  }
-
-  /**
-   * Pulls latest changes from git and checks if updates are available
-   */
-  private async pullLatestChanges(rootDir: string): Promise<{ hasUpdates: boolean; output: string }> {
-    const { stdout: pullOutput } = await safeExec('git', ['pull', 'origin', 'main'], { cwd: rootDir });
-    const hasUpdates = !pullOutput.includes('Already up to date');
-    return { hasUpdates, output: pullOutput };
-  }
-
-  /**
-   * Updates npm dependencies and rebuilds the project
-   */
-  private async updateDependenciesAndBuild(rootDir: string): Promise<void> {
-    await safeExec('npm', ['install'], { cwd: rootDir });
-    await safeExec('npm', ['run', 'build'], { cwd: rootDir });
-  }
-
-  /**
-   * Formats the success message for completed updates with progress indicators
-   */
-  private formatUpdateSuccessMessage(pullOutput: string, backupDir: string): string {
-    const parts = [
-      this.getPersonaIndicator() + '🔄 **DollhouseMCP Update Complete**\n\n',
-      '**Progress Summary:**\n',
-      '✅ [1/6] Dependencies verified (git, npm)\n',
-      '✅ [2/6] Repository status validated\n',
-      '✅ [3/6] Backup created: ' + path.basename(backupDir) + '\n',
-      '✅ [4/6] Git pull completed\n',
-      '✅ [5/6] Dependencies updated (npm install)\n',
-      '✅ [6/6] TypeScript build completed\n',
-      '\n🎉 **Update Successful!**\n\n',
-      '**Changes Applied:**\n' + pullOutput + '\n\n',
-      '**Next Steps:**\n',
-      '• Server will restart automatically\n',
-      '• All personas will be reloaded\n',
-      '• Use `get_server_status` to verify update\n\n',
-      '**Backup Location:** ' + backupDir + '\n',
-      'Use `rollback_update true` if issues occur.'
-    ];
-    return parts.join('');
-  }
-
-  private async updateServer(confirm: boolean) {
+  async updateServer(confirm: boolean) {
     if (!confirm) {
       return {
         content: [{
@@ -2226,554 +1092,50 @@ ${sanitizedInstructions}
       };
     }
 
-    try {
-      // Check that required dependencies are available
-      const depCheck = await this.verifyDependencies();
-      if (!depCheck.valid) {
-        return { content: [{ type: "text", text: depCheck.message! }] };
-      }
-
-      const rootDir = path.join(__dirname, "..");
-
-      // Validate prerequisites (git repo + clean working tree)
-      const validation = await this.validateUpdatePrerequisites(rootDir);
-      if (!validation.valid) {
-        return {
-          content: [{ type: "text", text: validation.message! }]
-        };
-      }
-
-      // Create backup before making changes
-      const backupDir = await this.createUpdateBackup(rootDir);
-
-      // Pull latest changes and check if updates exist
-      const { hasUpdates, output: pullOutput } = await this.pullLatestChanges(rootDir);
-      
-      // If no updates, clean up backup and return
-      if (!hasUpdates) {
-        await safeExec('rm', ['-rf', backupDir]);
-        return {
-          content: [{
-            type: "text",
-            text: this.getPersonaIndicator() + 
-              'ℹ️ **Already Up to Date**\n\n' +
-              'No updates were available.\n' +
-              'Your DollhouseMCP installation is current.\n\n' +
-              'Use `check_for_updates` to see version information.'
-          }]
-        };
-      }
-
-      // Update dependencies and rebuild
-      await this.updateDependenciesAndBuild(rootDir);
-
-      // Format and return success message
-      const successMessage = this.formatUpdateSuccessMessage(pullOutput, backupDir);
-      return {
-        content: [{ type: "text", text: successMessage }]
-      };
-
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Update Failed**\n\n' +
-            'Error during auto-update: ' + errorMessage + '\n\n' +
-            '**Recovery:**\n' +
-            'If the server is in an unstable state:\n' +
-            '1. Use `rollback_update true` to restore previous version\n' +
-            '2. Or manually restore from backup directory\n' +
-            '3. Report the issue on GitHub if it persists'
-        }]
-      };
-    }
+    const { text } = await this.updateManager.updateServer(confirm, this.getPersonaIndicator());
+    return {
+      content: [{ type: "text", text }]
+    };
   }
 
-  /**
-   * Finds available backup directories for rollback
-   */
-  private async findAvailableBackups(parentDir: string): Promise<{ success: boolean; backups?: string[]; message?: string }> {
-    const { stdout: lsOutput } = await safeExec('ls', ['-1t'], { cwd: parentDir });
-    const backupDirs = lsOutput.split('\n')
-      .filter(dir => dir.startsWith('.backup-'))
-      .map(dir => path.join(parentDir, dir));
+  // Rollback helper methods are now handled by UpdateManager
 
-    if (backupDirs.length === 0) {
-      return {
-        success: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **No Backups Found**\n\n' +
-          'No backup directories found for rollback.\n' +
-          'Backups are created automatically during updates.\n\n' +
-          '**Manual Recovery:**\n' +
-          'You may need to manually restore from:\n' +
-          '• Git history: `git reset --hard HEAD~1`\n' +
-          '• External backup\n' +
-          '• Fresh installation'
-      };
-    }
-
-    return { success: true, backups: backupDirs };
+  async rollbackUpdate(confirm: boolean) {
+    const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
+    return {
+      content: [{ type: "text", text }]
+    };
   }
 
-  /**
-   * Performs safe rollback with safety backup creation
-   */
-  private async performSafeRollback(rootDir: string, parentDir: string, latestBackup: string): Promise<string> {
-    // Create safety backup of current state
-    const safetyBackup = path.join(parentDir, '.rollback-safety-' + Date.now());
-    await safeExec('cp', ['-r', rootDir, safetyBackup]);
+  // Version and git info methods are now handled by UpdateManager
 
-    // Remove current installation
-    await safeExec('rm', ['-rf', rootDir]);
+  // Status helper methods are now handled by UpdateManager
 
-    // Restore from backup
-    await safeExec('cp', ['-r', latestBackup, rootDir]);
-
-    return safetyBackup;
-  }
-
-  /**
-   * Attempts to rebuild after rollback (non-critical)
-   */
-  private async attemptPostRollbackBuild(rootDir: string): Promise<boolean> {
-    try {
-      await safeExec('npm', ['run', 'build'], { cwd: rootDir });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Formats the success message for completed rollbacks
-   */
-  private formatRollbackSuccessMessage(latestBackup: string, safetyBackup: string, buildSuccess: boolean): string {
-    const parts = [
-      this.getPersonaIndicator() + '🔄 **DollhouseMCP Rollback Complete**\n\n',
-      '**Progress Summary:**\n',
-      '✅ [1/5] Dependencies verified (git, npm)\n',
-      '✅ [2/5] Safety backup created\n',
-      '✅ [3/5] Current version removed\n',
-      '✅ [4/5] Previous version restored from: ' + path.basename(latestBackup) + '\n',
-      buildSuccess ? '✅ [5/5] TypeScript rebuild completed\n' : '⚠️ [5/5] Rebuild skipped (may not be needed)\n',
-      '\n🎉 **Rollback Successful!**\n\n',
-      '**Status:**\n',
-      '• Previous version restored successfully\n',
-      '• Server will restart automatically\n',
-      '• Use `get_server_status` to verify rollback\n\n',
-      '**Backup Information:**\n',
-      '• Safety backup: ' + path.basename(safetyBackup) + '\n',
-      '• Original backup: ' + path.basename(latestBackup) + '\n',
-      '• Remove manually when satisfied with rollback result'
-    ];
-    return parts.join('');
-  }
-
-  private async rollbackUpdate(confirm: boolean) {
-    if (!confirm) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '⚠️ **Rollback Confirmation Required**\n\n' +
-            'To proceed with rollback, you must confirm:\n' +
-            '`rollback_update true`\n\n' +
-            '**What will happen:**\n' +
-            '• Find most recent backup\n' +
-            '• Restore previous version\n' +
-            '• Rebuild if necessary\n' +
-            '• Restart server\n\n' +
-            '⚠️ **Warning:** This will undo recent updates and changes.'
-        }]
-      };
-    }
-
-    try {
-      // Check that required dependencies are available
-      const depCheck = await this.verifyDependencies();
-      if (!depCheck.valid) {
-        return { content: [{ type: "text", text: depCheck.message! }] };
-      }
-
-      const rootDir = path.join(__dirname, "..");
-      const parentDir = path.dirname(rootDir);
-
-      // Find available backups
-      const backupResult = await this.findAvailableBackups(parentDir);
-      if (!backupResult.success) {
-        return {
-          content: [{ type: "text", text: backupResult.message! }]
-        };
-      }
-
-      // Use the most recent backup
-      const latestBackup = backupResult.backups![0];
-
-      // Perform the rollback with safety backup
-      const safetyBackup = await this.performSafeRollback(rootDir, parentDir, latestBackup);
-
-      // Attempt to rebuild (non-critical)
-      const buildSuccess = await this.attemptPostRollbackBuild(rootDir);
-
-      // Format and return success message
-      const successMessage = this.formatRollbackSuccessMessage(latestBackup, safetyBackup, buildSuccess);
-      return {
-        content: [{ type: "text", text: successMessage }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Rollback Failed**\n\n' +
-            'Error during rollback: ' + error + '\n\n' +
-            '**Emergency Recovery:**\n' +
-            '1. Check for safety backup directories\n' +
-            '2. Manually restore from backup\n' +
-            '3. Or reinstall DollhouseMCP from GitHub\n' +
-            '4. Report this issue if it persists'
-        }]
-      };
-    }
-  }
-
-  /**
-   * Reads version information from package.json
-   */
-  private async getVersionInfo(rootDir: string): Promise<{ version: string; name: string }> {
-    const packageJsonPath = path.join(rootDir, "package.json");
-    const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
-    const packageData = JSON.parse(packageContent);
-    return { version: packageData.version, name: packageData.name };
-  }
-
-  /**
-   * Gathers git repository information
-   */
-  private async getGitInfo(rootDir: string): Promise<{ gitInfo: string; lastCommit: string }> {
-    try {
-      const { stdout: branchOutput } = await safeExec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootDir });
-      const { stdout: commitOutput } = await safeExec('git', ['rev-parse', '--short', 'HEAD'], { cwd: rootDir });
-      const { stdout: dateOutput } = await safeExec('git', ['log', '-1', '--format=%cd', '--date=short'], { cwd: rootDir });
-      
-      const gitInfo = branchOutput.trim() + ' (' + commitOutput.trim() + ')';
-      const lastCommit = dateOutput.trim();
-      
-      return { gitInfo, lastCommit };
-    } catch {
-      return { gitInfo: "Not available", lastCommit: "Unknown" };
-    }
-  }
-
-  /**
-   * Checks for backup directories
-   */
-  private async getBackupInfo(rootDir: string): Promise<string> {
-    try {
-      const parentDir = path.dirname(rootDir);
-      const { stdout: lsOutput } = await safeExec('ls', ['-1'], { cwd: parentDir });
-      const backupCount = lsOutput.split('\n').filter(dir => dir.startsWith('.backup-')).length;
-      
-      if (backupCount > 0) {
-        return backupCount + ' backup(s) available';
-      }
-      return "None found";
-    } catch {
-      return "Check failed";
-    }
-  }
-
-  /**
-   * Collects system information
-   */
-  private getSystemInfo(): { nodeVersion: string; platform: string; arch: string; uptimeString: string } {
-    const nodeVersion = process.version;
-    const platform = process.platform;
-    const arch = process.arch;
-    const uptime = process.uptime();
-    const uptimeString = Math.floor(uptime / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm ' + Math.floor(uptime % 60) + 's';
+  async getServerStatus() {
+    // Add persona information to the status
+    const personaInfo = `
+**🎭 Persona Information:**
+• **Total Personas:** ${this.personas.size}
+• **Active Persona:** ${this.activePersona || 'None'}
+• **User Identity:** ${this.currentUser || 'Anonymous'}
+• **Personas Directory:** ${this.personasDir}`;
     
-    return { nodeVersion, platform, arch, uptimeString };
+    const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
+    // Insert persona info into the status text
+    const updatedText = text.replace('**Available Commands:**', personaInfo + '\n\n**Available Commands:**');
+    
+    return {
+      content: [{ type: "text", text: updatedText }]
+    };
   }
 
-  /**
-   * Formats the complete server status message
-   */
-  private formatServerStatusMessage(
-    versionInfo: { version: string; name: string },
-    gitInfo: { gitInfo: string; lastCommit: string },
-    backupInfo: string,
-    systemInfo: { nodeVersion: string; platform: string; arch: string; uptimeString: string },
-    rootDir: string
-  ): string {
-    const parts = [
-      this.getPersonaIndicator() + '📊 **DollhouseMCP Server Status**\n\n',
-      '**📦 Version Information:**\n',
-      '• **Version:** ' + versionInfo.version + '\n',
-      '• **Git Branch:** ' + gitInfo.gitInfo + '\n',
-      '• **Last Update:** ' + gitInfo.lastCommit + '\n\n',
-      '**⚙️ System Information:**\n',
-      '• **Node.js:** ' + systemInfo.nodeVersion + '\n',
-      '• **Platform:** ' + systemInfo.platform + ' (' + systemInfo.arch + ')\n',
-      '• **Uptime:** ' + systemInfo.uptimeString + '\n',
-      '• **Installation:** ' + rootDir + '\n\n',
-      '**🎭 Persona Information:**\n',
-      '• **Total Personas:** ' + this.personas.size + '\n',
-      '• **Active Persona:** ' + (this.activePersona || 'None') + '\n',
-      '• **User Identity:** ' + (this.currentUser || 'Anonymous') + '\n',
-      '• **Personas Directory:** ' + this.personasDir + '\n\n',
-      '**🔄 Update Information:**\n',
-      '• **Backups:** ' + backupInfo + '\n',
-      '• **Check Updates:** `check_for_updates`\n',
-      '• **Update Server:** `update_server true`\n',
-      '• **Rollback:** `rollback_update true`\n\n',
-      '**🛠️ Tools Available:** 21 MCP tools registered'
-    ];
-    return parts.join('');
-  }
+  // Version and dependency methods are now handled by UpdateManager
 
-  private async getServerStatus() {
-    try {
-      const rootDir = path.join(__dirname, "..");
-
-      // Gather all status information using helper functions
-      const versionInfo = await this.getVersionInfo(rootDir);
-      const gitInfo = await this.getGitInfo(rootDir);
-      const backupInfo = await this.getBackupInfo(rootDir);
-      const systemInfo = this.getSystemInfo();
-
-      // Format and return the complete status message
-      const statusMessage = this.formatServerStatusMessage(versionInfo, gitInfo, backupInfo, systemInfo, rootDir);
-      return {
-        content: [{ type: "text", text: statusMessage }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '❌ **Status Check Failed**\n\n' +
-            'Error gathering system information: ' + error + '\n\n' +
-            'Basic information:\n' +
-            '• Server is running (you received this message)\n' +
-            '• Personas loaded: ' + this.personas.size + '\n' +
-            '• Active persona: ' + (this.activePersona || 'None')
-        }]
-      };
-    }
-  }
-
-  /**
-   * Extracts version number from dependency version output
-   */
-  private parseVersionFromOutput(output: string, tool: string): string | null {
-    // Git version output: "git version 2.39.2"
-    // npm version output: "8.19.2" or JSON with version info
-    
-    if (tool === 'git') {
-      const match = output.match(/git version (\d+\.\d+\.\d+)/);
-      return match ? match[1] : null;
-    } else if (tool === 'npm') {
-      // npm might return just the version number or JSON
-      const cleanOutput = output.trim();
-      if (cleanOutput.match(/^\d+\.\d+\.\d+/)) {
-        return cleanOutput.split('\n')[0]; // First line if multiple lines
-      }
-      // Try to parse as JSON if it looks like JSON
-      try {
-        const parsed = JSON.parse(cleanOutput);
-        return parsed.npm || parsed.version || null;
-      } catch {
-        // If not JSON, try to extract version pattern
-        const match = cleanOutput.match(/(\d+\.\d+\.\d+)/);
-        return match ? match[1] : null;
-      }
-    }
-    
-    return null;
-  }
-
-  /**
-   * Validates that a dependency version meets requirements
-   */
-  private validateDependencyVersion(
-    actualVersion: string, 
-    requirements: { minimum: string; maximum: string; recommended: string },
-    toolName: string
-  ): { valid: boolean; warning?: string; error?: string } {
-    const minComparison = this.compareVersions(actualVersion, requirements.minimum);
-    const maxComparison = this.compareVersions(actualVersion, requirements.maximum);
-    
-    // Check minimum version requirement
-    if (minComparison < 0) {
-      return {
-        valid: false,
-        error: `${toolName} version ${actualVersion} is below minimum required version ${requirements.minimum}`
-      };
-    }
-    
-    // Check maximum version (warning for newer versions)
-    if (maxComparison > 0) {
-      return {
-        valid: true,
-        warning: `${toolName} version ${actualVersion} is newer than tested version ${requirements.maximum}. May cause compatibility issues.`
-      };
-    }
-    
-    // Check if it's the recommended version
-    const recComparison = this.compareVersions(actualVersion, requirements.recommended);
-    if (recComparison !== 0) {
-      return {
-        valid: true,
-        warning: `${toolName} version ${actualVersion} works but ${requirements.recommended} is recommended for optimal stability.`
-      };
-    }
-    
-    return { valid: true }; // Perfect version
-  }
-
-  /**
-   * Verifies that required dependencies (git, npm) are available with proper versions
-   */
-  private async verifyDependencies(): Promise<{ valid: boolean; message?: string }> {
-    const warnings: string[] = [];
-    
-    // Check Git availability and version
-    try {
-      const { stdout: gitOutput } = await safeExec('git', ['--version']);
-      const gitVersion = this.parseVersionFromOutput(gitOutput, 'git');
-      
-      if (!gitVersion) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **Git Version Detection Failed**\n\n' +
-            'Could not parse Git version from output: ' + gitOutput + '\n' +
-            'Please ensure Git is properly installed and accessible.'
-        };
-      }
-      
-      const gitValidation = this.validateDependencyVersion(
-        gitVersion, 
-        DEPENDENCY_REQUIREMENTS.git, 
-        'Git'
-      );
-      
-      if (!gitValidation.valid) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **Git Version Incompatible**\n\n' +
-            gitValidation.error + '\n\n' +
-            `**Current:** Git ${gitVersion}\n` +
-            `**Required:** ${DEPENDENCY_REQUIREMENTS.git.minimum} - ${DEPENDENCY_REQUIREMENTS.git.maximum}\n` +
-            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.git.recommended}\n\n` +
-            '**Update Git:**\n' +
-            '• macOS: `brew upgrade git`\n' +
-            '• Ubuntu/Debian: `sudo apt update && sudo apt upgrade git`\n' +
-            '• Windows: Download latest from git-scm.com'
-        };
-      }
-      
-      if (gitValidation.warning) {
-        warnings.push('⚠️ **Git:** ' + gitValidation.warning);
-      }
-      
-    } catch (error) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **Git Not Available**\n\n' +
-          'Git is not installed or not accessible.\n' +
-          'Git is required for auto-update functionality.\n\n' +
-          '**Installation:**\n' +
-          '• macOS: `brew install git` or download from git-scm.com\n' +
-          '• Ubuntu/Debian: `sudo apt install git`\n' +
-          '• Windows: Download from git-scm.com\n\n' +
-          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.git.minimum}+`
-      };
-    }
-
-    // Check npm availability and version
-    try {
-      const { stdout: npmOutput } = await safeExec('npm', ['--version']);
-      const npmVersion = this.parseVersionFromOutput(npmOutput, 'npm');
-      
-      if (!npmVersion) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **npm Version Detection Failed**\n\n' +
-            'Could not parse npm version from output: ' + npmOutput + '\n' +
-            'Please ensure npm is properly installed and accessible.'
-        };
-      }
-      
-      const npmValidation = this.validateDependencyVersion(
-        npmVersion, 
-        DEPENDENCY_REQUIREMENTS.npm, 
-        'npm'
-      );
-      
-      if (!npmValidation.valid) {
-        return {
-          valid: false,
-          message: this.getPersonaIndicator() + 
-            '❌ **npm Version Incompatible**\n\n' +
-            npmValidation.error + '\n\n' +
-            `**Current:** npm ${npmVersion}\n` +
-            `**Required:** ${DEPENDENCY_REQUIREMENTS.npm.minimum} - ${DEPENDENCY_REQUIREMENTS.npm.maximum}\n` +
-            `**Recommended:** ${DEPENDENCY_REQUIREMENTS.npm.recommended}\n\n` +
-            '**Update npm:**\n' +
-            '• `npm install -g npm@latest` (or specific version)\n' +
-            '• Or update Node.js from nodejs.org\n' +
-            '• Use nvm/nvs for version management'
-        };
-      }
-      
-      if (npmValidation.warning) {
-        warnings.push('⚠️ **npm:** ' + npmValidation.warning);
-      }
-      
-    } catch (error) {
-      return {
-        valid: false,
-        message: this.getPersonaIndicator() + 
-          '❌ **npm Not Available**\n\n' +
-          'npm is not installed or not accessible.\n' +
-          'npm is required for dependency management and building.\n\n' +
-          '**Installation:**\n' +
-          '• Install Node.js from nodejs.org (includes npm)\n' +
-          '• Or use a package manager like brew, apt, or chocolatey\n\n' +
-          `**Required Version:** ${DEPENDENCY_REQUIREMENTS.npm.minimum}+`
-      };
-    }
-
-    // If there are warnings, include them in success message
-    if (warnings.length > 0) {
-      return {
-        valid: true,
-        message: this.getPersonaIndicator() + 
-          '✅ **Dependencies Available**\n\n' +
-          'All required dependencies are available, but there are some recommendations:\n\n' +
-          warnings.join('\n') + '\n\n' +
-          'These are non-blocking warnings. Update at your convenience for optimal stability.'
-      };
-    }
-
-    return { valid: true };
-  }
 
   /**
    * Configure indicator settings
    */
-  private async configureIndicator(config: Partial<IndicatorConfig>) {
+  async configureIndicator(config: Partial<IndicatorConfig>) {
     try {
       // Update the configuration
       if (config.enabled !== undefined) {
@@ -2880,7 +1242,7 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
   /**
    * Get current indicator configuration
    */
-  private async getIndicatorConfig() {
+  async getIndicatorConfig() {
     // Show current configuration and example
     let exampleIndicator = "";
     if (this.activePersona) {
@@ -2939,41 +1301,6 @@ Placeholders for custom format:
     };
   }
 
-  /**
-   * Enhanced semantic version comparison supporting pre-release versions
-   * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
-   */
-  private compareVersions(version1: string, version2: string): number {
-    // Normalize versions by removing 'v' prefix
-    const v1 = version1.replace(/^v/, '');
-    const v2 = version2.replace(/^v/, '');
-    
-    // Split version and pre-release parts
-    const [v1main, v1pre] = v1.split('-');
-    const [v2main, v2pre] = v2.split('-');
-    
-    // Compare main version parts (x.y.z)
-    const v1parts = v1main.split('.').map(part => parseInt(part) || 0);
-    const v2parts = v2main.split('.').map(part => parseInt(part) || 0);
-    
-    const maxLength = Math.max(v1parts.length, v2parts.length);
-    for (let i = 0; i < maxLength; i++) {
-      const v1part = v1parts[i] || 0;
-      const v2part = v2parts[i] || 0;
-      
-      if (v1part < v2part) return -1;
-      if (v1part > v2part) return 1;
-    }
-    
-    // If main versions are equal, compare pre-release versions
-    // Version without pre-release is greater than version with pre-release
-    if (!v1pre && v2pre) return 1;   // 1.0.0 > 1.0.0-beta
-    if (v1pre && !v2pre) return -1;  // 1.0.0-beta < 1.0.0
-    if (!v1pre && !v2pre) return 0;  // 1.0.0 == 1.0.0
-    
-    // Both have pre-release, compare lexicographically
-    return v1pre.localeCompare(v2pre);
-  }
 
   async run() {
     const transport = new StdioServerTransport();
@@ -2982,8 +1309,7 @@ Placeholders for custom format:
   }
 }
 
-// Export for testing
-export { DollhouseMCPServer };
+// Export is already at class declaration
 
 const server = new DollhouseMCPServer();
 server.run().catch(console.error);
