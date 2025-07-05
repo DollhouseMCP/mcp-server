@@ -21,12 +21,27 @@ describe('PersonaManager', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     
-    // Reset mocked dependencies
-    mockLoader = new PersonaLoader(mockPersonasDir) as jest.Mocked<PersonaLoader>;
-    mockValidator = new PersonaValidator() as jest.Mocked<PersonaValidator>;
+    // Create mocks for the dependencies
+    mockLoader = {
+      loadAll: jest.fn(),
+      savePersona: jest.fn(),
+      deletePersona: jest.fn()
+    } as unknown as jest.Mocked<PersonaLoader>;
+    
+    mockValidator = {
+      validatePersona: jest.fn(),
+      validateMetadata: jest.fn(),
+      isValidPersonaName: jest.fn(),
+      suggestImprovements: jest.fn()
+    } as unknown as jest.Mocked<PersonaValidator>;
+    
+    // Mock the PersonaLoader and PersonaValidator constructors
+    jest.mock('../../src/persona/PersonaLoader');
+    jest.mock('../../src/persona/PersonaValidator');
     
     personaManager = new PersonaManager(mockPersonasDir, DEFAULT_INDICATOR_CONFIG);
-    // Inject mocked dependencies
+    
+    // Replace the internal instances with our mocks
     (personaManager as any).loader = mockLoader;
     (personaManager as any).validator = mockValidator;
   });
@@ -145,8 +160,8 @@ describe('PersonaManager', () => {
         triggers: ['creative', 'writing']
       };
 
-      // Mock validator and loader
-      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({ 
+      // Mock validator to return valid
+      mockValidator.validatePersona.mockReturnValue({ 
         valid: true, 
         issues: [],
         warnings: [],
@@ -172,7 +187,7 @@ describe('PersonaManager', () => {
     });
 
     it('should reject invalid persona data', async () => {
-      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({
+      mockValidator.validatePersona.mockReturnValue({
         valid: false,
         issues: ['Name is required', 'Invalid category'],
         warnings: [],
@@ -213,7 +228,7 @@ describe('PersonaManager', () => {
       mockLoader.savePersona.mockResolvedValue();
       
       // Mock validator to return valid
-      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({ 
+      mockValidator.validatePersona.mockReturnValue({ 
         valid: true, 
         issues: [],
         warnings: [],
@@ -234,7 +249,7 @@ describe('PersonaManager', () => {
       mockLoader.savePersona.mockResolvedValue();
       
       // Mock validator to return valid
-      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({ 
+      mockValidator.validatePersona.mockReturnValue({ 
         valid: true, 
         issues: [],
         warnings: [],
@@ -356,6 +371,66 @@ describe('PersonaManager', () => {
       
       // Verify loader was called
       expect(mockLoader.loadAll).toHaveBeenCalled();
+    });
+
+    it('should handle concurrent persona operations', async () => {
+      // Set up initial personas
+      const mockPersonas = new Map([
+        ['test1.md', {
+          metadata: { name: 'Test 1', description: 'Test', unique_id: 'test1' },
+          content: 'Content 1',
+          filename: 'test1.md',
+          unique_id: 'test1'
+        }],
+        ['test2.md', {
+          metadata: { name: 'Test 2', description: 'Test', unique_id: 'test2' },
+          content: 'Content 2',
+          filename: 'test2.md',
+          unique_id: 'test2'
+        }]
+      ]);
+      
+      mockLoader.loadAll.mockResolvedValue(mockPersonas);
+      await personaManager.initialize();
+
+      // Simulate concurrent activations
+      const results = await Promise.all([
+        personaManager.activatePersona('Test 1'),
+        personaManager.activatePersona('Test 2'),
+        personaManager.activatePersona('Test 1')
+      ]);
+
+      // All should succeed
+      expect(results.every(r => r.success)).toBe(true);
+      
+      // Last activation should win
+      const activePersona = personaManager.getActivePersona();
+      expect(activePersona?.metadata.name).toBe('Test 1');
+    });
+
+    it('should handle file system race conditions', async () => {
+      // Mock validator to succeed
+      mockValidator.validatePersona.mockReturnValue({
+        valid: true,
+        issues: [],
+        warnings: [],
+        report: 'Valid'
+      });
+
+      // Simulate race condition where save fails due to file already existing
+      mockLoader.savePersona
+        .mockRejectedValueOnce(new Error('EEXIST: file already exists'))
+        .mockResolvedValueOnce(undefined);
+
+      const result = await personaManager.createPersona(
+        'Race Test',
+        'Description',
+        'creative',
+        'Instructions'
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Failed to create persona');
     });
   });
 });
