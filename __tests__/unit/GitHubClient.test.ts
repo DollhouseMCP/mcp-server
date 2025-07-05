@@ -6,7 +6,7 @@ import { SECURITY_LIMITS } from '../../src/security/constants';
 
 // Mock fetch globally with proper typing
 const mockFetch = jest.fn();
-global.fetch = mockFetch;
+global.fetch = mockFetch as any;
 
 describe('GitHubClient', () => {
   let githubClient: GitHubClient;
@@ -41,7 +41,7 @@ describe('GitHubClient', () => {
         json: jest.fn().mockResolvedValue(mockData)
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       const result = await githubClient.fetchFromGitHub(testUrl);
@@ -76,7 +76,7 @@ describe('GitHubClient', () => {
         statusText: 'Forbidden'
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub(testUrl))
@@ -128,7 +128,7 @@ describe('GitHubClient', () => {
         json: jest.fn().mockResolvedValue({})
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       await githubClient.fetchFromGitHub(testUrl);
@@ -169,7 +169,7 @@ describe('GitHubClient', () => {
         ok: true,
         json: jest.fn().mockResolvedValue({})
       };
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       // Should not throw rate limit error
@@ -185,7 +185,7 @@ describe('GitHubClient', () => {
         ok: true,
         json: jest.fn().mockResolvedValue({})
       };
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       // Make multiple requests
@@ -204,7 +204,7 @@ describe('GitHubClient', () => {
         json: jest.fn().mockRejectedValue(new Error('Invalid JSON'))
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
@@ -218,7 +218,7 @@ describe('GitHubClient', () => {
         statusText: 'Not Found'
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
@@ -233,7 +233,7 @@ describe('GitHubClient', () => {
         })
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
       mockApiCache.get.mockReturnValue(null);
 
       try {

@@ -145,10 +145,11 @@ describe('PersonaManager', () => {
         triggers: ['creative', 'writing']
       };
 
-      mockValidator.validatePersona = jest.fn().mockReturnValue({ 
-        isValid: true, 
-        errors: [],
-        warnings: []
+      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({ 
+        valid: true, 
+        issues: [],
+        warnings: [],
+        report: 'Validation successful'
       });
 
       (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockResolvedValue(undefined);
@@ -157,8 +158,7 @@ describe('PersonaManager', () => {
         newPersona.name,
         newPersona.description,
         newPersona.category,
-        newPersona.instructions,
-        newPersona.triggers
+        newPersona.instructions
       );
 
       expect(mockValidator.validatePersona).toHaveBeenCalled();
@@ -169,10 +169,11 @@ describe('PersonaManager', () => {
     });
 
     it('should reject invalid persona data', async () => {
-      mockValidator.validatePersona = jest.fn().mockReturnValue({
-        isValid: false,
-        errors: ['Name is required', 'Invalid category'],
-        warnings: []
+      (mockValidator.validatePersona as any) = jest.fn().mockReturnValue({
+        valid: false,
+        issues: ['Name is required', 'Invalid category'],
+        warnings: [],
+        report: 'Validation failed'
       });
 
       await expect(personaManager.createPersona(
@@ -325,7 +326,7 @@ describe('PersonaManager', () => {
 
     it('should handle corrupted persona files', async () => {
       // Mock a corrupted file read
-      (fs.readdir as jest.MockedFunction<typeof fs.readdir>).mockResolvedValue(['corrupted.md']);
+      (fs.readdir as jest.MockedFunction<typeof fs.readdir>).mockResolvedValue(['corrupted.md'] as any);
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue('Invalid YAML content {{{');
 
       // Initialize should handle the error gracefully
