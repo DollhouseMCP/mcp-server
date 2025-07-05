@@ -349,13 +349,41 @@ describe('InputValidator - Security Edge Cases', () => {
         'ｔest.md' // Full-width character
       ];
 
-      // These should be rejected or normalized
+      // These should be rejected due to non-ASCII characters
       homographAttacks.forEach(attack => {
-        // Implementation should either reject or normalize these
-        const result = () => validateFilename(attack);
-        // Either throws or doesn't match expected pattern
-        expect(result).toBeDefined();
+        expect(() => validateFilename(attack))
+          .toThrow('Invalid filename format');
       });
+    });
+
+    it('should resist timing attacks on validation', () => {
+      const validInput = 'test-file.md';
+      const invalidInput = '../../../etc/passwd';
+      
+      // Measure validation times
+      const timings = {
+        valid: [] as number[],
+        invalid: [] as number[]
+      };
+      
+      // Run multiple iterations
+      for (let i = 0; i < 100; i++) {
+        const validStart = process.hrtime.bigint();
+        try { validateFilename(validInput); } catch {}
+        timings.valid.push(Number(process.hrtime.bigint() - validStart));
+        
+        const invalidStart = process.hrtime.bigint();
+        try { validateFilename(invalidInput); } catch {}
+        timings.invalid.push(Number(process.hrtime.bigint() - invalidStart));
+      }
+      
+      // Calculate averages
+      const avgValid = timings.valid.reduce((a, b) => a + b) / timings.valid.length;
+      const avgInvalid = timings.invalid.reduce((a, b) => a + b) / timings.invalid.length;
+      
+      // Timing difference should be minimal (< 50% variance)
+      const variance = Math.abs(avgValid - avgInvalid) / Math.max(avgValid, avgInvalid);
+      expect(variance).toBeLessThan(0.5);
     });
   });
 });

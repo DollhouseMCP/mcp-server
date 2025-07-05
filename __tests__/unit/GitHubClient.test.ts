@@ -15,6 +15,7 @@ describe('GitHubClient', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFetch.mockClear();
     
     // Create mock APICache
     mockApiCache = {
@@ -222,6 +223,50 @@ describe('GitHubClient', () => {
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
         .rejects.toThrow('GitHub API error: 404 Not Found');
+    });
+
+    it('should handle partial network failures', async () => {
+      const mockResponse = {
+        ok: true,
+        json: jest.fn().mockImplementation(() => {
+          throw new Error('Connection reset');
+        })
+      };
+
+      mockFetch.mockResolvedValue(mockResponse);
+      mockApiCache.get.mockReturnValue(null);
+
+      try {
+        await githubClient.fetchFromGitHub('https://api.github.com/test');
+        fail('Should have thrown an error');
+      } catch (error) {
+        expect(error).toBeInstanceOf(McpError);
+        expect((error as McpError).message).toContain('Connection reset');
+      }
+    });
+
+    it('should handle cache eviction scenarios', async () => {
+      const testUrl = 'https://api.github.com/test-cache-eviction';
+      const mockData = { test: 'data' };
+      
+      // First call - cache miss
+      mockApiCache.get.mockReturnValue(null);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockData)
+      });
+
+      const result1 = await githubClient.fetchFromGitHub(testUrl);
+      expect(mockApiCache.set).toHaveBeenCalledWith(testUrl, mockData);
+      expect(result1).toEqual(mockData);
+
+      // Simulate cache eviction
+      mockApiCache.get.mockReturnValue(null);
+      
+      // Second call should fetch again
+      const result2 = await githubClient.fetchFromGitHub(testUrl);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result2).toEqual(mockData);
     });
   });
 });
