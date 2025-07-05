@@ -8,7 +8,7 @@ import { Persona, PersonaMetadata } from '../types/persona.js';
 import { PersonaLoader } from './PersonaLoader.js';
 import { PersonaValidator } from './PersonaValidator.js';
 import { validateFilename, sanitizeInput } from '../security/InputValidator.js';
-import { generateUniqueId, slugify } from '../utils/filesystem.js';
+import { generateAnonymousId, generateUniqueId, slugify } from '../utils/filesystem.js';
 import { IndicatorConfig, formatIndicator } from '../config/indicator-config.js';
 
 export class PersonaManager {
@@ -366,8 +366,8 @@ export class PersonaManager {
   /**
    * Helper to get current user for attribution
    */
-  private getCurrentUserForAttribution(): string | null {
-    return this.currentUser || process.env.DOLLHOUSE_USER || null;
+  private getCurrentUserForAttribution(): string {
+    return this.currentUser || process.env.DOLLHOUSE_USER || generateAnonymousId();
   }
   
   /**

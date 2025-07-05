@@ -83,10 +83,19 @@ export class GitHubClient {
       
       return data;
     } catch (error) {
-      throw new McpError(
+      // Preserve original error information
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const mcpError = new McpError(
         ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${error}`
+        `Failed to fetch from GitHub: ${errorMessage}`
       );
+      
+      // Attach original error as cause if supported
+      if (error instanceof Error && 'cause' in mcpError) {
+        (mcpError as any).cause = error;
+      }
+      
+      throw mcpError;
     }
   }
 }

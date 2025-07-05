@@ -10,7 +10,7 @@ import { getMarketplaceTools } from './tools/MarketplaceTools.js';
 import { getUserTools } from './tools/UserTools.js';
 import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
-import { DollhouseMCPServer } from '../index.js';
+import { IToolHandler } from './types.js';
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
@@ -22,7 +22,7 @@ export class ServerSetup {
   /**
    * Initialize the server with all tools and handlers
    */
-  setupServer(server: Server, instance: DollhouseMCPServer): void {
+  setupServer(server: Server, instance: IToolHandler): void {
     // Register all tools
     this.registerTools(instance);
     
@@ -34,7 +34,7 @@ export class ServerSetup {
   /**
    * Register all tool categories
    */
-  private registerTools(instance: DollhouseMCPServer): void {
+  private registerTools(instance: IToolHandler): void {
     // Register persona tools
     this.toolRegistry.registerMany(getPersonaTools(instance));
     

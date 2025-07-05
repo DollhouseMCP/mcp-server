@@ -3,9 +3,9 @@
  */
 
 import { ToolDefinition } from './ToolRegistry.js';
-import { DollhouseMCPServer } from '../../index.js';
+import { IToolHandler } from '../types.js';
 
-export function getMarketplaceTools(server: DollhouseMCPServer): Array<{ tool: ToolDefinition; handler: any }> {
+export function getMarketplaceTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
     {
       tool: {

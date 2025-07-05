@@ -19,13 +19,13 @@ import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesyst
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
 import { UpdateManager } from './update/index.js';
-import { ServerSetup } from './server/index.js';
+import { ServerSetup, IToolHandler } from './server/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 
-export class DollhouseMCPServer {
+export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
   private personasDir: string;
   private personas: Map<string, Persona> = new Map();
