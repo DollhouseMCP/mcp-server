@@ -26,6 +26,7 @@ import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesyst
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
 import { UpdateManager } from './update/index.js';
+import { ServerSetup } from './server/index.js';
 
 const exec = promisify(child_process.exec);
 
@@ -138,7 +139,7 @@ function validateCategory(category: string): string {
 
 // generateAnonymousId, generateUniqueId, and slugify are now imported from ./utils/filesystem.js
 
-class DollhouseMCPServer {
+export class DollhouseMCPServer {
   private server: Server;
   private personasDir: string;
   private personas: Map<string, Persona> = new Map();
@@ -155,6 +156,7 @@ class DollhouseMCPServer {
   private personaInstaller: PersonaInstaller;
   private personaSubmitter: PersonaSubmitter;
   private updateManager: UpdateManager;
+  private serverSetup: ServerSetup;
 
   constructor() {
     this.server = new Server(
@@ -192,418 +194,15 @@ class DollhouseMCPServer {
     // Initialize update manager
     this.updateManager = new UpdateManager();
     
-    this.setupHandlers();
+    // Initialize server setup
+    this.serverSetup = new ServerSetup();
+    this.serverSetup.setupServer(this.server, this);
+    
     this.loadPersonas();
   }
 
-  private setupHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: [
-          {
-            name: "list_personas",
-            description: "List all available personas",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "activate_persona",
-            description: "Activate a specific persona by name or filename",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to activate",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "get_active_persona",
-            description: "Get information about the currently active persona",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "deactivate_persona",
-            description: "Deactivate the current persona",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "get_persona_details",
-            description: "Get detailed information about a specific persona",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to get details for",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "reload_personas",
-            description: "Reload all personas from the personas directory",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "browse_marketplace",
-            description: "Browse personas from the DollhouseMCP marketplace by category",
-            inputSchema: {
-              type: "object",
-              properties: {
-                category: {
-                  type: "string",
-                  description: "Category to browse (creative, professional, educational, gaming, personal)",
-                },
-              },
-            },
-          },
-          {
-            name: "search_marketplace",
-            description: "Search for personas in the marketplace by keywords",
-            inputSchema: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description: "Search query for finding personas",
-                },
-              },
-              required: ["query"],
-            },
-          },
-          {
-            name: "get_marketplace_persona",
-            description: "Get detailed information about a persona from the marketplace",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "The marketplace path to the persona (e.g., 'creative/storyteller_20250701_alice.md')",
-                },
-              },
-              required: ["path"],
-            },
-          },
-          {
-            name: "install_persona",
-            description: "Install a persona from the marketplace to your local collection",
-            inputSchema: {
-              type: "object",
-              properties: {
-                path: {
-                  type: "string",
-                  description: "The marketplace path to the persona to install",
-                },
-              },
-              required: ["path"],
-            },
-          },
-          {
-            name: "submit_persona",
-            description: "Submit a persona to the marketplace for community review",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to submit",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "set_user_identity",
-            description: "Set your user identity for persona creation and attribution",
-            inputSchema: {
-              type: "object",
-              properties: {
-                username: {
-                  type: "string",
-                  description: "Your username for persona attribution",
-                },
-                email: {
-                  type: "string",
-                  description: "Your email (optional, for contact)",
-                },
-              },
-              required: ["username"],
-            },
-          },
-          {
-            name: "get_user_identity",
-            description: "Get your current user identity",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "clear_user_identity",
-            description: "Clear your user identity (return to anonymous mode)",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "create_persona",
-            description: "Create a new persona through guided chat interface",
-            inputSchema: {
-              type: "object",
-              properties: {
-                name: {
-                  type: "string",
-                  description: "The name for the new persona",
-                },
-                description: {
-                  type: "string",
-                  description: "Brief description of what this persona does",
-                },
-                category: {
-                  type: "string",
-                  description: "Category (creative, professional, educational, gaming, personal)",
-                },
-                instructions: {
-                  type: "string",
-                  description: "The persona's behavioral instructions and guidelines",
-                },
-                triggers: {
-                  type: "string",
-                  description: "Comma-separated list of trigger keywords (optional)",
-                },
-              },
-              required: ["name", "description", "category", "instructions"],
-            },
-          },
-          {
-            name: "edit_persona",
-            description: "Edit an existing persona's metadata or content",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to edit",
-                },
-                field: {
-                  type: "string",
-                  description: "Field to edit: name, description, category, instructions, triggers, version",
-                },
-                value: {
-                  type: "string",
-                  description: "New value for the field",
-                },
-              },
-              required: ["persona", "field", "value"],
-            },
-          },
-          {
-            name: "validate_persona",
-            description: "Validate a persona's format and metadata",
-            inputSchema: {
-              type: "object",
-              properties: {
-                persona: {
-                  type: "string",
-                  description: "The persona name or filename to validate",
-                },
-              },
-              required: ["persona"],
-            },
-          },
-          {
-            name: "check_for_updates",
-            description: "Check GitHub releases for available DollhouseMCP updates",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "update_server",
-            description: "Update DollhouseMCP server to the latest version",
-            inputSchema: {
-              type: "object",
-              properties: {
-                confirm: {
-                  type: "boolean",
-                  description: "Confirm you want to proceed with the update",
-                },
-              },
-              required: ["confirm"],
-            },
-          },
-          {
-            name: "rollback_update",
-            description: "Rollback to the previous version of DollhouseMCP",
-            inputSchema: {
-              type: "object",
-              properties: {
-                confirm: {
-                  type: "boolean",
-                  description: "Confirm you want to rollback to the previous version",
-                },
-              },
-              required: ["confirm"],
-            },
-          },
-          {
-            name: "get_server_status",
-            description: "Get current DollhouseMCP server version and status information",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-          {
-            name: "configure_indicator",
-            description: "Configure how persona indicators are displayed in responses",
-            inputSchema: {
-              type: "object",
-              properties: {
-                enabled: {
-                  type: "boolean",
-                  description: "Enable or disable persona indicators",
-                },
-                style: {
-                  type: "string",
-                  enum: ["full", "minimal", "compact", "custom"],
-                  description: "Indicator style: full, minimal, compact, or custom",
-                },
-                customFormat: {
-                  type: "string",
-                  description: "Custom format template (use with style='custom'). Placeholders: {emoji}, {name}, {version}, {author}, {category}",
-                },
-                showVersion: {
-                  type: "boolean",
-                  description: "Show persona version in indicator",
-                },
-                showAuthor: {
-                  type: "boolean",
-                  description: "Show persona author in indicator",
-                },
-                showCategory: {
-                  type: "boolean",
-                  description: "Show persona category in indicator",
-                },
-                emoji: {
-                  type: "string",
-                  description: "Emoji to use in indicator (default: 🎭)",
-                },
-                bracketStyle: {
-                  type: "string",
-                  enum: ["square", "round", "curly", "angle", "none"],
-                  description: "Bracket style for indicator",
-                },
-              },
-            },
-          },
-          {
-            name: "get_indicator_config",
-            description: "Get current persona indicator configuration",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
-        ],
-      };
-    });
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      try {
-        switch (name) {
-          case "list_personas":
-            return await this.listPersonas();
-          case "activate_persona":
-            return await this.activatePersona((args as any)?.persona as string);
-          case "get_active_persona":
-            return await this.getActivePersona();
-          case "deactivate_persona":
-            return await this.deactivatePersona();
-          case "get_persona_details":
-            return await this.getPersonaDetails((args as any)?.persona as string);
-          case "reload_personas":
-            return await this.reloadPersonas();
-          case "browse_marketplace":
-            return await this.browseMarketplace((args as any)?.category as string);
-          case "search_marketplace":
-            return await this.searchMarketplace((args as any)?.query as string);
-          case "get_marketplace_persona":
-            return await this.getMarketplacePersona((args as any)?.path as string);
-          case "install_persona":
-            return await this.installPersona((args as any)?.path as string);
-          case "submit_persona":
-            return await this.submitPersona((args as any)?.persona as string);
-          case "set_user_identity":
-            return await this.setUserIdentity((args as any)?.username as string, (args as any)?.email as string);
-          case "get_user_identity":
-            return await this.getUserIdentity();
-          case "clear_user_identity":
-            return await this.clearUserIdentity();
-          case "create_persona":
-            return await this.createPersona(
-              (args as any)?.name as string,
-              (args as any)?.description as string,
-              (args as any)?.category as string,
-              (args as any)?.instructions as string,
-              (args as any)?.triggers as string
-            );
-          case "edit_persona":
-            return await this.editPersona(
-              (args as any)?.persona as string,
-              (args as any)?.field as string,
-              (args as any)?.value as string
-            );
-          case "validate_persona":
-            return await this.validatePersona((args as any)?.persona as string);
-          case "check_for_updates":
-            return await this.checkForUpdates();
-          case "update_server":
-            return await this.updateServer((args as any)?.confirm as boolean);
-          case "rollback_update":
-            return await this.rollbackUpdate((args as any)?.confirm as boolean);
-          case "get_server_status":
-            return await this.getServerStatus();
-          case "configure_indicator":
-            return await this.configureIndicator(args as any);
-          case "get_indicator_config":
-            return await this.getIndicatorConfig();
-          default:
-            throw new McpError(
-              ErrorCode.MethodNotFound,
-              `Unknown tool: ${name}`
-            );
-        }
-      } catch (error) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Error executing tool ${name}: ${error}`
-        );
-      }
-    });
-  }
-
+  // Tool handler methods - now public for access from tool modules
+  
   private getPersonaIndicator(): string {
     if (!this.activePersona) {
       return "";
@@ -686,7 +285,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async listPersonas() {
+  async listPersonas() {
     const personaList = Array.from(this.personas.values()).map(persona => ({
       filename: persona.filename,
       unique_id: persona.unique_id,
@@ -719,7 +318,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async activatePersona(personaIdentifier: string) {
+  async activatePersona(personaIdentifier: string) {
     // Try to find persona by filename first, then by name
     let persona = this.personas.get(personaIdentifier);
     
@@ -751,7 +350,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async getActivePersona() {
+  async getActivePersona() {
     if (!this.activePersona) {
       return {
         content: [
@@ -790,7 +389,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async deactivatePersona() {
+  async deactivatePersona() {
     const wasActive = this.activePersona !== null;
     const indicator = this.getPersonaIndicator();
     this.activePersona = null;
@@ -807,7 +406,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async getPersonaDetails(personaIdentifier: string) {
+  async getPersonaDetails(personaIdentifier: string) {
     // Try to find persona by filename first, then by name
     let persona = this.personas.get(personaIdentifier);
     
@@ -841,7 +440,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async reloadPersonas() {
+  async reloadPersonas() {
     await this.loadPersonas();
     return {
       content: [
@@ -855,7 +454,7 @@ class DollhouseMCPServer {
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
-  private async browseMarketplace(category?: string) {
+  async browseMarketplace(category?: string) {
     try {
       const { items, categories } = await this.marketplaceBrowser.browseMarketplace(category);
       const text = this.marketplaceBrowser.formatBrowseResults(items, categories, category, this.getPersonaIndicator());
@@ -880,7 +479,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async searchMarketplace(query: string) {
+  async searchMarketplace(query: string) {
     try {
       const items = await this.marketplaceSearch.searchMarketplace(query);
       const text = this.marketplaceSearch.formatSearchResults(items, query, this.getPersonaIndicator());
@@ -905,7 +504,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async getMarketplacePersona(path: string) {
+  async getMarketplacePersona(path: string) {
     try {
       const { metadata, content } = await this.personaDetails.getMarketplacePersona(path);
       const text = this.personaDetails.formatPersonaDetails(metadata, content, path, this.getPersonaIndicator());
@@ -930,7 +529,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async installPersona(inputPath: string) {
+  async installPersona(inputPath: string) {
     try {
       const result = await this.personaInstaller.installPersona(inputPath);
       
@@ -975,7 +574,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async submitPersona(personaIdentifier: string) {
+  async submitPersona(personaIdentifier: string) {
     // Find the persona in local collection
     let persona = this.personas.get(personaIdentifier);
     
@@ -1011,7 +610,7 @@ class DollhouseMCPServer {
   }
 
   // User identity management
-  private async setUserIdentity(username: string, email?: string) {
+  async setUserIdentity(username: string, email?: string) {
     try {
       if (!username || username.trim().length === 0) {
         return {
@@ -1072,7 +671,7 @@ class DollhouseMCPServer {
     }
   }
 
-  private async getUserIdentity() {
+  async getUserIdentity() {
     const email = process.env.DOLLHOUSE_EMAIL;
     
     if (!this.currentUser) {
@@ -1111,7 +710,7 @@ class DollhouseMCPServer {
     };
   }
 
-  private async clearUserIdentity() {
+  async clearUserIdentity() {
     const wasSet = this.currentUser !== null;
     const previousUser = this.currentUser;
     this.currentUser = null;
@@ -1140,7 +739,7 @@ class DollhouseMCPServer {
   }
 
   // Chat-based persona management tools
-  private async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
+  async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
     try {
       // Validate required fields
       if (!name || !description || !category || !instructions) {
@@ -1301,7 +900,7 @@ ${sanitizedInstructions}
     }
   }
 
-  private async editPersona(personaIdentifier: string, field: string, value: string) {
+  async editPersona(personaIdentifier: string, field: string, value: string) {
     if (!personaIdentifier || !field || !value) {
       return {
         content: [
@@ -1439,7 +1038,7 @@ ${sanitizedInstructions}
     }
   }
 
-  private async validatePersona(personaIdentifier: string) {
+  async validatePersona(personaIdentifier: string) {
     if (!personaIdentifier) {
       return {
         content: [
@@ -1576,7 +1175,7 @@ ${sanitizedInstructions}
   // retryNetworkOperation is now handled by UpdateChecker
 
   // Auto-update management tools
-  private async checkForUpdates() {
+  async checkForUpdates() {
     const { text } = await this.updateManager.checkForUpdates();
     return {
       content: [{ type: "text", text: this.getPersonaIndicator() + text }]
@@ -1585,7 +1184,7 @@ ${sanitizedInstructions}
 
   // Update helper methods are now handled by UpdateManager
 
-  private async updateServer(confirm: boolean) {
+  async updateServer(confirm: boolean) {
     if (!confirm) {
       return {
         content: [{
@@ -1616,7 +1215,7 @@ ${sanitizedInstructions}
 
   // Rollback helper methods are now handled by UpdateManager
 
-  private async rollbackUpdate(confirm: boolean) {
+  async rollbackUpdate(confirm: boolean) {
     const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
     return {
       content: [{ type: "text", text }]
@@ -1627,7 +1226,7 @@ ${sanitizedInstructions}
 
   // Status helper methods are now handled by UpdateManager
 
-  private async getServerStatus() {
+  async getServerStatus() {
     // Add persona information to the status
     const personaInfo = `
 **🎭 Persona Information:**
@@ -1651,7 +1250,7 @@ ${sanitizedInstructions}
   /**
    * Configure indicator settings
    */
-  private async configureIndicator(config: Partial<IndicatorConfig>) {
+  async configureIndicator(config: Partial<IndicatorConfig>) {
     try {
       // Update the configuration
       if (config.enabled !== undefined) {
@@ -1758,7 +1357,7 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
   /**
    * Get current indicator configuration
    */
-  private async getIndicatorConfig() {
+  async getIndicatorConfig() {
     // Show current configuration and example
     let exampleIndicator = "";
     if (this.activePersona) {
@@ -1825,8 +1424,7 @@ Placeholders for custom format:
   }
 }
 
-// Export for testing
-export { DollhouseMCPServer };
+// Export is already at class declaration
 
 const server = new DollhouseMCPServer();
 server.run().catch(console.error);

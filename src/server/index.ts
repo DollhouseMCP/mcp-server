@@ -2,6 +2,5 @@
  * Server module exports
  */
 
-// Export server implementation when ready
-// export * from './DollhouseMCPServer.js';
-// export * from './handlers.js';
+export * from './ServerSetup.js';
+export * from './tools/index.js';
