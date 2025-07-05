@@ -3,13 +3,13 @@ const config = {
   preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
   extensionsToTreatAsEsm: ['.ts'],
-  globals: {
-    'ts-jest': {
-      useESM: true
-    }
-  },
   transform: {
-    '^.+\\.tsx?$': ['ts-jest', { useESM: true }]
+    '^.+\\.tsx?$': ['ts-jest', { 
+      useESM: true,
+      tsconfig: {
+        allowJs: true
+      }
+    }]
   },
   testMatch: [
     '**/__tests__/**/*.test.ts',
