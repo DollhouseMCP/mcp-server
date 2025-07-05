@@ -73,7 +73,7 @@ describe('InputValidator - Security Edge Cases', () => {
           expect(result).not.toContain('|');
         } catch (error) {
           // Many will throw after sanitization
-          expect(error.message).toContain('Invalid filename');
+          expect((error as Error).message).toContain('Invalid filename');
         }
       });
     });
@@ -119,8 +119,8 @@ describe('InputValidator - Security Edge Cases', () => {
         try {
           const result = validatePath(path);
           // If it doesn't throw, it should be normalized
-          expect(result).not.toStartWith('/');
-          expect(result).not.toContain('\\');
+          expect(result.startsWith('/')).toBe(false);
+          expect(result.includes('\\')).toBe(false);
         } catch (error) {
           // Some may still fail validation
           expect(error).toBeDefined();

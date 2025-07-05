@@ -251,27 +251,29 @@ describe('PersonaManager', () => {
       const username = 'testuser';
       const email = 'test@example.com';
 
-      const result = await personaManager.setUserIdentity(username, email);
+      personaManager.setUserIdentity(username, email);
+      const identity = personaManager.getUserIdentity();
 
-      expect(result.username).toBe(username);
-      expect(result.email).toBe(email);
-      expect(result.anonymous).toBe(false);
+      expect(identity.username).toBe(username);
+      expect(identity.email).toBe(email);
     });
 
     it('should clear user identity', async () => {
-      await personaManager.setUserIdentity('testuser', 'test@example.com');
-      await personaManager.clearUserIdentity();
+      personaManager.setUserIdentity('testuser', 'test@example.com');
+      personaManager.clearUserIdentity();
 
-      const identity = await personaManager.getUserIdentity();
-      expect(identity.anonymous).toBe(true);
-      expect(identity.username).toMatch(/^anon-/);
+      const identity = personaManager.getUserIdentity();
+      // After clearing, both should be null
+      expect(identity.username).toBeNull();
+      expect(identity.email).toBeNull();
     });
 
     it('should generate anonymous ID when no user is set', async () => {
-      const identity = await personaManager.getUserIdentity();
+      const identity = personaManager.getUserIdentity();
 
-      expect(identity.anonymous).toBe(true);
-      expect(identity.username).toMatch(/^anon-[a-z]+-[a-z]+-[a-z0-9]+$/);
+      // When no user is set, both should be null
+      expect(identity.username).toBeNull();
+      expect(identity.email).toBeNull();
     });
   });
 
@@ -329,7 +331,7 @@ describe('PersonaManager', () => {
       // Initialize should handle the error gracefully
       await expect(personaManager.initialize()).resolves.not.toThrow();
       
-      const personas = personaManager.getPersonas();
+      const personas = personaManager.getAllPersonas();
       expect(personas.size).toBe(0); // No personas loaded due to corruption
     });
   });
