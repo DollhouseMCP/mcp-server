@@ -3,21 +3,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 
-// Create manual mocks (using 'as any' for ESM compatibility)
-const mockMkdir = jest.fn() as any;
-const mockWriteFile = jest.fn() as any;
-const mockReadFile = jest.fn() as any;
-const mockUnlink = jest.fn() as any;
-const mockAccess = jest.fn() as any;
-
-// Mock external dependencies
-jest.mock('fs/promises', () => ({
-  mkdir: mockMkdir,
-  writeFile: mockWriteFile,
-  readFile: mockReadFile,
-  unlink: mockUnlink,
-  access: mockAccess
-}));
+// Note: fs/promises mocking removed as we're no longer testing Node.js fs functionality
+// Tests now focus on our business logic rather than testing the fs module itself
 
 describe('Cross-Platform Integration Tests', () => {
   let tempDir: string;
@@ -154,58 +141,8 @@ describe('Cross-Platform Integration Tests', () => {
     });
   });
 
-  describe('File System Operations', () => {
-    it('should handle directory creation across platforms', async () => {
-      const testDirs = [
-        path.join(tempDir, 'personas'),
-        path.join(tempDir, 'personas', 'creative'),
-        path.join(tempDir, 'personas', 'professional')
-      ];
-
-      // Mock successful directory creation
-      mockMkdir.mockResolvedValue(undefined);
-      mockAccess.mockRejectedValue(new Error('Directory does not exist'));
-
-      for (const dir of testDirs) {
-        try {
-          await fs.access(dir);
-        } catch {
-          await fs.mkdir(dir, { recursive: true });
-        }
-      }
-
-      expect(mockMkdir).toHaveBeenCalledTimes(testDirs.length);
-    });
-
-    it('should handle file read/write with different encodings', async () => {
-      const testContent = '# Test Persona\n\nThis is a test persona with unicode: café 🎭';
-      const testFile = path.join(tempDir, 'test-persona.md');
-
-      mockWriteFile.mockResolvedValue(undefined);
-      mockReadFile.mockResolvedValue(testContent);
-
-      // Write and read file
-      await fs.writeFile(testFile, testContent, 'utf-8');
-      const readContent = await fs.readFile(testFile, 'utf-8');
-
-      expect(mockWriteFile).toHaveBeenCalledWith(testFile, testContent, 'utf-8');
-      expect(mockReadFile).toHaveBeenCalledWith(testFile, 'utf-8');
-      expect(readContent).toBe(testContent);
-    });
-
-    it('should handle permission errors gracefully', async () => {
-      const restrictedFile = path.join(tempDir, 'restricted.md');
-      
-      mockWriteFile.mockRejectedValue(new Error('EACCES: permission denied'));
-      mockReadFile.mockRejectedValue(new Error('EACCES: permission denied'));
-
-      await expect(fs.writeFile(restrictedFile, 'content', 'utf-8'))
-        .rejects.toThrow('EACCES: permission denied');
-
-      await expect(fs.readFile(restrictedFile, 'utf-8'))
-        .rejects.toThrow('EACCES: permission denied');
-    });
-  });
+  // Note: Removed File System Operations tests as they were testing Node.js fs module
+  // functionality rather than our business logic (see Issue #58)
 
   describe('Configuration Path Detection', () => {
     const configPaths = {
@@ -247,17 +184,8 @@ describe('Cross-Platform Integration Tests', () => {
       process.env = originalEnv;
     });
 
-    it('should handle missing environment variables', () => {
-      process.env = {};
-
-      const personasDir = process.env.PERSONAS_DIR || path.join(__dirname, '..', 'personas');
-      const user = process.env.DOLLHOUSE_USER || null;
-      const email = process.env.DOLLHOUSE_EMAIL || null;
-
-      expect(personasDir).toContain('personas');
-      expect(user).toBeNull();
-      expect(email).toBeNull();
-    });
+    // Note: Removed test that used __dirname which is not available in ESM modules
+    // The test was also just verifying JavaScript's || operator, not our business logic
 
     it('should handle custom environment variables', () => {
       process.env = {

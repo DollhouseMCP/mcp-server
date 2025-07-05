@@ -64,27 +64,27 @@ You are a helpful assistant designed to test performance with large persona coll
       const personaCount = 100;
       const mockFiles = Array.from({ length: personaCount }, (_, i) => `test-persona-${i}.md`);
       
-      mockReaddir.mockResolvedValue(mockFiles as any);
+      mockReaddir.mockResolvedValue(mockFiles);
       
       // Mock file reads for each persona
-      mockReadFile.mockImplementation((async (filepath: any) => {
+      mockReadFile.mockImplementation(async (filepath: any) => {
         const filename = typeof filepath === 'string' ? filepath.split('/').pop() || filepath : '';
         const index = mockFiles.indexOf(filename);
         if (index >= 0) {
           return generateMockPersona(index);
         }
         throw new Error('File not found');
-      }) as any);
+      });
 
       const startTime = performance.now();
       
       // Simulate persona loading
       const personas = new Map();
-      const files = await fs.readdir('.');
+      const files = await mockReaddir('.');
       const mdFiles = files.filter((f: string) => f.endsWith('.md'));
       
       for (const file of mdFiles) {
-        const content = await fs.readFile(file, 'utf-8');
+        const content = await mockReadFile(file, 'utf-8');
         personas.set(file, content);
       }
       
@@ -223,20 +223,20 @@ You are a helpful assistant designed to test performance with large persona coll
       mockReaddir.mockImplementation(async () => {
         // Simulate directory read time
         await new Promise(resolve => setTimeout(resolve, 5));
-        return Array.from({ length: fileCount }, (_, i) => `persona-${i}.md`) as any;
+        return Array.from({ length: fileCount }, (_, i) => `persona-${i}.md`);
       });
 
-      mockReadFile.mockImplementation((async (filepath: any) => {
+      mockReadFile.mockImplementation(async (filepath: any) => {
         // Simulate file read time based on file size
         await new Promise(resolve => setTimeout(resolve, 2));
         return generateMockPersona(0);
-      }) as any);
+      });
 
       const startTime = performance.now();
 
       // Simulate loading all personas
-      const files = await fs.readdir('.');
-      const readPromises = files.map(file => fs.readFile(file, 'utf-8'));
+      const files = await mockReaddir('.');
+      const readPromises = files.map(file => mockReadFile(file, 'utf-8'));
       const contents = await Promise.all(readPromises);
 
       const endTime = performance.now();
