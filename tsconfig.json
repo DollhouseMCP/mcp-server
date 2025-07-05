@@ -23,6 +23,9 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
+  "ts-node": {
+    "esm": true
+  },
   "include": [
     "src/**/*.ts",
     "personas/*.md"
