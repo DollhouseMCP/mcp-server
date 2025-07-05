@@ -28,7 +28,11 @@ Thumbs.db
 
 # Test coverage
 coverage/
+coverage-integration/
 *.lcov
+
+# Integration test temporary files
+.test-tmp/
 
 # Logs
 logs/
