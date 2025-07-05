@@ -95,7 +95,11 @@ export async function waitForFile(
  * Create a temporary directory for a test
  */
 export async function createTempDir(prefix: string): Promise<string> {
-  const baseDir = process.env.TEST_BASE_DIR!;
+  const baseDir = process.env.TEST_BASE_DIR;
+  if (!baseDir) {
+    throw new Error('TEST_BASE_DIR environment variable is not set. Ensure the test setup has run properly.');
+  }
+  
   const tempDir = path.join(baseDir, `${prefix}-${Date.now()}`);
   await fs.mkdir(tempDir, { recursive: true });
   return tempDir;

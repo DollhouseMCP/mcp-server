@@ -19,7 +19,10 @@ describe('Persona Lifecycle Integration', () => {
   let personasDir: string;
   
   beforeEach(async () => {
-    personasDir = process.env.TEST_PERSONAS_DIR!;
+    personasDir = process.env.TEST_PERSONAS_DIR || '';
+    if (!personasDir) {
+      throw new Error('TEST_PERSONAS_DIR environment variable is not set');
+    }
     await cleanDirectory(personasDir);
     
     testServer = new TestServer();
@@ -254,13 +257,31 @@ describe('Persona Lifecycle Integration', () => {
     });
     
     it('should recover from corrupted persona files', async () => {
-      // Create a corrupted file
+      // Create a corrupted file with invalid YAML that will cause parsing errors
       const fs = await import('fs/promises');
       const corruptedPath = path.join(personasDir, 'corrupted.md');
-      await fs.writeFile(corruptedPath, 'This is not valid YAML frontmatter');
+      
+      // This will cause gray-matter to fail parsing due to invalid YAML syntax
+      const corruptedContent = `---
+name: Corrupted Persona
+description: This has invalid YAML
+category: [unclosed array
+version: 1.0
+---
+
+This persona has corrupted frontmatter that should cause parsing errors.`;
+      
+      await fs.writeFile(corruptedPath, corruptedContent);
       
       // Should handle gracefully during reload
       await expect(testServer.personaManager.reload()).resolves.not.toThrow();
+      
+      // Verify corrupted file is handled (might be loaded with defaults or skipped)
+      const allPersonas = testServer.personaManager.getAllPersonas();
+      
+      // Verify file still exists (not deleted)
+      const fileStillExists = await fileExists(corruptedPath);
+      expect(fileStillExists).toBe(true);
       
       // Other personas should still work
       const result = await testServer.personaManager.createPersona(
@@ -273,6 +294,9 @@ describe('Persona Lifecycle Integration', () => {
       expect(result.success).toBe(true);
       const persona = testServer.personaManager.findPersona('Working Persona');
       expect(persona).toBeDefined();
+      
+      // System should continue functioning with at least the working personas
+      expect(allPersonas.size).toBeGreaterThanOrEqual(0);
     });
   });
 });

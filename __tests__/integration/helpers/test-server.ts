@@ -19,7 +19,14 @@ export class TestServer {
   public rateLimitTracker: Map<string, number[]>;
   
   constructor(options: TestServerOptions = {}) {
-    const personasDir = options.personasDir || process.env.TEST_PERSONAS_DIR!;
+    const personasDir = options.personasDir || process.env.TEST_PERSONAS_DIR;
+    
+    if (!personasDir) {
+      throw new Error(
+        'TEST_PERSONAS_DIR environment variable is not set. ' +
+        'Please ensure the integration test setup has run properly.'
+      );
+    }
     
     // Create core components
     this.personaManager = new PersonaManager(personasDir, DEFAULT_INDICATOR_CONFIG);
