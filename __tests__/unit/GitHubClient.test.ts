@@ -16,6 +16,7 @@ describe('GitHubClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFetch.mockClear();
+    mockFetch.mockReset();
     
     // Create mock APICache
     mockApiCache = {
@@ -254,7 +255,7 @@ describe('GitHubClient', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue(mockData)
-      });
+      } as unknown as Response);
 
       const result1 = await githubClient.fetchFromGitHub(testUrl);
       expect(mockApiCache.set).toHaveBeenCalledWith(testUrl, mockData);
@@ -267,6 +268,35 @@ describe('GitHubClient', () => {
       const result2 = await githubClient.fetchFromGitHub(testUrl);
       expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(result2).toEqual(mockData);
+    });
+
+    it('should handle concurrent request scenarios', async () => {
+      const testUrl = 'https://api.github.com/test-concurrent';
+      const mockData = { concurrent: 'test' };
+      
+      mockApiCache.get.mockReturnValue(null);
+      mockFetch.mockImplementation(() => new Promise(resolve => {
+        setTimeout(() => {
+          resolve({
+            ok: true,
+            json: jest.fn().mockResolvedValue(mockData)
+          } as unknown as Response);
+        }, 100);
+      }));
+
+      // Make concurrent requests
+      const promises = [
+        githubClient.fetchFromGitHub(testUrl),
+        githubClient.fetchFromGitHub(testUrl),
+        githubClient.fetchFromGitHub(testUrl)
+      ];
+
+      const results = await Promise.all(promises);
+      
+      // All should get the same result
+      results.forEach(result => {
+        expect(result).toEqual(mockData);
+      });
     });
   });
 });
