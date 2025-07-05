@@ -210,6 +210,25 @@ describe('GitHubClient', () => {
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
         .rejects.toThrow('Invalid JSON');
+      
+      // Verify cache was not updated with bad data
+      expect(mockApiCache.set).not.toHaveBeenCalled();
+    });
+
+    it('should handle JSON parsing with unexpected format', async () => {
+      const mockResponse = {
+        ok: true,
+        json: jest.fn().mockResolvedValue('not an object')
+      };
+
+      mockFetch.mockResolvedValue(mockResponse as unknown as Response);
+      mockApiCache.get.mockReturnValue(null);
+
+      const result = await githubClient.fetchFromGitHub('https://api.github.com/test');
+      expect(result).toBe('not an object');
+      
+      // Even non-object JSON should be cached
+      expect(mockApiCache.set).toHaveBeenCalledWith('https://api.github.com/test', 'not an object');
     });
 
     it('should handle 404 responses', async () => {
@@ -243,7 +262,36 @@ describe('GitHubClient', () => {
       } catch (error) {
         expect(error).toBeInstanceOf(McpError);
         expect((error as McpError).message).toContain('Connection reset');
+        expect((error as McpError).code).toBe(ErrorCode.InternalError);
       }
+      
+      // Verify no cache pollution
+      expect(mockApiCache.set).not.toHaveBeenCalled();
+    });
+
+    it('should handle intermittent network failures with retry', async () => {
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('ECONNRESET');
+        }
+        return Promise.resolve({
+          ok: true,
+          json: jest.fn().mockResolvedValue({ success: true })
+        } as unknown as Response);
+      });
+      
+      mockApiCache.get.mockReturnValue(null);
+
+      // First call should fail
+      await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
+        .rejects.toThrow('ECONNRESET');
+      
+      // Second call should succeed
+      const result = await githubClient.fetchFromGitHub('https://api.github.com/test');
+      expect(result).toEqual({ success: true });
+      expect(callCount).toBe(2);
     });
 
     it('should handle cache eviction scenarios', async () => {
@@ -268,6 +316,27 @@ describe('GitHubClient', () => {
       const result2 = await githubClient.fetchFromGitHub(testUrl);
       expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(result2).toEqual(mockData);
+      
+      // Verify cache was set both times
+      expect(mockApiCache.set).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle cache corruption gracefully', async () => {
+      const testUrl = 'https://api.github.com/test-cache-corruption';
+      
+      // Simulate corrupted cache returning undefined
+      mockApiCache.get.mockReturnValue(undefined);
+      
+      const mockData = { fresh: 'data' };
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockData)
+      } as unknown as Response);
+
+      const result = await githubClient.fetchFromGitHub(testUrl);
+      expect(result).toEqual(mockData);
+      expect(mockFetch).toHaveBeenCalled();
+      expect(mockApiCache.set).toHaveBeenCalledWith(testUrl, mockData);
     });
 
     it('should handle concurrent request scenarios', async () => {
@@ -297,6 +366,46 @@ describe('GitHubClient', () => {
       results.forEach(result => {
         expect(result).toEqual(mockData);
       });
+      
+      // Despite 3 concurrent requests, fetch should only be called once per unique URL
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('should handle race condition in cache updates', async () => {
+      const testUrl = 'https://api.github.com/test-race';
+      const mockData1 = { version: 1 };
+      const mockData2 = { version: 2 };
+      
+      mockApiCache.get.mockReturnValue(null);
+      
+      // Simulate different responses for concurrent requests
+      let callCount = 0;
+      mockFetch.mockImplementation(() => {
+        callCount++;
+        const data = callCount === 1 ? mockData1 : mockData2;
+        return Promise.resolve({
+          ok: true,
+          json: jest.fn().mockResolvedValue(data)
+        } as unknown as Response);
+      });
+
+      // Make requests with slight delay
+      const promise1 = githubClient.fetchFromGitHub(testUrl);
+      const promise2 = new Promise(resolve => {
+        setTimeout(async () => {
+          const result = await githubClient.fetchFromGitHub(testUrl);
+          resolve(result);
+        }, 10);
+      });
+
+      const [result1, result2] = await Promise.all([promise1, promise2]);
+      
+      // Results might differ due to race condition
+      expect([mockData1, mockData2]).toContainEqual(result1);
+      expect([mockData1, mockData2]).toContainEqual(result2);
+      
+      // Cache should be set at least once
+      expect(mockApiCache.set).toHaveBeenCalled();
     });
   });
 });

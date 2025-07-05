@@ -332,6 +332,27 @@ describe('InputValidator - Security Edge Cases', () => {
       const emojiContent = '😀'.repeat(Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 4) + 100);
       expect(() => validateContentSize(emojiContent))
         .toThrow('Content too large');
+      
+      // Test edge case: exactly at limit with multi-byte characters
+      const mixedContent = 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH - 4) + '😀';
+      expect(() => validateContentSize(mixedContent)).not.toThrow();
+      
+      // Test various Unicode characters
+      const unicodeTests = [
+        { text: '中文测试', expectMultiByte: true },  // Chinese characters
+        { text: '🔥💯👍', expectMultiByte: true },   // Emojis
+        { text: 'café', expectMultiByte: true },      // Accented characters
+        { text: '\u0000\u0001\u0002', expectMultiByte: false }  // Control characters
+      ];
+      
+      unicodeTests.forEach(({ text, expectMultiByte }) => {
+        const size = new TextEncoder().encode(text).length;
+        if (expectMultiByte) {
+          expect(size).toBeGreaterThan(text.length); // Verify multi-byte
+        } else {
+          expect(size).toBe(text.length); // Single byte characters
+        }
+      });
     });
 
     it('should accept custom size limits', () => {
@@ -380,13 +401,27 @@ describe('InputValidator - Security Edge Cases', () => {
       // These should be rejected due to non-ASCII characters
       homographAttacks.forEach(attack => {
         expect(() => validateFilename(attack)).toThrow();
-        // Verify they all get rejected, not just throw some error
+        // Verify they all get rejected with specific error message
         try {
           validateFilename(attack);
-          fail('Should have thrown');
+          fail(`Should have thrown for homograph attack: ${attack}`);
         } catch (error) {
           expect((error as Error).message).toMatch(/Invalid filename/);
+          // Ensure the error is not a generic one
+          expect((error as Error).message).not.toMatch(/undefined/);
+          expect((error as Error).message).not.toMatch(/null/);
         }
+      });
+      
+      // Additional homograph tests
+      const moreHomographs = [
+        'АВСDЕҒԌНІЈКԼМΝОРԚЅТԱѴԜХҮΖаЬсԁеſɡһіϳкІтпорԛѕƚսѵԝхуᴢ', // Mixed scripts
+        'ⅰⅱⅲⅳⅴ.md',  // Roman numerals that look like letters
+        '𝐭𝐞𝐬𝐭.md',   // Mathematical alphanumeric symbols
+      ];
+      
+      moreHomographs.forEach(attack => {
+        expect(() => validateFilename(attack)).toThrow(/Invalid filename/);
       });
     });
 
@@ -415,10 +450,35 @@ describe('InputValidator - Security Edge Cases', () => {
       const avgValid = timings.valid.reduce((a, b) => a + b) / timings.valid.length;
       const avgInvalid = timings.invalid.reduce((a, b) => a + b) / timings.invalid.length;
       
-      // Timing difference should be minimal (< 80% variance)
-      // Note: In practice, sanitization makes timing fairly consistent
+      // Timing difference should be minimal
+      // Tightened from 80% to 50% variance for better security
       const variance = Math.abs(avgValid - avgInvalid) / Math.max(avgValid, avgInvalid);
-      expect(variance).toBeLessThan(0.8);
+      expect(variance).toBeLessThan(0.5);
+      
+      // Additional timing attack protection tests
+      // Test that early vs late rejection doesn't leak timing info
+      const earlyReject = 'Δtest.md';  // Fails on first character
+      const lateReject = 'test-file-name-that-is-very-long-and-fails-at-endΔ.md';
+      
+      const earlyTimings: number[] = [];
+      const lateTimings: number[] = [];
+      
+      for (let i = 0; i < 50; i++) {
+        const earlyStart = process.hrtime.bigint();
+        try { validateFilename(earlyReject); } catch {}
+        earlyTimings.push(Number(process.hrtime.bigint() - earlyStart));
+        
+        const lateStart = process.hrtime.bigint();
+        try { validateFilename(lateReject); } catch {}
+        lateTimings.push(Number(process.hrtime.bigint() - lateStart));
+      }
+      
+      const avgEarly = earlyTimings.reduce((a, b) => a + b) / earlyTimings.length;
+      const avgLate = lateTimings.reduce((a, b) => a + b) / lateTimings.length;
+      const positionVariance = Math.abs(avgEarly - avgLate) / Math.max(avgEarly, avgLate);
+      
+      // Position of invalid character shouldn't significantly affect timing
+      expect(positionVariance).toBeLessThan(0.5);
     });
   });
 });
