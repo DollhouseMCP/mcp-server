@@ -120,7 +120,7 @@ describe('PersonaManager', () => {
   });
 
   describe('deactivatePersona', () => {
-    it('should deactivate the active persona', async () => {
+    it('should deactivate the active persona', () => {
       const testPersona: Persona = {
         metadata: {
           name: 'Test Persona',
@@ -282,7 +282,7 @@ describe('PersonaManager', () => {
   });
 
   describe('User Management', () => {
-    it('should set user identity', async () => {
+    it('should set user identity', () => {
       const username = 'testuser';
       const email = 'test@example.com';
 
@@ -293,7 +293,7 @@ describe('PersonaManager', () => {
       expect(identity.email).toBe(email);
     });
 
-    it('should clear user identity', async () => {
+    it('should clear user identity', () => {
       personaManager.setUserIdentity('testuser', 'test@example.com');
       personaManager.clearUserIdentity();
 
@@ -303,7 +303,7 @@ describe('PersonaManager', () => {
       expect(identity.email).toBeNull();
     });
 
-    it('should generate anonymous ID when no user is set', async () => {
+    it('should generate anonymous ID when no user is set', () => {
       const identity = personaManager.getUserIdentity();
 
       // When no user is set, both should be null
