@@ -2,19 +2,25 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
+// Create manual mocks (using 'as any' for ESM compatibility)
+const mockReaddir = jest.fn() as any;
+const mockReadFile = jest.fn() as any;
+const mockWriteFile = jest.fn() as any;
+
 // Mock external dependencies
-jest.mock('fs/promises');
+jest.mock('fs/promises', () => ({
+  readdir: mockReaddir,
+  readFile: mockReadFile,
+  writeFile: mockWriteFile
+}));
 
 describe('Performance Tests', () => {
-  let mockFs: jest.Mocked<typeof fs>;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    mockFs = fs as jest.Mocked<typeof fs>;
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    // Cleanup is handled by clearAllMocks in beforeEach
   });
 
   describe('Large Persona Collection Performance', () => {
@@ -58,10 +64,10 @@ You are a helpful assistant designed to test performance with large persona coll
       const personaCount = 100;
       const mockFiles = Array.from({ length: personaCount }, (_, i) => `test-persona-${i}.md`);
       
-      mockFs.readdir.mockResolvedValue(mockFiles as any);
+      mockReaddir.mockResolvedValue(mockFiles as any);
       
       // Mock file reads for each persona
-      mockFs.readFile.mockImplementation((async (filepath: any) => {
+      mockReadFile.mockImplementation((async (filepath: any) => {
         const filename = typeof filepath === 'string' ? filepath.split('/').pop() || filepath : '';
         const index = mockFiles.indexOf(filename);
         if (index >= 0) {
@@ -87,8 +93,8 @@ You are a helpful assistant designed to test performance with large persona coll
 
       expect(personas.size).toBe(personaCount);
       expect(loadTime).toBeLessThan(1000); // Should load 100 personas in under 1 second
-      expect(mockFs.readdir).toHaveBeenCalledTimes(1);
-      expect(mockFs.readFile).toHaveBeenCalledTimes(personaCount);
+      expect(mockReaddir).toHaveBeenCalledTimes(1);
+      expect(mockReadFile).toHaveBeenCalledTimes(personaCount);
     });
 
     it('should handle memory usage efficiently with large collections', () => {
@@ -214,13 +220,13 @@ You are a helpful assistant designed to test performance with large persona coll
       const avgFileSize = 2048; // 2KB average file size
       
       // Mock file operations with realistic delays
-      mockFs.readdir.mockImplementation(async () => {
+      mockReaddir.mockImplementation(async () => {
         // Simulate directory read time
         await new Promise(resolve => setTimeout(resolve, 5));
         return Array.from({ length: fileCount }, (_, i) => `persona-${i}.md`) as any;
       });
 
-      mockFs.readFile.mockImplementation((async (filepath: any) => {
+      mockReadFile.mockImplementation((async (filepath: any) => {
         // Simulate file read time based on file size
         await new Promise(resolve => setTimeout(resolve, 2));
         return generateMockPersona(0);
