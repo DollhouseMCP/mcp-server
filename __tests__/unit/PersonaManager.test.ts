@@ -52,13 +52,14 @@ describe('PersonaManager', () => {
       await personaManager.initialize();
 
       // Verify personas are loaded
-      const personas = personaManager.getPersonas();
+      const personas = personaManager.getAllPersonas();
       expect(personas.size).toBe(1);
     });
 
     it('should handle load errors gracefully', async () => {
       // Mock fs.readdir to fail
-      (fs.readdir as jest.Mock).mockRejectedValue(new Error('Failed to read directory'));
+      const mockReaddir = fs.readdir as jest.MockedFunction<typeof fs.readdir>;
+      mockReaddir.mockRejectedValue(new Error('Failed to read directory'));
 
       await expect(personaManager.initialize()).rejects.toThrow();
     });
@@ -150,7 +151,7 @@ describe('PersonaManager', () => {
         warnings: []
       });
 
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockResolvedValue(undefined);
 
       const result = await personaManager.createPersona(
         newPersona.name,
@@ -202,8 +203,8 @@ describe('PersonaManager', () => {
     });
 
     it('should edit persona description', async () => {
-      (fs.readFile as jest.Mock).mockResolvedValue(testPersona.content);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue(testPersona.content);
+      (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockResolvedValue(undefined);
 
       const result = await personaManager.editPersona(
         'Test Persona',
@@ -220,8 +221,8 @@ describe('PersonaManager', () => {
     });
 
     it('should increment version when editing', async () => {
-      (fs.readFile as jest.Mock).mockResolvedValue(testPersona.content);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue(testPersona.content);
+      (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockResolvedValue(undefined);
 
       await personaManager.editPersona(
         'Test Persona',
@@ -310,7 +311,7 @@ describe('PersonaManager', () => {
   describe('Error Handling', () => {
     it('should handle file system errors gracefully', async () => {
       const fsError = new Error('EACCES: permission denied');
-      (fs.writeFile as jest.Mock).mockRejectedValue(fsError);
+      (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockRejectedValue(fsError);
 
       await expect(personaManager.createPersona(
         'Test',
@@ -322,8 +323,8 @@ describe('PersonaManager', () => {
 
     it('should handle corrupted persona files', async () => {
       // Mock a corrupted file read
-      (fs.readdir as jest.Mock).mockResolvedValue(['corrupted.md']);
-      (fs.readFile as jest.Mock).mockResolvedValue('Invalid YAML content {{{');
+      (fs.readdir as jest.MockedFunction<typeof fs.readdir>).mockResolvedValue(['corrupted.md']);
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue('Invalid YAML content {{{');
 
       // Initialize should handle the error gracefully
       await expect(personaManager.initialize()).resolves.not.toThrow();

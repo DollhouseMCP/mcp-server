@@ -5,7 +5,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { SECURITY_LIMITS } from '../../src/security/constants';
 
 // Mock fetch globally with proper typing
-const mockFetch = jest.fn();
+const mockFetch = jest.fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>();
 global.fetch = mockFetch as any;
 
 describe('GitHubClient', () => {
