@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { UpdateManager } from '../../../src/update/UpdateManager';
+import { UpdateManager } from '../../../src/update/UpdateManager.js';
 
 describe('UpdateManager (Security & Performance)', () => {
   let updateManager: UpdateManager;
@@ -142,6 +142,12 @@ describe('UpdateManager (Security & Performance)', () => {
       // Both are valid responses that provide meaningful error messages
       const hasBackupMessage = result.text.includes('No Backups Found') || 
                               result.text.includes('Rollback Confirmation Required');
+      
+      // Debug output for CI failures
+      if (!hasBackupMessage) {
+        console.error('Unexpected rollback message:', result.text.substring(0, 200));
+      }
+      
       expect(hasBackupMessage).toBe(true);
       
       // Both messages should guide the user on next steps
