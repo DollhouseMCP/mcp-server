@@ -23,7 +23,7 @@ export class BackupManager {
     // Safety check: Don't allow operations on directories containing critical files
     // This prevents accidental deletion of the actual project directory
     if (this.rootDir.includes('DollhouseMCP') && !this.rootDir.includes('test')) {
-      console.warn('WARNING: BackupManager initialized with production directory. This should only happen in production use.');
+      throw new Error('BackupManager cannot operate on production directory. Pass a safe test directory to the constructor.');
     }
     
     this.backupsDir = path.join(this.rootDir, "..", "dollhousemcp-backups");

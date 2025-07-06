@@ -8,12 +8,15 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { UpdateManager } from '../../../src/update/UpdateManager.js';
+import * as path from 'path';
+import * as os from 'os';
 
 describe('UpdateManager (Security & Performance)', () => {
   let updateManager: UpdateManager;
+  const testDir = path.join(os.tmpdir(), 'dollhouse-test-security', Date.now().toString());
 
   beforeEach(() => {
-    updateManager = new UpdateManager();
+    updateManager = new UpdateManager(testDir);
   });
 
   describe('security validation', () => {

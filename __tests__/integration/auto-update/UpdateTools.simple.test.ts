@@ -1,12 +1,15 @@
 import { describe, it, expect } from '@jest/globals';
 import { UpdateManager } from '../../../src/update/UpdateManager';
+import * as path from 'path';
+import * as os from 'os';
 
 // Simple integration test for the MCP tools
 describe('UpdateTools (Simple Integration)', () => {
   let updateManager: UpdateManager;
+  const testDir = path.join(os.tmpdir(), 'dollhouse-test-integration', Date.now().toString());
 
   beforeEach(() => {
-    updateManager = new UpdateManager();
+    updateManager = new UpdateManager(testDir);
   });
 
   describe('MCP tool integration', () => {
