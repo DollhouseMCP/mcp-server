@@ -99,11 +99,33 @@ jobs:
         run: npm test
         continue-on-error: true
 
-      - name: Run test suite (compiled method) - DIAGNOSTIC
+      - name: Debug failed tests environment
         if: steps.original_tests.outcome == 'failure'
         run: |
-          echo "=== Original tests failed, trying compiled approach ==="
-          npm run test:compiled:ci
+          echo "=== Original tests failed, debugging environment ==="
+          echo "Current directory: $(pwd)"
+          echo "Contents of current directory:"
+          ls -la
+          echo "=== Checking if package.json exists ==="
+          if [ -f "package.json" ]; then
+            echo "✓ package.json exists"
+            echo "First 5 lines:"
+            head -5 package.json
+          else
+            echo "✗ package.json NOT FOUND"
+          fi
+          
+      - name: Run compiled tests approach
+        if: steps.original_tests.outcome == 'failure'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "=== Running compiled test approach ==="
+          echo "Explicitly setting working directory to: ${{ github.workspace }}"
+          pwd
+          # Build the tests first
+          npm run build:test
+          # Run the compiled tests using cross-env
+          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config jest.config.compiled.cjs --ci --watchAll=false
 
       - name: Validation complete
         run: |
