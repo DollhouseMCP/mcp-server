@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
 
+env:
+  NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
+  CI: true
+  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
