@@ -7,8 +7,10 @@ const config = {
     '^.+\\.tsx?$': ['ts-jest', { 
       useESM: true,
       tsconfig: {
-        allowJs: true
-      }
+        allowJs: true,
+        rootDir: '.'
+      },
+      isolatedModules: true
     }]
   },
   testMatch: [
@@ -27,6 +29,8 @@ const config = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.mjs'],
+  modulePathIgnorePatterns: ['<rootDir>/dist/'],
+  roots: ['<rootDir>'],
   testTimeout: 10000,
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol|zod)/)'

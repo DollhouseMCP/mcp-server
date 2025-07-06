@@ -6,15 +6,37 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 export class VersionManager {
   /**
    * Get current version from package.json
    */
   async getCurrentVersion(): Promise<string> {
-    const packageJsonPath = path.join(__dirname, "..", "..", "package.json");
+    // Use process.cwd() as a base, then search upward for package.json
+    let currentDir = process.cwd();
+    let packageJsonPath: string | null = null;
+    
+    // Search up to 5 levels for package.json
+    for (let i = 0; i < 5; i++) {
+      const candidatePath = path.join(currentDir, 'package.json');
+      try {
+        await fs.access(candidatePath);
+        packageJsonPath = candidatePath;
+        break;
+      } catch {
+        // File doesn't exist, try parent directory
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) {
+          // We've reached the root
+          break;
+        }
+        currentDir = parentDir;
+      }
+    }
+    
+    if (!packageJsonPath) {
+      throw new Error('Could not find package.json in current directory or any parent directory');
+    }
+    
     const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
     const packageData = JSON.parse(packageContent);
     return packageData.version;
