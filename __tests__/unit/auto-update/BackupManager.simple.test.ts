@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { BackupManager } from '../../../src/update/BackupManager';
+import { BackupManager } from '../../../src/update/BackupManager.js';
 
 // Simple integration test - runs against real implementation
 describe('BackupManager (Simple)', () => {

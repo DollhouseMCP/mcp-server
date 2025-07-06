@@ -22,6 +22,9 @@
     "test:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --watch",
     "test:coverage": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --coverage",
     "test:ci": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --ci --coverage --watchAll=false",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test:compiled": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config jest.config.compiled.cjs",
+    "test:compiled:ci": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config jest.config.compiled.cjs --ci --watchAll=false",
     "test:integration": "jest --config jest.integration.config.cjs",
     "test:integration:watch": "jest --config jest.integration.config.cjs --watch",
     "test:integration:coverage": "jest --config jest.integration.config.cjs --coverage",
@@ -73,6 +76,7 @@
     "cross-env": "^7.0.3",
     "jest": "^30.0.3",
     "ts-jest": "^29.4.0",
+    "ts-jest-resolver": "^2.0.1",
     "tsx": "^4.0.0",
     "typescript": "^5.8.3"
   },

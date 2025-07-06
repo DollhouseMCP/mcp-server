@@ -3,15 +3,11 @@
  */
 
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import { safeExec } from '../utils/git.js';
 import { VersionManager } from './VersionManager.js';
 import { UpdateChecker } from './UpdateChecker.js';
 import { DependencyChecker } from './DependencyChecker.js';
 import { BackupManager } from './BackupManager.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export interface UpdateProgress {
   step: string;
@@ -31,7 +27,8 @@ export class UpdateManager {
     this.updateChecker = new UpdateChecker(this.versionManager);
     this.dependencyChecker = new DependencyChecker(this.versionManager);
     this.backupManager = new BackupManager();
-    this.rootDir = path.join(__dirname, "..", "..");
+    // Use process.cwd() as the root directory
+    this.rootDir = process.cwd();
   }
   
   /**

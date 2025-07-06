@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { VersionManager } from '../../../src/update/VersionManager';
+import { VersionManager } from '../../../src/update/VersionManager.js';
 
 describe('VersionManager', () => {
   const versionManager = new VersionManager();

@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals';
-import { UpdateChecker } from '../../../src/update/UpdateChecker';
-import { VersionManager } from '../../../src/update/VersionManager';
+import { UpdateChecker } from '../../../src/update/UpdateChecker.js';
+import { VersionManager } from '../../../src/update/VersionManager.js';
 
 /**
  * Demonstration test showing all security measures in UpdateChecker

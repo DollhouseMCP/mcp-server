@@ -4,11 +4,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import { safeExec } from '../utils/git.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export interface BackupInfo {
   path: string;
@@ -21,7 +17,8 @@ export class BackupManager {
   private backupsDir: string;
   
   constructor() {
-    this.rootDir = path.join(__dirname, "..", "..");
+    // Use process.cwd() as the root directory
+    this.rootDir = process.cwd();
     this.backupsDir = path.join(this.rootDir, "..", "dollhousemcp-backups");
   }
   

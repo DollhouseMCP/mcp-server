@@ -6,7 +6,6 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import matter from "gray-matter";
-import { fileURLToPath } from "url";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 
 // Import modularized components
@@ -20,8 +19,6 @@ import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, Pe
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -56,8 +53,8 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
-    // Use environment variable if set, otherwise default to personas subdirectory relative to this script
-    this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
+    // Use environment variable if set, otherwise default to personas subdirectory relative to current working directory
+    this.personasDir = process.env.PERSONAS_DIR || path.join(process.cwd(), "personas");
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
