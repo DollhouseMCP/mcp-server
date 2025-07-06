@@ -12,6 +12,17 @@ describe('UpdateChecker (Performance Enhancements)', () => {
   });
 
   describe('configurable limits', () => {
+    it('should validate minimum configuration limits', () => {
+      // Should throw for too-small release notes limit
+      expect(() => new UpdateChecker(versionManager, {
+        releaseNotesMaxLength: 50  // Too small
+      })).toThrow('releaseNotesMaxLength must be at least 100');
+      
+      // Should throw for too-small URL limit
+      expect(() => new UpdateChecker(versionManager, {
+        urlMaxLength: 25  // Too small
+      })).toThrow('urlMaxLength must be at least 50');
+    });
     it('should use custom release notes length limit', () => {
       const customLimit = 1000;
       const updateChecker = new UpdateChecker(versionManager, {
