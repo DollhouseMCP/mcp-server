@@ -18,12 +18,41 @@ export interface UpdateCheckResult {
 
 export class UpdateChecker {
   private versionManager: VersionManager;
+  private static purifyWindow: any = null;  // JSDOM window type
+  private static purify: any = null;  // DOMPurify instance
+  private releaseNotesMaxLength: number = 5000;
+  private urlMaxLength: number = 2048;
+  private securityLogger?: (event: string, details: any) => void;
   
-  constructor(versionManager: VersionManager) {
+  constructor(
+    versionManager: VersionManager,
+    options?: {
+      releaseNotesMaxLength?: number;
+      urlMaxLength?: number;
+      securityLogger?: (event: string, details: any) => void;
+    }
+  ) {
     if (!versionManager) {
       throw new Error('VersionManager is required');
     }
     this.versionManager = versionManager;
+    
+    // Apply options
+    if (options?.releaseNotesMaxLength) {
+      this.releaseNotesMaxLength = options.releaseNotesMaxLength;
+    }
+    if (options?.urlMaxLength) {
+      this.urlMaxLength = options.urlMaxLength;
+    }
+    if (options?.securityLogger) {
+      this.securityLogger = options.securityLogger;
+    }
+    
+    // Initialize cached DOMPurify instance
+    if (!UpdateChecker.purifyWindow) {
+      UpdateChecker.purifyWindow = new JSDOM('').window;
+      UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow as any);
+    }
   }
   
   /**
@@ -178,15 +207,23 @@ export class UpdateChecker {
   private sanitizeUrl(url: string): string {
     if (!url) return '';
     
+    // Check URL length
+    if (url.length > this.urlMaxLength) {
+      this.logSecurityEvent('url_too_long', { length: url.length, maxLength: this.urlMaxLength });
+      return '';  // URL too long
+    }
+    
     // Only allow http and https schemes
     const allowedSchemes = ['http:', 'https:'];
     try {
       const parsed = new URL(url);
       if (!allowedSchemes.includes(parsed.protocol)) {
+        this.logSecurityEvent('dangerous_url_scheme', { scheme: parsed.protocol, url });
         return '';  // Return empty string for dangerous schemes
       }
       return url;
     } catch {
+      this.logSecurityEvent('invalid_url', { url });
       return '';  // Invalid URL
     }
   }
@@ -197,25 +234,54 @@ export class UpdateChecker {
   private sanitizeReleaseNotes(notes: string): string {
     if (!notes) return 'See release notes on GitHub';
     
-    // Apply length limit (5000 chars)
+    // Apply length limit
     let sanitized = notes;
-    if (sanitized.length > 5000) {
-      sanitized = sanitized.substring(0, 5000) + '...';
+    if (sanitized.length > this.releaseNotesMaxLength) {
+      this.logSecurityEvent('release_notes_truncated', { 
+        originalLength: sanitized.length, 
+        maxLength: this.releaseNotesMaxLength 
+      });
+      sanitized = sanitized.substring(0, this.releaseNotesMaxLength) + '...';
     }
     
-    // Sanitize HTML/JavaScript
-    const window = new JSDOM('').window;
-    const purify = DOMPurify(window);
-    sanitized = purify.sanitize(sanitized, { 
+    // Use cached DOMPurify instance
+    if (!UpdateChecker.purify) {
+      throw new Error('DOMPurify not initialized');
+    }
+    
+    const beforeSanitize = sanitized;
+    sanitized = UpdateChecker.purify.sanitize(sanitized, { 
       ALLOWED_TAGS: [],  // Strip all HTML tags
       ALLOWED_ATTR: [] 
     });
     
-    // Additional sanitization for command injection patterns
-    sanitized = sanitized
-      .replace(/`[^`]*`/g, '')  // Remove backtick expressions
-      .replace(/\$\([^)]*\)/g, '')  // Remove command substitution
-      .replace(/\$\{[^}]*\}/g, '');  // Remove variable expansion
+    if (beforeSanitize !== sanitized) {
+      this.logSecurityEvent('html_content_removed', { 
+        removedLength: beforeSanitize.length - sanitized.length 
+      });
+    }
+    
+    // Additional sanitization for command injection patterns with single regex pass
+    const patterns = [
+      /`[^`]*`/g,           // Backtick expressions
+      /\$\([^)]*\)/g,     // Command substitution
+      /\$\{[^}]*\}/g,     // Variable expansion
+      /<\?[^>]*\?>/g,     // PHP tags (OWASP)
+      /&lt;%[^>]*%&gt;/g,  // ASP tags (HTML-encoded by DOMPurify)
+      /<%[^>]*%>/g,         // ASP tags (raw)
+      /\\x[0-9a-fA-F]{2}/g // Hex escapes (OWASP)
+    ];
+    
+    const beforePatterns = sanitized;
+    for (const pattern of patterns) {
+      sanitized = sanitized.replace(pattern, '');
+    }
+    
+    if (beforePatterns !== sanitized) {
+      this.logSecurityEvent('injection_patterns_removed', { 
+        removedLength: beforePatterns.length - sanitized.length 
+      });
+    }
     
     return sanitized;
   }
@@ -229,13 +295,25 @@ export class UpdateChecker {
       if (isNaN(date.getTime())) {
         return dateStr;  // Return original if invalid
       }
+      
+      // Use UTC methods to ensure consistent timezone handling
       return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
-        day: 'numeric'
+        day: 'numeric',
+        timeZone: 'UTC'  // Ensure consistent timezone
       });
     } catch {
       return dateStr;  // Return original on error
+    }
+  }
+  
+  /**
+   * Log security events for monitoring
+   */
+  private logSecurityEvent(event: string, details: any): void {
+    if (this.securityLogger) {
+      this.securityLogger(event, details);
     }
   }
 }
