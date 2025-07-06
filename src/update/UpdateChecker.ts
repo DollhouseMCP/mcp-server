@@ -1,5 +1,18 @@
 /**
- * Check for updates from GitHub releases
+ * UpdateChecker - Secure GitHub release update checking with comprehensive sanitization
+ * 
+ * Security measures implemented:
+ * 1. XSS Protection: DOMPurify with strict no-tags/no-attributes policy
+ * 2. Command Injection Prevention: Multiple regex patterns for various escape sequences
+ * 3. URL Validation: Whitelist approach allowing only http/https schemes
+ * 4. Information Disclosure Prevention: Sanitized logging of sensitive data
+ * 5. Length Limits: Configurable limits to prevent DoS attacks
+ * 6. OWASP Patterns: Protection against PHP, ASP, hex, unicode, and octal escapes
+ * 
+ * Performance optimizations:
+ * - Cached DOMPurify instance to avoid recreation overhead
+ * - Single-pass regex processing for injection patterns
+ * - Exponential backoff for network retries
  */
 
 import { RELEASES_API_URL } from '../config/constants.js';
@@ -16,13 +29,22 @@ export interface UpdateCheckResult {
   releaseUrl: string;
 }
 
+// Type declarations for better type safety
+type DOMPurifyInstance = ReturnType<typeof DOMPurify>;
+
 export class UpdateChecker {
   private versionManager: VersionManager;
+  
+  // Static cache for DOMPurify to improve performance
+  // We use 'any' for JSDOM window to avoid complex type conflicts
+  // but maintain type safety for DOMPurify instance
   private static purifyWindow: any = null;
-  private static purify: any = null;
-  private releaseNotesMaxLength: number = 5000;
-  private urlMaxLength: number = 2048;
-  private securityLogger?: (event: string, details: any) => void;
+  private static purify: DOMPurifyInstance | null = null;
+  
+  // Security configuration with sensible defaults
+  private readonly releaseNotesMaxLength: number;
+  private readonly urlMaxLength: number;
+  private readonly securityLogger?: (event: string, details: any) => void;
   
   constructor(
     versionManager: VersionManager,
@@ -37,18 +59,21 @@ export class UpdateChecker {
     }
     this.versionManager = versionManager;
     
-    // Apply options
-    if (options?.releaseNotesMaxLength) {
-      this.releaseNotesMaxLength = options.releaseNotesMaxLength;
+    // Apply options with defaults and validation
+    this.releaseNotesMaxLength = options?.releaseNotesMaxLength ?? 5000;
+    this.urlMaxLength = options?.urlMaxLength ?? 2048;
+    this.securityLogger = options?.securityLogger;
+    
+    // Validate configuration for security
+    if (this.releaseNotesMaxLength < 100) {
+      throw new Error('releaseNotesMaxLength must be at least 100 characters for security');
     }
-    if (options?.urlMaxLength) {
-      this.urlMaxLength = options.urlMaxLength;
-    }
-    if (options?.securityLogger) {
-      this.securityLogger = options.securityLogger;
+    if (this.urlMaxLength < 50) {
+      throw new Error('urlMaxLength must be at least 50 characters');
     }
     
-    // Initialize cached DOMPurify instance
+    // Initialize cached DOMPurify instance for performance
+    // This avoids creating a new JSDOM window for each sanitization
     if (!UpdateChecker.purifyWindow) {
       const dom = new JSDOM('');
       UpdateChecker.purifyWindow = dom.window;
@@ -59,6 +84,11 @@ export class UpdateChecker {
   
   /**
    * Execute a network operation with retry logic and exponential backoff
+   * @param operation - The async operation to execute
+   * @param maxRetries - Maximum number of retry attempts (default: 3)
+   * @param baseDelay - Base delay in milliseconds for exponential backoff (default: 1000ms)
+   * @returns Promise resolving to the operation result
+   * @throws The last error if all retries fail
    */
   private async retryNetworkOperation<T>(
     operation: () => Promise<T>, 
@@ -93,7 +123,9 @@ export class UpdateChecker {
   }
   
   /**
-   * Check for updates from GitHub releases
+   * Check for updates from GitHub releases with security and error handling
+   * @returns UpdateCheckResult if update info is available, null if no releases found
+   * @throws Error for network or API failures
    */
   async checkForUpdates(): Promise<UpdateCheckResult | null> {
     const currentVersion = await this.versionManager.getCurrentVersion();
@@ -129,7 +161,8 @@ export class UpdateChecker {
     
     const releaseData = await response.json();
     const latestVersion = releaseData.tag_name?.replace(/^v/, '') || releaseData.name;
-    const publishedAt = new Date(releaseData.published_at).toLocaleDateString();
+    // Use consistent date formatting method
+    const publishedAt = releaseData.published_at;
     
     // Compare versions
     const isUpdateAvailable = this.versionManager.compareVersions(currentVersion, latestVersion) < 0;
@@ -140,14 +173,18 @@ export class UpdateChecker {
       currentVersion,
       latestVersion,
       isUpdateAvailable,
-      releaseDate: publishedAt,
+      releaseDate: publishedAt,  // Will be formatted by formatDate() when displayed
       releaseNotes,
       releaseUrl: releaseData.html_url
     };
   }
   
   /**
-   * Format update check results for display
+   * Format update check results for display with comprehensive sanitization
+   * @param result - The update check result to format
+   * @param error - Optional error from update check
+   * @param personaIndicator - Optional persona indicator prefix
+   * @returns Formatted string safe for display
    */
   formatUpdateCheckResult(result: UpdateCheckResult | null, error?: Error, personaIndicator: string = ''): string {
     if (error) {
@@ -204,7 +241,15 @@ export class UpdateChecker {
   }
   
   /**
-   * Sanitize URLs to prevent dangerous schemes
+   * Sanitize URLs to prevent dangerous schemes and information disclosure
+   * 
+   * Security measures:
+   * - Length validation to prevent DoS
+   * - Whitelist approach: only http/https allowed
+   * - Sanitized logging to prevent sensitive data exposure
+   * 
+   * @param url - The URL to sanitize
+   * @returns Empty string if invalid/dangerous, original URL if safe
    */
   private sanitizeUrl(url: string): string {
     if (!url) return '';
@@ -240,7 +285,16 @@ export class UpdateChecker {
   }
   
   /**
-   * Sanitize release notes to prevent XSS and limit length
+   * Sanitize release notes to prevent XSS, command injection, and DoS
+   * 
+   * Security layers:
+   * 1. Length limiting (configurable, default 5000 chars)
+   * 2. HTML/JS sanitization via DOMPurify (no tags/attributes allowed)
+   * 3. Command injection pattern removal (backticks, command substitution)
+   * 4. OWASP pattern removal (PHP, ASP, hex/unicode/octal escapes)
+   * 
+   * @param notes - The release notes to sanitize
+   * @returns Sanitized release notes safe for display
    */
   private sanitizeReleaseNotes(notes: string): string {
     if (!notes) return 'See release notes on GitHub';
@@ -255,15 +309,24 @@ export class UpdateChecker {
       sanitized = sanitized.substring(0, this.releaseNotesMaxLength) + '...';
     }
     
-    // Use cached DOMPurify instance
-    if (!UpdateChecker.purify) {
-      throw new Error('DOMPurify not initialized');
+    // Use cached DOMPurify instance with automatic recovery
+    if (!UpdateChecker.purify || !UpdateChecker.purifyWindow) {
+      // Reinitialize if somehow corrupted - provides resilience
+      const dom = new JSDOM('');
+      UpdateChecker.purifyWindow = dom.window;
+      UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow);
     }
     
     const beforeSanitize = sanitized;
+    // DOMPurify configuration for maximum security
+    // ALLOWED_TAGS: [] strips all HTML tags
+    // ALLOWED_ATTR: [] strips all attributes
+    // Additional options for extra security
     sanitized = UpdateChecker.purify.sanitize(sanitized, { 
-      ALLOWED_TAGS: [],  // Strip all HTML tags
-      ALLOWED_ATTR: [] 
+      ALLOWED_TAGS: [],      // Strip all HTML tags
+      ALLOWED_ATTR: [],      // Strip all attributes
+      FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'link'],
+      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
     });
     
     if (beforeSanitize !== sanitized) {
@@ -272,7 +335,9 @@ export class UpdateChecker {
       });
     }
     
-    // Additional sanitization for command injection patterns with single regex pass
+    // Additional sanitization for command injection patterns
+    // Single-pass processing for performance while maintaining security
+    // These patterns cover various injection vectors beyond HTML/JS
     const patterns = [
       /`[^`]*`/g,           // Backtick expressions
       /\$\([^)]*\)/g,     // Command substitution
@@ -300,7 +365,9 @@ export class UpdateChecker {
   }
   
   /**
-   * Format date to human-readable format
+   * Format date to human-readable format with consistent timezone handling
+   * @param dateStr - ISO date string to format
+   * @returns Human-readable date string (e.g., "January 5, 2025")
    */
   private formatDate(dateStr: string): string {
     try {
@@ -322,7 +389,10 @@ export class UpdateChecker {
   }
   
   /**
-   * Log security events for monitoring
+   * Log security events for monitoring and alerting
+   * Only logs if securityLogger callback was provided in constructor
+   * @param event - The security event type
+   * @param details - Event details (sanitized to prevent info disclosure)
    */
   private logSecurityEvent(event: string, details: any): void {
     if (this.securityLogger) {
@@ -331,7 +401,9 @@ export class UpdateChecker {
   }
   
   /**
-   * Reset static cache (useful for long-running processes)
+   * Reset static DOMPurify cache (useful for long-running processes)
+   * This prevents memory accumulation in services that run for extended periods
+   * @static
    */
   public static resetCache(): void {
     UpdateChecker.purifyWindow = null;
