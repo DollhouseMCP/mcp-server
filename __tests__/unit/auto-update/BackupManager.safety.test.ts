@@ -113,7 +113,7 @@ describe('BackupManager Safety Mechanisms', () => {
         // If it doesn't throw, we're probably in a test environment
         expect(true).toBe(true);
       } catch (error) {
-        expect(error.message).toContain('cannot operate on production directory');
+        expect((error as Error).message).toContain('cannot operate on production directory');
       }
     });
   });
