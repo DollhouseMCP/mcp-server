@@ -122,8 +122,27 @@ jobs:
           echo "=== Running compiled test approach ==="
           echo "Explicitly setting working directory to: ${{ github.workspace }}"
           pwd
+          echo "=== Checking for tsconfig files ==="
+          ls -la tsconfig*.json || echo "No tsconfig files found"
+          echo "=== Checking git status ==="
+          git status --porcelain || echo "Git status failed"
+          echo "=== Checking if files were checked out ==="
+          git ls-tree -r HEAD --name-only | grep tsconfig || echo "No tsconfig in git"
           # Build the tests first
-          npm run build:test
+          echo "=== Running build:test ==="
+          echo "=== First, let's verify the file exists ==="
+          if [ -f "tsconfig.test.json" ]; then
+            echo "✓ tsconfig.test.json exists at $(pwd)/tsconfig.test.json"
+            echo "File size: $(ls -la tsconfig.test.json | awk '{print $5}') bytes"
+          else
+            echo "✗ tsconfig.test.json NOT FOUND at $(pwd)"
+          fi
+          echo "=== Let's run tsc directly with full path ==="
+          ./node_modules/.bin/tsc -p ./tsconfig.test.json || echo "Direct tsc with ./ failed"
+          echo "=== Now let's try absolute path ==="
+          ./node_modules/.bin/tsc -p "${PWD}/tsconfig.test.json" || echo "Direct tsc with absolute path failed"
+          echo "=== Original npm run approach ==="
+          npm run build:test || echo "npm run build:test failed"
           # Run the compiled tests using cross-env
           ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config jest.config.compiled.cjs --ci --watchAll=false
 
