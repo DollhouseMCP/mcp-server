@@ -60,6 +60,10 @@ jobs:
         run: |
           echo "=== Current directory ==="
           pwd
+          echo "=== Node version ==="
+          node --version
+          echo "=== NPM version ==="
+          npm --version
           echo "=== Root files ==="
           ls -la jest.* || echo "No jest files found"
           echo "=== Source files ==="
@@ -70,6 +74,10 @@ jobs:
           ls -la dist/update/ || echo "dist/update not found"
           echo "=== Test files ==="
           ls -la __tests__/unit/auto-update/ || echo "auto-update tests not found"
+          echo "=== NODE_PATH ==="
+          echo $NODE_PATH
+          echo "=== Jest config ==="
+          cat jest.config.cjs
 
       - name: Cache Jest
         uses: actions/cache@v4
