@@ -11,6 +11,7 @@ on:
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
+  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
 
 jobs:
   core-test:
@@ -57,6 +58,7 @@ jobs:
         run: npm run build
 
       - name: Debug file structure
+        shell: bash
         run: |
           echo "=== Current directory ==="
           pwd

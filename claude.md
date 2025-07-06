@@ -99,55 +99,37 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Configuration Validation** - Minimum security limits enforced (releaseNotesMaxLength >= 100)
 ✅ **28 Tests** - Complete coverage of security scenarios, performance, and edge cases
 
-## CI Test Failures Session Summary (July 6, 2025)
+## CI Test Failures Resolution (July 6, 2025)
 
-### Session 1: Initial CI Fixes (PR #75 - Merged)
-Successfully fixed immediate CI failures:
-1. **InputValidator timing attack test**: Threshold increased from 0.5 to 1.0 for CI environments
-2. **UpdateManager security test**: Fixed expectations to match actual error messages
-3. **Missing .js extensions**: Added to UpdateManager test imports
-4. **CI environment handling**: Tests now accept CI-specific errors
+### Critical File Deletion Issue - RESOLVED ✅
 
-### Session 2: Critical CI Issues Investigation (PR #80 - In Progress)
+**Root Cause**: BackupManager and UpdateManager were using `process.cwd()` directly, causing tests to operate on production directories and delete project files.
 
-#### Branch: `fix-ci-critical-issues`
+**Solution (PR #86 - Merged)**:
+1. Made `rootDir` configurable in BackupManager/UpdateManager constructors
+2. Added comprehensive safety checks:
+   - Path validation and traversal prevention
+   - Production directory detection (not hardcoded)
+   - Safe directory recognition
+3. Updated all tests to use temporary directories
+4. Added 10 new safety tests
 
-#### Changes Made:
-1. **Path Resolution Fixes**:
-   - Replaced all `__dirname` with `process.cwd()` in update modules and index.ts
-   - Made VersionManager search upward for package.json
-   
-2. **Import Consistency**:
-   - Added .js extensions to all auto-update test imports
-   - Fixed Jest configuration for module resolution
+**Results**:
+- ✅ All 221 tests passing locally
+- ✅ tsconfig.test.json no longer deleted
+- ✅ CI file deletion issue completely resolved
 
-3. **CI Debugging**:
-   - Temporarily disabled TypeScript cache
-   - Added extensive debug logging
+### Remaining CI Issues (Issue #88)
+1. **Windows Shell Syntax**: `2>/dev/null` doesn't work in PowerShell
+2. **Integration Tests**: Missing TEST_PERSONAS_DIR environment variable
 
-#### Current Status - STILL FAILING:
-Jest cannot resolve TypeScript modules in CI despite files existing. Error:
-```
-Cannot find module '../../../src/update/BackupManager.js'
-```
+These are unrelated to the file deletion issue and documented for future work.
 
-#### Root Cause:
-Jest's moduleNameMapper `'^(\\.{1,2}/.*)\\.js$': '$1'` is not working correctly in CI environment. Tests pass locally but fail in all CI environments (Ubuntu, macOS, Windows).
-
-#### Critical Learning:
-**ALL documentation MUST be in PR code, NOT separate comments** - breaks PR review bot
-
-#### Next Session Must:
-1. Analyze debug output from CI run
-2. Fix Jest module resolution in CI
-3. Re-enable TypeScript cache once fixed
-
-See `/docs/development/CI_FIXES_SESSION_2025_07_06.md` for detailed next steps.
+See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_CI_ISSUES.md` for details.
 
 ## Current Active Issues (GitHub Project):
 🔴 **Critical/High Priority**:
-- #79: Ubuntu CI failing with ENOENT errors (CRITICAL - blocking all PRs)
-- #78: Fix package.json path resolution in CI environment
+- #88: Windows shell syntax and integration test environment (NEW - remaining CI issues)
 - #29: Add MCP protocol integration tests
 - #30: Research multi-platform MCP compatibility (ChatGPT, BoltAI, Gemini)
 - #32: Create universal installer for multi-platform support
@@ -158,15 +140,16 @@ See `/docs/development/CI_FIXES_SESSION_2025_07_06.md` for detailed next steps.
 - #72: Add rate limiting for UpdateChecker to prevent abuse
 - #73: Add signature verification for GitHub releases
 - #77: Implement CI environment detection for security tests
+- #87: Future enhancements from PR #86 review (BackupManager security/flexibility)
 
 🟢 **Low Priority**:
 - #74: Security enhancement ideas (enhanced audit logging, CSP headers)
 
 ### Next Strategic Priorities:
-1. **Fix Ubuntu CI ENOENT errors** (Issue #79) - CRITICAL
-2. **Fix package.json path resolution** (Issue #78) - Blocking tests
-3. **Universal MCP Compatibility** - Support ChatGPT, BoltAI, Gemini, and other AI tools
-4. **Enhanced Marketplace** - Bi-directional sync, analytics, collaborative features  
+1. **Fix remaining CI issues** (Issue #88) - Windows shell syntax and integration tests
+2. **Universal MCP Compatibility** - Support ChatGPT, BoltAI, Gemini, and other AI tools
+3. **Enhanced Marketplace** - Bi-directional sync, analytics, collaborative features
+4. **Security Enhancements** - Implement recommendations from Issue #87  
 
 ## Current Workflow Status (July 6, 2025)
 
@@ -451,11 +434,12 @@ rollback_update true                # Revert to previous version if needed
 ### Testing Status
 - ✅ **Build System**: TypeScript compilation working perfectly
 - ✅ **Server Startup**: DollhouseMCP server boots correctly with all 23 MCP tools
-- ✅ **Comprehensive Test Suite**: 211 tests (195 passing in CI due to file issues)
+- ✅ **Comprehensive Test Suite**: 221 tests all passing locally
 - ✅ **Auto-Update System**: Complete test coverage including edge cases and security validation
 - ✅ **Dependency Validation**: Version parsing and requirements testing
 - ✅ **Security Testing**: Command injection prevention and input validation
-- ❌ **CI Testing**: Ubuntu failing with ENOENT errors, macOS has timeouts
+- ✅ **BackupManager Safety**: Path validation, traversal prevention, production detection
+- ❌ **CI Testing**: Windows shell syntax, integration test environment issues
 - ✅ **Persona Loading**: Unique ID generation and metadata parsing
 - ✅ **GitHub Integration**: Marketplace browsing and installation working
 - ✅ **User Identity**: Environment-based attribution functional
@@ -580,13 +564,14 @@ rollback_update true                # Revert to previous version if needed
 ## Development Environment Notes
 
 **Current Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/`  
-**Git Status**: CI fixes attempted, still failing on Ubuntu/macOS  
+**Git Status**: On main branch, PR #86 merged successfully  
 **Build Status**: All TypeScript compiling correctly (23 MCP tools)  
+**Test Status**: All 221 tests passing locally  
 **Server Status**: Startup verified locally, all 23 MCP tools functional  
 **Marketplace Status**: Fully operational with 5 initial personas across categories  
-**Security Status**: UpdateChecker fully secured with comprehensive protections
-**CI Status**: CRITICAL - Ubuntu failing with ENOENT, macOS has timeouts, Windows passing
+**Security Status**: UpdateChecker and BackupManager fully secured with comprehensive protections
+**CI Status**: Core file deletion issue RESOLVED ✅; remaining issues are Windows shell syntax and integration test env
 
-**Ready for Phase 2C**: After fixing critical CI issues
+**Key Achievement**: CI file deletion issue fixed - tests no longer delete production files
 
-This represents a **production-ready persona management platform** with comprehensive security, but currently blocked by CI infrastructure issues that must be resolved before further development.
+This represents a **production-ready persona management platform** with the critical CI file deletion issue resolved. Remaining CI issues are minor and don't affect core functionality.

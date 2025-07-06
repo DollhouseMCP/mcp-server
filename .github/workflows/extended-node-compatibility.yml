@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_OPTIONS: --max-old-space-size=4096
+  NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
+  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
 
 jobs:
   extended-compatibility:
