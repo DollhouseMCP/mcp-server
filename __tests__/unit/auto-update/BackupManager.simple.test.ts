@@ -1,12 +1,15 @@
 import { describe, it, expect } from '@jest/globals';
 import { BackupManager } from '../../../src/update/BackupManager.js';
+import * as path from 'path';
+import * as os from 'os';
 
 // Simple integration test - runs against real implementation
 describe('BackupManager (Simple)', () => {
   let backupManager: BackupManager;
+  const testDir = path.join(os.tmpdir(), 'dollhouse-test-backup', Date.now().toString());
 
   beforeEach(() => {
-    backupManager = new BackupManager();
+    backupManager = new BackupManager(testDir);
   });
 
   describe('basic functionality', () => {

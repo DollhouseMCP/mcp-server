@@ -1,12 +1,15 @@
 import { describe, it, expect } from '@jest/globals';
 import { UpdateManager } from '../../../src/update/UpdateManager.js';
+import * as path from 'path';
+import * as os from 'os';
 
 // Simple integration test - runs against real implementation
 describe('UpdateManager (Simple)', () => {
   let updateManager: UpdateManager;
+  const testDir = path.join(os.tmpdir(), 'dollhouse-test-update', Date.now().toString());
 
   beforeEach(() => {
-    updateManager = new UpdateManager();
+    updateManager = new UpdateManager(testDir);
   });
 
   describe('basic functionality', () => {

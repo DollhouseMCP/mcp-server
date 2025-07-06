@@ -22,13 +22,12 @@ export class UpdateManager {
   private backupManager: BackupManager;
   private rootDir: string;
   
-  constructor() {
+  constructor(rootDir?: string) {
+    this.rootDir = rootDir || process.cwd();
     this.versionManager = new VersionManager();
     this.updateChecker = new UpdateChecker(this.versionManager);
     this.dependencyChecker = new DependencyChecker(this.versionManager);
-    this.backupManager = new BackupManager();
-    // Use process.cwd() as the root directory
-    this.rootDir = process.cwd();
+    this.backupManager = new BackupManager(this.rootDir);
   }
   
   /**

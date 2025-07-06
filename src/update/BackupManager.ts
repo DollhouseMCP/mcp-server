@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { safeExec } from '../utils/git.js';
 
@@ -16,10 +17,71 @@ export class BackupManager {
   private rootDir: string;
   private backupsDir: string;
   
-  constructor() {
-    // Use process.cwd() as the root directory
-    this.rootDir = process.cwd();
+  constructor(rootDir?: string) {
+    // Validate rootDir parameter if provided
+    if (rootDir) {
+      // Prevent path traversal attacks first
+      if (rootDir.includes('../') || rootDir.includes('..\\')) {
+        throw new Error('rootDir cannot contain path traversal sequences');
+      }
+      // Then check if it's absolute
+      if (!path.isAbsolute(rootDir)) {
+        throw new Error('rootDir must be an absolute path');
+      }
+    }
+    
+    // Allow override for testing, default to process.cwd()
+    this.rootDir = rootDir || process.cwd();
+    
+    // Safety check: Don't allow operations on directories containing critical files
+    // This prevents accidental deletion of the actual project directory
+    if (this.hasProductionFiles() && !this.isSafeTestDirectory()) {
+      throw new Error('BackupManager cannot operate on production directory. Pass a safe test directory to the constructor.');
+    }
+    
     this.backupsDir = path.join(this.rootDir, "..", "dollhousemcp-backups");
+  }
+  
+  /**
+   * Check if the directory contains production files
+   */
+  private hasProductionFiles(): boolean {
+    try {
+      const productionIndicators = [
+        'package.json',
+        'tsconfig.json',
+        '.git',
+        'src',
+        'LICENSE'
+      ];
+      
+      const files = fsSync.readdirSync(this.rootDir);
+      const hasProductionFile = productionIndicators.some(indicator => 
+        files.includes(indicator)
+      );
+      
+      // Additional check: if package.json exists, check if it's a real project
+      if (hasProductionFile && files.includes('package.json')) {
+        const packageJsonPath = path.join(this.rootDir, 'package.json');
+        const packageJson = JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8'));
+        // If it has a name and dependencies, it's likely a real project
+        return !!(packageJson.name && packageJson.dependencies);
+      }
+      
+      return hasProductionFile;
+    } catch {
+      // If we can't read the directory, assume it's safe
+      return false;
+    }
+  }
+  
+  /**
+   * Check if this appears to be a safe test directory
+   */
+  private isSafeTestDirectory(): boolean {
+    const safePaths = ['test', 'tmp', 'temp', '.test', '__test__'];
+    const dirPath = this.rootDir.toLowerCase();
+    return safePaths.some(safe => dirPath.includes(safe));
   }
   
   /**
