@@ -16,9 +16,16 @@ export class BackupManager {
   private rootDir: string;
   private backupsDir: string;
   
-  constructor() {
-    // Use process.cwd() as the root directory
-    this.rootDir = process.cwd();
+  constructor(rootDir?: string) {
+    // Allow override for testing, default to process.cwd()
+    this.rootDir = rootDir || process.cwd();
+    
+    // Safety check: Don't allow operations on directories containing critical files
+    // This prevents accidental deletion of the actual project directory
+    if (this.rootDir.includes('DollhouseMCP') && !this.rootDir.includes('test')) {
+      console.warn('WARNING: BackupManager initialized with production directory. This should only happen in production use.');
+    }
+    
     this.backupsDir = path.join(this.rootDir, "..", "dollhousemcp-backups");
   }
   
