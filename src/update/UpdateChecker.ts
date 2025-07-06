@@ -4,6 +4,8 @@
 
 import { RELEASES_API_URL } from '../config/constants.js';
 import { VersionManager } from './VersionManager.js';
+import DOMPurify from 'dompurify';
+import { JSDOM } from 'jsdom';
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -18,6 +20,9 @@ export class UpdateChecker {
   private versionManager: VersionManager;
   
   constructor(versionManager: VersionManager) {
+    if (!versionManager) {
+      throw new Error('VersionManager is required');
+    }
     this.versionManager = versionManager;
   }
   
@@ -98,9 +103,7 @@ export class UpdateChecker {
     // Compare versions
     const isUpdateAvailable = this.versionManager.compareVersions(currentVersion, latestVersion) < 0;
     
-    const releaseNotes = releaseData.body 
-      ? releaseData.body.substring(0, 500) + (releaseData.body.length > 500 ? '...' : '')
-      : 'See release notes on GitHub';
+    const releaseNotes = releaseData.body || 'See release notes on GitHub';
     
     return {
       currentVersion,
@@ -146,16 +149,16 @@ export class UpdateChecker {
       personaIndicator + '📦 **Update Check Complete**\n\n',
       '🔄 **Current Version:** ' + result.currentVersion + '\n',
       '📡 **Latest Version:** ' + result.latestVersion + '\n',
-      '📅 **Released:** ' + result.releaseDate + '\n\n'
+      '📅 **Released:** ' + this.formatDate(result.releaseDate) + '\n\n'
     ];
     
     if (result.isUpdateAvailable) {
       statusParts.push(
         '✨ **Update Available!**\n\n',
-        '**What\'s New:**\n' + result.releaseNotes + '\n\n',
+        '**What\'s New:**\n' + this.sanitizeReleaseNotes(result.releaseNotes) + '\n\n',
         '**To Update:**\n',
         '• Use: `update_server true`\n',
-        '• Or visit: ' + result.releaseUrl + '\n\n',
+        '• Or visit: ' + this.sanitizeUrl(result.releaseUrl) + '\n\n',
         '⚠️ **Note:** Update will restart the server and reload all personas.'
       );
     } else {
@@ -167,5 +170,72 @@ export class UpdateChecker {
     }
     
     return statusParts.join('');
+  }
+  
+  /**
+   * Sanitize URLs to prevent dangerous schemes
+   */
+  private sanitizeUrl(url: string): string {
+    if (!url) return '';
+    
+    // Only allow http and https schemes
+    const allowedSchemes = ['http:', 'https:'];
+    try {
+      const parsed = new URL(url);
+      if (!allowedSchemes.includes(parsed.protocol)) {
+        return '';  // Return empty string for dangerous schemes
+      }
+      return url;
+    } catch {
+      return '';  // Invalid URL
+    }
+  }
+  
+  /**
+   * Sanitize release notes to prevent XSS and limit length
+   */
+  private sanitizeReleaseNotes(notes: string): string {
+    if (!notes) return 'See release notes on GitHub';
+    
+    // Apply length limit (5000 chars)
+    let sanitized = notes;
+    if (sanitized.length > 5000) {
+      sanitized = sanitized.substring(0, 5000) + '...';
+    }
+    
+    // Sanitize HTML/JavaScript
+    const window = new JSDOM('').window;
+    const purify = DOMPurify(window);
+    sanitized = purify.sanitize(sanitized, { 
+      ALLOWED_TAGS: [],  // Strip all HTML tags
+      ALLOWED_ATTR: [] 
+    });
+    
+    // Additional sanitization for command injection patterns
+    sanitized = sanitized
+      .replace(/`[^`]*`/g, '')  // Remove backtick expressions
+      .replace(/\$\([^)]*\)/g, '')  // Remove command substitution
+      .replace(/\$\{[^}]*\}/g, '');  // Remove variable expansion
+    
+    return sanitized;
+  }
+  
+  /**
+   * Format date to human-readable format
+   */
+  private formatDate(dateStr: string): string {
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        return dateStr;  // Return original if invalid
+      }
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    } catch {
+      return dateStr;  // Return original on error
+    }
   }
 }
