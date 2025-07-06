@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_OPTIONS: --max-old-space-size=4096
+  NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
 
 jobs:
@@ -90,6 +90,9 @@ jobs:
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
+
+      - name: Clear Jest cache
+        run: npx jest --clearCache
 
       - name: Run test suite
         run: npm test

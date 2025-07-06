@@ -37,7 +37,8 @@ const config = {
     'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
   moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1'
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^(\\.\\.?\\/.+)\\.js$': '$1'
   }
 };
 
