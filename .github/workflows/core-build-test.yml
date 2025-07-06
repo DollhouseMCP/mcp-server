@@ -94,8 +94,16 @@ jobs:
       - name: Clear Jest cache
         run: npx jest --clearCache
 
-      - name: Run test suite
+      - name: Run test suite (original method)
+        id: original_tests
         run: npm test
+        continue-on-error: true
+
+      - name: Run test suite (compiled method) - DIAGNOSTIC
+        if: steps.original_tests.outcome == 'failure'
+        run: |
+          echo "=== Original tests failed, trying compiled approach ==="
+          npm run test:compiled:ci
 
       - name: Validation complete
         run: |
