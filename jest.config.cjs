@@ -9,9 +9,9 @@ const config = {
       useESM: true,
       tsconfig: {
         allowJs: true,
-        rootDir: '.'
-      },
-      isolatedModules: true
+        rootDir: '.',
+        isolatedModules: true
+      }
     }]
   },
   testMatch: [
@@ -38,7 +38,8 @@ const config = {
   ],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1'
-  }
+  },
+  resolver: undefined
 };
 
 module.exports = config;

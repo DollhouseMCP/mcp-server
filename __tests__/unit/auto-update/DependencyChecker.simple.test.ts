@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@jest/globals';
-import { DependencyChecker } from '../../../src/update/DependencyChecker';
-import { VersionManager } from '../../../src/update/VersionManager';
+import { DependencyChecker } from '../../../src/update/DependencyChecker.js';
+import { VersionManager } from '../../../src/update/VersionManager.js';
 
 // Simple integration test - runs against real implementation
 describe('DependencyChecker (Simple)', () => {

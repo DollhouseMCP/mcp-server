@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { UpdateChecker } from '../../../src/update/UpdateChecker';
-import { VersionManager } from '../../../src/update/VersionManager';
+import { UpdateChecker } from '../../../src/update/UpdateChecker.js';
+import { VersionManager } from '../../../src/update/VersionManager.js';
 
 describe('UpdateChecker (Performance Enhancements)', () => {
   let versionManager: VersionManager;
