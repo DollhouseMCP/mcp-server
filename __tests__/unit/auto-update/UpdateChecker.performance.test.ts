@@ -58,7 +58,8 @@ describe('UpdateChecker (Performance Enhancements)', () => {
       expect(formatted).not.toContain(longUrl);
       expect(securityLogger).toHaveBeenCalledWith('url_too_long', expect.objectContaining({
         length: longUrl.length,
-        maxLength: customLimit
+        maxLength: customLimit,
+        urlPrefix: expect.any(String)
       }));
     });
   });
@@ -98,7 +99,10 @@ describe('UpdateChecker (Performance Enhancements)', () => {
       updateChecker.formatUpdateCheckResult(result);
 
       expect(securityLogger).toHaveBeenCalledWith('dangerous_url_scheme', 
-        expect.objectContaining({ scheme: 'javascript:' })
+        expect.objectContaining({ 
+          scheme: 'javascript:',
+          host: ''
+        })
       );
     });
 
@@ -232,6 +236,8 @@ describe('UpdateChecker (Performance Enhancements)', () => {
 
   describe('DOMPurify caching', () => {
     it('should reuse DOMPurify instance across multiple calls', () => {
+      // Reset cache first to ensure clean test
+      UpdateChecker.resetCache();
       const updateChecker1 = new UpdateChecker(versionManager);
       const updateChecker2 = new UpdateChecker(versionManager);
 
@@ -252,6 +258,29 @@ describe('UpdateChecker (Performance Enhancements)', () => {
       expect(formatted2).toContain('Test release');
       expect(formatted1).not.toContain('<b>');
       expect(formatted2).not.toContain('<b>');
+    });
+
+    it('should provide static method to reset cache', () => {
+      // Create instance to populate cache
+      const updateChecker1 = new UpdateChecker(versionManager);
+      
+      // Reset cache
+      UpdateChecker.resetCache();
+      
+      // Create new instance after reset - cache should be repopulated
+      const updateChecker2 = new UpdateChecker(versionManager);
+      
+      const result = {
+        currentVersion: '1.0.0',
+        latestVersion: '1.1.0',
+        isUpdateAvailable: true,
+        releaseDate: '2025-01-06T10:00:00Z',
+        releaseNotes: '<script>test</script>',
+        releaseUrl: 'https://github.com/test/repo'
+      };
+      
+      const formatted = updateChecker2.formatUpdateCheckResult(result);
+      expect(formatted).not.toContain('<script>');
     });
   });
 });

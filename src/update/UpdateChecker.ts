@@ -18,8 +18,8 @@ export interface UpdateCheckResult {
 
 export class UpdateChecker {
   private versionManager: VersionManager;
-  private static purifyWindow: any = null;  // JSDOM window type
-  private static purify: any = null;  // DOMPurify instance
+  private static purifyWindow: any = null;
+  private static purify: any = null;
   private releaseNotesMaxLength: number = 5000;
   private urlMaxLength: number = 2048;
   private securityLogger?: (event: string, details: any) => void;
@@ -50,8 +50,10 @@ export class UpdateChecker {
     
     // Initialize cached DOMPurify instance
     if (!UpdateChecker.purifyWindow) {
-      UpdateChecker.purifyWindow = new JSDOM('').window;
-      UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow as any);
+      const dom = new JSDOM('');
+      UpdateChecker.purifyWindow = dom.window;
+      // DOMPurify expects a Window-like object from JSDOM
+      UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow);
     }
   }
   
@@ -209,7 +211,11 @@ export class UpdateChecker {
     
     // Check URL length
     if (url.length > this.urlMaxLength) {
-      this.logSecurityEvent('url_too_long', { length: url.length, maxLength: this.urlMaxLength });
+      this.logSecurityEvent('url_too_long', { 
+        length: url.length, 
+        maxLength: this.urlMaxLength,
+        urlPrefix: url.substring(0, 50) + '...'  // Only log first 50 chars
+      });
       return '';  // URL too long
     }
     
@@ -218,12 +224,17 @@ export class UpdateChecker {
     try {
       const parsed = new URL(url);
       if (!allowedSchemes.includes(parsed.protocol)) {
-        this.logSecurityEvent('dangerous_url_scheme', { scheme: parsed.protocol, url });
+        this.logSecurityEvent('dangerous_url_scheme', { 
+          scheme: parsed.protocol,
+          host: parsed.hostname  // Log only hostname, not full URL
+        });
         return '';  // Return empty string for dangerous schemes
       }
       return url;
     } catch {
-      this.logSecurityEvent('invalid_url', { url });
+      this.logSecurityEvent('invalid_url', { 
+        urlLength: url.length  // Log length only, not content
+      });
       return '';  // Invalid URL
     }
   }
@@ -269,7 +280,9 @@ export class UpdateChecker {
       /<\?[^>]*\?>/g,     // PHP tags (OWASP)
       /&lt;%[^>]*%&gt;/g,  // ASP tags (HTML-encoded by DOMPurify)
       /<%[^>]*%>/g,         // ASP tags (raw)
-      /\\x[0-9a-fA-F]{2}/g // Hex escapes (OWASP)
+      /\\x[0-9a-fA-F]{2}/g, // Hex escapes (OWASP)
+      /\\u[0-9a-fA-F]{4}/g, // Unicode escapes
+      /\\[0-7]{1,3}/g      // Octal escapes
     ];
     
     const beforePatterns = sanitized;
@@ -315,5 +328,13 @@ export class UpdateChecker {
     if (this.securityLogger) {
       this.securityLogger(event, details);
     }
+  }
+  
+  /**
+   * Reset static cache (useful for long-running processes)
+   */
+  public static resetCache(): void {
+    UpdateChecker.purifyWindow = null;
+    UpdateChecker.purify = null;
   }
 }
