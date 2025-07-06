@@ -60,6 +60,8 @@ jobs:
         run: |
           echo "=== Current directory ==="
           pwd
+          echo "=== Root files ==="
+          ls -la jest.* || echo "No jest files found"
           echo "=== Source files ==="
           ls -la src/update/ || echo "src/update not found"
           echo "=== Config files ==="

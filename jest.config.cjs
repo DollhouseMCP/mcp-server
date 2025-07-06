@@ -2,6 +2,7 @@
 const config = {
   preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
+  rootDir: '.',
   extensionsToTreatAsEsm: ['.ts'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', { 
@@ -28,9 +29,9 @@ const config = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.mjs'],
-  modulePathIgnorePatterns: ['<rootDir>/dist/'],
-  roots: ['<rootDir>'],
+  setupFilesAfterEnv: ['./jest.setup.mjs'],
+  modulePathIgnorePatterns: ['./dist/'],
+  roots: ['.'],
   testTimeout: 10000,
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol|zod)/)'
