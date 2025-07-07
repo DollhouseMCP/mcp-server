@@ -24,11 +24,14 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Run badge verification
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        shell: bash
         run: |
           chmod +x scripts/verify-badges.sh
           ./scripts/verify-badges.sh
           
       - name: Validate badge URLs
+        shell: bash
         run: |
           # Extract and validate all badge URLs
           echo "Validating badge URLs in README..."
@@ -52,6 +55,7 @@ jobs:
           fi
           
       - name: Check badge image loading
+        shell: bash
         run: |
           # Test if badge images are accessible
           urls=$(grep -oE "https://img.shields.io/badge/[^)]*" README.md | head -3)

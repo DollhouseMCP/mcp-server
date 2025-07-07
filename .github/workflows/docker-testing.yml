@@ -49,6 +49,8 @@ jobs:
             docker-buildx-${{ runner.os }}-
 
       - name: Build Docker image (builder stage)
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        shell: bash
         run: |
           echo "🔨 Building Docker image for ${{ matrix.platform }}..."
           # Convert platform to tag-safe format (replace / with -)
@@ -63,6 +65,7 @@ jobs:
             .
 
       - name: Build Docker image (production stage)
+        shell: bash
         run: |
           echo "🏗️ Building production Docker image for ${{ matrix.platform }}..."
           # Convert platform to tag-safe format (replace / with -)
@@ -86,6 +89,7 @@ jobs:
         if: matrix.platform == 'linux/amd64'  # Only scan one platform to avoid duplication
 
       - name: Test MCP server initialization (with security constraints)
+        shell: bash
         run: |
           echo "🚀 Testing MCP server initialization for ${{ matrix.platform }}..."
           
@@ -128,6 +132,7 @@ jobs:
           fi
 
       - name: Test MCP server functionality
+        shell: bash
         run: |
           echo "🔍 Testing MCP server functionality for ${{ matrix.platform }}..."
           
@@ -199,11 +204,13 @@ jobs:
           fetch-depth: 1
 
       - name: Test Docker Compose build
+        shell: bash
         run: |
           echo "🐳 Testing Docker Compose build..."
           docker compose build dollhousemcp
 
       - name: Test Docker Compose startup
+        shell: bash
         run: |
           echo "🚀 Testing Docker Compose startup..."
           
@@ -235,6 +242,7 @@ jobs:
           fi
 
       - name: Test Docker Compose functionality
+        shell: bash
         run: |
           echo "🔍 Testing Docker Compose MCP server functionality..."
           
