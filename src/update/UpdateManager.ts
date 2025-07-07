@@ -253,6 +253,7 @@ export class UpdateManager {
       const currentVersion = await this.versionManager.getCurrentVersion();
       const dependencies = await this.dependencyChecker.checkDependencies();
       const backups = await this.backupManager.listBackups();
+      const rateLimitStatus = this.updateChecker.getRateLimitStatus();
       
       // Get git status
       let gitStatus = 'Unknown';
@@ -288,6 +289,16 @@ export class UpdateManager {
       if (backups.length > 0) {
         statusParts.push(`• Latest Backup: ${backups[0].timestamp} (v${backups[0].version || 'unknown'})\n`);
         statusParts.push(`• Oldest Backup: ${backups[backups.length - 1].timestamp}\n`);
+      }
+      
+      statusParts.push(
+        '\n**Rate Limit Status:**\n',
+        `• Update Checks Remaining: ${rateLimitStatus.remainingRequests}/10 per hour\n`,
+        `• Rate Limit Resets: ${rateLimitStatus.resetTime.toLocaleTimeString()}\n`
+      );
+      
+      if (!rateLimitStatus.allowed && rateLimitStatus.waitTimeSeconds) {
+        statusParts.push(`• ⏳ Wait ${rateLimitStatus.waitTimeSeconds} seconds before next check\n`);
       }
       
       statusParts.push(

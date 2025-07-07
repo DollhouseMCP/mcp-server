@@ -5,19 +5,47 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2025-07-07
 
 ### Added
-- Persona active indicator system with 2 new MCP tools (Issue #31)
-- `configure_indicator` tool for customizing persona indicator display
-- `get_indicator_config` tool for viewing current indicator settings
-- Environment variable support for persistent indicator configuration
-- Multiple indicator styles: full, minimal, compact, and custom
-- 23 new tests for indicator functionality (102 total tests)
+- **Rate Limiting** (#72): Token bucket algorithm to prevent API abuse
+  - Configurable limits (default: 10 checks/hour, 30s minimum delay)
+  - Clear error messages with wait times and reset information
+  - Rate limit status in server status display
+- **Signature Verification** (#73): GPG signature verification for release authenticity
+  - Verifies git tag signatures during update checks
+  - Shows signature status and signer information
+  - Configurable trusted key management
+  - Development mode allows unsigned releases
+- **CI Environment Tests** (#92): 44 new tests across 3 files
+  - Environment variable validation
+  - Shell compatibility verification
+  - Path safety and traversal prevention
+  - Total tests increased from 265 to 309
+- **Auto-Update Documentation** (#62): Comprehensive architecture documentation
+  - UpdateManager, BackupManager, UpdateChecker, RateLimiter, SignatureVerifier
+  - Workflow diagrams and troubleshooting guides
+  - Security implementation details
+- **NPM Publishing Preparation** (#40): Package ready for npm registry
+  - Added "files", "publishConfig", and "funding" fields
+  - Created .npmignore file
+  - Package size optimized to 278.8 kB
+
+### Security
+- Enhanced UpdateChecker security (already implemented in v1.1.0)
+- Rate limiting prevents update check abuse
+- Signature verification ensures release authenticity
+- Comprehensive security testing with 28+ security-specific tests
 
 ### Changed
-- Total MCP tools increased from 21 to 23
-- Enhanced documentation with Claude Desktop setup clarifications
+- Total tests increased from 265 to 309
+- Enhanced error messages for better user experience
+- Improved mock setup for ESM modules in tests
+
+### Fixed
+- SignatureVerifier test mock setup issues
+- UpdateChecker error handling for non-Error objects
+- Path resolution for CI environments
 
 ## [1.1.0] - 2025-07-04
 
@@ -63,5 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - User authorization controls for Claude triggers
 - Command injection prevention in auto-update system
 
+[1.2.0]: https://github.com/mickdarling/DollhouseMCP/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mickdarling/DollhouseMCP/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mickdarling/DollhouseMCP/releases/tag/v1.0.0

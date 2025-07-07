@@ -17,6 +17,8 @@
 
 import { RELEASES_API_URL } from '../config/constants.js';
 import { VersionManager } from './VersionManager.js';
+import { RateLimiter, RateLimiterFactory } from './RateLimiter.js';
+import { SignatureVerifier } from './SignatureVerifier.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 
@@ -27,6 +29,9 @@ export interface UpdateCheckResult {
   releaseDate: string;
   releaseNotes: string;
   releaseUrl: string;
+  tagName?: string;
+  signatureVerified?: boolean;
+  signerInfo?: string;
 }
 
 // Type declarations for better type safety
@@ -34,6 +39,8 @@ type DOMPurifyInstance = ReturnType<typeof DOMPurify>;
 
 export class UpdateChecker {
   private versionManager: VersionManager;
+  private rateLimiter: RateLimiter;
+  private signatureVerifier: SignatureVerifier;
   
   // Static cache for DOMPurify to improve performance
   // We use 'any' for JSDOM window to avoid complex type conflicts
@@ -45,6 +52,7 @@ export class UpdateChecker {
   private readonly releaseNotesMaxLength: number;
   private readonly urlMaxLength: number;
   private readonly securityLogger?: (event: string, details: any) => void;
+  private readonly requireSignedReleases: boolean;
   
   constructor(
     versionManager: VersionManager,
@@ -52,6 +60,9 @@ export class UpdateChecker {
       releaseNotesMaxLength?: number;
       urlMaxLength?: number;
       securityLogger?: (event: string, details: any) => void;
+      rateLimiter?: RateLimiter;
+      signatureVerifier?: SignatureVerifier;
+      requireSignedReleases?: boolean;
     }
   ) {
     if (!versionManager) {
@@ -63,6 +74,18 @@ export class UpdateChecker {
     this.releaseNotesMaxLength = options?.releaseNotesMaxLength ?? 5000;
     this.urlMaxLength = options?.urlMaxLength ?? 2048;
     this.securityLogger = options?.securityLogger;
+    
+    // Use provided rate limiter or create default
+    this.rateLimiter = options?.rateLimiter || RateLimiterFactory.createUpdateCheckLimiter();
+    
+    // Use provided signature verifier or create default
+    this.signatureVerifier = options?.signatureVerifier || new SignatureVerifier({
+      // In production, we should require signed releases
+      allowUnsignedInDev: process.env.NODE_ENV !== 'production'
+    });
+    
+    // Whether to require signed releases (default: true in production)
+    this.requireSignedReleases = options?.requireSignedReleases ?? (process.env.NODE_ENV === 'production');
     
     // Validate configuration for security
     if (this.releaseNotesMaxLength < 100) {
@@ -125,9 +148,29 @@ export class UpdateChecker {
   /**
    * Check for updates from GitHub releases with security and error handling
    * @returns UpdateCheckResult if update info is available, null if no releases found
-   * @throws Error for network or API failures
+   * @throws Error for network or API failures or rate limit exceeded
    */
   async checkForUpdates(): Promise<UpdateCheckResult | null> {
+    // Check rate limit before making API request
+    const rateLimitStatus = this.rateLimiter.checkLimit();
+    if (!rateLimitStatus.allowed) {
+      const waitTime = Math.ceil(rateLimitStatus.retryAfterMs! / 1000);
+      const waitMinutes = Math.floor(waitTime / 60);
+      const waitSeconds = waitTime % 60;
+      
+      const timeStr = waitMinutes > 0 
+        ? `${waitMinutes} minute${waitMinutes > 1 ? 's' : ''} ${waitSeconds} second${waitSeconds !== 1 ? 's' : ''}`
+        : `${waitSeconds} second${waitSeconds !== 1 ? 's' : ''}`;
+      
+      throw new Error(
+        `Rate limit exceeded. Please wait ${timeStr} before checking for updates again. ` +
+        `(${rateLimitStatus.remainingTokens} requests remaining, resets at ${rateLimitStatus.resetTime.toLocaleTimeString()})`
+      );
+    }
+    
+    // Consume a rate limit token
+    this.rateLimiter.consumeToken();
+    
     const currentVersion = await this.versionManager.getCurrentVersion();
     
     // Check GitHub releases API for latest version with retry logic
@@ -160,7 +203,8 @@ export class UpdateChecker {
     }
     
     const releaseData = await response.json();
-    const latestVersion = releaseData.tag_name?.replace(/^v/, '') || releaseData.name;
+    const tagName = releaseData.tag_name;
+    const latestVersion = tagName?.replace(/^v/, '') || releaseData.name;
     // Use consistent date formatting method
     const publishedAt = releaseData.published_at;
     
@@ -169,13 +213,83 @@ export class UpdateChecker {
     
     const releaseNotes = releaseData.body || 'See release notes on GitHub';
     
+    // Verify release signature if we have a tag
+    let signatureVerified = false;
+    let signerInfo: string | undefined;
+    
+    if (tagName) {
+      try {
+        const verificationResult = await this.signatureVerifier.verifyTagSignature(tagName);
+        signatureVerified = verificationResult.verified;
+        
+        if (verificationResult.signerEmail) {
+          signerInfo = verificationResult.signerEmail;
+          if (verificationResult.signerKey) {
+            signerInfo += ` (${verificationResult.signerKey})`;
+          }
+        }
+        
+        // Log signature verification
+        if (this.securityLogger) {
+          this.securityLogger('signature_verification', {
+            tagName,
+            verified: signatureVerified,
+            signerKey: verificationResult.signerKey,
+            error: verificationResult.error
+          });
+        }
+        
+        // If signature verification is required and failed, throw error
+        if (this.requireSignedReleases && !signatureVerified) {
+          throw new Error(
+            `Release signature verification failed: ${verificationResult.error || 'Unknown error'}. ` +
+            'Only signed releases are accepted in production mode.'
+          );
+        }
+      } catch (error) {
+        // If we can't verify the signature and it's required, fail
+        if (this.requireSignedReleases) {
+          throw error;
+        }
+        // Otherwise, log and continue
+        if (this.securityLogger) {
+          this.securityLogger('signature_verification_error', {
+            tagName,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    }
+    
     return {
       currentVersion,
       latestVersion,
       isUpdateAvailable,
       releaseDate: publishedAt,  // Will be formatted by formatDate() when displayed
       releaseNotes,
-      releaseUrl: releaseData.html_url
+      releaseUrl: releaseData.html_url,
+      tagName,
+      signatureVerified,
+      signerInfo
+    };
+  }
+  
+  /**
+   * Get current rate limit status
+   * @returns Current rate limit status including remaining requests and reset time
+   */
+  getRateLimitStatus(): { 
+    allowed: boolean; 
+    remainingRequests: number; 
+    resetTime: Date;
+    waitTimeSeconds?: number;
+  } {
+    const status = this.rateLimiter.getStatus();
+    return {
+      allowed: status.allowed,
+      remainingRequests: status.remainingTokens,
+      resetTime: status.resetTime,
+      waitTimeSeconds: status.retryAfterMs ? Math.ceil(status.retryAfterMs / 1000) : undefined
     };
   }
   
@@ -189,10 +303,25 @@ export class UpdateChecker {
   formatUpdateCheckResult(result: UpdateCheckResult | null, error?: Error, personaIndicator: string = ''): string {
     if (error) {
       const isAbortError = error.name === 'AbortError';
+      const errorMessage = error.message || String(error);
+      const isRateLimitError = errorMessage.includes('Rate limit exceeded');
+      
+      if (isRateLimitError) {
+        return personaIndicator + 
+          '⏳ **Rate Limit Exceeded**\n\n' +
+          error.message + '\n\n' +
+          '**Why this happens:**\n' +
+          '• Update checks are limited to prevent API abuse\n' +
+          '• GitHub API has rate limits for all applications\n\n' +
+          '**What you can do:**\n' +
+          '• Wait for the specified time before checking again\n' +
+          '• Use `get_server_status` to see current version without API calls\n' +
+          '• Visit https://github.com/mickdarling/DollhouseMCP/releases directly';
+      }
       
       return personaIndicator + 
         '❌ **Update Check Failed**\n\n' +
-        'Error: ' + error.message + '\n\n' +
+        'Error: ' + errorMessage + '\n\n' +
         (isAbortError 
           ? 'The request timed out. Please check your internet connection and try again.'
           : 'Tips:\n' +
@@ -217,8 +346,23 @@ export class UpdateChecker {
       personaIndicator + '📦 **Update Check Complete**\n\n',
       '🔄 **Current Version:** ' + result.currentVersion + '\n',
       '📡 **Latest Version:** ' + result.latestVersion + '\n',
-      '📅 **Released:** ' + this.formatDate(result.releaseDate) + '\n\n'
+      '📅 **Released:** ' + this.formatDate(result.releaseDate) + '\n'
     ];
+    
+    // Add signature verification status
+    if (result.signatureVerified !== undefined) {
+      if (result.signatureVerified) {
+        statusParts.push('✅ **Signature:** Verified');
+        if (result.signerInfo) {
+          statusParts.push(` by ${result.signerInfo}`);
+        }
+        statusParts.push('\n');
+      } else {
+        statusParts.push('⚠️ **Signature:** Not verified\n');
+      }
+    }
+    
+    statusParts.push('\n');
     
     if (result.isUpdateAvailable) {
       statusParts.push(
