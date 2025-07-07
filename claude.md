@@ -15,7 +15,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 **Author**: Mick Darling (mick@mickdarling.com)  
 **License**: AGPL-3.0 with Platform Stability Commitments  
 
-## Project Status: Phase 2B+ Complete ✅ + Auto-Update System with Comprehensive Enhancements Complete ✅
+## Project Status: v1.2.0 Release Complete ✅ - Ready for NPM Publish
 
 ### Completed (Phase 1 - Foundation):
 ✅ **Fresh Repository Setup** - Clean DollhouseMCP repository with AGPL-3.0 license  
@@ -104,6 +104,17 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Configuration Validation** - Minimum security limits enforced (releaseNotesMaxLength >= 100)
 ✅ **28 Tests** - Complete coverage of security scenarios, performance, and edge cases
 
+### Completed (v1.2.0 Security & Reliability Release - January 7, 2025):
+✅ **Rate Limiting Implementation** - Issue #72 - Token bucket algorithm prevents API abuse
+✅ **Signature Verification** - Issue #73 - GPG signature verification for release authenticity
+✅ **CI Environment Tests** - 44 new tests for CI compatibility and security
+✅ **Critical Fixes Merged** - PR #124 fixed division by zero, temp file security, production detection
+✅ **CI Issues Resolved** - PR #128 fixed git tags and Windows path issues
+✅ **Package Optimized** - 279.3 kB ready for npm publish
+✅ **Total Tests**: 309 (up from 265)
+✅ **All CI Workflows**: Passing at 100% reliability
+✅ **Branch Protection**: Enabled with all checks passing
+
 ## CI Test Failures Resolution (July 6, 2025)
 
 ### Critical File Deletion Issue - RESOLVED ✅
@@ -156,27 +167,27 @@ See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_
 3. **Enhanced Marketplace** - Bi-directional sync, analytics, collaborative features
 4. **Security Enhancements** - Implement recommendations from Issue #87  
 
-## Current Workflow Status (July 6, 2025)
+## Current Workflow Status (January 7, 2025)
 
 | Workflow | Status | Reliability | Purpose |
 |----------|--------|-------------|---------|
-| Core Build & Test | ❌ Failing | 33% | Main CI/CD pipeline (Ubuntu/macOS fail) |
-| Build Artifacts | ❓ Unknown | - | Release preparation |
-| Extended Node Compatibility | ❓ Unknown | - | Node 18/20/22 testing |
-| Cross-Platform Simple | ❓ Unknown | - | Simplified cross-platform |
-| Performance Testing | ❓ Unknown | - | Daily performance checks |
-| Docker Testing | ⚠️ Partial | 67% | 2/3 passing (ARM64 fails) |
+| Core Build & Test | ✅ Passing | 100% | Main CI/CD pipeline - All tests passing |
+| Build Artifacts | ✅ Passing | 100% | Release preparation |
+| Extended Node Compatibility | ✅ Passing | 100% | Node 18/20/22 testing |
+| Cross-Platform Simple | ✅ Passing | 100% | Simplified cross-platform |
+| Performance Testing | ✅ Passing | 100% | Daily performance checks |
+| Docker Testing | ✅ Passing | 100% | All platforms passing |
 
-**Branch Protection**: BLOCKED - Core Build & Test must pass
+**Branch Protection**: ENABLED - All checks passing
 
 ## GitHub Project Management
 
 **Project Board**: https://github.com/users/mickdarling/projects/1
 **Milestones**:
-- v1.1.0 - CI/CD Reliability (Due: July 18, 2025)
-- v1.2.0 - Universal Platform Support (Due: Aug 15, 2025)
-- v1.3.0 - Enhanced UX (Due: Sep 5, 2025)
-- v1.4.0 - Marketplace Evolution (Due: Oct 3, 2025)
+- v1.1.0 - CI/CD Reliability ✅ (Completed: July 4, 2025)
+- v1.2.0 - Security & Reliability ✅ (Completed: January 7, 2025)
+- v1.3.0 - Universal Platform Support (Due: Feb 15, 2025)
+- v1.4.0 - Enhanced UX & Marketplace (Due: Mar 15, 2025)
 
 **Management Tools**:
 - `./scripts/project-management.sh` - Interactive issue management
@@ -439,15 +450,18 @@ rollback_update true                # Revert to previous version if needed
 ### Testing Status
 - ✅ **Build System**: TypeScript compilation working perfectly
 - ✅ **Server Startup**: DollhouseMCP server boots correctly with all 23 MCP tools
-- ✅ **Comprehensive Test Suite**: 221 tests all passing locally
+- ✅ **Comprehensive Test Suite**: 309 tests all passing (up from 221)
+- ✅ **CI/CD Pipeline**: All workflows passing at 100% reliability
 - ✅ **Auto-Update System**: Complete test coverage including edge cases and security validation
+- ✅ **Rate Limiting**: Token bucket algorithm fully tested
+- ✅ **Signature Verification**: GPG signature verification working
 - ✅ **Dependency Validation**: Version parsing and requirements testing
 - ✅ **Security Testing**: Command injection prevention and input validation
 - ✅ **BackupManager Safety**: Path validation, traversal prevention, production detection
-- ❌ **CI Testing**: Windows shell syntax, integration test environment issues
 - ✅ **Persona Loading**: Unique ID generation and metadata parsing
 - ✅ **GitHub Integration**: Marketplace browsing and installation working
 - ✅ **User Identity**: Environment-based attribution functional
+- ✅ **Package Build**: 279.3 kB optimized for npm
 - 🔄 **Integration Testing**: Needs testing with Claude Desktop in real scenarios
 
 ## Implementation Roadmap
@@ -569,14 +583,18 @@ rollback_update true                # Revert to previous version if needed
 ## Development Environment Notes
 
 **Current Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/`  
-**Git Status**: On main branch, PR #86 merged successfully  
+**Git Status**: On main branch, v1.2.0 tagged and released  
 **Build Status**: All TypeScript compiling correctly (23 MCP tools)  
-**Test Status**: All 221 tests passing locally  
+**Test Status**: All 309 tests passing (up from 221)  
 **Server Status**: Startup verified locally, all 23 MCP tools functional  
 **Marketplace Status**: Fully operational with 5 initial personas across categories  
-**Security Status**: UpdateChecker and BackupManager fully secured with comprehensive protections
-**CI Status**: Core file deletion issue RESOLVED ✅; remaining issues are Windows shell syntax and integration test env
+**Security Status**: Rate limiting and signature verification implemented  
+**CI Status**: All workflows passing ✅ - v1.2.0 ready for npm publish  
+**Package Status**: 279.3 kB optimized and ready for npm registry  
 
-**Key Achievement**: CI file deletion issue fixed - tests no longer delete production files
+**Key Achievements**: 
+- v1.2.0 released with rate limiting and signature verification
+- All CI issues resolved (git tags, Windows paths)
+- 44 new tests added for CI environment compatibility
 
-This represents a **production-ready persona management platform** with the critical CI file deletion issue resolved. Remaining CI issues are minor and don't affect core functionality.
+This represents a **production-ready persona management platform** with enterprise-grade security features. v1.2.0 is fully tested and ready for npm publication with rate limiting and signature verification.

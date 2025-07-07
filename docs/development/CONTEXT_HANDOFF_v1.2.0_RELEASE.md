@@ -7,7 +7,11 @@
 - ✅ Changes pushed directly to main (bypassed branch protection)
 - ✅ CI issues fixed and all tests passing
 - ✅ Critical security fixes merged (PR #124)
+- ✅ Git tag fetch issue fixed (PR #128)
+- ✅ Windows path validation fixed (PR #128)
+- ✅ All 309 tests passing in CI
 - 🎯 **Ready for npm publish**
+- 📦 **Package size**: 279.3 kB
 
 ### Completed PRs
 
