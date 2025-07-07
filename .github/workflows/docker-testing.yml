@@ -49,6 +49,7 @@ jobs:
             docker-buildx-${{ runner.os }}-
 
       - name: Build Docker image (builder stage)
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
         shell: bash
         run: |
           echo "🔨 Building Docker image for ${{ matrix.platform }}..."
