@@ -1,5 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { UpdateChecker } from '../../../src/update/UpdateChecker.js';
+
+// Mock SignatureVerifier before importing UpdateChecker
+jest.unstable_mockModule('../../../src/update/SignatureVerifier.js', () => ({
+  SignatureVerifier: jest.fn().mockImplementation(() => ({
+    verifyTagSignature: jest.fn().mockResolvedValue({
+      verified: true,
+      signerKey: 'MOCKKEY123',
+      signerEmail: 'test@example.com',
+      error: undefined
+    })
+  }))
+}));
+
+const { UpdateChecker } = await import('../../../src/update/UpdateChecker.js');
 import { VersionManager } from '../../../src/update/VersionManager.js';
 import { RateLimiter } from '../../../src/update/RateLimiter.js';
 
@@ -10,14 +23,9 @@ describe('UpdateChecker Rate Limiting', () => {
   let updateChecker: UpdateChecker;
   let mockVersionManager: VersionManager;
   let mockRateLimiter: RateLimiter;
-  let originalAllowUnsigned: string | undefined;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
-    // Save and set environment variable to allow unsigned releases in tests
-    originalAllowUnsigned = process.env.ALLOW_UNSIGNED_RELEASES;
-    process.env.ALLOW_UNSIGNED_RELEASES = 'true';
     
     // Setup mock version manager
     mockVersionManager = {
@@ -27,15 +35,6 @@ describe('UpdateChecker Rate Limiting', () => {
     
     // Reset fetch mock
     (global.fetch as jest.MockedFunction<typeof fetch>).mockReset();
-  });
-
-  afterEach(() => {
-    // Restore original environment
-    if (originalAllowUnsigned !== undefined) {
-      process.env.ALLOW_UNSIGNED_RELEASES = originalAllowUnsigned;
-    } else {
-      delete process.env.ALLOW_UNSIGNED_RELEASES;
-    }
   });
 
   describe('Rate limit enforcement', () => {
