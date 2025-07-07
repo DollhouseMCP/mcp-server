@@ -1,6 +1,8 @@
 # Claude Project Context: DollhouseMCP
 
-@docs/development/NEXT_ITERATION_CONTEXT_2025_01_07.md
+@docs/development/CONTEXT_HANDOFF_2025_01_07.md
+@docs/development/BRANCH_PROTECTION_CONFIG.md
+@docs/development/PRIORITY_WORK_QUEUE.md
 @docs/development/PR_BEST_PRACTICES.md
 
 ## Project Overview
