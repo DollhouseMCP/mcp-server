@@ -23,6 +23,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
+      - name: Fetch tags for signature verification
+        shell: bash
+        run: git fetch --tags --force
+      
       - name: Validate environment
         # Use bash for cross-platform compatibility (Windows/macOS/Linux)
         shell: bash

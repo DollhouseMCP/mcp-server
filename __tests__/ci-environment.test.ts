@@ -25,7 +25,10 @@ describe('CI Environment Tests', () => {
       if (isCI) {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
-        expect(process.env.TEST_PERSONAS_DIR).toMatch(/^[/\\].+/); // Should be absolute path
+        // Use path.isAbsolute for cross-platform compatibility
+        const testPersonasDir = process.env.TEST_PERSONAS_DIR!;
+        const isAbsolutePath = path.isAbsolute(testPersonasDir);
+        expect(isAbsolutePath).toBe(true);
       } else {
         // In local development, it might not be set
         expect(true).toBe(true);
