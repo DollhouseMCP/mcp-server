@@ -81,7 +81,40 @@ export class BackupManager {
   private isSafeTestDirectory(): boolean {
     const safePaths = ['test', 'tmp', 'temp', '.test', '__test__'];
     const dirPath = this.rootDir.toLowerCase();
+    
+    // Check if running in Docker container
+    if (this.isDockerEnvironment()) {
+      return true; // Docker containers are immutable, updates don't apply
+    }
+    
     return safePaths.some(safe => dirPath.includes(safe));
+  }
+  
+  /**
+   * Check if running in a Docker container
+   */
+  private isDockerEnvironment(): boolean {
+    // Check common Docker indicators
+    if (process.env.DOLLHOUSE_DISABLE_UPDATES === 'true') {
+      return true;
+    }
+    
+    // Check if running from /app directory (common Docker practice)
+    if (this.rootDir === '/app') {
+      return true;
+    }
+    
+    // Check for Docker-specific files
+    try {
+      const hasDockerEnv = fsSync.existsSync('/.dockerenv');
+      if (hasDockerEnv) {
+        return true;
+      }
+    } catch {
+      // Ignore errors
+    }
+    
+    return false;
   }
   
   /**
