@@ -137,7 +137,7 @@ jobs:
           echo "------------------------------------"
 
           # Clean build for accurate timing
-          rm -rf dist/ 2>/dev/null || true
+          rm -rf dist/ || true
 
           HAS_PYTHON3=$(command -v python3 &> /dev/null && echo "true" || echo "false")
 
@@ -210,7 +210,7 @@ jobs:
           # Wait for startup indicators or timeout
           SUCCESS=false
           for i in {1..10}; do
-            if grep -q "Server running\|MCP server\|tools.*registered" server-perf.log 2>/dev/null; then
+            if grep -q "Server running\|MCP server\|tools.*registered" server-perf.log; then
               if [ "$HAS_PYTHON3" = "true" ]; then
                 END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
                 SERVER_STARTUP_TIME=$((END_TIME - START_TIME))
@@ -232,8 +232,8 @@ jobs:
           fi
 
           # Cleanup
-          kill $SERVER_PID 2>/dev/null || true
-          wait $SERVER_PID 2>/dev/null || true
+          kill $SERVER_PID || true
+          wait $SERVER_PID || true
           echo ""
 
       - name: Performance Summary and Analysis

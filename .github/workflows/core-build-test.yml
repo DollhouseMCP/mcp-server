@@ -31,6 +31,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Validate environment
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        shell: bash
+        run: |
+          echo "🔍 Validating CI environment..."
+          echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
+          echo "NODE_OPTIONS: $NODE_OPTIONS"
+          echo "CI: $CI"
+          
+          # Verify TEST_PERSONAS_DIR is set
+          if [ -z "$TEST_PERSONAS_DIR" ]; then
+            echo "❌ TEST_PERSONAS_DIR is not set!"
+            exit 1
+          fi
+          
+          # Display workspace info for debugging
+          echo "GitHub workspace: ${{ github.workspace }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Current directory: $(pwd)"
+          
+          echo "✅ Environment validation passed"
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
@@ -67,15 +89,15 @@ jobs:
           echo "=== NPM version ==="
           npm --version
           echo "=== Root files ==="
-          ls jest.* 2>/dev/null || echo "No jest files found"
+          if ls jest.* >/dev/null 2>&1; then ls jest.*; else echo "No jest files found"; fi
           echo "=== Source files ==="
-          ls src/update/ 2>/dev/null || echo "src/update not found"
+          if [ -d "src/update/" ]; then ls src/update/; else echo "src/update not found"; fi
           echo "=== Config files ==="
-          ls src/config/ 2>/dev/null || echo "src/config not found"
+          if [ -d "src/config/" ]; then ls src/config/; else echo "src/config not found"; fi
           echo "=== Dist files ==="
-          ls dist/update/ 2>/dev/null || echo "dist/update not found"
+          if [ -d "dist/update/" ]; then ls dist/update/; else echo "dist/update not found"; fi
           echo "=== Test files ==="
-          ls __tests__/unit/auto-update/ 2>/dev/null || echo "auto-update tests not found"
+          if [ -d "__tests__/unit/auto-update/" ]; then ls __tests__/unit/auto-update/; else echo "auto-update tests not found"; fi
           echo "=== NODE_PATH ==="
           echo $NODE_PATH
           echo "=== Jest config ==="

@@ -22,6 +22,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Validate environment
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        shell: bash
+        run: |
+          echo "🔍 Validating CI environment..."
+          echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
+          echo "NODE_OPTIONS: $NODE_OPTIONS"
+          echo "CI: $CI"
+          
+          # Verify TEST_PERSONAS_DIR is set
+          if [ -z "$TEST_PERSONAS_DIR" ]; then
+            echo "❌ TEST_PERSONAS_DIR is not set!"
+            exit 1
+          fi
+          
+          # Display workspace info for debugging
+          echo "GitHub workspace: ${{ github.workspace }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Current directory: $(pwd)"
+          
+          echo "✅ Environment validation passed"
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
