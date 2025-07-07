@@ -69,6 +69,8 @@ ENV NODE_ENV=production
 ENV PERSONAS_DIR=/app/personas
 # Add Node.js heap size limit for ARM64 compatibility
 ENV NODE_OPTIONS="--max-old-space-size=256"
+# Disable updates in Docker container (containers are immutable)
+ENV DOLLHOUSE_DISABLE_UPDATES=true
 
 # Default command with explicit platform handling
 CMD ["node", "--trace-warnings", "dist/index.js"]
