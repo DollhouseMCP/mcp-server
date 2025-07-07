@@ -5,101 +5,99 @@
 ### Release Status
 - ✅ v1.2.0 tagged and released on GitHub
 - ✅ Changes pushed directly to main (bypassed branch protection)
-- ⚠️ CI failing on release due to missing fixes
+- ✅ CI issues fixed and all tests passing
+- ✅ Critical security fixes merged (PR #124)
+- 🎯 **Ready for npm publish**
 
-### Open PRs
+### Completed PRs
 
-#### PR #123: v1.2.0 Release Review (Review Only)
-- **Purpose**: Get Claude's review of already-merged v1.2.0
-- **Status**: Windows CI failing, Claude review complete
-- **Action**: Will be closed without merging (code already in main)
+#### PR #128: CI Fixes (MERGED)
+- **Purpose**: Fix git tags and Windows path issues
+- **Status**: Merged successfully
+- **Fixed**:
+  - Added `git fetch --tags` to all CI workflows
+  - Fixed Windows path validation with `path.isAbsolute()`
 
-#### PR #124: Critical Fixes from Review
+#### PR #124: Critical Fixes from Review (MERGED)
 - **Purpose**: Fix critical issues Claude identified
-- **Status**: ALL CI failing (was meant to fix issues, made it worse)
+- **Status**: Merged with all CI passing
 - **Contains**:
   - RateLimiter division by zero fix
   - SignatureVerifier secure temp files
   - UpdateChecker better production detection
+  - Test fixes for CI compatibility
 
-## Critical Issues Blocking Progress
+#### PR #123: v1.2.0 Release Review (CLOSED)
+- **Purpose**: Get Claude's review of already-merged v1.2.0
+- **Status**: Closed - served its purpose for review
+- **Result**: Led to PR #124 with critical fixes
 
-### Issue #125: Git Tags Missing in CI
+## Issues Resolved
+
+### Issue #125: Git Tags Missing in CI ✅
 - **Problem**: `error: tag 'v1.1.0' not found` in CI environment
 - **Impact**: SignatureVerifier tests fail
-- **Fix**: Add `git fetch --tags` to CI workflows
+- **Fix**: Added `git fetch --tags` to all CI workflows (PR #128)
 
-### Issue #126: Windows Path Validation
+### Issue #126: Windows Path Validation ✅
 - **Problem**: Mixed path separators on Windows
 - **Location**: `__tests__/ci-environment.test.ts`
-- **Fix**: Use `path.isAbsolute()` instead of regex
+- **Fix**: Used `path.isAbsolute()` instead of regex (PR #128)
 
-## Next Session Action Plan
+## NPM Publishing Instructions
 
-### 1. Fix CI Issues (Priority: Critical)
+### Prerequisites ✅
+- v1.2.0 tag created and pushed
+- All CI tests passing
+- Critical fixes merged (PR #124, #128)
+- Branch protection enabled and working
+
+### Publishing Steps
+
+1. **Update local main branch**:
 ```bash
-# Start on main
 git checkout main
 git pull
-
-# Create fix branch
-git checkout -b fix-ci-tag-and-path-issues
 ```
 
-#### Fix 1: Add tags to ALL CI workflows
-Add this step after the checkout action in these files:
-- `.github/workflows/core-build-test.yml`
-- `.github/workflows/extended-node-compatibility.yml`
-- `.github/workflows/cross-platform-simple.yml`
-
-```yaml
-- name: Fetch tags for signature verification
-  shell: bash
-  run: git fetch --tags --force
-```
-
-#### Fix 2: Update path validation in tests
-Edit `__tests__/ci-environment.test.ts` around line 95:
-```typescript
-// Replace:
-expect(testPersonasDir).toMatch(/^[/\\].+/);
-
-// With:
-const isAbsolutePath = path.isAbsolute(testPersonasDir);
-expect(isAbsolutePath).toBe(true);
-```
-
-#### Fix 3: Consider environment variable for signature tests
-The isProduction logic in UpdateChecker triggers in CI. May need to set:
-```yaml
-env:
-  ALLOW_UNSIGNED_RELEASES: true
-```
-Or modify the tests to handle CI environment properly.
-
-### 2. Test Fixes Locally
+2. **Verify version and build**:
 ```bash
-# Run affected tests
-npm test -- __tests__/ci-environment.test.ts
-npm test -- __tests__/unit/auto-update/SignatureVerifier.test.ts
-npm test -- __tests__/unit/auto-update/UpdateChecker.ratelimit.test.ts
+npm run build
+cat package.json | grep version
+# Should show: "version": "1.2.0"
 ```
 
-### 3. Create PR and Monitor
+3. **Test package locally**:
 ```bash
-# Push fixes
-git push origin fix-ci-tag-and-path-issues
-
-# Create PR
-gh pr create --title "Fix CI: Add git tags and fix Windows paths"
+npm pack
+# Creates dollhousemcp-1.2.0.tgz (279.3 kB)
 ```
 
-### 4. After CI Passes
-1. Merge the CI fix PR
-2. Rebase PR #124 on main to get the CI fixes
-3. Verify PR #124 now passes
-4. Merge PR #124
-5. Close PR #123 with thanks
+4. **Publish to npm**:
+```bash
+npm publish
+```
+
+5. **Verify publication**:
+```bash
+npm view dollhousemcp
+```
+
+### Post-Publishing Tasks
+
+1. **Close related issues**:
+   - Close #125 (Git tags in CI) ✅
+   - Close #126 (Windows paths) ✅
+   - Close #72 (Rate limiting) ✅
+   - Close #73 (Signature verification) ✅
+
+2. **Update project board**:
+   - Move completed items to Done
+   - Update v1.2.0 milestone
+
+3. **Announce release**:
+   - Update GitHub release notes if needed
+   - Post in relevant channels
 
 ## Technical Details
 
