@@ -91,8 +91,8 @@ describe('CI Environment Tests', () => {
     it('should handle cross-platform commands correctly', () => {
       // Test commands that should work on all platforms
       const commands = [
-        { cmd: 'echo "test"', expected: 'test' },
-        { cmd: 'node --version', pattern: /^v\d+\.\d+\.\d+$/ }
+        { cmd: 'node --version', pattern: /^v\d+\.\d+\.\d+$/ },
+        { cmd: 'node -e "console.log(\'test\')"', expected: 'test' }
       ];
 
       commands.forEach(({ cmd, expected, pattern }) => {

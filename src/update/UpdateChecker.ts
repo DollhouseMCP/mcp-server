@@ -78,14 +78,19 @@ export class UpdateChecker {
     // Use provided rate limiter or create default
     this.rateLimiter = options?.rateLimiter || RateLimiterFactory.createUpdateCheckLimiter();
     
+    // Determine if we're in production environment
+    const isProduction = process.env.NODE_ENV === 'production' || 
+                        process.env.CI === 'true' ||
+                        !process.env.ALLOW_UNSIGNED_RELEASES;
+    
     // Use provided signature verifier or create default
     this.signatureVerifier = options?.signatureVerifier || new SignatureVerifier({
       // In production, we should require signed releases
-      allowUnsignedInDev: process.env.NODE_ENV !== 'production'
+      allowUnsignedInDev: !isProduction
     });
     
     // Whether to require signed releases (default: true in production)
-    this.requireSignedReleases = options?.requireSignedReleases ?? (process.env.NODE_ENV === 'production');
+    this.requireSignedReleases = options?.requireSignedReleases ?? isProduction;
     
     // Validate configuration for security
     if (this.releaseNotesMaxLength < 100) {

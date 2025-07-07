@@ -12,6 +12,7 @@ import { safeExec } from '../utils/git.js';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
 
 export interface SignatureVerificationResult {
   verified: boolean;
@@ -238,8 +239,8 @@ export class SignatureVerifier {
    */
   async importPublicKey(keyData: string): Promise<boolean> {
     try {
-      // Write key data to temporary file
-      const tempFile = path.join(process.cwd(), `.gpg-import-${Date.now()}.asc`);
+      // Write key data to temporary file with secure random name
+      const tempFile = path.join(process.cwd(), `.gpg-import-${randomBytes(8).toString('hex')}.asc`);
       await fs.writeFile(tempFile, keyData);
       
       try {

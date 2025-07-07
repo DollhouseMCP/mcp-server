@@ -1,5 +1,18 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { UpdateChecker } from '../../../src/update/UpdateChecker.js';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+
+// Mock SignatureVerifier before importing UpdateChecker
+jest.unstable_mockModule('../../../src/update/SignatureVerifier.js', () => ({
+  SignatureVerifier: jest.fn().mockImplementation(() => ({
+    verifyTagSignature: jest.fn().mockResolvedValue({
+      verified: true,
+      signerKey: 'MOCKKEY123',
+      signerEmail: 'test@example.com',
+      error: undefined
+    })
+  }))
+}));
+
+const { UpdateChecker } = await import('../../../src/update/UpdateChecker.js');
 import { VersionManager } from '../../../src/update/VersionManager.js';
 import { RateLimiter } from '../../../src/update/RateLimiter.js';
 
