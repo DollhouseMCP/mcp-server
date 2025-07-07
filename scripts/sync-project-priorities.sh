@@ -19,6 +19,18 @@ NC='\033[0m'
 echo -e "${BLUE}=== GitHub Project Priority Sync Tool ===${NC}"
 echo ""
 
+# Validate permissions before proceeding
+validate_permissions() {
+    if ! gh auth status --hostname github.com 2>/dev/null | grep -q "project"; then
+        echo -e "${RED}Error: Missing project permissions${NC}"
+        echo "Run: gh auth refresh -s project"
+        exit 1
+    fi
+}
+
+# Check permissions first
+validate_permissions
+
 # Get current user and repo info
 OWNER=$(gh api user --jq .login)
 REPO_OWNER=$(gh repo view --json owner --jq .owner.login)
@@ -360,6 +372,12 @@ main() {
     list_projects
     echo ""
     read -p "Enter project number: " PROJECT_NUM
+    
+    # Validate project number
+    if ! [[ "$PROJECT_NUM" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error: Project number must be a positive integer${NC}"
+        exit 1
+    fi
     
     # Get project ID
     PROJECT_ID=$(gh api graphql -f query='

@@ -238,17 +238,32 @@ while true; do
             
             read -p "P0/High option ID: " HIGH_OPTION_ID
             if [ "$HIGH_OPTION_ID" != "skip" ] && [ -n "$HIGH_OPTION_ID" ]; then
-                update_field_option "$HIGH_OPTION_ID" "🔴 High" "RED"
+                # Validate option ID format
+                if ! [[ "$HIGH_OPTION_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                    echo -e "${RED}Error: Invalid option ID format${NC}"
+                else
+                    update_field_option "$HIGH_OPTION_ID" "🔴 High" "RED"
+                fi
             fi
             
             read -p "P1/Medium option ID: " MEDIUM_OPTION_ID
             if [ "$MEDIUM_OPTION_ID" != "skip" ] && [ -n "$MEDIUM_OPTION_ID" ]; then
-                update_field_option "$MEDIUM_OPTION_ID" "🟡 Medium" "YELLOW"
+                # Validate option ID format
+                if ! [[ "$MEDIUM_OPTION_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                    echo -e "${RED}Error: Invalid option ID format${NC}"
+                else
+                    update_field_option "$MEDIUM_OPTION_ID" "🟡 Medium" "YELLOW"
+                fi
             fi
             
             read -p "P2/Low option ID: " LOW_OPTION_ID
             if [ "$LOW_OPTION_ID" != "skip" ] && [ -n "$LOW_OPTION_ID" ]; then
-                update_field_option "$LOW_OPTION_ID" "🟢 Low" "GREEN"
+                # Validate option ID format
+                if ! [[ "$LOW_OPTION_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                    echo -e "${RED}Error: Invalid option ID format${NC}"
+                else
+                    update_field_option "$LOW_OPTION_ID" "🟢 Low" "GREEN"
+                fi
             fi
             ;;
         3)
@@ -259,7 +274,21 @@ while true; do
             read -p "Medium priority option ID (🟡 Medium): " MEDIUM_OPTION_ID
             read -p "Low priority option ID (🟢 Low): " LOW_OPTION_ID
             
-            sync_issue_priorities
+            # Validate all option IDs before proceeding
+            local valid=true
+            for id_name in "HIGH_OPTION_ID" "MEDIUM_OPTION_ID" "LOW_OPTION_ID"; do
+                local id_value="${!id_name}"
+                if [ -z "$id_value" ] || ! [[ "$id_value" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                    echo -e "${RED}Error: Invalid ${id_name//_OPTION_ID/ priority} option ID format${NC}"
+                    valid=false
+                fi
+            done
+            
+            if [ "$valid" = true ]; then
+                sync_issue_priorities
+            else
+                echo -e "${RED}Please provide valid option IDs${NC}"
+            fi
             ;;
         4)
             echo -e "\n${YELLOW}Running full update...${NC}"
