@@ -31,6 +31,10 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Fetch tags for signature verification
+        shell: bash
+        run: git fetch --tags --force
+
       - name: Validate environment
         # Use bash for cross-platform compatibility (Windows/macOS/Linux)
         shell: bash
