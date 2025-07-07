@@ -1,5 +1,8 @@
 # Claude Project Context: DollhouseMCP
 
+@docs/development/NEXT_ITERATION_CONTEXT_2025_01_07.md
+@docs/development/PR_BEST_PRACTICES.md
+
 ## Project Overview
 
 DollhouseMCP is a professional Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files. It allows Claude and other compatible AI assistants to activate and switch between different behavioral personas, with an integrated GitHub-powered marketplace for sharing and monetizing personas.
