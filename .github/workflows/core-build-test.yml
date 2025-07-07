@@ -103,6 +103,7 @@ jobs:
 
       - name: Debug failed tests environment
         if: steps.original_tests.outcome == 'failure'
+        shell: bash
         run: |
           echo "=== Original tests failed, debugging environment ==="
           echo "Current directory: $(pwd)"

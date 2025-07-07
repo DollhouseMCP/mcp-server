@@ -50,6 +50,7 @@ jobs:
         run: npm run build
 
       - name: Verify build artifacts
+        shell: bash
         run: |
           echo "🔍 Verifying build artifacts..."
           
