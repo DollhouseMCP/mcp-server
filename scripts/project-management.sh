@@ -23,7 +23,8 @@ show_menu() {
     echo "6. View my assigned issues"
     echo "7. View project metrics"
     echo "8. Update issue labels"
-    echo "9. Exit"
+    echo "9. Sync priorities with project board"
+    echo "10. Exit"
 }
 
 # View issues by priority
@@ -189,6 +190,51 @@ update_labels() {
     esac
 }
 
+# Sync with project board
+sync_with_project() {
+    echo -e "${BLUE}Sync Priorities with Project Board${NC}"
+    echo ""
+    echo "This will sync issue priority labels with your GitHub Project board."
+    echo ""
+    echo "Options:"
+    echo "1. Run automated sync (sync-project-priorities.sh)"
+    echo "2. Update priority field names only (update-priority-names.sh)"
+    echo "3. View GraphQL examples (priority-graphql-example.sh)"
+    echo "4. Cancel"
+    
+    read -p "Choice: " sync_choice
+    
+    case $sync_choice in
+        1)
+            if [ -f "./scripts/sync-project-priorities.sh" ]; then
+                ./scripts/sync-project-priorities.sh
+            else
+                echo -e "${RED}sync-project-priorities.sh not found${NC}"
+            fi
+            ;;
+        2)
+            if [ -f "./scripts/update-priority-names.sh" ]; then
+                ./scripts/update-priority-names.sh
+            else
+                echo -e "${RED}update-priority-names.sh not found${NC}"
+            fi
+            ;;
+        3)
+            if [ -f "./scripts/priority-graphql-example.sh" ]; then
+                ./scripts/priority-graphql-example.sh
+            else
+                echo -e "${RED}priority-graphql-example.sh not found${NC}"
+            fi
+            ;;
+        4)
+            echo "Cancelled"
+            ;;
+        *)
+            echo -e "${RED}Invalid choice${NC}"
+            ;;
+    esac
+}
+
 # Main loop
 while true; do
     show_menu
@@ -203,7 +249,8 @@ while true; do
         6) view_my_issues ;;
         7) view_metrics ;;
         8) update_labels ;;
-        9) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
+        9) sync_with_project ;;
+        10) echo -e "${GREEN}Goodbye!${NC}"; exit 0 ;;
         *) echo -e "${RED}Invalid choice${NC}" ;;
     esac
     
