@@ -155,6 +155,29 @@ export class BackupManager {
       // node_modules doesn't exist or copy failed, that's okay
     }
     
+    // Backup all persona files (including user-created ones not in git)
+    const personasDir = path.join(this.rootDir, 'personas');
+    const backupPersonasDir = path.join(backupPath, 'personas');
+    
+    try {
+      await fs.access(personasDir);
+      await fs.mkdir(backupPersonasDir, { recursive: true });
+      
+      const personaFiles = await fs.readdir(personasDir);
+      for (const file of personaFiles) {
+        if (file.endsWith('.md')) {
+          const sourcePath = path.join(personasDir, file);
+          const destPath = path.join(backupPersonasDir, file);
+          
+          // Copy the file, overwriting if it already exists from git archive
+          await fs.copyFile(sourcePath, destPath);
+        }
+      }
+    } catch (error) {
+      // Log warning but don't fail the backup
+      console.error('Warning: Could not backup all personas:', error);
+    }
+    
     // Save backup metadata
     const metadata = {
       timestamp,

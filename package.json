@@ -1,6 +1,6 @@
 {
   "name": "dollhousemcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -91,7 +91,7 @@
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",
-    "@types/node": "^24.0.10",
+    "@types/node": "^20.19.5",
     "cross-env": "^7.0.3",
     "jest": "^30.0.4",
     "js-yaml": "^4.1.0",
@@ -101,6 +101,7 @@
     "typescript": "^5.8.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
   }
 }

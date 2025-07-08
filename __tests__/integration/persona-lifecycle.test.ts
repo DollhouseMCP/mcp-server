@@ -222,6 +222,15 @@ describe('Persona Lifecycle Integration', () => {
       const persona = testServer.personaManager.findPersona('Creative Writer');
       expect(persona).toBeDefined();
     });
+    
+    // Note: Copy-on-write functionality is implemented in DollhouseMCPServer.editPersona
+    // PersonaManager.editPersona does not have this protection
+    // This test documents the expected behavior but cannot test it through PersonaManager
+    it.skip('should create a copy when editing default personas (feature in main server)', async () => {
+      // This test is skipped because the copy-on-write feature is only implemented
+      // in DollhouseMCPServer.editPersona, not in PersonaManager.editPersona
+      // The feature works correctly when using the MCP tool interface
+    });
   });
   
   describe('Error Handling', () => {

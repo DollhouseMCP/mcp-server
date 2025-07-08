@@ -19,6 +19,14 @@ import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, Pe
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 
+// Default personas that should not be modified in place
+const DEFAULT_PERSONAS = [
+  'business-consultant.md',
+  'creative-writer.md',
+  'debug-detective.md',
+  'eli5-explainer.md',
+  'technical-analyst.md'
+];
 
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -839,12 +847,32 @@ ${sanitizedInstructions}
       };
     }
 
-    const filePath = path.join(this.personasDir, persona.filename);
+    let filePath = path.join(this.personasDir, persona.filename);
+    let isDefaultPersona = DEFAULT_PERSONAS.includes(persona.filename);
 
     try {
       // Read current file
       const fileContent = await fs.readFile(filePath, 'utf-8');
       const parsed = matter(fileContent);
+      
+      // If editing a default persona, create a copy instead
+      if (isDefaultPersona) {
+        // Generate unique ID for the copy
+        const author = this.currentUser || generateAnonymousId();
+        const uniqueId = generateUniqueId(persona.metadata.name, author);
+        const newFilename = `${uniqueId}.md`;
+        const newFilePath = path.join(this.personasDir, newFilename);
+        
+        // Create copy of the default persona
+        await fs.copyFile(filePath, newFilePath);
+        
+        // Update file path to point to the copy
+        filePath = newFilePath;
+        
+        // Update the unique_id in the metadata
+        parsed.data.unique_id = uniqueId;
+        parsed.data.author = author;
+      }
       
       // Update the appropriate field
       const normalizedField = field.toLowerCase();
@@ -898,11 +926,14 @@ ${sanitizedInstructions}
           {
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
-              `🎭 **${persona.metadata.name}**\n` +
+              (isDefaultPersona ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
+              `🎭 **${parsed.data.name || persona.metadata.name}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : value}\n` +
-              `📊 **Version:** ${parsed.data.version}\n\n` +
-              `Use \`get_persona_details "${persona.metadata.name}"\` to see all changes.`,
+              `📊 **Version:** ${parsed.data.version}\n` +
+              (isDefaultPersona ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
+              `\n` +
+              `Use \`get_persona_details "${parsed.data.name || persona.metadata.name}"\` to see all changes.`,
           },
         ],
       };
