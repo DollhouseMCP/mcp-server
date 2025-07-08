@@ -94,6 +94,7 @@
     "@types/node": "^24.0.10",
     "cross-env": "^7.0.3",
     "jest": "^30.0.4",
+    "js-yaml": "^4.1.0",
     "ts-jest": "^29.4.0",
     "ts-jest-resolver": "^2.0.1",
     "tsx": "^4.0.0",

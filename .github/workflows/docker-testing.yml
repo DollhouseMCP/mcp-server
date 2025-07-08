@@ -14,6 +14,7 @@ permissions:
 env:
   NODE_OPTIONS: --max-old-space-size=4096
   CI: true
+  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
 
 jobs:
   docker-build-test:
@@ -179,17 +180,20 @@ jobs:
 
       - name: Cleanup containers
         if: always()
+        shell: bash
         run: |
           echo "🧹 Cleaning up any dangling containers..."
           docker system prune -f --volumes || true
 
       - name: Move cache
         if: always()
+        shell: bash
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
 
       - name: Docker testing complete
+        shell: bash
         run: |
           echo "✅ Docker Testing Complete for ${{ matrix.platform }}!"
           echo "Platform: ${{ matrix.platform }}"
@@ -285,6 +289,7 @@ jobs:
           docker compose rm -f
 
       - name: Docker Compose testing complete
+        shell: bash
         run: |
           echo "✅ Docker Compose Testing Complete!"
           echo "All tests passed successfully"
