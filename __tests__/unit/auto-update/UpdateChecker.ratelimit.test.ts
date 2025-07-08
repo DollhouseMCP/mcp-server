@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 // Mock SignatureVerifier before importing UpdateChecker
 jest.unstable_mockModule('../../../src/update/SignatureVerifier.js', () => ({
   SignatureVerifier: jest.fn().mockImplementation(() => ({
-    verifyTagSignature: jest.fn().mockResolvedValue({
+    verifyTagSignature: jest.fn<() => Promise<{ verified: boolean; signerKey?: string; signerEmail?: string; error?: string }>>().mockResolvedValue({
       verified: true,
       signerKey: 'MOCKKEY123',
       signerEmail: 'test@example.com',
@@ -20,7 +20,7 @@ import { RateLimiter } from '../../../src/update/RateLimiter.js';
 global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 
 describe('UpdateChecker Rate Limiting', () => {
-  let updateChecker: UpdateChecker;
+  let updateChecker: InstanceType<typeof UpdateChecker>;
   let mockVersionManager: VersionManager;
   let mockRateLimiter: RateLimiter;
 
@@ -29,8 +29,8 @@ describe('UpdateChecker Rate Limiting', () => {
     
     // Setup mock version manager
     mockVersionManager = {
-      getCurrentVersion: jest.fn().mockResolvedValue('1.0.0'),
-      compareVersions: jest.fn().mockReturnValue(-1) // Current < Latest
+      getCurrentVersion: jest.fn<() => Promise<string>>().mockResolvedValue('1.0.0'),
+      compareVersions: jest.fn<(v1: string, v2: string) => number>().mockReturnValue(-1) // Current < Latest
     } as unknown as VersionManager;
     
     // Reset fetch mock
