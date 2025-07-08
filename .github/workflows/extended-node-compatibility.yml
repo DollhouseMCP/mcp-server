@@ -8,6 +8,9 @@ on:
     - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
