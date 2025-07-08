@@ -21,9 +21,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 **🌐 Repository**: https://github.com/mickdarling/DollhouseMCP  
 **🏪 Marketplace**: https://github.com/mickdarling/DollhouseMCP-Personas  
+**📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.1 - Critical Data Protection Release  
-**📦 NPM**: `@mickdarling/dollhousemcp`
+**📦 Version**: v1.2.1 - Critical Data Protection Release
 
 ## ✨ Key Features
 
