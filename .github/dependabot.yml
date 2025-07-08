@@ -10,11 +10,31 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
     open-pull-requests-limit: 5
+    assignees:
+      - "mickdarling"
+    labels:
+      - "dependencies"
+      - "automated"
+      - "npm"
+    versioning-strategy: "increase"
     
-  # Monitor Docker base images and dependencies
+  # Monitor Docker base images and dependencies  
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
     open-pull-requests-limit: 3
+    assignees:
+      - "mickdarling"
+    labels:
+      - "dependencies"
+      - "automated"
+      - "docker"
+    versioning-strategy: "increase"
