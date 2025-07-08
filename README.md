@@ -14,14 +14,15 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-102%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-372%20Tests-green)](https://github.com/mickdarling/DollhouseMCP/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/mickdarling/DollhouseMCP)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
 
 **🌐 Repository**: https://github.com/mickdarling/DollhouseMCP  
 **🏪 Marketplace**: https://github.com/mickdarling/DollhouseMCP-Personas  
-**🌍 Website**: https://dollhousemcp.com (planned)
+**🌍 Website**: https://dollhousemcp.com (planned)  
+**📦 Version**: v1.2.1 - Security & Reliability Release
 
 ## ✨ Key Features
 
@@ -34,7 +35,17 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
 | 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
+| 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
+
+## 📋 Prerequisites
+
+- **Node.js**: v20.0.0 or higher (LTS recommended)
+- **npm**: v10.0.0 or higher
+- **git**: For cloning the repository
+- **Operating System**: Windows, macOS, or Linux
+
+> **Note**: DollhouseMCP is developed on Node.js 24 but supports Node.js 20+ for broad compatibility.
 
 ## 🚀 Quick Start
 
@@ -201,17 +212,29 @@ export DOLLHOUSE_INDICATOR_EMOJI=🎨
 ### 🐧 Linux Installation
 
 #### Prerequisites
+- **Node.js**: v20.0.0 or higher
+- **npm**: v10.0.0 or higher
+- **git**: For version control
+
 ```bash
 # Ubuntu/Debian
 sudo apt update
 sudo apt install -y nodejs npm git
+# Verify Node.js version
+node --version  # Should be v20.0.0 or higher
 
 # CentOS/RHEL/Fedora  
 sudo dnf install -y nodejs npm git
+# Verify Node.js version
+node --version  # Should be v20.0.0 or higher
 
 # Arch Linux
 sudo pacman -S nodejs npm git
+# Verify Node.js version
+node --version  # Should be v20.0.0 or higher
 ```
+
+> **Note**: If your system's Node.js is older than v20, install from [NodeSource](https://github.com/nodesource/distributions) or use [nvm](https://github.com/nvm-sh/nvm).
 
 #### Installation Steps
 ```bash
@@ -250,13 +273,21 @@ Configuration content:
 ### 🪟 Windows Installation
 
 #### Prerequisites
+- **Node.js**: v20.0.0 or higher
+- **npm**: v10.0.0 or higher (included with Node.js)
+- **git**: For version control
+
 ```powershell
-# Install Node.js from https://nodejs.org/
+# Install Node.js from https://nodejs.org/ (download LTS version)
 # Or using Chocolatey
-choco install nodejs git
+choco install nodejs --version=20.18.0
+choco install git
 
 # Or using winget
 winget install OpenJS.NodeJS Git.Git
+
+# Verify Node.js version
+node --version  # Should be v20.0.0 or higher
 ```
 
 #### Installation Steps (PowerShell)
@@ -293,11 +324,18 @@ Configuration content (use forward slashes or double backslashes):
 ### 🍎 macOS Installation
 
 #### Prerequisites
+- **Node.js**: v20.0.0 or higher
+- **npm**: v10.0.0 or higher (included with Node.js)
+- **git**: For version control
+
 ```bash
 # Using Homebrew (recommended)
 brew install node git
 
-# Or download from https://nodejs.org/
+# Or download from https://nodejs.org/ (LTS version)
+
+# Verify Node.js version
+node --version  # Should be v20.0.0 or higher
 ```
 
 #### Installation Steps
@@ -836,11 +874,21 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### Unreleased (Current)
-- ✅ **Persona active indicator system** with 2 new MCP tools (Issue #31)
-- ✅ **102 comprehensive tests** covering all functionality
-- ✅ **23 total MCP tools** including configure_indicator and get_indicator_config
-- ✅ **Enhanced documentation** with Claude Desktop setup clarifications
+### v1.2.1 - January 8, 2025 (Current)
+- ✅ **Critical bug fixes** for data protection:
+  - Copy-on-write for default personas (Issue #145)
+  - User personas included in backups (Issue #144)
+- ✅ **Node.js 20+ requirement** for npm publishing compatibility
+- ✅ **372 comprehensive tests** covering all functionality
+- ✅ **Enhanced security** with all vulnerabilities resolved
+- ✅ **Improved documentation** with clear prerequisites
+
+### v1.2.0 - January 7, 2025
+- ✅ **Rate limiting implementation** to prevent API abuse
+- ✅ **GPG signature verification** for release authenticity
+- ✅ **GitHub Advanced Security** integration
+- ✅ **309 tests** with improved CI environment coverage
+- ✅ **Package optimization** at 279.3 kB
 
 ### v1.1.0 - July 4, 2025
 - ✅ **Platform-specific badges** for Windows, macOS, Linux visibility
