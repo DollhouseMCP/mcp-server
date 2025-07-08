@@ -175,12 +175,33 @@ clear_user_identity                        # Return to anonymous
 ```
 
 ### Auto-Update Operations
+
+The auto-update system provides enterprise-grade update management with safety features:
+
 ```
 check_for_updates                          # Check for new DollhouseMCP versions
 get_server_status                          # View current version and system info
 update_server true                         # Perform automated update with backup
 rollback_update true                       # Revert to previous version if needed
 ```
+
+**How Auto-Update Works:**
+
+1. **Version Check**: Queries GitHub releases API for latest version
+2. **Backup Creation**: Automatically backs up current installation (including user personas)
+3. **Update Process**: 
+   - Performs `git pull` to fetch latest code
+   - Runs `npm install` for dependency updates
+   - Rebuilds TypeScript with `npm run build`
+4. **Verification**: Validates the update succeeded
+5. **Rollback Option**: Keep last 5 backups for easy recovery
+
+**Safety Features:**
+- Rate limiting prevents API abuse
+- GPG signature verification (when available)
+- Dependency version validation
+- Automatic backup retention (5 most recent)
+- User personas preserved during updates
 
 ### Persona Indicators
 DollhouseMCP adds visual indicators to AI responses when a persona is active:
@@ -525,32 +546,46 @@ az container create \
 DollhouseMCP/
 ├── .github/
 │   ├── actions/
-│   │   └── validate-yaml/    # Reusable YAML validation action
-│   └── workflows/
-│       ├── cross-platform.yml    # Cross-platform testing (Mac/Windows/Linux)
-│       ├── claude.yml             # Interactive Claude Code workflow
-│       └── claude-code-review.yml # Automated PR review workflow
+│   │   └── validate-yaml/         # Reusable YAML validation action
+│   ├── workflows/                 # CI/CD workflows
+│   └── ISSUE_TEMPLATE/           # Issue templates for bug/feature/task
 ├── __tests__/
-│   └── auto-update.test.ts   # Comprehensive test suite (102 tests total)
+│   ├── unit/                     # Unit tests for components
+│   ├── integration/              # Integration tests
+│   └── *.test.ts                 # Test files (372 tests total)
 ├── src/
-│   └── index.ts              # Main MCP server (DollhouseMCPServer class)
-├── dist/                     # Compiled JavaScript (auto-generated)
-├── personas/                 # Local persona collection
-│   ├── creative-writer.md    # Enhanced with unique ID system
+│   ├── index.ts                  # Main MCP server (DollhouseMCPServer)
+│   ├── cache/                    # API caching layer
+│   ├── config/                   # Configuration management
+│   ├── marketplace/              # GitHub marketplace integration
+│   ├── persona/                  # Persona management core
+│   ├── security/                 # Input validation and security
+│   ├── server/                   # MCP server setup and tools
+│   ├── types/                    # TypeScript type definitions
+│   ├── update/                   # Auto-update system components
+│   └── utils/                    # Utility functions
+├── dist/                         # Compiled JavaScript (auto-generated)
+├── personas/                     # Default persona collection
+│   ├── creative-writer.md
 │   ├── technical-analyst.md
 │   ├── eli5-explainer.md
 │   ├── business-consultant.md
 │   └── debug-detective.md
-├── Dockerfile                # Multi-stage Docker build
-├── docker-compose.yml        # Production and development configurations
-├── .dockerignore            # Docker build optimizations
-├── package.json              # Project config (dollhousemcp, AGPL-3.0)
-├── tsconfig.json             # TypeScript configuration
-├── setup.sh                  # Automated installation script
-├── LICENSE                   # AGPL-3.0 with platform stability terms
-├── CONVERSATION_SUMMARY.md   # Development session documentation
-├── claude.md                 # Project context file
-└── README.md                 # This file
+├── custom-personas/              # User-created personas (git-ignored)
+├── docs/                         # Documentation
+│   ├── auto-update/             # Auto-update system docs
+│   └── development/             # Development notes and guides
+├── scripts/                      # Management and utility scripts
+├── Dockerfile                    # Multi-stage Docker build
+├── docker-compose.yml           # Production and development configs
+├── package.json                 # Project config (dollhousemcp v1.2.1)
+├── tsconfig.json                # TypeScript configuration
+├── jest.config.cjs              # Jest test configuration
+├── setup.sh                     # Automated installation script
+├── LICENSE                      # AGPL-3.0 with platform stability
+├── CHANGELOG.md                 # Version history
+├── claude.md                    # Project context for Claude
+└── README.md                    # This file
 ```
 
 ## 📝 Creating Custom Personas
@@ -591,18 +626,23 @@ Your persona instructions go here. This content defines how the AI should behave
 
 ### Metadata Fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | ✅ | Display name for the persona |
-| `description` | ✅ | Brief description of purpose |
-| `unique_id` | ❌ | Auto-generated if missing |
-| `author` | ❌ | Creator username (uses environment or anonymous) |
-| `category` | ❌ | creative, professional, educational, gaming, personal |
-| `triggers` | ❌ | Keywords that suggest this persona |
-| `version` | ❌ | Version tracking |
-| `age_rating` | ❌ | all, 13+, 18+ |
-| `ai_generated` | ❌ | Boolean flag for AI-created content |
-| `price` | ❌ | "free" or monetary amount |
+#### Required Fields
+| Field | Description |
+|-------|-------------|
+| `name` | Display name for the persona |
+| `description` | Brief description of purpose and capabilities |
+
+#### Optional Fields
+| Field | Description |
+|-------|-------------|
+| `unique_id` | Auto-generated in format: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` |
+| `author` | Creator username (uses DOLLHOUSE_USER environment variable or generates anonymous ID) |
+| `category` | One of: creative, professional, educational, gaming, personal |
+| `triggers` | Array of keywords that suggest when to use this persona |
+| `version` | Semantic version number (auto-incremented on edits) |
+| `age_rating` | Content rating: all, 13+, or 18+ |
+| `ai_generated` | Boolean flag indicating if content was AI-created |
+| `price` | Monetization field - **TODO: Future Release** (will support "free" or pricing tiers) |
 
 ## 📚 Built-in Personas
 
@@ -614,26 +654,31 @@ Your persona instructions go here. This content defines how the AI should behave
 | **Business Consultant** | Strategic business analysis and recommendations | Strategy planning, business decisions, market analysis |
 | **Debug Detective** | Systematic debugging and troubleshooting | Bug hunting, system troubleshooting, root cause analysis |
 
-## 🏪 Marketplace Integration
+## 🏪 Marketplace Integration (Beta)
 
-DollhouseMCP includes a complete GitHub-powered marketplace:
+> **🧪 Beta Feature**: The GitHub-powered marketplace is currently in beta. Features may change based on community feedback.
+
+DollhouseMCP includes an experimental GitHub-powered marketplace:
 
 - **Browse by Category**: creative, professional, educational, gaming, personal
 - **Search Content**: Find personas by keywords and descriptions
 - **One-Click Install**: Download and integrate marketplace personas
-- **Community Submissions**: Submit your personas via automated GitHub workflow
+- **Community Submissions**: Submit your personas via `submit_persona` tool
 - **Version Control**: Full Git history for all marketplace content
+
+> **Note**: Marketplace features require internet connection and GitHub API access. Rate limits may apply.
 
 ## 💼 Business Model & Legal
 
 ### Licensing
 - **Core Server**: AGPL-3.0 (prevents proprietary competing platforms)
-- **Platform Terms**: Creator-friendly 80/20 revenue split framework
-- **Persona Content**: CC-BY-SA-4.0 for free personas
+- **Persona Content**: CC-BY-SA-4.0 for free personas, custom licenses for premium
+- **Platform Terms**: Creator-friendly 80/20 revenue split (applies only to paid personas when monetization is implemented)
 
 ### Platform Stability Commitments
 - 90-day advance notice for monetization changes
-- 12-month revenue sharing locks
+- 12-month revenue sharing locks for existing paid personas
+- Transparent governance for platform policy updates
 - Full data portability rights
 - Community advisory input on policy changes
 
@@ -678,10 +723,16 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 
 | Issue | Solution |
 |-------|----------|
-| **Personas not loading** | Check `personas/` directory and file permissions |
+| **Personas not loading** | Check `personas/` directory exists and has read permissions |
 | **Server won't start** | Run `npm run rebuild` to clean and rebuild |
 | **Marketplace not working** | Check internet connection and GitHub API access |
-| **User identity not saving** | Verify environment variables are set correctly |
+| **User identity not saving** | Set `DOLLHOUSE_USER` environment variable before starting Claude |
+| **"Cannot find module" errors** | Ensure `npm install` completed successfully |
+| **TypeScript compilation errors** | Verify Node.js version is 20+ with `node --version` |
+| **Tools not appearing in Claude** | Restart Claude Desktop completely after config changes |
+| **Default personas modified** | v1.2.1+ uses copy-on-write; git restore if needed |
+| **Update/rollback issues** | Check write permissions; disable with `DOLLHOUSE_DISABLE_UPDATES=true` |
+| **Rate limit errors** | Wait 60 seconds; GitHub API has hourly limits |
 
 ### Debug Steps
 
@@ -705,7 +756,7 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
    # Check Claude Desktop config
    cat ~/Library/Application\ Support/Claude/claude_desktop_config.json
    
-   # Verify Node.js version (requires 18+)
+   # Verify Node.js version (requires 20+)
    node --version
    
    # Check npm version
@@ -724,21 +775,33 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to help:
+We welcome contributions! DollhouseMCP includes integrated tools for submitting personas directly from Claude.
 
-### Adding Personas
+### Integrated Contribution Process (Recommended)
+
+1. **Create or modify a persona** using the chat-based tools:
+   ```
+   create_persona "My Awesome Persona" "A helpful assistant for..." "professional"
+   ```
+
+2. **Validate your persona** to ensure quality:
+   ```
+   validate_persona "My Awesome Persona"
+   ```
+
+3. **Submit to the marketplace** directly from Claude:
+   ```
+   submit_persona "My Awesome Persona"
+   ```
+   This automatically creates a GitHub issue for community review.
+
+### Manual Contribution Process
 
 1. Fork the repository
-2. Create a new persona file in `personas/`
-3. Follow the established format and naming conventions
-4. Test your persona thoroughly with `validate_persona` tool
-5. Submit a pull request with a clear description
-
-### Community Contributions
-1. Create personas following the enhanced metadata format
-2. Test thoroughly with `validate_persona` tool
-3. Submit via `submit_persona` tool for community review
-4. Participate in GitHub discussions and issue reviews
+2. Create persona files in `personas/` or `custom-personas/`
+3. Follow the metadata format and naming conventions
+4. Test thoroughly with `validate_persona` tool
+5. Submit a pull request with clear description
 
 ### Reporting Issues
 
