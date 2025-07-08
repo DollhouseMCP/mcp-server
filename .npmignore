@@ -1,88 +1,62 @@
-# Source files (TypeScript)
-src/
-__tests__/
-
-# Test files in dist
-dist/__tests__/
-dist/**/*.test.js
-dist/**/*.test.d.ts
-dist/**/*.test.d.ts.map
-
-# Configuration files
-.github/
-.vscode/
-jest.config.cjs
-jest.config.compiled.cjs
-jest.integration.config.cjs
-jest.setup.mjs
-jest.setup.ts
-tsconfig.json
-tsconfig.test.json
-.gitignore
-
-# Development files
-*.ts
-!*.d.ts
-.env
-.env.local
-.env.test
-
-# Test coverage
-coverage/
-.nyc_output/
-
-# Documentation
+# Documentation and development files
 docs/
 *.md
-!README.md
-!CHANGELOG.md
-
-# Scripts and setup
+\!README.md
+\!CHANGELOG.md
+.github/
 scripts/
-setup.sh
-Dockerfile
-docker-compose.yml
 
-# Personas (users will create their own)
+# Source and test files
+src/
+__tests__/
+jest.config.cjs
+tsconfig.json
+tsconfig.test.json
+
+# Development files
+.vscode/
+.idea/
+*.sublime-*
+
+# Environment and config files
+.env
+.env.*
+claude_desktop_config.json
+
+# Dollhouse specific
 personas/
-custom-personas/
-
-# Logs and temporary files
-*.log
-*.tmp
-.DS_Store
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+claude.md
+.claude/
+CLAUDE.md
 
 # Backup directories
 dollhousemcp-backups/
-*-backups/
+backup-*/
 
-# IDE files
-.idea/
-*.sublime-project
-*.sublime-workspace
+# CI/Build artifacts
+coverage/
+.nyc_output/
+*.log
+*.tgz
 
-# Build artifacts that shouldn't be published
-*.tsbuildinfo
-dist/**/*.map
+# Development dependencies config
+.editorconfig
+.eslintrc*
+.prettierrc*
 
-# CI/CD
-.travis.yml
-.circleci/
-appveyor.yml
+# OS files
+.DS_Store
+Thumbs.db
 
-# Test fixtures
-test-fixtures/
-__fixtures__/
+# Git files
+.gitignore
+.gitattributes
 
-# Example configurations
-claude_config_example.json
-claude.md
-
-# Any local or private files
-*.local
-*.private
-private/
+# Keep only:
+# - dist/
+# - package.json
+# - package-lock.json
+# - README.md
+# - LICENSE
+# - CHANGELOG.md
+EOF < /dev/null

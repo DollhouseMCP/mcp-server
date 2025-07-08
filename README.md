@@ -22,7 +22,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌐 Repository**: https://github.com/mickdarling/DollhouseMCP  
 **🏪 Marketplace**: https://github.com/mickdarling/DollhouseMCP-Personas  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.1 - Security & Reliability Release
+**📦 Version**: v1.2.1 - Critical Data Protection Release  
+**📦 NPM**: `@mickdarling/dollhousemcp`
 
 ## ✨ Key Features
 
@@ -51,7 +52,15 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ### Installation
 
-#### Automated Setup (Recommended) - Claude Desktop Only
+#### NPM Installation (NEW! - Recommended)
+
+```bash
+npm install -g @mickdarling/dollhousemcp
+```
+
+Then add to your Claude Desktop configuration as shown in the [Configuration](#configuration) section below.
+
+#### Automated Setup (Alternative) - Claude Desktop Only
 
 > [!WARNING]
 > **Claude Desktop Only**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
@@ -96,6 +105,19 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 **Location**: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
+#### For NPM Installation:
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["@mickdarling/dollhousemcp"]
+    }
+  }
+}
+```
+
+#### For Source Installation:
 ```json
 {
   "mcpServers": {
