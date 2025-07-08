@@ -148,7 +148,8 @@ export function loadIndicatorConfig(): IndicatorConfig {
  */
 export function validateCustomFormat(format: string): { valid: boolean; error?: string } {
   const validPlaceholders = ['{emoji}', '{name}', '{version}', '{author}', '{category}'];
-  const placeholderRegex = /\{[^}]*\}/g;  // Changed + to * to catch empty placeholders
+  // Length limit added to prevent ReDoS attacks
+  const placeholderRegex = /\{[^}]{0,50}\}/g;  // Limited to 50 chars for placeholder names
   const foundPlaceholders = format.match(placeholderRegex) || [];
   
   for (const placeholder of foundPlaceholders) {
