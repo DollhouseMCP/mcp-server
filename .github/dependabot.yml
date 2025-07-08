@@ -5,7 +5,6 @@
 
 version: 2
 updates:
-  # Monitor npm dependencies (TypeScript/JavaScript)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -21,7 +20,7 @@ updates:
       - "automated"
       - "npm"
     versioning-strategy: "increase"
-    
+
   # Monitor Docker base images and dependencies  
   - package-ecosystem: "docker"
     directory: "/"
@@ -37,4 +36,4 @@ updates:
       - "dependencies"
       - "automated"
       - "docker"
-    versioning-strategy: "increase"
+    # versioning-strategy removed for docker
