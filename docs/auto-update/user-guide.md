@@ -244,6 +244,6 @@ Default: 10 requests per minute
 ## Getting Help
 
 - Check [Troubleshooting Guide](./troubleshooting.md)
-- Review [GitHub Issues](https://github.com/mickdarling/DollhouseMCP/issues)
+- Review [GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)
 - Community Discord: [Coming Soon]
 - Email support: mick@mickdarling.com

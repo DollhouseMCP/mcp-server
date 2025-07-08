@@ -6,7 +6,7 @@ import { GitHubClient } from './GitHubClient.js';
 
 export class MarketplaceBrowser {
   private githubClient: GitHubClient;
-  private baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
+  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/personas/contents/personas';
   
   constructor(githubClient: GitHubClient) {
     this.githubClient = githubClient;

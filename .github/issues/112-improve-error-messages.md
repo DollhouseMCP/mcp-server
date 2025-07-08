@@ -24,7 +24,7 @@ if [ -z "$TEST_PERSONAS_DIR" ]; then
   echo "Example: export TEST_PERSONAS_DIR=\${{ github.workspace }}/test-personas"
   echo ""
   echo "For more information, see:"
-  echo "https://github.com/mickdarling/DollhouseMCP/blob/main/docs/ci-configuration.md"
+  echo "https://github.com/DollhouseMCP/mcp-server/blob/main/docs/ci-configuration.md"
   exit 1
 fi
 ```
@@ -63,7 +63,7 @@ validate_environment() {
   
   if [ $errors -gt 0 ]; then
     echo ""
-    echo "📚 Configuration Guide: https://github.com/mickdarling/DollhouseMCP/wiki/CI-Setup"
+    echo "📚 Configuration Guide: https://github.com/DollhouseMCP/mcp-server/wiki/CI-Setup"
     return 1
   fi
   

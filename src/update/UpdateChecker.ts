@@ -321,7 +321,7 @@ export class UpdateChecker {
           '**What you can do:**\n' +
           '• Wait for the specified time before checking again\n' +
           '• Use `get_server_status` to see current version without API calls\n' +
-          '• Visit https://github.com/mickdarling/DollhouseMCP/releases directly';
+          '• Visit https://github.com/DollhouseMCP/mcp-server/releases directly';
       }
       
       return personaIndicator + 
@@ -333,7 +333,7 @@ export class UpdateChecker {
             '• Check your internet connection\n' +
             '• Ensure GitHub.com is accessible\n' +
             '• Try running `update_server true` for manual update\n' +
-            '• Visit https://github.com/mickdarling/DollhouseMCP/releases');
+            '• Visit https://github.com/DollhouseMCP/mcp-server/releases');
     }
     
     if (!result) {

@@ -357,7 +357,7 @@ If the system is completely broken:
 
 1. **Clone fresh copy**
    ```bash
-   git clone https://github.com/mickdarling/DollhouseMCP.git dollhouse-fresh
+   git clone https://github.com/DollhouseMCP/mcp-server.git dollhouse-fresh
    cd dollhouse-fresh
    ```
 
@@ -417,7 +417,7 @@ When reporting issues, include:
 
 ### Support Channels
 
-1. **GitHub Issues**: https://github.com/mickdarling/DollhouseMCP/issues
+1. **GitHub Issues**: https://github.com/DollhouseMCP/mcp-server/issues
 2. **Email Support**: mick@mickdarling.com
 3. **Community Discord**: [Coming Soon]
 

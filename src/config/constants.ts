@@ -3,14 +3,14 @@
  */
 
 // Repository configuration
-export const REPO_OWNER = 'mickdarling';
-export const REPO_NAME = 'DollhouseMCP';
+export const REPO_OWNER = 'DollhouseMCP';
+export const REPO_NAME = 'mcp-server';
 export const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
 export const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 
 // Marketplace repository configuration
-export const MARKETPLACE_REPO_OWNER = 'mickdarling';
-export const MARKETPLACE_REPO_NAME = 'DollhouseMCP-Personas';
+export const MARKETPLACE_REPO_OWNER = 'DollhouseMCP';
+export const MARKETPLACE_REPO_NAME = 'personas';
 
 // Dependency version requirements
 export const DEPENDENCY_REQUIREMENTS = {

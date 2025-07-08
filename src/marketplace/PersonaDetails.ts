@@ -8,7 +8,7 @@ import { PersonaMetadata } from '../types/persona.js';
 
 export class PersonaDetails {
   private githubClient: GitHubClient;
-  private baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
+  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/personas/contents/personas';
   
   constructor(githubClient: GitHubClient) {
     this.githubClient = githubClient;

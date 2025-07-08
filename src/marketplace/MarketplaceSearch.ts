@@ -16,7 +16,7 @@ export class MarketplaceSearch {
    * Search marketplace for personas matching query
    */
   async searchMarketplace(query: string): Promise<any[]> {
-    const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:mickdarling/DollhouseMCP-Personas+extension:md`;
+    const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/personas+extension:md`;
     
     const data = await this.githubClient.fetchFromGitHub(searchUrl);
     

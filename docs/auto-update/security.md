@@ -182,7 +182,7 @@ npm audit
 npm update
 
 # Review security advisories
-gh api /repos/mickdarling/DollhouseMCP/security-advisories
+gh api /repos/DollhouseMCP/mcp-server/security-advisories
 ```
 
 ### 2. Secure Deployment
@@ -215,7 +215,7 @@ If you suspect a security incident:
 
 4. **Report the incident**
    - Email: security@dollhousemcp.com
-   - GitHub Security: https://github.com/mickdarling/DollhouseMCP/security
+   - GitHub Security: https://github.com/DollhouseMCP/mcp-server/security
 
 ## Security Checklist
 

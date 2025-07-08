@@ -7,8 +7,8 @@
 DollhouseMCP is a comprehensive Model Context Protocol (MCP) server that provides dynamic AI persona management with an integrated GitHub-powered marketplace. The project enables Claude and other AI assistants to activate different behavioral personas while supporting community sharing and monetization.
 
 **Key Repositories:**
-- **Main Server**: https://github.com/mickdarling/DollhouseMCP
-- **Marketplace**: https://github.com/mickdarling/DollhouseMCP-Personas
+- **Main Server**: https://github.com/DollhouseMCP/mcp-server
+- **Marketplace**: https://github.com/DollhouseMCP/personas
 - **Website**: https://dollhousemcp.com (planned)
 
 ## 📈 Development Phases Completed

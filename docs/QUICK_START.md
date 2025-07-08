@@ -111,7 +111,7 @@ gh browse --projects
 
 ## ❓ Need Help?
 
-- Check [Discussions](https://github.com/mickdarling/DollhouseMCP/discussions)
+- Check [Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 - Tag @mickdarling in issues/PRs
 - Join our [Discord](#) (coming soon)
 

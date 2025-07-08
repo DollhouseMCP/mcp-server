@@ -246,7 +246,7 @@ Configure alternative update sources:
     "sources": [
       {
         "name": "github",
-        "url": "https://api.github.com/repos/mickdarling/DollhouseMCP",
+        "url": "https://api.github.com/repos/DollhouseMCP/mcp-server",
         "priority": 1
       },
       {

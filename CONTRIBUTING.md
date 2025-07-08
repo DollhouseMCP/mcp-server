@@ -5,7 +5,7 @@ Thank you for your interest in contributing to DollhouseMCP! This guide will hel
 ## 🎯 Getting Started
 
 ### 1. Find an Issue
-- Browse [open issues](https://github.com/mickdarling/DollhouseMCP/issues)
+- Browse [open issues](https://github.com/DollhouseMCP/mcp-server/issues)
 - Look for issues labeled `good first issue` or `help wanted`
 - Check that no one is already assigned
 - Comment on the issue to claim it
@@ -38,9 +38,9 @@ Thank you for your interest in contributing to DollhouseMCP! This guide will hel
 ### 1. Fork and Clone
 ```bash
 # Fork the repository on GitHub, then:
-git clone https://github.com/YOUR_USERNAME/DollhouseMCP.git
-cd DollhouseMCP
-git remote add upstream https://github.com/mickdarling/DollhouseMCP.git
+git clone https://github.com/YOUR_USERNAME/mcp-server.git
+cd mcp-server
+git remote add upstream https://github.com/DollhouseMCP/mcp-server.git
 ```
 
 ### 2. Create a Branch

@@ -17,7 +17,7 @@ Each platform badge follows this pattern:
 
 #### Windows Badge
 ```markdown
-[![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
+[![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
 ```
 - **Color**: `#0078D4` (Windows Blue)
 - **Logo**: Windows logo
@@ -26,7 +26,7 @@ Each platform badge follows this pattern:
 
 #### macOS Badge
 ```markdown
-[![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
+[![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 ```
 - **Color**: `#000000` (Apple Black)
 - **Logo**: Apple logo
@@ -35,7 +35,7 @@ Each platform badge follows this pattern:
 
 #### Linux Badge
 ```markdown
-[![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
+[![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 ```
 - **Color**: `#FCC624` (Linux Yellow)
 - **Logo**: Linux Tux logo

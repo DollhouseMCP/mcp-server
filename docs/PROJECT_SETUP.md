@@ -3,7 +3,7 @@
 ## Creating the Project Board
 
 1. **Navigate to Projects**
-   - Go to: https://github.com/mickdarling/DollhouseMCP/projects/new
+   - Go to: https://github.com/DollhouseMCP/mcp-server/projects/new
    - Or: Repository → Projects tab → New project
 
 2. **Choose Template**
@@ -118,7 +118,7 @@ Group by: Milestone
 
 ## Quick Links
 
-- [Open Issues](https://github.com/mickdarling/DollhouseMCP/issues)
-- [Milestones](https://github.com/mickdarling/DollhouseMCP/milestones)
-- [Labels](https://github.com/mickdarling/DollhouseMCP/labels)
+- [Open Issues](https://github.com/DollhouseMCP/mcp-server/issues)
+- [Milestones](https://github.com/DollhouseMCP/mcp-server/milestones)
+- [Labels](https://github.com/DollhouseMCP/mcp-server/labels)
 - [Contributors Guide](../CONTRIBUTING.md)

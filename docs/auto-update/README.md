@@ -91,5 +91,5 @@ Updates are logged to the console with detailed progress information. The system
 
 For issues or questions:
 - Check the [Troubleshooting Guide](./troubleshooting.md)
-- Review [GitHub Issues](https://github.com/mickdarling/DollhouseMCP/issues)
+- Review [GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)
 - Contact support at mick@mickdarling.com

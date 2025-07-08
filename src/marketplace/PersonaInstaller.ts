@@ -13,7 +13,7 @@ import { SECURITY_LIMITS } from '../security/constants.js';
 export class PersonaInstaller {
   private githubClient: GitHubClient;
   private personasDir: string;
-  private baseUrl = 'https://api.github.com/repos/mickdarling/DollhouseMCP-Personas/contents/personas';
+  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/personas/contents/personas';
   
   constructor(githubClient: GitHubClient, personasDir: string) {
     this.githubClient = githubClient;
