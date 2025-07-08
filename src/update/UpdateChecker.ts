@@ -487,16 +487,17 @@ export class UpdateChecker {
     // Additional sanitization for command injection patterns
     // Single-pass processing for performance while maintaining security
     // These patterns cover various injection vectors beyond HTML/JS
+    // Length limits added to prevent ReDoS attacks
     const patterns = [
-      /`[^`]*`/g,           // Backtick expressions
-      /\$\([^)]*\)/g,     // Command substitution
-      /\$\{[^}]*\}/g,     // Variable expansion
-      /<\?[^>]*\?>/g,     // PHP tags (OWASP)
-      /&lt;%[^>]*%&gt;/g,  // ASP tags (HTML-encoded by DOMPurify)
-      /<%[^>]*%>/g,         // ASP tags (raw)
-      /\\x[0-9a-fA-F]{2}/g, // Hex escapes (OWASP)
-      /\\u[0-9a-fA-F]{4}/g, // Unicode escapes
-      /\\[0-7]{1,3}/g      // Octal escapes
+      /`[^`]{0,1000}`/g,           // Backtick expressions (limited to 1000 chars)
+      /\$\([^)]{0,1000}\)/g,       // Command substitution (limited to 1000 chars)
+      /\$\{[^}]{0,1000}\}/g,       // Variable expansion (limited to 1000 chars)
+      /<\?[^>]{0,1000}\?>/g,       // PHP tags (OWASP) (limited to 1000 chars)
+      /&lt;%[^>]{0,1000}%&gt;/g,   // ASP tags (HTML-encoded by DOMPurify) (limited to 1000 chars)
+      /<%[^>]{0,1000}%>/g,         // ASP tags (raw) (limited to 1000 chars)
+      /\\x[0-9a-fA-F]{2}/g,        // Hex escapes (OWASP) - already limited by {2}
+      /\\u[0-9a-fA-F]{4}/g,        // Unicode escapes - already limited by {4}
+      /\\[0-7]{1,3}/g              // Octal escapes - already limited by {1,3}
     ];
     
     const beforePatterns = sanitized;
