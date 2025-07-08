@@ -42,6 +42,12 @@ on:
     #   - "node_modules/**"       # Ignore dependencies
     #   - "coverage/**"           # Ignore test coverage
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  id-token: write
+
 jobs:
   claude-review:
     # Security: Only run automated reviews for authorized users
