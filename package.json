@@ -80,7 +80,7 @@
     "url": "https://github.com/sponsors/mickdarling"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@modelcontextprotocol/sdk": "^1.15.0",
     "@types/dompurify": "^3.0.5",
     "dompurify": "^3.2.6",
     "gray-matter": "^4.0.3",
