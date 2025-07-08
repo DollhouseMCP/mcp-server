@@ -18,7 +18,7 @@ const { SignatureVerifier } = await import('../../../src/update/SignatureVerifie
 const mockSafeExec = safeExec as jest.MockedFunction<typeof safeExec>;
 
 describe('SignatureVerifier', () => {
-  let verifier: SignatureVerifier;
+  let verifier: InstanceType<typeof SignatureVerifier>;
   let tempDir: string;
 
   beforeEach(async () => {
@@ -219,14 +219,14 @@ describe('SignatureVerifier', () => {
       await fs.writeFile(path.join(tempDir, 'SHA256SUMS'), checksums);
       
       // Mock actual checksums
-      jest.spyOn(verifier, 'verifyChecksum').mockImplementation(async (filePath, expected) => {
+      jest.spyOn(verifier, 'verifyChecksum').mockImplementation(async (filePath: string, expected: string) => {
         if (filePath.endsWith('file1.txt')) {
           return { verified: true, expectedChecksum: expected, actualChecksum: expected };
         }
         if (filePath.endsWith('file2.txt')) {
           return { verified: false, expectedChecksum: expected, actualChecksum: 'different', error: 'Checksum mismatch' };
         }
-        return { verified: false, error: 'Unknown file' };
+        return { verified: false, error: 'Unknown file' } as any;
       });
       
       const results = await verifier.verifyReleaseArtifacts(
