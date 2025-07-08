@@ -13,7 +13,7 @@ describe('Basic Functionality Tests', () => {
       expect(packageJson.version).toBeDefined();
       expect(packageJson.main).toBe('dist/index.js');
       expect(packageJson.bin['dollhousemcp']).toBe('./dist/index.js');
-      expect(packageJson.engines.node).toBe('>=18');
+      expect(packageJson.engines.node).toBe('>=20.0.0');
     });
 
     it('should have required dependencies', async () => {
