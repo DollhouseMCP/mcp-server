@@ -9,7 +9,7 @@ describe('Basic Functionality Tests', () => {
       const packageContent = await fs.readFile(packagePath, 'utf-8');
       const packageJson = JSON.parse(packageContent);
       
-      expect(packageJson.name).toBe('dollhousemcp');
+      expect(packageJson.name).toBe('@mickdarling/dollhousemcp');
       expect(packageJson.version).toBeDefined();
       expect(packageJson.main).toBe('dist/index.js');
       expect(packageJson.bin['dollhousemcp']).toBe('./dist/index.js');

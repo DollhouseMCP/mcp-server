@@ -55,10 +55,10 @@
   "license": "AGPL-3.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mickdarling/DollhouseMCP.git"
+    "url": "git+https://github.com/DollhouseMCP/mcp-server.git"
   },
   "bugs": {
-    "url": "https://github.com/mickdarling/DollhouseMCP/issues"
+    "url": "https://github.com/DollhouseMCP/mcp-server/issues"
   },
   "homepage": "https://dollhousemcp.com",
   "files": [
