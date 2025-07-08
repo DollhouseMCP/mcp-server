@@ -75,7 +75,8 @@ describe('GitHub Workflow Validation', () => {
           Object.entries(workflow.jobs).forEach(([jobName, job]) => {
             if (jobName.includes('test') || jobName.includes('Test')) {
               // Check if the job or its steps set TEST_PERSONAS_DIR
-              const hasEnvVar = checkForTestPersonasDir(job);
+              // Also check workflow-level env
+              const hasEnvVar = checkForTestPersonasDir(job) || !!workflow.env?.TEST_PERSONAS_DIR;
               
               // Only enforce for specific workflows that run tests
               if (file.includes('core-build-test') || file.includes('docker-testing')) {
