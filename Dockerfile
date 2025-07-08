@@ -1,6 +1,6 @@
 # Multi-stage build for production efficiency
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 # Install build dependencies for better cross-platform compatibility
 # These are especially important for ARM64 builds
@@ -29,7 +29,7 @@ RUN npm run build
 
 # Production stage
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node:20-slim AS production
+FROM node:24-slim AS production
 
 # Install runtime dependencies
 # Minimal dependencies for production, helps with ARM64 compatibility
