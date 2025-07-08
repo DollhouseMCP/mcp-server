@@ -37,7 +37,7 @@ export function validatePath(inputPath: string): string {
   
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
-  const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/{1,100}/g, '/');
+  const normalized = inputPath.replace(/^\/{1,100}|\/{1,100}$/g, '').replace(/\/{1,100}/g, '/');
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
     throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
