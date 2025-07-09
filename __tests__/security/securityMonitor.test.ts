@@ -35,9 +35,12 @@ describe('SecurityMonitor', () => {
         details: 'Critical injection detected'
       });
 
-      expect(consoleErrorSpy).toHaveBeenCalledTimes(3); // Log + alert header + details
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(5); // Log + 4 alert lines
       expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('[SECURITY]'));
       expect(consoleErrorSpy).toHaveBeenCalledWith('🚨 CRITICAL SECURITY ALERT 🚨');
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Type:'));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Details:'));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Timestamp:'));
     });
 
     it('should log high severity events to console.error', () => {
