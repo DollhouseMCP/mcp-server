@@ -6,6 +6,8 @@ import matter from 'gray-matter';
 import { GitHubClient } from './GitHubClient.js';
 import { PersonaMetadata } from '../types/persona.js';
 import { ContentValidator } from '../security/contentValidator.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecurityError } from '../errors/SecurityError.js';
 
 export class PersonaDetails {
   private githubClient: GitHubClient;
@@ -33,10 +35,20 @@ export class PersonaDetails {
     // Sanitize content for display (this is view-only, not installation)
     const sanitizedContent = ContentValidator.sanitizePersonaContent(content);
     
-    const parsed = matter(sanitizedContent);
+    // Use secure YAML parser
+    let parsed;
+    try {
+      parsed = SecureYamlParser.safeMatter(sanitizedContent);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        throw new Error(`Security warning: This persona contains potentially malicious content - ${error.message}`);
+      }
+      throw error;
+    }
+    
     const metadata = parsed.data as PersonaMetadata;
     
-    // Validate metadata for display
+    // Additional validation for display
     const metadataValidation = ContentValidator.validateMetadata(metadata);
     if (!metadataValidation.isValid && metadataValidation.severity === 'critical') {
       throw new Error(`Security warning: This persona contains potentially malicious content`);

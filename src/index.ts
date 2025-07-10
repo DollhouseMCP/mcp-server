@@ -7,6 +7,8 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
+import { SecureYamlParser } from './security/secureYamlParser.js';
+import { SecurityError } from './errors/SecurityError.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
@@ -132,7 +134,18 @@ export class DollhouseMCPServer implements IToolHandler {
         try {
           const filePath = path.join(this.personasDir, file);
           const fileContent = await fs.readFile(filePath, 'utf-8');
-          const parsed = matter(fileContent);
+          
+          // Use secure YAML parser
+          let parsed;
+          try {
+            parsed = SecureYamlParser.safeMatter(fileContent);
+          } catch (error) {
+            if (error instanceof SecurityError) {
+              console.error(`Security threat detected in persona ${file}: ${error.message}`);
+              continue;
+            }
+            throw error;
+          }
           
           const metadata = parsed.data as PersonaMetadata;
           const content = parsed.content;
@@ -918,7 +931,25 @@ ${sanitizedInstructions}
     try {
       // Read current file
       const fileContent = await fs.readFile(filePath, 'utf-8');
-      const parsed = matter(fileContent);
+      
+      // Use secure YAML parser
+      let parsed;
+      try {
+        parsed = SecureYamlParser.safeMatter(fileContent);
+      } catch (error) {
+        if (error instanceof SecurityError) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${this.getPersonaIndicator()}❌ **Security Error**\n\n` +
+                  `Cannot edit persona due to security threat: ${error.message}`,
+              },
+            ],
+          };
+        }
+        throw error;
+      }
       
       // If editing a default persona, create a copy instead
       if (isDefaultPersona) {
@@ -997,7 +1028,9 @@ ${sanitizedInstructions}
       }
 
       // Regenerate file content
-      const updatedContent = matter.stringify(parsed.content, parsed.data);
+      // Use secure YAML stringification
+      const secureParser = SecureYamlParser.createSecureMatterParser();
+      const updatedContent = secureParser.stringify(parsed.content, parsed.data);
       
       // Write updated file
       await fs.writeFile(filePath, updatedContent, 'utf-8');

@@ -76,8 +76,13 @@ export class ContentValidator {
   // Malicious YAML patterns
   private static readonly MALICIOUS_YAML_PATTERNS = [
     /!!python\/object/,
+    /!!ruby\/object/,
+    /!!java/,
     /!!exec/,
     /!!eval/,
+    /!!new/,
+    /!!construct/,
+    /!!apply/,
     /subprocess/,
     /os\.system/,
     /eval\(/,
@@ -136,6 +141,7 @@ export class ContentValidator {
           source: 'yaml_validation',
           details: `Malicious YAML pattern detected: ${pattern}`,
         });
+        // Early exit on first match for performance
         return false;
       }
     }
