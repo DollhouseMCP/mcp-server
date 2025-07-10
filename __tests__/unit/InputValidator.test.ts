@@ -443,7 +443,8 @@ describe('InputValidator - Security Edge Cases', () => {
         console.log('Skipping timing attack test in CI environment - timing too unreliable');
         // Still verify that the validation functions work correctly
         expect(() => validateFilename('test-file.md')).not.toThrow();
-        expect(() => validateFilename('../../../etc/passwd')).toThrow();
+        // Path traversal is sanitized, not rejected, so check the result
+        expect(validateFilename('../../../etc/passwd')).toBe('etcpasswd');
         return;
       }
       
