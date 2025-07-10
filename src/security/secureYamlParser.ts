@@ -41,7 +41,7 @@ export class SecureYamlParser {
     name: (v) => typeof v === 'string' && v.length <= 100,
     description: (v) => typeof v === 'string' && v.length <= 500,
     author: (v) => typeof v === 'string' && v.length <= 100,
-    version: (v) => typeof v === 'string' && /^\d+\.\d+(\.\d+)?$/.test(v),
+    version: (v) => typeof v === 'string' && /^\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(v),
     category: (v) => typeof v === 'string' && v.length <= 50,
     age_rating: (v) => ['all', '13+', '18+'].includes(v),
     price: (v) => typeof v === 'string' && (v === 'free' || /^\$\d+\.\d{2}$/.test(v)),

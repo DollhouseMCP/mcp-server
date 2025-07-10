@@ -109,6 +109,36 @@ code: eval('1+1')
 name: test
 module: __import__('os')
 ---`
+        },
+        {
+          name: 'constructor new',
+          yaml: `---
+name: !!new Date()
+---`
+        },
+        {
+          name: 'constructor construct',
+          yaml: `---
+name: !!construct Date
+---`
+        },
+        {
+          name: 'constructor apply',
+          yaml: `---
+name: !!apply Date.now
+---`
+        },
+        {
+          name: 'Ruby object injection',
+          yaml: `---
+name: !!ruby/object:Gem::Requirement
+---`
+        },
+        {
+          name: 'Java injection',
+          yaml: `---
+name: !!java/object:java.lang.Runtime
+---`
         }
       ];
 
@@ -326,6 +356,20 @@ generation_method: ${method}
         
         const result = SecureYamlParser.parse(yaml);
         expect(result.data.generation_method).toBe(method);
+      });
+    });
+
+    it('should validate version with pre-release', () => {
+      const validVersions = ['1.0.0', '2.1.3', '1.0.0-beta', '2.0.0-alpha.1', '3.0.0-rc.2.3'];
+      
+      validVersions.forEach(version => {
+        const yaml = `---
+name: Test
+version: ${version}
+---`;
+        
+        const result = SecureYamlParser.parse(yaml);
+        expect(result.data.version).toBe(version);
       });
     });
   });
