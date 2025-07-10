@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { safeExec } from '../utils/git.js';
+import { logger } from '../utils/logger.js';
 
 export interface BackupInfo {
   path: string;
@@ -175,7 +176,7 @@ export class BackupManager {
       }
     } catch (error) {
       // Log warning but don't fail the backup
-      console.error('Warning: Could not backup all personas:', error);
+      logger.warn('Could not backup all personas:', error);
     }
     
     // Save backup metadata
@@ -296,7 +297,7 @@ export class BackupManager {
           await fs.rm(backup.path, { recursive: true, force: true });
           deletedCount++;
         } catch (error) {
-          console.error(`Failed to delete backup ${backup.path}:`, error);
+          logger.error(`Failed to delete backup ${backup.path}:`, error);
         }
       }
     }

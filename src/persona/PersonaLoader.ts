@@ -9,6 +9,7 @@ import { Persona, PersonaMetadata } from '../types/persona.js';
 import { ensureDirectory, generateUniqueId } from '../utils/filesystem.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
+import { logger } from '../utils/logger.js';
 
 export class PersonaLoader {
   private personasDir: string;
@@ -35,14 +36,14 @@ export class PersonaLoader {
           const persona = await this.loadPersona(file, getCurrentUser);
           if (persona) {
             personas.set(file, persona);
-            console.error(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
+            logger.error(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
           }
         } catch (error) {
-          console.error(`Error loading persona ${file}: ${error}`);
+          logger.error(`Error loading persona ${file}: ${error}`);
         }
       }
     } catch (error) {
-      console.error(`Error reading personas directory: ${error}`);
+      logger.error(`Error reading personas directory: ${error}`);
     }
     
     return personas;
@@ -62,7 +63,7 @@ export class PersonaLoader {
         parsed = SecureYamlParser.safeMatter(fileContent);
       } catch (error) {
         if (error instanceof SecurityError) {
-          console.error(`Security threat detected in persona ${filename}: ${error.message}`);
+          logger.error(`Security threat detected in persona ${filename}: ${error.message}`);
           return null;
         }
         throw error;
@@ -80,7 +81,7 @@ export class PersonaLoader {
       if (!uniqueId) {
         const authorForId = metadata.author || getCurrentUser() || undefined;
         uniqueId = generateUniqueId(metadata.name, authorForId);
-        console.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
+        logger.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
       }
       
       // Set default values for metadata fields
@@ -95,7 +96,7 @@ export class PersonaLoader {
       
       return persona;
     } catch (error) {
-      console.error(`Error loading persona ${filename}: ${error}`);
+      logger.error(`Error loading persona ${filename}: ${error}`);
       return null;
     }
   }

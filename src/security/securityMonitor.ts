@@ -5,6 +5,8 @@
  * for tracking and alerting on security-related events.
  */
 
+import { logger } from '../utils/logger.js';
+
 export interface SecurityEvent {
   type: 'CONTENT_INJECTION_ATTEMPT' | 'YAML_INJECTION_ATTEMPT' | 'PATH_TRAVERSAL_ATTEMPT' | 
         'TOKEN_VALIDATION_FAILURE' | 'UPDATE_SECURITY_VIOLATION' | 'RATE_LIMIT_EXCEEDED' |
@@ -44,23 +46,12 @@ export class SecurityMonitor {
       this.events.shift();
     }
 
-    // Log to console with appropriate level
-    const logMessage = `[SECURITY] ${JSON.stringify(logEntry)}`;
+    // In MCP servers, we cannot write to stderr/stdout as it breaks the JSON-RPC protocol
+    // Security events are stored in memory and can be retrieved via API
+    // Only send critical alerts via the proper channel
     
-    switch (event.severity) {
-      case 'CRITICAL':
-        console.error(logMessage);
-        this.sendSecurityAlert(logEntry);
-        break;
-      case 'HIGH':
-        console.error(logMessage);
-        break;
-      case 'MEDIUM':
-        console.warn(logMessage);
-        break;
-      case 'LOW':
-        console.log(logMessage);
-        break;
+    if (event.severity === 'CRITICAL') {
+      this.sendSecurityAlert(logEntry);
     }
   }
 
@@ -74,10 +65,14 @@ export class SecurityMonitor {
     // - PagerDuty
     // - Security Information and Event Management (SIEM) systems
     
-    console.error(`🚨 CRITICAL SECURITY ALERT 🚨`);
-    console.error(`Type: ${event.type}`);
-    console.error(`Details: ${event.details}`);
-    console.error(`Timestamp: ${event.timestamp}`);
+    // Log critical security alerts with structured data
+    // DO NOT use console.error in MCP servers as it breaks the JSON-RPC protocol
+    logger.error('🚨 CRITICAL SECURITY ALERT 🚨', {
+      type: event.type,
+      details: event.details,
+      timestamp: event.timestamp,
+      id: event.id
+    });
     
     // If in production mode with proper config, send actual alerts
     if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
