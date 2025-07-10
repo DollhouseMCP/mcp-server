@@ -36,7 +36,7 @@ export class PersonaLoader {
           const persona = await this.loadPersona(file, getCurrentUser);
           if (persona) {
             personas.set(file, persona);
-            logger.error(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
+            logger.debug(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
           }
         } catch (error) {
           logger.error(`Error loading persona ${file}: ${error}`);
@@ -81,7 +81,7 @@ export class PersonaLoader {
       if (!uniqueId) {
         const authorForId = metadata.author || getCurrentUser() || undefined;
         uniqueId = generateUniqueId(metadata.name, authorForId);
-        logger.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
+        logger.debug(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
       }
       
       // Set default values for metadata fields

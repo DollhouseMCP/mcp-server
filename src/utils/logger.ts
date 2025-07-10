@@ -46,8 +46,8 @@ class MCPLogger {
       this.logs.shift();
     }
     
-    // Only write to console during initialization
-    if (!this.isMCPConnected) {
+    // Only write to console during initialization and not in test environment
+    if (!this.isMCPConnected && process.env.NODE_ENV !== 'test') {
       const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
       const fullMessage = data 
         ? `${prefix} ${message} ${JSON.stringify(data)}`

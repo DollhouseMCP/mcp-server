@@ -1,29 +1,47 @@
 # Quick Start Guide - Next Session
 
-## 1. Check Current State (30 seconds)
+## 🎯 PRIORITY: NPM Organization Migration
+
+### Where We Left Off (July 10, 2025, 5:00 PM)
+- ✅ Published v1.2.2 to NPM as `@mickdarling/dollhousemcp`
+- ✅ Created GitHub release with comprehensive security notes
+- ✅ Created NPM organization "DollhouseMCP"
+- 🎯 Ready to migrate to `@dollhousemcp/mcp-server`
+
+## 1. Quick Migration Steps
 ```bash
 cd /Users/mick/Developer/MCP-Servers/DollhouseMCP
 git pull
-git status
-npm test  # Should show 487+ tests passing
+
+# 1. Update package.json
+# Change: "name": "@mickdarling/dollhousemcp"
+# To:     "name": "@dollhousemcp/mcp-server"
+# Also bump version to 1.2.3 or 1.3.0
+
+# 2. Update test
+# Edit __tests__/basic.test.ts line 12
+# expect(packageJson.name).toBe('@dollhousemcp/mcp-server');
+
+# 3. Run tests
+npm test
+
+# 4. Build
+npm run build
+
+# 5. Publish to organization
+npm publish --access public
+
+# 6. Deprecate old package
+npm deprecate @mickdarling/dollhousemcp "Package moved to @dollhousemcp/mcp-server"
 ```
 
-## 2. Review Priorities (1 minute)
-```bash
-# Check high priority issues
-gh issue list --label "priority: high"
+## 2. Files to Update
+- `package.json` - name field
+- `README.md` - all NPM installation instructions
+- `__tests__/basic.test.ts` - package name test
+- Various docs with old package name
 
-# Current high priority:
-# #40  - NPM publishing (IMMEDIATE!)
-# #174 - Rate limiting
-# #175 - Async cache refresh  
-# #162 - Unicode normalization
-
-# Review master todo list
-cat docs/development/MASTER_TODO_LIST_JULY_10_2025.md | head -30
-```
-
-## 3. Start v1.2.2 Release (If not done)
+## 3. After Migration: Start User Features
 ```bash
 # Update version
 npm version 1.2.2
