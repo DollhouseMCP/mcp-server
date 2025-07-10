@@ -14,7 +14,7 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-487%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-500%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Marketplace**: https://github.com/DollhouseMCP/personas  
 **📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.2 - Comprehensive Security Enhancement Release
+**📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
 
 ## ✨ Key Features
 
@@ -39,7 +39,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
 
-## 🔒 Enterprise-Grade Security (v1.2.2)
+## 🔒 Enterprise-Grade Security (v1.2.4)
 
 DollhouseMCP implements comprehensive security measures to protect your personas and system:
 
@@ -978,7 +978,23 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.2.2 - July 10, 2025 (Current)
+### v1.2.4 - July 10, 2025 (Current)
+
+**Critical Fix**:
+- ✅ **Fixed MCP protocol compatibility** - console output no longer breaks JSON-RPC communication
+- ✅ **Added MCP-safe logger utility** for proper logging during protocol sessions
+- ✅ **Resolves connection failures** in Claude Desktop
+- ✅ **Updated Docker tests** to work with new logging approach
+- ✅ **Added comprehensive logger unit tests**
+
+### v1.2.3 - July 10, 2025
+
+**Bug Fix**:
+- ✅ **Fixed personas directory path resolution** for production environments
+- ✅ **Changed from process.cwd() to __dirname-based paths**
+- ✅ **Fixed setup script** with correct tool count and repository URLs
+
+### v1.2.2 - July 10, 2025
 - ✅ **Comprehensive security enhancements**:
   - Content sanitization with DOMPurify (SEC-001)
   - YAML injection prevention (SEC-003)
