@@ -9,6 +9,7 @@ import { GitHubClient } from './GitHubClient.js';
 import { PersonaMetadata } from '../types/persona.js';
 import { validatePath, validateFilename, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
+import { ContentValidator } from '../security/contentValidator.js';
 
 export class PersonaInstaller {
   private githubClient: GitHubClient;
@@ -55,8 +56,17 @@ export class PersonaInstaller {
     // Validate content size after decoding
     validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
     
-    const parsed = matter(content);
+    // Sanitize content for security threats
+    const sanitizedContent = ContentValidator.sanitizePersonaContent(content);
+    
+    const parsed = matter(sanitizedContent);
     const metadata = parsed.data as PersonaMetadata;
+    
+    // Validate metadata for injection attacks
+    const metadataValidation = ContentValidator.validateMetadata(metadata);
+    if (!metadataValidation.isValid) {
+      throw new Error(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);
+    }
     
     // Validate metadata
     if (!metadata.name || !metadata.description) {
@@ -79,8 +89,8 @@ export class PersonaInstaller {
       // File doesn't exist, proceed with installation
     }
     
-    // Write the file
-    await fs.writeFile(localPath, content, 'utf-8');
+    // Write the sanitized file
+    await fs.writeFile(localPath, sanitizedContent, 'utf-8');
     
     return {
       success: true,

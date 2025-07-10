@@ -1,0 +1,1 @@
+export { SecurityError } from './SecurityError.js';

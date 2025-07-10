@@ -5,6 +5,7 @@
 import matter from 'gray-matter';
 import { GitHubClient } from './GitHubClient.js';
 import { PersonaMetadata } from '../types/persona.js';
+import { ContentValidator } from '../security/contentValidator.js';
 
 export class PersonaDetails {
   private githubClient: GitHubClient;
@@ -28,8 +29,18 @@ export class PersonaDetails {
     
     // Decode Base64 content
     const content = Buffer.from(data.content, 'base64').toString('utf-8');
-    const parsed = matter(content);
+    
+    // Sanitize content for display (this is view-only, not installation)
+    const sanitizedContent = ContentValidator.sanitizePersonaContent(content);
+    
+    const parsed = matter(sanitizedContent);
     const metadata = parsed.data as PersonaMetadata;
+    
+    // Validate metadata for display
+    const metadataValidation = ContentValidator.validateMetadata(metadata);
+    if (!metadataValidation.isValid && metadataValidation.severity === 'critical') {
+      throw new Error(`Security warning: This persona contains potentially malicious content`);
+    }
     
     return {
       metadata,

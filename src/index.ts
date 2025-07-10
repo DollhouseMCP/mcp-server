@@ -13,6 +13,7 @@ import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
 import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
+import { ContentValidator } from './security/contentValidator.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
@@ -486,6 +487,54 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
 
+    // Validate persona content before submission
+    try {
+      // Read the full persona file content
+      const fullPath = path.join(this.personasDir, persona.filename);
+      const fileContent = await fs.readFile(fullPath, 'utf-8');
+      
+      // Validate content for security threats
+      const contentValidation = ContentValidator.validateAndSanitize(fileContent);
+      if (!contentValidation.isValid && contentValidation.severity === 'critical') {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
+              `This persona contains content that could be used for prompt injection attacks:\n` +
+              `• ${contentValidation.detectedPatterns?.join('\n• ')}\n\n` +
+              `Please remove these patterns before submitting to the marketplace.`,
+            },
+          ],
+        };
+      }
+      
+      // Validate metadata
+      const metadataValidation = ContentValidator.validateMetadata(persona.metadata);
+      if (!metadataValidation.isValid) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}⚠️ **Metadata Security Warning**\n\n` +
+              `The persona metadata contains potentially problematic content:\n` +
+              `• ${metadataValidation.detectedPatterns?.join('\n• ')}\n\n` +
+              `Please fix these issues before submitting.`,
+            },
+          ],
+        };
+      }
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error validating persona: ${error}`,
+          },
+        ],
+      };
+    }
+
     const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
     const text = this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
 
@@ -667,6 +716,22 @@ export class DollhouseMCPServer implements IToolHandler {
       // Validate content sizes
       validateContentSize(sanitizedInstructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
       validateContentSize(sanitizedDescription, 2000); // 2KB max for description
+
+      // Validate content for security threats
+      const nameValidation = ContentValidator.validateAndSanitize(sanitizedName);
+      if (!nameValidation.isValid) {
+        throw new Error(`Name contains prohibited content: ${nameValidation.detectedPatterns?.join(', ')}`);
+      }
+
+      const descValidation = ContentValidator.validateAndSanitize(sanitizedDescription);
+      if (!descValidation.isValid) {
+        throw new Error(`Description contains prohibited content: ${descValidation.detectedPatterns?.join(', ')}`);
+      }
+
+      const instructionsValidation = ContentValidator.validateAndSanitize(sanitizedInstructions);
+      if (!instructionsValidation.isValid && instructionsValidation.severity === 'critical') {
+        throw new Error(`Instructions contain security threats: ${instructionsValidation.detectedPatterns?.join(', ')}`);
+      }
 
       // Generate metadata
       const author = this.getCurrentUserForAttribution();
@@ -877,31 +942,50 @@ ${sanitizedInstructions}
       // Update the appropriate field
       const normalizedField = field.toLowerCase();
       
+      // Validate the new value for security threats
+      const valueValidation = ContentValidator.validateAndSanitize(value);
+      if (!valueValidation.isValid && valueValidation.severity === 'critical') {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
+              `The new value contains prohibited content:\n` +
+              `• ${valueValidation.detectedPatterns?.join('\n• ')}\n\n` +
+              `Please remove these patterns and try again.`,
+            },
+          ],
+        };
+      }
+      
+      // Use sanitized value if needed
+      const sanitizedValue = valueValidation.sanitizedContent || value;
+      
       if (normalizedField === 'instructions') {
         // Update the main content
-        parsed.content = value;
+        parsed.content = sanitizedValue;
       } else if (normalizedField === 'triggers') {
         // Parse triggers as comma-separated list
-        parsed.data[normalizedField] = value.split(',').map(t => t.trim()).filter(t => t.length > 0);
+        parsed.data[normalizedField] = sanitizedValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
       } else if (normalizedField === 'category') {
         // Validate category
         const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
-        if (!validCategories.includes(value.toLowerCase())) {
+        if (!validCategories.includes(sanitizedValue.toLowerCase())) {
           return {
             content: [
               {
                 type: "text",
                 text: `${this.getPersonaIndicator()}❌ **Invalid Category**\n\n` +
                     `Category must be one of: ${validCategories.join(', ')}\n` +
-                    `You provided: "${value}"`,
+                    `You provided: "${sanitizedValue}"`,
               },
             ],
           };
         }
-        parsed.data[normalizedField] = value.toLowerCase();
+        parsed.data[normalizedField] = sanitizedValue.toLowerCase();
       } else {
         // Update metadata field
-        parsed.data[normalizedField] = value;
+        parsed.data[normalizedField] = sanitizedValue;
       }
 
       // Update version and modification info
