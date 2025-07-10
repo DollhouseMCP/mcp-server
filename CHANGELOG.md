@@ -5,6 +5,41 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2025-07-10
+
+### Security
+- **Content Sanitization** (#156): Comprehensive XSS prevention in persona content
+  - DOMPurify integration with strict no-tags policy
+  - Input validation for all user-provided content
+  - Safe handling of persona instructions and metadata
+- **YAML Injection Prevention** (#171): Secure YAML parsing implementation
+  - Schema validation with strict type checking
+  - Size limits for YAML documents (100KB default)
+  - Protection against prototype pollution and code injection
+- **Token Security** (#173): GitHub token exposure prevention
+  - Token validation and format checking
+  - Secure storage with encryption at rest
+  - Token expiration and rotation support
+  - Audit logging for token operations
+- **Docker Container Security** (#181): Hardened container configuration
+  - Non-root user execution (UID 1000)
+  - Read-only root filesystem
+  - Minimal attack surface with distroless base image
+  - Resource limits (100MB memory, 0.5 CPU)
+  - No capabilities granted
+
+### Fixed
+- **CI Timing Test Flakiness** (#185): Fixed unreliable timing attack tests
+  - Skip timing tests in CI environments where they're inherently unreliable
+  - Added deterministic security validation tests
+  - Enhanced CI detection covering 8+ platforms
+  - Maintained strict security thresholds (>50%) for local development
+
+### Added
+- Total tests increased from 309 to 487
+- Comprehensive security test coverage
+- TypeScript compilation fixes for all test files
+
 ## [1.2.0] - 2025-07-07
 
 ### Added
@@ -91,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - User authorization controls for Claude triggers
 - Command injection prevention in auto-update system
 
+[1.2.2]: https://github.com/DollhouseMCP/mcp-server/compare/v1.2.0...v1.2.2
 [1.2.0]: https://github.com/DollhouseMCP/mcp-server/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/DollhouseMCP/mcp-server/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.0.0

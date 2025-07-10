@@ -14,7 +14,7 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-372%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-487%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Marketplace**: https://github.com/DollhouseMCP/personas  
 **📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.1 - Critical Data Protection Release
+**📦 Version**: v1.2.2 - Comprehensive Security Enhancement Release
 
 ## ✨ Key Features
 
@@ -38,6 +38,25 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 | 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
+
+## 🔒 Enterprise-Grade Security (v1.2.2)
+
+DollhouseMCP implements comprehensive security measures to protect your personas and system:
+
+### Security Features
+- **🛡️ Content Sanitization**: DOMPurify integration prevents XSS attacks in persona content
+- **📝 YAML Injection Prevention**: Secure parsing with schema validation and size limits
+- **🔐 Token Security**: GitHub tokens are validated, encrypted at rest, with rotation support
+- **🐳 Container Hardening**: Non-root execution, read-only filesystem, resource limits
+- **🚦 Rate Limiting**: Token bucket algorithm prevents API abuse (10 checks/hour default)
+- **✅ Signature Verification**: GPG verification ensures release authenticity
+- **🔍 Input Validation**: Comprehensive validation for all user inputs
+- **📊 Security Monitoring**: Audit logging for security-relevant operations
+
+### Security Testing
+- **487 comprehensive tests** including security-specific test suites
+- **Continuous security scanning** with GitHub Advanced Security
+- **Vulnerability-free**: All security alerts resolved (0 active)
 
 ## 📋 Prerequisites
 
@@ -959,7 +978,18 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.2.1 - January 8, 2025 (Current)
+### v1.2.2 - July 10, 2025 (Current)
+- ✅ **Comprehensive security enhancements**:
+  - Content sanitization with DOMPurify (SEC-001)
+  - YAML injection prevention (SEC-003)
+  - GitHub token security (SEC-004)
+  - Docker container hardening (SEC-005)
+- ✅ **487 comprehensive tests** including extensive security coverage
+- ✅ **CI timing test fixes** for reliable cross-platform testing
+- ✅ **TypeScript compilation fixes** for all test files
+- ✅ **All security vulnerabilities resolved** (0 active alerts)
+
+### v1.2.1 - January 8, 2025
 - ✅ **Critical bug fixes** for data protection:
   - Copy-on-write for default personas (Issue #145)
   - User personas included in backups (Issue #144)
