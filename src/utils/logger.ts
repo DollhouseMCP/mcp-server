@@ -46,21 +46,25 @@ class MCPLogger {
       this.logs.shift();
     }
     
-    // Only write to console during initialization and not in test environment
-    if (!this.isMCPConnected && process.env.NODE_ENV !== 'test') {
-      const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
-      const fullMessage = data 
-        ? `${prefix} ${message} ${JSON.stringify(data)}`
-        : `${prefix} ${message}`;
-      
-      // During initialization, we can use console
-      if (level === 'error') {
-        console.error(fullMessage);
-      } else if (level === 'warn') {
-        console.warn(fullMessage);
-      } else {
-        // For MCP, even during init, avoid stdout for info/debug
-        console.error(fullMessage);
+    // Only write to console during initialization
+    if (!this.isMCPConnected) {
+      // Check NODE_ENV inside the method to ensure it's evaluated at runtime
+      const isTest = process.env.NODE_ENV === 'test';
+      if (!isTest) {
+        const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
+        const fullMessage = data 
+          ? `${prefix} ${message} ${JSON.stringify(data)}`
+          : `${prefix} ${message}`;
+        
+        // During initialization, we can use console
+        if (level === 'error') {
+          console.error(fullMessage);
+        } else if (level === 'warn') {
+          console.warn(fullMessage);
+        } else {
+          // For MCP, even during init, avoid stdout for info/debug
+          console.error(fullMessage);
+        }
       }
     }
   }

@@ -28,7 +28,7 @@ describe('SecurityMonitor', () => {
   });
 
   describe('logSecurityEvent', () => {
-    it('should log critical events to console.error', () => {
+    it('should store critical events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
@@ -36,15 +36,16 @@ describe('SecurityMonitor', () => {
         details: 'Critical injection detected'
       });
 
-      expect(consoleErrorSpy).toHaveBeenCalledTimes(5); // Log + alert header + type + details + timestamp
-      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('[SECURITY]'));
-      expect(consoleErrorSpy).toHaveBeenCalledWith('🚨 CRITICAL SECURITY ALERT 🚨');
-      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Type:'));
-      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Details:'));
-      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Timestamp:'));
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('CONTENT_INJECTION_ATTEMPT');
+      expect(events[0].severity).toBe('CRITICAL');
+      expect(events[0].details).toBe('Critical injection detected');
+      // In test environment, console output is suppressed
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it('should log high severity events to console.error', () => {
+    it('should store high severity events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'HIGH',
@@ -52,11 +53,15 @@ describe('SecurityMonitor', () => {
         details: 'Path traversal detected'
       });
 
-      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].severity).toBe('HIGH');
+      // In test environment, console output is suppressed
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
       expect(consoleWarnSpy).not.toHaveBeenCalled();
     });
 
-    it('should log medium severity events to console.warn', () => {
+    it('should store medium severity events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'MEDIUM',
@@ -64,11 +69,15 @@ describe('SecurityMonitor', () => {
         details: 'Rate limit hit'
       });
 
-      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].severity).toBe('MEDIUM');
+      // In test environment, console output is suppressed
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it('should log low severity events to console.log', () => {
+    it('should store low severity events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'TOKEN_VALIDATION_FAILURE',
         severity: 'LOW',
@@ -76,7 +85,11 @@ describe('SecurityMonitor', () => {
         details: 'Invalid token format'
       });
 
-      expect(consoleLogSpy).toHaveBeenCalledTimes(1);
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].severity).toBe('LOW');
+      // In test environment, console output is suppressed
+      expect(consoleLogSpy).not.toHaveBeenCalled();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 

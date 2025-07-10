@@ -152,32 +152,29 @@ These are unrelated to the file deletion issue and documented for future work.
 
 See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_CI_ISSUES.md` for details.
 
-## Current Active Issues (January 9, 2025 - Security Implementation):
-🔴 **Critical/High Priority**:
-- #156: PR for SEC-001 awaiting review (Anthropic API issues)
-- #40: Complete npm publishing (wait for security fixes)
-- #138: Fix CI Environment Validation Tests
-- #153: SEC-003 YAML parsing security
-- #154: SEC-004 Token management system
-- #148: Fix flaky timing test on macOS
+## Current Active Issues (July 10, 2025 - MCP Protocol Fix):
+🔴 **Critical/Urgent**:
+- #189: Fix MCP console output breaking protocol (tests failing)
+- #188: Follow-up improvements for path resolution
 
-🟡 **Medium Priority**:
-- #155: SEC-005 Docker security hardening
+🟡 **High Priority**:
+- #40: Complete npm publishing (after v1.2.4)
+- #138: Fix CI Environment Validation Tests
+- #62: Document auto-update system
+
+🟢 **Medium Priority**:
 - #111-114: PR review suggestions
 - #9: Document branch protection
-- #29: Add MCP protocol integration tests
-- #30: Research multi-platform MCP compatibility
+- Security issues: #153-159
 
-🟢 **Low Priority**:
-- #88: Windows shell syntax (mostly resolved)
-- #139: Monitor Node.js 24 impact
-- #157-159: Security research projects
+### Current Session Status:
+1. **v1.2.3 Released** - Fixed personas path resolution
+2. **PR #189 Open** - Console output fix, tests failing
+3. **Next**: Fix test failures, merge PR, release v1.2.4
 
-### Next Session Priority:
-1. **Check PR #156 status** - Merge if reviewed
-2. **Implement SEC-003** - YAML parsing security
-3. **NPM Publish** - After security fixes merged
-4. **Document security features** - Update README  
+### Latest Releases:
+- v1.2.3 (July 10): Fixed /personas filesystem root error  
+- v1.2.4 (pending): Fix console output breaking MCP protocol  
 
 ## Current Workflow Status (January 8, 2025)
 
