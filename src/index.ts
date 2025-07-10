@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
@@ -64,8 +65,12 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
-    // Use environment variable if set, otherwise default to personas subdirectory relative to current working directory
-    this.personasDir = process.env.PERSONAS_DIR || path.join(process.cwd(), "personas");
+    // Get the directory of this file for proper path resolution
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    
+    // Use environment variable if set, otherwise default to personas subdirectory relative to the project root
+    this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
