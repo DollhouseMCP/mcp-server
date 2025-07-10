@@ -218,7 +218,7 @@ describe('SecureTokenManager', () => {
 
       try {
         await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
-        expect.fail('Should have thrown error');
+        throw new Error('Should have thrown error');
       } catch (error: any) {
         // The error message should not contain the actual token pattern
         expect(error.message).toBe('Invalid GitHub token format');
@@ -244,7 +244,7 @@ describe('SecureTokenManager', () => {
 
       try {
         await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
-        fail('Should have thrown error');
+        throw new Error('Should have thrown error');
       } catch (error: any) {
         // SecurityError sanitizes the original error
         expect(error.message).toBe('Failed to validate token permissions');
@@ -261,7 +261,7 @@ describe('SecureTokenManager', () => {
 
       try {
         await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
-        fail('Should have thrown error');
+        throw new Error('Should have thrown error');
       } catch (error: any) {
         // SecurityError sanitizes the original error internally
         expect(error.message).toBe('Failed to validate token permissions');
@@ -275,7 +275,7 @@ describe('SecureTokenManager', () => {
 
       try {
         await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
-        fail('Should have thrown error');
+        throw new Error('Should have thrown error');
       } catch (error) {
         // Expected
       }
@@ -432,7 +432,7 @@ describe('SecureTokenManager', () => {
 
       try {
         await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
-        fail('Should have thrown error');
+        throw new Error('Should have thrown error');
       } catch (error: any) {
         expect(error.message).toBe('Failed to validate token permissions');
         // Original error should be sanitized in logs
