@@ -174,7 +174,7 @@ See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_
 
 ### Latest Releases:
 - v1.2.3 (July 10): Fixed /personas filesystem root error  
-- v1.2.4 (pending): Fix console output breaking MCP protocol  
+- v1.2.4 (July 10): Fixed console output breaking MCP protocol  
 
 ## Current Workflow Status (January 8, 2025)
 
