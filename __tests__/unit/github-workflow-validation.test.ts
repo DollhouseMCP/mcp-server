@@ -9,7 +9,7 @@
 import { describe, expect, it, beforeAll } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 interface WorkflowStep {
   name?: string;
@@ -25,6 +25,7 @@ interface WorkflowJob {
   'runs-on': string | string[];
   steps: WorkflowStep[];
   env?: Record<string, any>;
+  permissions?: Record<string, string> | string;
 }
 
 interface Workflow {
@@ -32,6 +33,7 @@ interface Workflow {
   on: any;
   jobs: Record<string, WorkflowJob>;
   env?: Record<string, any>;
+  permissions?: Record<string, string> | string;
 }
 
 describe('GitHub Workflow Validation', () => {

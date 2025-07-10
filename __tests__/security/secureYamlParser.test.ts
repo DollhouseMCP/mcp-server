@@ -7,7 +7,8 @@ describe('SecureYamlParser', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset security monitor
-    SecurityMonitor['events'] = [];
+    // Use splice to clear the events array without reassigning
+    SecurityMonitor['events'].splice(0, SecurityMonitor['events'].length);
   });
 
   describe('parse', () => {

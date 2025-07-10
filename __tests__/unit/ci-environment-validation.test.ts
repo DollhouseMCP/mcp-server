@@ -11,6 +11,18 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 
+// Extend process.env type to include TEST_PERSONAS_DIR
+declare global {
+  namespace NodeJS {
+    interface ProcessEnv {
+      TEST_PERSONAS_DIR?: string;
+      CI?: string;
+      GITHUB_ACTIONS?: string;
+      NODE_ENV?: string;
+    }
+  }
+}
+
 describe('CI Environment Validation', () => {
   const isCI = process.env.CI === 'true';
   const isWindows = process.platform === 'win32';

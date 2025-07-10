@@ -11,12 +11,13 @@ describe('SecurityMonitor', () => {
   let consoleLogSpy: jest.SpiedFunction<typeof console.log>;
 
   beforeEach(() => {
-    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     
     // Clear any existing events
-    SecurityMonitor['events'] = [];
+    // Use splice to clear the events array without reassigning
+    SecurityMonitor['events'].splice(0, SecurityMonitor['events'].length);
     SecurityMonitor['eventCount'] = 0;
   });
 
