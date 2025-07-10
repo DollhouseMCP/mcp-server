@@ -25,6 +25,31 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌍 Website**: https://dollhousemcp.com (planned)  
 **📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
 
+## 🚀 Quick Start
+
+```bash
+# Install globally
+npm install -g @mickdarling/dollhousemcp
+
+# Add to Claude Desktop config (see path below for your OS)
+# macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
+# Windows: %APPDATA%\Claude\claude_desktop_config.json  
+# Linux: ~/.config/Claude/claude_desktop_config.json
+```
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["@mickdarling/dollhousemcp"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas` to get started.
+
 ## ✨ Key Features
 
 | Feature | Description |
@@ -77,7 +102,24 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 npm install -g @mickdarling/dollhousemcp
 ```
 
-Then add to your Claude Desktop configuration as shown in the [Configuration](#configuration) section below.
+After installation, add DollhouseMCP to your Claude Desktop configuration:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
+**Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["@mickdarling/dollhousemcp"]
+    }
+  }
+}
+```
+
+> **Note**: If you have other MCP servers configured, add dollhousemcp to your existing mcpServers object.
 
 #### Automated Setup (Alternative) - Claude Desktop Only
 
