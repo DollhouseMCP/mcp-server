@@ -70,7 +70,11 @@ export class DollhouseMCPServer implements IToolHandler {
     const __dirname = path.dirname(__filename);
     
     // Use environment variable if set, otherwise default to personas subdirectory relative to the project root
+    // Note: Assumes compiled output is in a subdirectory (e.g., dist/ or build/)
     this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
+    
+    // Log resolved path for debugging
+    console.error(`Personas directory resolved to: ${this.personasDir}`);
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
@@ -120,13 +124,23 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   private async loadPersonas() {
+    // Validate the personas directory path
+    if (!path.isAbsolute(this.personasDir)) {
+      console.warn(`Personas directory path is not absolute: ${this.personasDir}`);
+    }
+    
     try {
       await fs.access(this.personasDir);
-    } catch {
+    } catch (error) {
       // Create personas directory if it doesn't exist
-      await fs.mkdir(this.personasDir, { recursive: true });
-      console.error(`Created personas directory at: ${this.personasDir}`);
-      return;
+      try {
+        await fs.mkdir(this.personasDir, { recursive: true });
+        console.error(`Created personas directory at: ${this.personasDir}`);
+        return;
+      } catch (mkdirError: any) {
+        console.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
+        throw new Error(`Cannot create personas directory: ${mkdirError.message}`);
+      }
     }
 
     try {

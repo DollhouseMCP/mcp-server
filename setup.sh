@@ -125,13 +125,13 @@ echo
 echo "🔄 After updating the configuration:"
 echo "   1. Save the configuration file"
 echo "   2. Restart Claude Desktop completely"
-echo "   3. All 17 DollhouseMCP tools will be available in your next conversation"
+echo "   3. All 23 DollhouseMCP tools will be available in your next conversation"
 echo
 echo "🎯 Quick Test:"
 echo "   Try using 'list_personas' tool in Claude to verify the installation works"
 echo
 echo "📚 Documentation:"
-echo "   Repository: https://github.com/mickdarling/DollhouseMCP"
-echo "   Marketplace: https://github.com/mickdarling/DollhouseMCP-Personas"
+echo "   Repository: https://github.com/DollhouseMCP/mcp-server"
+echo "   Marketplace: https://github.com/DollhouseMCP/personas"
 echo
 echo "🎭 Happy persona management!"
