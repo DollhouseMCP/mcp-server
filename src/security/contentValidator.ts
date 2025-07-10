@@ -18,6 +18,18 @@ export interface ValidationResult {
 }
 
 export class ContentValidator {
+  /**
+   * Pattern-based detection system for prompt injection attacks.
+   * 
+   * This approach was chosen over AI-based detection because:
+   * 1. Pattern matching cannot be socially engineered or confused
+   * 2. Deterministic results ensure consistent security
+   * 3. No additional API calls or latency
+   * 4. Can't be bypassed by clever prompt engineering
+   * 
+   * The patterns below represent known attack vectors from security research
+   * and real-world exploit attempts against AI systems.
+   */
   // Prompt injection patterns that could compromise AI assistants
   private static readonly INJECTION_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'critical'; description: string }> = [
     // System prompt override attempts
