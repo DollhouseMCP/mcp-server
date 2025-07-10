@@ -10,6 +10,8 @@ import { PersonaMetadata } from '../types/persona.js';
 import { validatePath, validateFilename, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecurityError } from '../errors/SecurityError.js';
 
 export class PersonaInstaller {
   private githubClient: GitHubClient;
@@ -59,10 +61,20 @@ export class PersonaInstaller {
     // Sanitize content for security threats
     const sanitizedContent = ContentValidator.sanitizePersonaContent(content);
     
-    const parsed = matter(sanitizedContent);
+    // Use secure YAML parser
+    let parsed;
+    try {
+      parsed = SecureYamlParser.safeMatter(sanitizedContent);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        throw new Error(`Security threat in persona: ${error.message}`);
+      }
+      throw error;
+    }
+    
     const metadata = parsed.data as PersonaMetadata;
     
-    // Validate metadata for injection attacks
+    // Additional metadata validation for injection attacks
     const metadataValidation = ContentValidator.validateMetadata(metadata);
     if (!metadataValidation.isValid) {
       throw new Error(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);

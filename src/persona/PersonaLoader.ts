@@ -7,6 +7,8 @@ import * as path from 'path';
 import matter from 'gray-matter';
 import { Persona, PersonaMetadata } from '../types/persona.js';
 import { ensureDirectory, generateUniqueId } from '../utils/filesystem.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecurityError } from '../errors/SecurityError.js';
 
 export class PersonaLoader {
   private personasDir: string;
@@ -53,7 +55,18 @@ export class PersonaLoader {
     try {
       const filePath = path.join(this.personasDir, filename);
       const fileContent = await fs.readFile(filePath, 'utf-8');
-      const parsed = matter(fileContent);
+      
+      // Use secure YAML parser instead of direct gray-matter
+      let parsed;
+      try {
+        parsed = SecureYamlParser.safeMatter(fileContent);
+      } catch (error) {
+        if (error instanceof SecurityError) {
+          console.error(`Security threat detected in persona ${filename}: ${error.message}`);
+          return null;
+        }
+        throw error;
+      }
       
       const metadata = parsed.data as PersonaMetadata;
       const content = parsed.content;
@@ -92,7 +105,11 @@ export class PersonaLoader {
    */
   async savePersona(persona: Persona): Promise<void> {
     const filePath = path.join(this.personasDir, persona.filename);
-    const fileContent = matter.stringify(persona.content, persona.metadata);
+    
+    // Use secure YAML stringification
+    const secureParser = SecureYamlParser.createSecureMatterParser();
+    const fileContent = secureParser.stringify(persona.content, persona.metadata);
+    
     await fs.writeFile(filePath, fileContent, 'utf-8');
   }
   
