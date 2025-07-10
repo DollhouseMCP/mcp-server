@@ -1,4 +1,4 @@
-# Multi-stage build for production efficiency
+# Multi-stage build for production efficiency and security
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
 FROM node:24-slim AS builder
 
@@ -27,20 +27,28 @@ COPY personas/ ./personas/
 # Build the application
 RUN npm run build
 
-# Production stage
+# Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
 FROM node:24-slim AS production
 
-# Install runtime dependencies
-# Minimal dependencies for production, helps with ARM64 compatibility
-RUN apt-get update && apt-get install -y \
+# Install only essential runtime dependencies and remove unnecessary packages
+# This reduces attack surface by removing tools commonly used in exploits
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get remove -y --purge \
+    curl \
+    wget \
+    git \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Create non-root user for security
-# Using Debian-style user creation instead of Alpine-style
+# Using specific UID/GID for consistency across containers
 RUN groupadd -g 1001 nodejs && \
-    useradd -u 1001 -g nodejs -s /bin/bash -m dollhouse
+    useradd -u 1001 -g nodejs -s /bin/false -m dollhouse && \
+    mkdir -p /app && \
+    chown -R dollhouse:nodejs /app
 
 # Set working directory
 WORKDIR /app
@@ -55,22 +63,32 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/personas ./personas
 
-# Change ownership to non-root user
-RUN chown -R dollhouse:nodejs /app
+# Security hardening - Set proper permissions
+RUN chmod -R 750 /app && \
+    chown -R dollhouse:nodejs /app
+
+# Create writable directories with restricted permissions
+RUN mkdir -p /app/tmp /app/logs && \
+    chown -R dollhouse:nodejs /app/tmp /app/logs && \
+    chmod -R 700 /app/tmp /app/logs
+
+# Switch to non-root user
 USER dollhouse
 
-# No ports needed for stdio-based MCP servers
+# No ports exposed - stdio-based MCP servers don't need network access
 
-# No health check needed for stdio-based MCP servers
-# MCP servers initialize, load personas, and exit when no input stream available
+# Add security labels for container metadata
+LABEL security.non-root="true" \
+      security.no-new-privileges="true" \
+      security.read-only-root="true"
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV PERSONAS_DIR=/app/personas
-# Add Node.js heap size limit for ARM64 compatibility
-ENV NODE_OPTIONS="--max-old-space-size=256"
-# Disable updates in Docker container (containers are immutable)
-ENV DOLLHOUSE_DISABLE_UPDATES=true
+# Set environment variables with security considerations
+ENV NODE_ENV=production \
+    PERSONAS_DIR=/app/personas \
+    NODE_OPTIONS="--max-old-space-size=256" \
+    DOLLHOUSE_DISABLE_UPDATES=true \
+    DOLLHOUSE_SECURITY_MODE=strict \
+    PATH="/app/node_modules/.bin:$PATH"
 
 # Default command with explicit platform handling
 CMD ["node", "--trace-warnings", "dist/index.js"]
