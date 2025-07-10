@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
+import { logger } from '../utils/logger.js';
 
 export interface SignatureVerificationResult {
   verified: boolean;
@@ -253,7 +254,7 @@ export class SignatureVerifier {
       }
       
     } catch (error) {
-      console.error('Failed to import GPG key:', error);
+      logger.error('Failed to import GPG key:', error);
       return false;
     }
   }

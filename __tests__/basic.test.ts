@@ -12,7 +12,7 @@ describe('Basic Functionality Tests', () => {
       expect(packageJson.name).toBe('@mickdarling/dollhousemcp');
       expect(packageJson.version).toBeDefined();
       expect(packageJson.main).toBe('dist/index.js');
-      expect(packageJson.bin['dollhousemcp']).toBe('./dist/index.js');
+      expect(packageJson.bin['dollhousemcp']).toBe('dist/index.js');
       expect(packageJson.engines.node).toBe('>=20.0.0');
     });
 

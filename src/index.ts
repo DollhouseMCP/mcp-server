@@ -22,6 +22,7 @@ import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
+import { logger } from './utils/logger.js';
 
 // Default personas that should not be modified in place
 const DEFAULT_PERSONAS = [
@@ -74,7 +75,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
     
     // Log resolved path for debugging
-    console.error(`Personas directory resolved to: ${this.personasDir}`);
+    logger.info(`Personas directory resolved to: ${this.personasDir}`);
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
@@ -126,7 +127,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private async loadPersonas() {
     // Validate the personas directory path
     if (!path.isAbsolute(this.personasDir)) {
-      console.warn(`Personas directory path is not absolute: ${this.personasDir}`);
+      logger.warn(`Personas directory path is not absolute: ${this.personasDir}`);
     }
     
     try {
@@ -135,10 +136,10 @@ export class DollhouseMCPServer implements IToolHandler {
       // Create personas directory if it doesn't exist
       try {
         await fs.mkdir(this.personasDir, { recursive: true });
-        console.error(`Created personas directory at: ${this.personasDir}`);
+        logger.info(`Created personas directory at: ${this.personasDir}`);
         return;
       } catch (mkdirError: any) {
-        console.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
+        logger.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
         throw new Error(`Cannot create personas directory: ${mkdirError.message}`);
       }
     }
@@ -160,7 +161,7 @@ export class DollhouseMCPServer implements IToolHandler {
             parsed = SecureYamlParser.safeMatter(fileContent);
           } catch (error) {
             if (error instanceof SecurityError) {
-              console.error(`Security threat detected in persona ${file}: ${error.message}`);
+              logger.warn(`Security threat detected in persona ${file}: ${error.message}`);
               continue;
             }
             throw error;
@@ -178,7 +179,7 @@ export class DollhouseMCPServer implements IToolHandler {
           if (!uniqueId) {
             const authorForId = metadata.author || this.getCurrentUserForAttribution();
             uniqueId = generateUniqueId(metadata.name, authorForId);
-            console.error(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
+            logger.debug(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
           }
 
           // Set default values for new metadata fields
@@ -198,13 +199,13 @@ export class DollhouseMCPServer implements IToolHandler {
           };
 
           this.personas.set(file, persona);
-          console.error(`Loaded persona: ${metadata.name} (${uniqueId})`);
+          logger.debug(`Loaded persona: ${metadata.name} (${uniqueId}`);
         } catch (error) {
-          console.error(`Error loading persona ${file}: ${error}`);
+          logger.error(`Error loading persona ${file}: ${error}`);
         }
       }
     } catch (error) {
-      console.error(`Error reading personas directory: ${error}`);
+      logger.error(`Error reading personas directory: ${error}`);
     }
   }
 
@@ -1468,12 +1469,18 @@ Placeholders for custom format:
 
   async run() {
     const transport = new StdioServerTransport();
+    logger.info("Starting DollhouseMCP server...");
     await this.server.connect(transport);
-    console.error("DollhouseMCP server running on stdio");
+    // Mark that MCP is now connected - no more console output allowed
+    logger.setMCPConnected();
+    logger.info("DollhouseMCP server running on stdio");
   }
 }
 
 // Export is already at class declaration
 
 const server = new DollhouseMCPServer();
-server.run().catch(console.error);
+server.run().catch((error) => {
+  logger.error("Fatal error starting server", error);
+  process.exit(1);
+});

@@ -6,6 +6,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { SecureTokenManager, TokenScope } from '../security/tokenManager.js';
+import { logger } from '../utils/logger.js';
 
 export class GitHubClient {
   private apiCache: APICache;
@@ -61,7 +62,7 @@ export class GitHubClient {
           headers['Authorization'] = `Bearer ${token}`;
         } catch (tokenError) {
           // Log error but continue without token
-          console.log('GitHub token validation failed, proceeding without authentication');
+          logger.info('GitHub token validation failed, proceeding without authentication');
         }
       }
       
