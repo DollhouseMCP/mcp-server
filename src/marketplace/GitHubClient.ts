@@ -5,6 +5,7 @@
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
+import { SecureTokenManager, TokenScope } from '../security/tokenManager.js';
 
 export class GitHubClient {
   private apiCache: APICache;
@@ -53,8 +54,15 @@ export class GitHubClient {
         'User-Agent': 'DollhouseMCP/1.0'
       };
       
+      // Use SecureTokenManager for token handling if token is available
       if (process.env.GITHUB_TOKEN) {
-        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+        try {
+          const token = await SecureTokenManager.getSecureGitHubToken(TokenScope.READ);
+          headers['Authorization'] = `Bearer ${token}`;
+        } catch (tokenError) {
+          // Log error but continue without token
+          console.log('GitHub token validation failed, proceeding without authentication');
+        }
       }
       
       // Create fetch with timeout

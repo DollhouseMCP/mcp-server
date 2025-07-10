@@ -8,6 +8,13 @@ import { SECURITY_LIMITS } from '../../src/security/constants';
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 global.fetch = mockFetch;
 
+// Mock SecurityMonitor to avoid security event logging in tests
+jest.mock('../../src/security/securityMonitor.js', () => ({
+  SecurityMonitor: {
+    logSecurityEvent: jest.fn()
+  }
+}));
+
 describe('GitHubClient', () => {
   let githubClient: GitHubClient;
   let mockApiCache: jest.Mocked<APICache>;
@@ -123,22 +130,58 @@ describe('GitHubClient', () => {
     });
 
     it('should include GitHub token when available', async () => {
-      process.env.GITHUB_TOKEN = 'test-token';
-      const mockResponse = {
+      const validToken = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+      process.env.GITHUB_TOKEN = validToken;
+
+      // Mock the token validation API response
+      const mockTokenValidationResponse = {
+        ok: true,
+        status: 200,
+        headers: {
+          get: jest.fn((key: string) => {
+            if (key === 'x-ratelimit-remaining') return '5000';
+            if (key === 'x-oauth-scopes') return 'repo';
+            return null;
+          })
+        },
+        json: (jest.fn() as any).mockResolvedValue({ login: 'testuser' })
+      } as unknown as Response;
+
+      // Mock the actual API response
+      const mockApiResponse = {
         ok: true,
         json: (jest.fn() as any).mockResolvedValue({})
       } as unknown as Response;
 
-      mockFetch.mockResolvedValue(mockResponse);
+      // First call is for token validation, second is for the actual API call
+      mockFetch
+        .mockResolvedValueOnce(mockTokenValidationResponse)
+        .mockResolvedValueOnce(mockApiResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await githubClient.fetchFromGitHub(testUrl);
 
-      expect(global.fetch).toHaveBeenCalledWith(
+      // Check that both calls were made
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      
+      // First call should be to validate the token
+      expect(global.fetch).toHaveBeenNthCalledWith(
+        1,
+        'https://api.github.com/user',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'Authorization': `Bearer ${validToken}`
+          })
+        })
+      );
+      
+      // Second call should be the actual API request
+      expect(global.fetch).toHaveBeenNthCalledWith(
+        2,
         testUrl,
         expect.objectContaining({
           headers: expect.objectContaining({
-            'Authorization': 'token test-token'
+            'Authorization': `Bearer ${validToken}`
           })
         })
       );
