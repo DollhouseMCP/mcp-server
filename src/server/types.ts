@@ -35,4 +35,11 @@ export interface IToolHandler {
   // Config tools
   configureIndicator(config: any): Promise<any>;
   getIndicatorConfig(): Promise<any>;
+  
+  // Export/Import/Share tools
+  exportPersona(persona: string): Promise<any>;
+  exportAllPersonas(includeDefaults?: boolean): Promise<any>;
+  importPersona(source: string, overwrite?: boolean): Promise<any>;
+  sharePersona(persona: string, expiryDays?: number): Promise<any>;
+  importFromUrl(url: string, overwrite?: boolean): Promise<any>;
 }

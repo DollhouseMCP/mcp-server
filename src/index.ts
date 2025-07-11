@@ -23,15 +23,9 @@ import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, Pe
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { logger } from './utils/logger.js';
+import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
+import { isDefaultPersona } from './constants/defaultPersonas.js';
 
-// Default personas that should not be modified in place
-const DEFAULT_PERSONAS = [
-  'business-consultant.md',
-  'creative-writer.md',
-  'debug-detective.md',
-  'eli5-explainer.md',
-  'technical-analyst.md'
-];
 
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -52,6 +46,9 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaSubmitter: PersonaSubmitter;
   private updateManager: UpdateManager;
   private serverSetup: ServerSetup;
+  private personaExporter: PersonaExporter;
+  private personaImporter: PersonaImporter;
+  private personaSharer: PersonaSharer;
 
   constructor() {
     this.server = new Server(
@@ -96,6 +93,11 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize update manager
     this.updateManager = new UpdateManager();
+    
+    // Initialize export/import/share modules
+    this.personaExporter = new PersonaExporter(this.currentUser);
+    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+    this.personaSharer = new PersonaSharer(this.githubClient, this.currentUser);
     
     // Initialize server setup
     this.serverSetup = new ServerSetup();
@@ -946,7 +948,7 @@ ${sanitizedInstructions}
     }
 
     let filePath = path.join(this.personasDir, persona.filename);
-    let isDefaultPersona = DEFAULT_PERSONAS.includes(persona.filename);
+    let isDefault = isDefaultPersona(persona.filename);
 
     try {
       // Read current file
@@ -972,7 +974,7 @@ ${sanitizedInstructions}
       }
       
       // If editing a default persona, create a copy instead
-      if (isDefaultPersona) {
+      if (isDefault) {
         // Generate unique ID for the copy
         const author = this.currentUser || generateAnonymousId();
         const uniqueId = generateUniqueId(persona.metadata.name, author);
@@ -1063,12 +1065,12 @@ ${sanitizedInstructions}
           {
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
-              (isDefaultPersona ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
+              (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
               `🎭 **${parsed.data.name || persona.metadata.name}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : value}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
-              (isDefaultPersona ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
+              (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
               `Use \`get_persona_details "${parsed.data.name || persona.metadata.name}"\` to see all changes.`,
           },
@@ -1466,6 +1468,196 @@ Placeholders for custom format:
     };
   }
 
+
+  /**
+   * Export a single persona
+   */
+  async exportPersona(personaName: string) {
+    try {
+      // Use a single lookup to avoid race conditions
+      let persona = this.personas.get(personaName);
+      if (!persona) {
+        // Try by filename
+        persona = Array.from(this.personas.values()).find(p => p.filename === personaName);
+        if (!persona) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Persona not found: ${personaName}`
+            }]
+          };
+        }
+      }
+
+      const exportData = this.personaExporter.exportPersona(persona);
+      const base64 = this.personaExporter.toBase64(exportData);
+      const result = this.personaExporter.formatExportResult(persona, base64);
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}${result}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Export failed: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Export all personas
+   */
+  async exportAllPersonas(includeDefaults = true) {
+    try {
+      const personasArray = Array.from(this.personas.values());
+      const bundle = this.personaExporter.exportBundle(personasArray, includeDefaults);
+      const base64 = this.personaExporter.toBase64(bundle);
+      const result = this.personaExporter.formatBundleResult(bundle, base64);
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}${result}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Export failed: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Import a persona
+   */
+  async importPersona(source: string, overwrite = false) {
+    try {
+      const result = await this.personaImporter.importPersona(source, this.personas, overwrite);
+      
+      if (result.success) {
+        // Reload personas to include the new one
+        await this.loadPersonas();
+        
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ ${result.message}\n\nPersona "${result.persona?.metadata.name}" is now available.\nTotal personas: ${this.personas.size}`
+          }]
+        };
+      } else {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ ${result.message}`
+          }]
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Import failed: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Share a persona via URL
+   */
+  async sharePersona(personaName: string, expiryDays = 7) {
+    try {
+      const persona = this.personas.get(personaName);
+      if (!persona) {
+        // Try by filename
+        const byFilename = Array.from(this.personas.values()).find(p => p.filename === personaName);
+        if (!byFilename) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Persona not found: ${personaName}`
+            }]
+          };
+        }
+        personaName = byFilename.metadata.name;
+      }
+
+      const result = await this.personaSharer.sharePersona(this.personas.get(personaName)!, expiryDays);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}${result.message}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Share failed: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Import from a shared URL
+   */
+  async importFromUrl(url: string, overwrite = false) {
+    try {
+      const fetchResult = await this.personaSharer.importFromUrl(url);
+      
+      if (!fetchResult.success) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ ${fetchResult.message}`
+          }]
+        };
+      }
+
+      // Import the fetched data
+      const importResult = await this.personaImporter.importPersona(
+        JSON.stringify(fetchResult.data),
+        this.personas,
+        overwrite
+      );
+
+      if (importResult.success) {
+        // Reload personas
+        await this.loadPersonas();
+        
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ Successfully imported from URL!\n\n${importResult.message}\nTotal personas: ${this.personas.size}`
+          }]
+        };
+      } else {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ ${importResult.message}`
+          }]
+        };
+      }
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Import from URL failed: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
 
   async run() {
     const transport = new StdioServerTransport();
