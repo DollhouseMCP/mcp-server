@@ -3,12 +3,17 @@ import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
 
 export class PathValidator {
-  private static readonly ALLOWED_DIRECTORIES = [
-    path.resolve('./personas'),
-    path.resolve('./custom-personas'),
-    path.resolve('./backups'),
-    path.resolve(process.env.PERSONAS_DIR || './personas')
-  ];
+  private static ALLOWED_DIRECTORIES: string[] = [];
+  
+  static initialize(personasDir: string): void {
+    this.ALLOWED_DIRECTORIES = [
+      path.resolve(personasDir),
+      path.resolve('./personas'),
+      path.resolve('./custom-personas'),
+      path.resolve('./backups'),
+      path.resolve(process.env.PERSONAS_DIR || './personas')
+    ];
+  }
 
   static async validatePersonaPath(userPath: string): Promise<string> {
     if (!userPath || typeof userPath !== 'string') {
@@ -29,13 +34,28 @@ export class PathValidator {
     }
     
     // Check if path is within allowed directories
-    const isAllowed = this.ALLOWED_DIRECTORIES.some(allowedDir => 
-      resolvedPath.startsWith(allowedDir + path.sep) || 
-      resolvedPath === allowedDir
-    );
-    
-    if (!isAllowed) {
-      throw new Error(`Path access denied: ${userPath}`);
+    if (this.ALLOWED_DIRECTORIES.length === 0) {
+      // If not initialized, allow paths under current working directory's personas folder
+      const defaultAllowed = [
+        path.resolve('./personas'),
+        path.resolve(process.env.PERSONAS_DIR || './personas')
+      ];
+      const isAllowed = defaultAllowed.some(allowedDir => 
+        resolvedPath.startsWith(allowedDir + path.sep) || 
+        resolvedPath === allowedDir
+      );
+      if (!isAllowed) {
+        throw new Error(`Path access denied: ${userPath}`);
+      }
+    } else {
+      const isAllowed = this.ALLOWED_DIRECTORIES.some(allowedDir => 
+        resolvedPath.startsWith(allowedDir + path.sep) || 
+        resolvedPath === allowedDir
+      );
+      
+      if (!isAllowed) {
+        throw new Error(`Path access denied: ${userPath}`);
+      }
     }
     
     // Validate filename if it's a file

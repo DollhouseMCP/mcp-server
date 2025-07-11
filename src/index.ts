@@ -76,6 +76,9 @@ export class DollhouseMCPServer implements IToolHandler {
     // Log resolved path for debugging
     logger.info(`Personas directory resolved to: ${this.personasDir}`);
     
+    // Initialize PathValidator with the personas directory
+    PathValidator.initialize(this.personasDir);
+    
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
     
