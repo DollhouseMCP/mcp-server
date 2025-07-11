@@ -17,6 +17,8 @@ import { APICache } from './cache/APICache.js';
 import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
+import { PathValidator } from './security/pathValidator.js';
+import { YamlValidator } from './security/yamlValidator.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
@@ -155,7 +157,7 @@ export class DollhouseMCPServer implements IToolHandler {
       for (const file of markdownFiles) {
         try {
           const filePath = path.join(this.personasDir, file);
-          const fileContent = await fs.readFile(filePath, 'utf-8');
+          const fileContent = await PathValidator.safeReadFile(filePath);
           
           // Use secure YAML parser
           let parsed;
@@ -526,7 +528,7 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // Read the full persona file content
       const fullPath = path.join(this.personasDir, persona.filename);
-      const fileContent = await fs.readFile(fullPath, 'utf-8');
+      const fileContent = await PathValidator.safeReadFile(fullPath);
       
       // Validate content for security threats
       const contentValidation = ContentValidator.validateAndSanitize(fileContent);
@@ -776,6 +778,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
     // Check if file already exists
     try {
+      await PathValidator.validatePersonaPath(filePath);
       await fs.access(filePath);
       return {
         content: [
@@ -843,7 +846,7 @@ ${sanitizedInstructions}
 
     try {
       // Write the file
-      await fs.writeFile(filePath, personaContent, 'utf-8');
+      await PathValidator.safeWriteFile(filePath, personaContent);
       
       // Reload personas to include the new one
       await this.loadPersonas();
@@ -952,7 +955,7 @@ ${sanitizedInstructions}
 
     try {
       // Read current file
-      const fileContent = await fs.readFile(filePath, 'utf-8');
+      const fileContent = await PathValidator.safeReadFile(filePath);
       
       // Use secure YAML parser
       let parsed;
@@ -982,7 +985,8 @@ ${sanitizedInstructions}
         const newFilePath = path.join(this.personasDir, newFilename);
         
         // Create copy of the default persona
-        await fs.copyFile(filePath, newFilePath);
+        const content = await PathValidator.safeReadFile(filePath);
+        await PathValidator.safeWriteFile(newFilePath, content);
         
         // Update file path to point to the copy
         filePath = newFilePath;
@@ -1055,7 +1059,7 @@ ${sanitizedInstructions}
       const updatedContent = secureParser.stringify(parsed.content, parsed.data);
       
       // Write updated file
-      await fs.writeFile(filePath, updatedContent, 'utf-8');
+      await PathValidator.safeWriteFile(filePath, updatedContent);
       
       // Reload personas
       await this.loadPersonas();
