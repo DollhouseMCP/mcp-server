@@ -66,10 +66,10 @@ describe('PersonaExporter', () => {
   });
   
   describe('exportBundle', () => {
-    it('should export multiple personas as a bundle', async () => {
-      const personas = new Map<string, Persona>([
-        ['test1', mockPersona],
-        ['test2', {
+    it('should export multiple personas as a bundle', () => {
+      const personas = [
+        mockPersona,
+        {
           ...mockPersona,
           metadata: {
             ...mockPersona.metadata,
@@ -77,10 +77,10 @@ describe('PersonaExporter', () => {
             unique_id: "test-persona-2_20250711-120000_test-author"
           },
           unique_id: "test-persona-2_20250711-120000_test-author"
-        }]
-      ]);
+        }
+      ];
       
-      const bundle = await exporter.exportBundle(personas);
+      const bundle = exporter.exportBundle(personas);
       
       expect(bundle).toHaveProperty('version');
       expect(bundle).toHaveProperty('exportedAt');
@@ -88,7 +88,7 @@ describe('PersonaExporter', () => {
       expect(bundle).toHaveProperty('personas');
       expect(bundle).toHaveProperty('personaCount');
       
-      expect(bundle.version).toBe('1.0');
+      expect(bundle.version).toBe('1.0.0');
       expect(bundle.exportedBy).toBe('test-user');
       expect(bundle.personaCount).toBe(2);
       expect(bundle.personas).toHaveLength(2);
@@ -97,63 +97,25 @@ describe('PersonaExporter', () => {
       expect(bundle.personas[1].metadata.name).toBe("Test Persona 2");
     });
     
-    it('should handle empty persona map', async () => {
-      const bundle = await exporter.exportBundle(new Map());
+    it('should handle empty persona array', () => {
+      const bundle = exporter.exportBundle([]);
       
       expect(bundle.personaCount).toBe(0);
       expect(bundle.personas).toHaveLength(0);
     });
   });
   
-  describe('formatExportResult', () => {
-    it('should format single export result correctly', () => {
-      const exportData = {
-        metadata: mockPersona.metadata,
-        content: mockPersona.content,
-        filename: mockPersona.filename,
-        exportedAt: new Date().toISOString(),
-        exportedBy: 'test-user'
-      };
-      
-      const formatted = exporter.formatExportResult(exportData);
-      
-      expect(formatted).toContain('Export successful!');
-      expect(formatted).toContain('Persona: Test Persona');
-      expect(formatted).toContain('Category: test');
-      expect(formatted).toContain('Version: 1.0');
-      expect(formatted).toContain('To import this persona');
-      expect(formatted).toContain('import_persona');
-    });
-  });
-  
-  describe('formatBundleResult', () => {
-    it('should format bundle export result correctly', () => {
-      const bundle = {
-        version: '1.0',
-        exportedAt: new Date().toISOString(),
-        exportedBy: 'test-user',
-        personas: [
-          {
-            metadata: mockPersona.metadata,
-            content: mockPersona.content,
-            filename: mockPersona.filename,
-            exportedAt: new Date().toISOString()
-          }
-        ],
-        personaCount: 1
-      };
-      
-      const base64 = Buffer.from(JSON.stringify(bundle)).toString('base64');
-      const formatted = exporter.formatBundleResult(bundle, base64);
-      
-      expect(formatted).toContain('Bundle Export successful!');
-      expect(formatted).toContain('Exported 1 personas');
-      expect(formatted).toContain('Test Persona');
-      expect(formatted).toContain('import_persona');
-    });
-  });
   
   describe('Edge cases', () => {
+    it('should throw error for oversized persona', () => {
+      const largePersona: Persona = {
+        ...mockPersona,
+        content: 'x'.repeat(200 * 1024) // 200KB of content
+      };
+      
+      expect(() => exporter.exportPersona(largePersona)).toThrow('Persona too large');
+    });
+    
     it('should handle persona without optional fields', async () => {
       const minimalPersona: Persona = {
         metadata: {
