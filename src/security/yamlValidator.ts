@@ -1,6 +1,8 @@
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
+import DOMPurify from 'dompurify';
+import { JSDOM } from 'jsdom';
 
 const PersonaMetadataSchema = z.object({
   name: z.string().min(1).max(100),
@@ -19,7 +21,14 @@ const PersonaMetadataSchema = z.object({
   created_date: z.string().optional()
 });
 
+// Type declarations for better type safety
+type DOMPurifyInstance = ReturnType<typeof DOMPurify>;
+
 export class YamlValidator {
+  // Static cache for DOMPurify to improve performance
+  private static purifyWindow: any = null;
+  private static purify: DOMPurifyInstance | null = null;
+
   static parsePersonaMetadataSafely(yamlContent: string): any {
     if (!yamlContent || typeof yamlContent !== 'string') {
       throw new Error('YAML content must be a non-empty string');
@@ -84,27 +93,70 @@ export class YamlValidator {
     return sanitized;
   }
 
+  /**
+   * Initialize DOMPurify instance if not already initialized
+   */
+  private static initializePurify(): void {
+    if (!this.purifyWindow || !this.purify) {
+      const dom = new JSDOM('');
+      this.purifyWindow = dom.window;
+      this.purify = DOMPurify(this.purifyWindow);
+    }
+  }
+
+  /**
+   * Sanitize string input using DOMPurify to prevent XSS attacks
+   * This replaces the regex-based approach with a more robust solution
+   */
   private static sanitizeString(input: string): string {
-    // Limit input length to prevent ReDoS
+    // Limit input length to prevent DoS
     if (input.length > 10000) {
       input = input.substring(0, 10000);
     }
     
-    // Comprehensive XSS protection with bounded patterns
-    return input
-      // Remove HTML tags and potential XSS vectors (bounded)
-      .replace(/<script[^>]{0,100}>[\s\S]{0,1000}?<\/script>/gi, '') // Remove script tags
-      .replace(/<iframe[^>]{0,100}>[\s\S]{0,1000}?<\/iframe>/gi, '') // Remove iframe tags
-      .replace(/<object[^>]{0,100}>[\s\S]{0,1000}?<\/object>/gi, '') // Remove object tags
-      .replace(/<embed[^>]{0,100}>/gi, '') // Remove embed tags
-      .replace(/<[^>]{0,100}>/g, '') // Remove all remaining HTML tags
-      // Remove dangerous attributes (bounded)
-      .replace(/\bon\w{1,20}\s*=\s*["'][^"']{0,100}["']/gi, '') // Remove event handlers
-      .replace(/javascript\s*:/gi, '') // Remove javascript: protocol
-      .replace(/vbscript\s*:/gi, '') // Remove vbscript: protocol
-      // Remove other dangerous characters
-      .replace(/\x00/g, '') // Remove null bytes
-      .replace(/[\r\n]/g, ' ') // Replace newlines with spaces
+    // Initialize DOMPurify if needed
+    this.initializePurify();
+    
+    // Use DOMPurify with strict configuration
+    // ALLOWED_TAGS: [] strips all HTML tags
+    // ALLOWED_ATTR: [] strips all attributes
+    // FORBID_TAGS/FORBID_ATTR provide additional protection
+    let sanitized = this.purify!.sanitize(input, {
+      ALLOWED_TAGS: [],      // Strip all HTML tags
+      ALLOWED_ATTR: [],      // Strip all attributes
+      FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'link'],
+      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style', 'href', 'src']
+    });
+    
+    // Additional protection against command injection patterns
+    // These patterns might not be caught by DOMPurify
+    const commandInjectionPatterns = [
+      /`[^`]{0,1000}`/g,           // Backtick expressions
+      /\$\([^)]{0,1000}\)/g,       // Command substitution
+      /\$\{[^}]{0,1000}\}/g,       // Variable expansion
+      /\\x[0-9a-fA-F]{2}/g,        // Hex escapes
+      /\\u[0-9a-fA-F]{4}/g,        // Unicode escapes
+      /\\[0-7]{1,3}/g              // Octal escapes
+    ];
+    
+    for (const pattern of commandInjectionPatterns) {
+      sanitized = sanitized.replace(pattern, '');
+    }
+    
+    // Remove null bytes and normalize whitespace
+    sanitized = sanitized
+      .replace(/\x00/g, '')          // Remove null bytes
+      .replace(/[\r\n]+/g, ' ')      // Replace newlines with spaces
       .trim();
+    
+    return sanitized;
+  }
+  
+  /**
+   * Reset static DOMPurify cache (useful for long-running processes)
+   */
+  public static resetCache(): void {
+    this.purifyWindow = null;
+    this.purify = null;
   }
 }
