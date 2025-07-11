@@ -4,46 +4,30 @@
 
 import * as child_process from 'child_process';
 import { promisify } from 'util';
+import { CommandValidator } from '../security/commandValidator.js';
 
 const exec = promisify(child_process.exec);
 
 /**
- * Execute a command safely using spawn to prevent command injection
+ * Execute a command safely using CommandValidator
  */
-export function safeExec(
+export async function safeExec(
   command: string, 
   args: string[], 
-  options: { cwd?: string } = {}
+  options: { cwd?: string; timeout?: number } = {}
 ): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const proc = child_process.spawn(command, args, {
+  try {
+    const result = await CommandValidator.secureExec(command, args, {
       cwd: options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe']
+      timeout: options.timeout || 30000
     });
     
-    let stdout = '';
-    let stderr = '';
-    
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(new Error(`Command failed with exit code ${code}: ${stderr}`));
-      }
-    });
-    
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
+    return { stdout: result, stderr: '' };
+  } catch (error) {
+    // Convert to expected format with stderr
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(errorMessage);
+  }
 }
 
 /**
