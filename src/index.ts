@@ -848,8 +848,23 @@ ${sanitizedInstructions}
       validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
 
     try {
-      // Write the file
-      await PathValidator.safeWriteFile(filePath, personaContent);
+      // Use file locking to prevent race conditions
+      await FileLockManager.withLock(`persona:${sanitizedName}`, async () => {
+        // Double-check file doesn't exist (in case of race condition)
+        try {
+          await fs.access(filePath);
+          throw new Error(`Persona file "${filename}" already exists`);
+        } catch (error: any) {
+          // If error is not ENOENT (file not found), re-throw it
+          if (error.code !== 'ENOENT' && error.message?.includes('already exists')) {
+            throw error;
+          }
+          // File doesn't exist, proceed
+        }
+        
+        // Write the file atomically
+        await FileLockManager.atomicWriteFile(filePath, personaContent);
+      });
       
       // Reload personas to include the new one
       await this.loadPersonas();
@@ -881,7 +896,7 @@ ${sanitizedInstructions}
           },
         ],
       };
-      }
+    }
     } catch (error) {
       return {
         content: [
