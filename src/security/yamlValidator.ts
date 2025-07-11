@@ -85,16 +85,21 @@ export class YamlValidator {
   }
 
   private static sanitizeString(input: string): string {
-    // Comprehensive XSS protection
+    // Limit input length to prevent ReDoS
+    if (input.length > 10000) {
+      input = input.substring(0, 10000);
+    }
+    
+    // Comprehensive XSS protection with bounded patterns
     return input
-      // Remove HTML tags and potential XSS vectors
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // Remove script tags
-      .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '') // Remove iframe tags
-      .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '') // Remove object tags
-      .replace(/<embed[^>]*>/gi, '') // Remove embed tags
-      .replace(/<[^>]+>/g, '') // Remove all remaining HTML tags
-      // Remove dangerous attributes
-      .replace(/\bon\w+\s*=\s*["'][^"']*["']/gi, '') // Remove event handlers
+      // Remove HTML tags and potential XSS vectors (bounded)
+      .replace(/<script[^>]{0,100}>[\s\S]{0,1000}?<\/script>/gi, '') // Remove script tags
+      .replace(/<iframe[^>]{0,100}>[\s\S]{0,1000}?<\/iframe>/gi, '') // Remove iframe tags
+      .replace(/<object[^>]{0,100}>[\s\S]{0,1000}?<\/object>/gi, '') // Remove object tags
+      .replace(/<embed[^>]{0,100}>/gi, '') // Remove embed tags
+      .replace(/<[^>]{0,100}>/g, '') // Remove all remaining HTML tags
+      // Remove dangerous attributes (bounded)
+      .replace(/\bon\w{1,20}\s*=\s*["'][^"']{0,100}["']/gi, '') // Remove event handlers
       .replace(/javascript\s*:/gi, '') // Remove javascript: protocol
       .replace(/vbscript\s*:/gi, '') // Remove vbscript: protocol
       // Remove other dangerous characters

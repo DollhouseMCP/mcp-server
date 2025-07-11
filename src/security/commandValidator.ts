@@ -48,12 +48,24 @@ export class CommandValidator {
       let stdout = '';
       let stderr = '';
       let timeoutHandle: NodeJS.Timeout | undefined;
+      let isCompleted = false;
+      
+      // Helper to safely resolve/reject only once
+      const complete = (fn: () => void) => {
+        if (!isCompleted) {
+          isCompleted = true;
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+          fn();
+        }
+      };
       
       // Handle timeout
       if (options?.timeout) {
         timeoutHandle = setTimeout(() => {
           proc.kill('SIGTERM');
-          reject(new Error(`Command timed out after ${options.timeout}ms`));
+          complete(() => reject(new Error(`Command timed out after ${options.timeout}ms`)));
         }, options.timeout);
         timeoutHandle.unref();
       }
@@ -62,22 +74,15 @@ export class CommandValidator {
       proc.stderr?.on('data', (data) => stderr += data);
       
       proc.on('exit', (code) => {
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-        
         if (code === 0) {
-          resolve(stdout.trim());
+          complete(() => resolve(stdout.trim()));
         } else {
-          reject(new Error(`Command failed (${code}): ${stderr}`));
+          complete(() => reject(new Error(`Command failed (${code}): ${stderr}`)));
         }
       });
       
       proc.on('error', (error) => {
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-        reject(error);
+        complete(() => reject(error));
       });
     });
   }
