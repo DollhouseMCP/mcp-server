@@ -29,7 +29,12 @@
     "test:integration:watch": "jest --config jest.integration.config.cjs --watch",
     "test:integration:coverage": "jest --config jest.integration.config.cjs --coverage",
     "test:all": "npm test && npm run test:integration",
-    "test:all:coverage": "npm run test:coverage && npm run test:integration:coverage"
+    "test:all:coverage": "npm run test:coverage && npm run test:integration:coverage",
+    "security:critical": "jest __tests__/security/tests --maxWorkers=4",
+    "security:rapid": "npm run security:critical && npm audit",
+    "security:all": "jest __tests__/security --coverage",
+    "security:report": "npm run security:all -- --json --outputFile=security-report.json",
+    "pre-commit": "npm run security:rapid"
   },
   "keywords": [
     "mcp",
@@ -83,9 +88,11 @@
     "@modelcontextprotocol/sdk": "^1.15.0",
     "@types/dompurify": "^3.0.5",
     "dompurify": "^3.2.6",
+    "express": "^5.1.0",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
-    "jsdom": "^26.1.0"
+    "jsdom": "^26.1.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
