@@ -417,7 +417,7 @@ describe('PersonaSharer', () => {
       
       // Some should succeed, some should be rate limited
       const successful = results.filter(r => r.success && r.url?.includes('github'));
-      const rateLimited = results.filter(r => r.success && r.url?.includes('dollhousemcp.com'));
+      const rateLimited = results.filter(r => r.success && r.url?.startsWith('https://dollhousemcp.com/'));
       const failed = results.filter(r => !r.success);
       
       // With a limit of 100 for authenticated requests, all 35 should succeed
