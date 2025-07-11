@@ -6,6 +6,7 @@ import { Persona } from '../../types/persona.js';
 import { PersonaExporter, ExportedPersona } from './PersonaExporter.js';
 import { GitHubClient } from '../../marketplace/GitHubClient.js';
 import { logger } from '../../utils/logger.js';
+import { RateLimiter } from '../../update/RateLimiter.js';
 
 export interface ShareResult {
   success: boolean;
@@ -17,12 +18,21 @@ export interface ShareResult {
 
 export class PersonaSharer {
   private exporter: PersonaExporter;
+  private githubRateLimiter: RateLimiter;
   
   constructor(
     private githubClient: GitHubClient,
     private currentUser: string | null
   ) {
     this.exporter = new PersonaExporter(currentUser);
+    
+    // GitHub API rate limit: 60 requests per hour for unauthenticated
+    // 5000 per hour for authenticated
+    this.githubRateLimiter = new RateLimiter({
+      maxRequests: process.env.GITHUB_TOKEN ? 100 : 30, // Conservative limits
+      windowMs: 60 * 60 * 1000, // 1 hour
+      minDelayMs: 1000 // Minimum 1 second between requests
+    });
   }
 
   /**
@@ -68,26 +78,6 @@ export class PersonaSharer {
   }
 
   /**
-   * Validate URL for security
-   */
-  private validateShareUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-      // Only allow http/https protocols
-      if (!['https:', 'http:'].includes(parsed.protocol)) {
-        return false;
-      }
-      // Prevent SSRF attacks - block local/private networks
-      if (parsed.hostname.match(/^(localhost|127\.|10\.|192\.168\.|172\.)/)) {
-        return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Import a persona from a share URL
    */
   async importFromUrl(url: string): Promise<{ success: boolean; data?: any; message: string }> {
@@ -110,18 +100,39 @@ export class PersonaSharer {
         return this.importFromBase64Url(url);
       }
 
-      // Try direct fetch
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.statusText}`);
+      // Validate URL for security
+      if (!this.validateShareUrl(url)) {
+        throw new Error('Invalid or potentially malicious URL');
       }
 
-      const data = await response.json();
-      return {
-        success: true,
-        data,
-        message: 'Successfully retrieved persona data'
-      };
+      // Try direct fetch with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'DollhouseMCP/1.0',
+            'Accept': 'application/json'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return {
+          success: true,
+          data,
+          message: 'Successfully retrieved persona data'
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
     } catch (error) {
       logger.error('Import from URL error', error);
@@ -143,9 +154,21 @@ export class PersonaSharer {
         logger.info('No GitHub token available for Gist creation');
         return { success: false };
       }
+      
+      // Check rate limit
+      const rateLimitStatus = this.githubRateLimiter.checkLimit();
+      if (!rateLimitStatus.allowed) {
+        logger.warn(`GitHub API rate limit exceeded. Retry after ${rateLimitStatus.retryAfterMs}ms`);
+        return { success: false };
+      }
 
-      const response = await fetch('https://api.github.com/gists', {
-        method: 'POST',
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      try {
+        const response = await fetch('https://api.github.com/gists', {
+          method: 'POST',
+          signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.github.v3+json',
@@ -161,18 +184,27 @@ export class PersonaSharer {
             }
           }
         })
-      });
+        });
+        
+        clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        throw new Error(`GitHub API error: ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`GitHub API error: ${response.statusText}`);
+        }
+
+        const gist = await response.json();
+        
+        // Consume the rate limit token after successful request
+        this.githubRateLimiter.consumeToken();
+        
+        return {
+          success: true,
+          url: gist.html_url,
+          gistId: gist.id
+        };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const gist = await response.json();
-      return {
-        success: true,
-        url: gist.html_url,
-        gistId: gist.id
-      };
 
     } catch (error) {
       logger.error('Gist creation error', error);
@@ -200,39 +232,65 @@ export class PersonaSharer {
    */
   private async importFromGist(gistId: string): Promise<{ success: boolean; data?: any; message: string }> {
     try {
-      const response = await fetch(`https://api.github.com/gists/${gistId}`, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'DollhouseMCP/1.0'
+      // Check rate limit
+      const rateLimitStatus = this.githubRateLimiter.checkLimit();
+      if (!rateLimitStatus.allowed) {
+        throw new Error(`GitHub API rate limit exceeded. Please try again in ${Math.ceil(rateLimitStatus.retryAfterMs! / 1000)} seconds`);
+      }
+      
+      const gistUrl = `https://api.github.com/gists/${gistId}`;
+      
+      // Validate URL (should always pass for GitHub API)
+      if (!this.validateShareUrl(gistUrl)) {
+        throw new Error('Invalid GitHub API URL');
+      }
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout for API
+      
+      try {
+        const response = await fetch(gistUrl, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'DollhouseMCP/1.0'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch gist: ${response.statusText}`);
         }
-      });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch gist: ${response.statusText}`);
-      }
+        const gist = await response.json();
+        const personaFile = gist.files['persona.json'];
+        
+        if (!personaFile) {
+          throw new Error('No persona data found in gist');
+        }
 
-      const gist = await response.json();
-      const personaFile = gist.files['persona.json'];
-      
-      if (!personaFile) {
-        throw new Error('No persona data found in gist');
-      }
+        const data = JSON.parse(personaFile.content);
+        
+        // Check expiry
+        if (data.expiresAt && new Date(data.expiresAt) < new Date()) {
+          return {
+            success: false,
+            message: 'This share link has expired'
+          };
+        }
 
-      const data = JSON.parse(personaFile.content);
-      
-      // Check expiry
-      if (data.expiresAt && new Date(data.expiresAt) < new Date()) {
+        // Consume the rate limit token after successful request
+        this.githubRateLimiter.consumeToken();
+        
         return {
-          success: false,
-          message: 'This share link has expired'
+          success: true,
+          data,
+          message: 'Successfully retrieved persona from GitHub'
         };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      return {
-        success: true,
-        data,
-        message: 'Successfully retrieved persona from GitHub'
-      };
 
     } catch (error) {
       logger.error('Gist import error', error);
@@ -244,11 +302,42 @@ export class PersonaSharer {
   }
 
   /**
+   * Validate URL for security (prevent SSRF attacks)
+   */
+  private validateShareUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      
+      // Only allow http/https protocols
+      if (!['https:', 'http:'].includes(parsed.protocol)) {
+        return false;
+      }
+      
+      // Prevent SSRF attacks - block local/private networks
+      const hostname = parsed.hostname.toLowerCase();
+      if (hostname === 'localhost' || 
+          hostname.startsWith('127.') ||
+          hostname.startsWith('10.') ||
+          hostname.startsWith('192.168.') ||
+          hostname.startsWith('172.') ||
+          hostname.startsWith('169.254.') ||
+          hostname === '0.0.0.0' ||
+          hostname.includes(':')) { // IPv6 localhost
+        return false;
+      }
+      
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Import from base64 URL
    */
   private importFromBase64Url(url: string): { success: boolean; data?: any; message: string } {
     try {
-      const match = url.match(/#dollhouse-persona=(.+)$/);
+      const match = url.match(/#dollhouse-persona=([A-Za-z0-9+/=]+)$/);
       if (!match) {
         throw new Error('Invalid share URL format');
       }
