@@ -306,11 +306,11 @@ export class PersonaImporter {
    * Check if string is base64
    */
   private isBase64(str: string): boolean {
-    try {
-      return Buffer.from(str, 'base64').toString('base64') === str;
-    } catch {
-      return false;
-    }
+    // Check length is multiple of 4
+    if (str.length % 4 !== 0) return false;
+    
+    // Check for valid base64 characters and padding
+    return /^[A-Za-z0-9+/]*={0,2}$/.test(str);
   }
 
   /**

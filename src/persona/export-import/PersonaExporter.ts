@@ -4,6 +4,8 @@
 
 import { Persona } from '../../types/persona.js';
 import { logger } from '../../utils/logger.js';
+import { isDefaultPersona } from '../../constants/defaultPersonas.js';
+import { MAX_PERSONA_SIZE, MAX_BUNDLE_SIZE, MAX_PERSONAS_PER_BUNDLE } from '../../constants/limits.js';
 
 export interface ExportedPersona {
   metadata: any;
@@ -30,6 +32,12 @@ export class PersonaExporter {
    * Export a single persona to JSON format
    */
   exportPersona(persona: Persona): ExportedPersona {
+    // Check size limit
+    const size = JSON.stringify(persona).length;
+    if (size > MAX_PERSONA_SIZE) {
+      throw new Error(`Persona too large (${Math.round(size/1024)}KB). Maximum size is ${Math.round(MAX_PERSONA_SIZE/1024)}KB`);
+    }
+    
     return {
       metadata: persona.metadata,
       content: persona.content,
@@ -45,7 +53,7 @@ export class PersonaExporter {
   exportBundle(personas: Persona[], includeDefaults: boolean = true): ExportBundle {
     const filteredPersonas = includeDefaults 
       ? personas 
-      : personas.filter(p => !this.isDefaultPersona(p.filename));
+      : personas.filter(p => !isDefaultPersona(p.filename));
 
     return {
       version: '1.0.0',
@@ -115,14 +123,4 @@ ${base64}
 - Or save to a file and use: import_persona "/path/to/bundle.json"`;
   }
 
-  private isDefaultPersona(filename: string): boolean {
-    const defaultPersonas = [
-      'business-consultant.md',
-      'creative-writer.md',
-      'debug-detective.md',
-      'eli5-explainer.md',
-      'technical-analyst.md'
-    ];
-    return defaultPersonas.includes(filename);
-  }
 }

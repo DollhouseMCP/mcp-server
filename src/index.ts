@@ -24,15 +24,8 @@ import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { logger } from './utils/logger.js';
 import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
+import { isDefaultPersona } from './constants/defaultPersonas.js';
 
-// Default personas that should not be modified in place
-const DEFAULT_PERSONAS = [
-  'business-consultant.md',
-  'creative-writer.md',
-  'debug-detective.md',
-  'eli5-explainer.md',
-  'technical-analyst.md'
-];
 
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -955,7 +948,7 @@ ${sanitizedInstructions}
     }
 
     let filePath = path.join(this.personasDir, persona.filename);
-    let isDefaultPersona = DEFAULT_PERSONAS.includes(persona.filename);
+    let isDefault = isDefaultPersona(persona.filename);
 
     try {
       // Read current file
@@ -981,7 +974,7 @@ ${sanitizedInstructions}
       }
       
       // If editing a default persona, create a copy instead
-      if (isDefaultPersona) {
+      if (isDefault) {
         // Generate unique ID for the copy
         const author = this.currentUser || generateAnonymousId();
         const uniqueId = generateUniqueId(persona.metadata.name, author);
@@ -1072,12 +1065,12 @@ ${sanitizedInstructions}
           {
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
-              (isDefaultPersona ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
+              (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
               `🎭 **${parsed.data.name || persona.metadata.name}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : value}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
-              (isDefaultPersona ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
+              (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
               `Use \`get_persona_details "${parsed.data.name || persona.metadata.name}"\` to see all changes.`,
           },
@@ -1481,11 +1474,12 @@ Placeholders for custom format:
    */
   async exportPersona(personaName: string) {
     try {
-      const persona = this.personas.get(personaName);
+      // Use a single lookup to avoid race conditions
+      let persona = this.personas.get(personaName);
       if (!persona) {
         // Try by filename
-        const byFilename = Array.from(this.personas.values()).find(p => p.filename === personaName);
-        if (!byFilename) {
+        persona = Array.from(this.personas.values()).find(p => p.filename === personaName);
+        if (!persona) {
           return {
             content: [{
               type: "text",
@@ -1493,12 +1487,11 @@ Placeholders for custom format:
             }]
           };
         }
-        personaName = byFilename.metadata.name;
       }
 
-      const exportData = this.personaExporter.exportPersona(this.personas.get(personaName)!);
+      const exportData = this.personaExporter.exportPersona(persona);
       const base64 = this.personaExporter.toBase64(exportData);
-      const result = this.personaExporter.formatExportResult(this.personas.get(personaName)!, base64);
+      const result = this.personaExporter.formatExportResult(persona, base64);
 
       return {
         content: [{

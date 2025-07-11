@@ -24,7 +24,7 @@ tsconfig.test.json
 claude_desktop_config.json
 
 # Dollhouse specific
-personas/
+# personas/  # Include personas in npm package
 claude.md
 .claude/
 CLAUDE.md

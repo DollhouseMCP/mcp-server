@@ -68,10 +68,37 @@ export class PersonaSharer {
   }
 
   /**
+   * Validate URL for security
+   */
+  private validateShareUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      // Only allow http/https protocols
+      if (!['https:', 'http:'].includes(parsed.protocol)) {
+        return false;
+      }
+      // Prevent SSRF attacks - block local/private networks
+      if (parsed.hostname.match(/^(localhost|127\.|10\.|192\.168\.|172\.)/)) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Import a persona from a share URL
    */
   async importFromUrl(url: string): Promise<{ success: boolean; data?: any; message: string }> {
     try {
+      // Validate URL first
+      if (!this.validateShareUrl(url)) {
+        return {
+          success: false,
+          message: 'Invalid or unsafe URL provided'
+        };
+      }
       // Check if it's a GitHub Gist URL
       const gistId = this.extractGistId(url);
       if (gistId) {
