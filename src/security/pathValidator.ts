@@ -4,8 +4,9 @@ import { logger } from '../utils/logger.js';
 
 export class PathValidator {
   private static ALLOWED_DIRECTORIES: string[] = [];
+  private static ALLOWED_EXTENSIONS: string[] = ['.md', '.markdown', '.txt', '.yml', '.yaml'];
   
-  static initialize(personasDir: string): void {
+  static initialize(personasDir: string, allowedExtensions?: string[]): void {
     this.ALLOWED_DIRECTORIES = [
       path.resolve(personasDir),
       path.resolve('./personas'),
@@ -13,6 +14,10 @@ export class PathValidator {
       path.resolve('./backups'),
       path.resolve(process.env.PERSONAS_DIR || './personas')
     ];
+    
+    if (allowedExtensions) {
+      this.ALLOWED_EXTENSIONS = allowedExtensions;
+    }
   }
 
   static async validatePersonaPath(userPath: string): Promise<string> {
@@ -61,7 +66,15 @@ export class PathValidator {
     // Validate filename if it's a file
     if (path.extname(resolvedPath)) {
       const filename = path.basename(resolvedPath);
-      if (!/^[a-zA-Z0-9\-_.]+\.md$/i.test(filename)) {
+      const ext = path.extname(filename).toLowerCase();
+      
+      // Check if extension is allowed
+      if (!this.ALLOWED_EXTENSIONS.includes(ext)) {
+        throw new Error(`File extension not allowed: ${ext}. Allowed: ${this.ALLOWED_EXTENSIONS.join(', ')}`);
+      }
+      
+      // Validate filename format (alphanumeric, dash, underscore, dot)
+      if (!/^[a-zA-Z0-9\-_.]+$/i.test(filename)) {
         throw new Error(`Invalid filename format: ${filename}`);
       }
     }

@@ -85,8 +85,19 @@ export class YamlValidator {
   }
 
   private static sanitizeString(input: string): string {
+    // Comprehensive XSS protection
     return input
-      .replace(/[<>]/g, '') // Remove potential XSS
+      // Remove HTML tags and potential XSS vectors
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // Remove script tags
+      .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '') // Remove iframe tags
+      .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '') // Remove object tags
+      .replace(/<embed[^>]*>/gi, '') // Remove embed tags
+      .replace(/<[^>]+>/g, '') // Remove all remaining HTML tags
+      // Remove dangerous attributes
+      .replace(/\bon\w+\s*=\s*["'][^"']*["']/gi, '') // Remove event handlers
+      .replace(/javascript\s*:/gi, '') // Remove javascript: protocol
+      .replace(/vbscript\s*:/gi, '') // Remove vbscript: protocol
+      // Remove other dangerous characters
       .replace(/\x00/g, '') // Remove null bytes
       .replace(/[\r\n]/g, ' ') // Replace newlines with spaces
       .trim();
