@@ -7,7 +7,7 @@ import { promisify } from 'util';
 
 const exec = promisify(child_process.exec);
 
-const ALLOWED_COMMANDS = {
+const ALLOWED_COMMANDS: Record<string, string[]> = {
   git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', '--abbrev-ref', 'HEAD', '--porcelain'],
   npm: ['install', 'run', 'audit', 'ci', '--version', 'build'],
   node: ['--version'],

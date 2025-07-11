@@ -58,10 +58,10 @@ export class YamlValidator {
       // Additional sanitization
       return this.sanitizeMetadata(validatedData);
     } catch (error) {
-      if (error.name === 'YAMLException') {
+      if (error instanceof Error && error.name === 'YAMLException') {
         throw new Error(`Invalid YAML syntax: ${error.message}`);
       }
-      throw new Error(`Invalid persona metadata: ${error.message}`);
+      throw new Error(`Invalid persona metadata: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -78,7 +78,7 @@ export class YamlValidator {
     
     // Sanitize array fields
     if (sanitized.triggers) {
-      sanitized.triggers = sanitized.triggers.map(t => this.sanitizeString(t));
+      sanitized.triggers = sanitized.triggers.map((t: string) => this.sanitizeString(t));
     }
     
     return sanitized;

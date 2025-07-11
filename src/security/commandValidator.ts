@@ -1,7 +1,7 @@
 import { spawn, SpawnOptions } from 'child_process';
 import path from 'path';
 
-const ALLOWED_COMMANDS = {
+const ALLOWED_COMMANDS: Record<string, string[]> = {
   git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout'],
   npm: ['install', 'run', 'audit', 'ci', '--version'],
   node: ['--version'],
