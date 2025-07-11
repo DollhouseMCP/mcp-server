@@ -2,8 +2,8 @@ import { spawn, SpawnOptions } from 'child_process';
 import path from 'path';
 
 const ALLOWED_COMMANDS: Record<string, string[]> = {
-  git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout'],
-  npm: ['install', 'run', 'audit', 'ci', '--version'],
+  git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', '--abbrev-ref', 'HEAD', '--porcelain'],
+  npm: ['install', 'run', 'audit', 'ci', '--version', 'build'],
   node: ['--version'],
   npx: ['--version']
 };
@@ -24,8 +24,8 @@ export class CommandValidator {
   }
 
   private static isSafeArgument(arg: string): boolean {
-    // Allow alphanumeric, dash, underscore, dot
-    return /^[a-zA-Z0-9\-_.]+$/.test(arg);
+    // Allow alphanumeric, dash, underscore, dot, and forward slash
+    return /^[a-zA-Z0-9\-_.\/]+$/.test(arg);
   }
 
   static async secureExec(command: string, args: string[], options?: SpawnOptions): Promise<string> {
@@ -47,11 +47,25 @@ export class CommandValidator {
       
       let stdout = '';
       let stderr = '';
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      
+      // Handle timeout
+      if (options?.timeout) {
+        timeoutHandle = setTimeout(() => {
+          proc.kill('SIGTERM');
+          reject(new Error(`Command timed out after ${options.timeout}ms`));
+        }, options.timeout);
+        timeoutHandle.unref();
+      }
       
       proc.stdout?.on('data', (data) => stdout += data);
       proc.stderr?.on('data', (data) => stderr += data);
       
       proc.on('exit', (code) => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        
         if (code === 0) {
           resolve(stdout.trim());
         } else {
@@ -59,7 +73,12 @@ export class CommandValidator {
         }
       });
       
-      proc.on('error', reject);
+      proc.on('error', (error) => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        reject(error);
+      });
     });
   }
 }

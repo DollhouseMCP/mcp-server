@@ -4,84 +4,30 @@
 
 import * as child_process from 'child_process';
 import { promisify } from 'util';
+import { CommandValidator } from '../security/commandValidator.js';
 
 const exec = promisify(child_process.exec);
 
-const ALLOWED_COMMANDS: Record<string, string[]> = {
-  git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', '--abbrev-ref', 'HEAD', '--porcelain'],
-  npm: ['install', 'run', 'audit', 'ci', '--version', 'build'],
-  node: ['--version'],
-  npx: ['--version']
-};
-
 /**
- * Validate command arguments for safety
+ * Execute a command safely using CommandValidator
  */
-function validateCommand(cmd: string, args: string[]): void {
-  if (!ALLOWED_COMMANDS[cmd]) {
-    throw new Error(`Command not allowed: ${cmd}`);
-  }
-  
-  const allowedArgs = ALLOWED_COMMANDS[cmd];
-  for (const arg of args) {
-    // Check if it's in allowed list or matches safe pattern
-    if (!allowedArgs.includes(arg) && !isSafeArgument(arg)) {
-      throw new Error(`Argument not allowed: ${arg}`);
-    }
-  }
-}
-
-/**
- * Check if an argument is safe (alphanumeric, dash, underscore, dot)
- */
-function isSafeArgument(arg: string): boolean {
-  return /^[a-zA-Z0-9\-_.\/]+$/.test(arg);
-}
-
-/**
- * Execute a command safely using spawn to prevent command injection
- */
-export function safeExec(
+export async function safeExec(
   command: string, 
   args: string[], 
-  options: { cwd?: string } = {}
+  options: { cwd?: string; timeout?: number } = {}
 ): Promise<{ stdout: string; stderr: string }> {
-  // Validate command and arguments
-  validateCommand(command, args);
-  
-  return new Promise((resolve, reject) => {
-    const proc = child_process.spawn(command, args, {
+  try {
+    const result = await CommandValidator.secureExec(command, args, {
       cwd: options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: '/usr/bin:/bin:/usr/local/bin' // Restrict PATH
-      }
+      timeout: options.timeout || 30000
     });
     
-    let stdout = '';
-    let stderr = '';
-    
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(new Error(`Command failed with exit code ${code}: ${stderr}`));
-      }
-    });
-    
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
+    return { stdout: result, stderr: '' };
+  } catch (error) {
+    // Convert to expected format with stderr
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(errorMessage);
+  }
 }
 
 /**
