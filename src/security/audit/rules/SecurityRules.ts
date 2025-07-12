@@ -3,7 +3,7 @@
  * Based on OWASP Top 10, CWE Top 25, and DollhouseMCP-specific security requirements
  */
 
-import type { SecurityRule } from '../types.js';
+import type { SecurityRule, SecurityFinding } from '../types.js';
 
 export class SecurityRules {
   /**
@@ -165,7 +165,7 @@ export class SecurityRules {
         severity: 'medium',
         category: 'custom',
         check: (content, context) => {
-          const findings = [];
+          const findings: SecurityFinding[] = [];
           // Check for MCP tool handlers without rate limiting
           const toolPattern = /name:\s*["']([^"']+)["'].*handle:/gs;
           const hasRateLimit = /rateLimiter|checkRateLimit|tokenBucket/i.test(content);
@@ -173,10 +173,10 @@ export class SecurityRules {
           if (toolPattern.test(content) && !hasRateLimit) {
             findings.push({
               ruleId: 'DMCP-SEC-003',
-              severity: 'medium',
+              severity: 'medium' as const,
               message: 'MCP tool handler without rate limiting',
               remediation: 'Add rate limiting to prevent abuse',
-              confidence: 'high'
+              confidence: 'high' as const
             });
           }
           
@@ -192,7 +192,7 @@ export class SecurityRules {
         severity: 'medium',
         category: 'custom',
         check: (content, context) => {
-          const findings = [];
+          const findings: SecurityFinding[] = [];
           // Check for user input processing without Unicode validation
           const inputPattern = /(?:req\.|request\.|params|query|body|content)/;
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode/i.test(content);
@@ -200,10 +200,10 @@ export class SecurityRules {
           if (inputPattern.test(content) && !hasUnicodeCheck) {
             findings.push({
               ruleId: 'DMCP-SEC-004',
-              severity: 'medium',
+              severity: 'medium' as const,
               message: 'User input processed without Unicode normalization',
               remediation: 'Use UnicodeValidator.normalize() on all user input',
-              confidence: 'medium'
+              confidence: 'medium' as const
             });
           }
           
@@ -229,7 +229,7 @@ export class SecurityRules {
         severity: 'low',
         category: 'custom',
         check: (content, context) => {
-          const findings = [];
+          const findings: SecurityFinding[] = [];
           // Check for security operations without logging
           const securityOps = /(?:authenticate|authorize|validate|sanitize|encrypt|decrypt)/i;
           const hasLogging = /SecurityMonitor\.log|logSecurityEvent/i.test(content);
@@ -237,10 +237,10 @@ export class SecurityRules {
           if (securityOps.test(content) && !hasLogging) {
             findings.push({
               ruleId: 'DMCP-SEC-006',
-              severity: 'low',
+              severity: 'low' as const,
               message: 'Security operation without audit logging',
               remediation: 'Add SecurityMonitor.logSecurityEvent() for audit trail',
-              confidence: 'medium'
+              confidence: 'medium' as const
             });
           }
           

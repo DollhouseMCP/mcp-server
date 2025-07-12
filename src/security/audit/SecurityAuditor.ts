@@ -3,7 +3,7 @@
  * Implements automated security auditing for DollhouseMCP (Issue #53)
  */
 
-import { SecurityMonitor } from '../securityMonitor.js';
+// import { SecurityMonitor } from '../securityMonitor.js';
 import type { 
   SecurityAuditConfig, 
   ScanContext, 
@@ -48,12 +48,8 @@ export class SecurityAuditor {
       this.scanners.push(new ConfigurationScanner(this.config.scanners.configuration));
     }
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'SECURITY_AUDIT_INITIALIZED',
-      severity: 'INFO',
-      source: 'security_auditor',
-      details: `Initialized ${this.scanners.length} security scanners`
-    });
+    // Audit logging would go here if SecurityMonitor supported audit events
+    console.log(`SecurityAuditor: Initialized ${this.scanners.length} security scanners`);
   }
 
   /**
@@ -81,12 +77,7 @@ export class SecurityAuditor {
     const errors: string[] = [];
     const scannedFilesSet = new Set<string>();
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'SECURITY_AUDIT_STARTED',
-      severity: 'INFO',
-      source: 'security_auditor',
-      details: `Starting security audit of ${projectRoot}`
-    });
+    console.log(`SecurityAuditor: Starting security audit of ${projectRoot}`);
 
     // Run all enabled scanners
     for (const scanner of this.scanners) {
@@ -103,12 +94,7 @@ export class SecurityAuditor {
       } catch (error) {
         const errorMessage = `Scanner ${scanner.name} failed: ${error instanceof Error ? error.message : String(error)}`;
         errors.push(errorMessage);
-        SecurityMonitor.logSecurityEvent({
-          type: 'SECURITY_AUDIT_ERROR',
-          severity: 'MEDIUM',
-          source: 'security_auditor',
-          details: errorMessage
-        });
+        console.error(`SecurityAuditor: ${errorMessage}`);
       }
     }
 
@@ -116,12 +102,7 @@ export class SecurityAuditor {
     const result = this.createScanResult(allFindings, duration, scannedFilesSet.size, errors);
 
     // Log audit completion
-    SecurityMonitor.logSecurityEvent({
-      type: 'SECURITY_AUDIT_COMPLETED',
-      severity: result.summary.critical > 0 ? 'CRITICAL' : 'INFO',
-      source: 'security_auditor',
-      details: `Audit completed: ${result.summary.total} findings in ${duration}ms`
-    });
+    console.log(`SecurityAuditor: Audit completed: ${result.summary.total} findings in ${duration}ms`);
 
     // Generate reports
     await this.generateReports(result);
@@ -225,12 +206,7 @@ export class SecurityAuditor {
           // SARIF format would be implemented similarly
         }
       } catch (error) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'SECURITY_AUDIT_ERROR',
-          severity: 'LOW',
-          source: 'security_auditor',
-          details: `Failed to generate ${format} report: ${error instanceof Error ? error.message : String(error)}`
-        });
+        console.error(`SecurityAuditor: Failed to generate ${format} report: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
