@@ -48,7 +48,7 @@ export class SecurityRules {
         description: 'Potential path traversal vulnerability',
         severity: 'high',
         category: 'code',
-        pattern: /(?:readFile|writeFile|readdir|mkdir|rm|unlink).*\$\{[^}]+\}|\.\.\/|\.\.\\/g,
+        pattern: /(?:readFile|writeFile|readdir|mkdir|rm|unlink)[^(]*\([^)]*(?:\.\.[/\\].*\+|\+.*\.\.[/\\])/g,
         remediation: 'Validate and sanitize file paths, use path.resolve() and check against allowed directories',
         references: ['https://owasp.org/Top10/A03_2021-Injection/']
       },
@@ -106,7 +106,7 @@ export class SecurityRules {
         description: 'SQL query built using string concatenation',
         severity: 'critical',
         category: 'code',
-        pattern: /(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["']\s*\+\s*\w+|["'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["']\s*\+/gi,
+        pattern: /["'`].*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["'`]\s*\+\s*\w+/gi,
         remediation: 'Use parameterized queries instead of string concatenation',
         references: ['https://cwe.mitre.org/data/definitions/89.html']
       },
@@ -154,7 +154,7 @@ export class SecurityRules {
         description: 'Token used without validation',
         severity: 'critical',
         category: 'custom',
-        pattern: /(?:token|auth)[^;]*[^;]*(?!validate|verify|check)/gi,
+        pattern: /(?:getToken|useToken|token\.use)\s*\([^)]*\)(?!.*(?:validate|verify|check))/gi,
         remediation: 'Always validate tokens using TokenManager.validateToken()',
         references: ['DollhouseMCP Security Guidelines']
       },
