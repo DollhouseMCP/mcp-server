@@ -150,7 +150,7 @@ export class ContentValidator {
     // Length validation before pattern matching
     if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
       SecurityMonitor.logSecurityEvent({
-        type: 'YAML_SIZE_EXCEEDED',
+        type: 'YAML_INJECTION_ATTEMPT',
         severity: 'HIGH',
         source: 'yaml_validation',
         details: `YAML content exceeds maximum length: ${yamlContent.length} > ${SECURITY_LIMITS.MAX_YAML_LENGTH}`
