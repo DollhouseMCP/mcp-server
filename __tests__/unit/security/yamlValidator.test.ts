@@ -34,10 +34,22 @@ category: educational
 
     test('should throw on dangerous YAML tags', () => {
       const dangerousYaml1 = 'name: !!js/function "alert()"';
-      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml1)).toThrow('Dangerous YAML tags detected');
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml1)).toThrow('Dangerous YAML tag detected: !!js/');
       
       const dangerousYaml2 = 'name: !!python/object/apply:os.system ["ls"]';
-      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml2)).toThrow('Dangerous YAML tags detected');
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml2)).toThrow('Dangerous YAML tag detected: !!python/');
+      
+      const dangerousYaml3 = 'name: !!ruby/object:Kernel';
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml3)).toThrow('Dangerous YAML tag detected: !!ruby/');
+      
+      const dangerousYaml4 = 'name: !!java/object:java.lang.Runtime';
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml4)).toThrow('Dangerous YAML tag detected: !!java');
+      
+      const dangerousYaml5 = 'name: !!exec ["rm", "-rf", "/"]';
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml5)).toThrow('Dangerous YAML tag detected: !!exec');
+      
+      const dangerousYaml6 = 'name: !!binary "malicious"';
+      expect(() => YamlValidator.parsePersonaMetadataSafely(dangerousYaml6)).toThrow('Dangerous YAML tag detected: !!binary');
     });
 
     test('should throw on YAML bomb attempts', () => {
