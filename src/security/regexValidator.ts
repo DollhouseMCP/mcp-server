@@ -86,6 +86,10 @@ export class RegexValidator {
 
       // Execute regex with periodic time checks
       checkTime();
+      // Reset lastIndex for global regexes to ensure consistent behavior
+      if (pattern.global) {
+        pattern.lastIndex = 0;
+      }
       matched = pattern.test(content);
       checkTime();
 
