@@ -51,7 +51,7 @@ export class MCPInputValidator {
     const sanitized = query
       .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
       .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-      .replace(/[;&|`$()]/g, '') // Remove shell metacharacters
+      .replace(/[;&|`$()!\\~*?{}]/g, '') // Remove shell metacharacters (expanded)
       .replace(/[\u202E\uFEFF]/g, '') // Remove RTL override and zero-width chars
       .trim();
 
@@ -74,9 +74,13 @@ export class MCPInputValidator {
       throw new Error('Marketplace path too long (max 500 characters)');
     }
 
-    // GitHub API paths should be safe filename patterns
-    if (!/^[a-zA-Z0-9\/\-_.]{1,500}$/.test(path)) {
-      throw new Error('Invalid marketplace path format');
+    // GitHub API paths should be safe filename patterns (efficient validation)
+    // Check each character to avoid ReDoS vulnerabilities
+    for (let i = 0; i < path.length; i++) {
+      const char = path[i];
+      if (!/[a-zA-Z0-9\/\-_.]/.test(char)) {
+        throw new Error(`Invalid character '${char}' in marketplace path at position ${i + 1}`);
+      }
     }
 
     // Prevent path traversal in GitHub paths
@@ -100,22 +104,44 @@ export class MCPInputValidator {
     }
 
     try {
-      const parsed = new URL(url);
+      // Decode URL to prevent encoding-based bypasses
+      let decodedUrl = url;
+      try {
+        decodedUrl = decodeURIComponent(url);
+      } catch {
+        // If decoding fails, use original URL
+      }
+      
+      const parsed = new URL(decodedUrl);
       
       // Protocol validation
       if (!['http:', 'https:'].includes(parsed.protocol)) {
         throw new Error('Only HTTP(S) URLs are allowed');
       }
       
-      // Basic SSRF protection - check for private IPs
-      const hostname = parsed.hostname.toLowerCase();
+      // Enhanced SSRF protection with IDN normalization
+      let hostname = parsed.hostname.toLowerCase();
+      
+      // Handle IDN (International Domain Names) by converting to ASCII
+      try {
+        hostname = new URL(`http://${hostname}`).hostname;
+      } catch {
+        // If IDN conversion fails, continue with original hostname
+      }
+      
+      // Check for private IPs (now with IDN-normalized hostname)
       if (this.isPrivateIP(hostname)) {
         throw new Error('Private network URLs are not allowed');
+      }
+      
+      // Additional SSRF checks for encoded IPs
+      if (this.isEncodedPrivateIP(hostname)) {
+        throw new Error('Encoded private network URLs are not allowed');
       }
 
       return url;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Private network')) {
+      if (error instanceof Error && (error.message.includes('Private network') || error.message.includes('Encoded private'))) {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -179,7 +205,7 @@ export class MCPInputValidator {
   }
 
   /**
-   * Check if hostname is a private IP address
+   * Check if hostname is a private IP address (IPv4 and IPv6)
    */
   private static isPrivateIP(hostname: string): boolean {
     // Check for localhost variations
@@ -207,6 +233,60 @@ export class MCPInputValidator {
       if (a === 169 && b === 254) return true;
     }
 
+    // Check for private IPv6 ranges
+    const ipv6Lower = hostname.toLowerCase();
+    
+    // fc00::/7 - Unique Local Addresses (ULA)
+    if (ipv6Lower.startsWith('fc') || ipv6Lower.startsWith('fd')) {
+      return true;
+    }
+    
+    // fe80::/10 - Link-Local Addresses
+    if (ipv6Lower.startsWith('fe8') || ipv6Lower.startsWith('fe9') || 
+        ipv6Lower.startsWith('fea') || ipv6Lower.startsWith('feb')) {
+      return true;
+    }
+    
+    // Additional IPv6 localhost formats
+    if (['::1', '0:0:0:0:0:0:0:1'].includes(ipv6Lower)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Check for encoded private IP addresses that could bypass basic detection
+   */
+  private static isEncodedPrivateIP(hostname: string): boolean {
+    // Check for decimal encoded IPs (e.g., 2130706433 = 127.0.0.1)
+    if (/^\d{8,10}$/.test(hostname)) {
+      const num = parseInt(hostname, 10);
+      if (num >= 0 && num <= 4294967295) { // Valid IPv4 range
+        // Convert to IP format and check if private
+        const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
+        return this.isPrivateIP(ip);
+      }
+    }
+    
+    // Check for hex encoded IPs (e.g., 0x7f000001 = 127.0.0.1)
+    if (/^0x[0-9a-f]{1,8}$/i.test(hostname)) {
+      const num = parseInt(hostname, 16);
+      if (num >= 0 && num <= 4294967295) {
+        const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
+        return this.isPrivateIP(ip);
+      }
+    }
+    
+    // Check for octal encoded IPs (e.g., 017700000001 = 127.0.0.1)
+    if (/^0[0-7]{8,11}$/.test(hostname)) {
+      const num = parseInt(hostname, 8);
+      if (num >= 0 && num <= 4294967295) {
+        const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
+        return this.isPrivateIP(ip);
+      }
+    }
+    
     return false;
   }
 }
@@ -340,7 +420,7 @@ export function sanitizeInput(input: string, maxLength: number = 1000): string {
   return input
     .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
     .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-    .replace(/[;&|`$()]/g, '') // Remove shell metacharacters
+    .replace(/[;&|`$()!\\~*?{}]/g, '') // Remove shell metacharacters (expanded)
     .replace(/[\u202E\uFEFF]/g, '') // Remove RTL override and zero-width chars
     .substring(0, maxLength)
     .trim();

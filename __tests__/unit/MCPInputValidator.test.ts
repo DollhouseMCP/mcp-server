@@ -59,8 +59,8 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
     });
 
     test('should reject invalid path formats', () => {
-      expect(() => MCPInputValidator.validateMarketplacePath('invalid<>path')).toThrow('Invalid marketplace path format');
-      expect(() => MCPInputValidator.validateMarketplacePath('path with spaces')).toThrow('Invalid marketplace path format');
+      expect(() => MCPInputValidator.validateMarketplacePath('invalid<>path')).toThrow('Invalid character \'<\' in marketplace path at position 8');
+      expect(() => MCPInputValidator.validateMarketplacePath('path with spaces')).toThrow('Invalid character \' \' in marketplace path at position 5');
     });
 
     test('should enforce length limits', () => {
