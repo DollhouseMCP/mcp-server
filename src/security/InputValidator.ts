@@ -439,6 +439,66 @@ export function validateContentSize(content: string, maxSize: number = SECURITY_
 }
 
 /**
+ * Comprehensive input validation before pattern matching
+ * Validates all content types with appropriate limits
+ */
+export interface ContentValidationOptions {
+  maxContentLength?: number;
+  maxYamlLength?: number;
+  maxMetadataFieldLength?: number;
+  maxFileSize?: number;
+}
+
+export function validateInputLengths(
+  content: string,
+  contentType: 'full' | 'yaml' | 'metadata' | 'field',
+  options: ContentValidationOptions = {}
+): void {
+  const limits = {
+    maxContentLength: options.maxContentLength ?? SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    maxYamlLength: options.maxYamlLength ?? SECURITY_LIMITS.MAX_YAML_LENGTH,
+    maxMetadataFieldLength: options.maxMetadataFieldLength ?? SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH,
+    maxFileSize: options.maxFileSize ?? SECURITY_LIMITS.MAX_FILE_SIZE
+  };
+
+  // Validate based on content type
+  switch (contentType) {
+    case 'full':
+      if (content.length > limits.maxContentLength) {
+        throw new Error(
+          `Content exceeds maximum length of ${limits.maxContentLength} characters (${content.length} provided)`
+        );
+      }
+      break;
+    
+    case 'yaml':
+      if (content.length > limits.maxYamlLength) {
+        throw new Error(
+          `YAML content exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`
+        );
+      }
+      break;
+    
+    case 'metadata':
+      // For metadata, check overall size
+      if (content.length > limits.maxYamlLength) {
+        throw new Error(
+          `Metadata exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`
+        );
+      }
+      break;
+    
+    case 'field':
+      if (content.length > limits.maxMetadataFieldLength) {
+        throw new Error(
+          `Field exceeds maximum length of ${limits.maxMetadataFieldLength} characters (${content.length} provided)`
+        );
+      }
+      break;
+  }
+}
+
+/**
  * General input sanitization
  */
 export function sanitizeInput(input: string, maxLength: number = 1000): string {

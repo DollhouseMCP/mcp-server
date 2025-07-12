@@ -28,7 +28,7 @@ category: educational
     });
 
     test('should throw on content exceeding size limit', () => {
-      const largeContent = 'a'.repeat(50001);
+      const largeContent = 'a'.repeat(65537); // > 64KB
       expect(() => YamlValidator.parsePersonaMetadataSafely(largeContent)).toThrow('YAML content too large');
     });
 

@@ -10,6 +10,7 @@
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { RegexValidator } from './regexValidator.js';
+import { SECURITY_LIMITS } from './constants.js';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -95,6 +96,13 @@ export class ContentValidator {
    * Validates and sanitizes persona content for security threats
    */
   static validateAndSanitize(content: string): ValidationResult {
+    // Length validation before pattern matching
+    if (content.length > SECURITY_LIMITS.MAX_CONTENT_LENGTH) {
+      throw new SecurityError(
+        `Content exceeds maximum length of ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${content.length} provided)`
+      );
+    }
+
     const detectedPatterns: string[] = [];
     let sanitized = content;
     let highestSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low';
@@ -139,6 +147,17 @@ export class ContentValidator {
    * Validates YAML frontmatter for malicious content
    */
   static validateYamlContent(yamlContent: string): boolean {
+    // Length validation before pattern matching
+    if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'yaml_validation',
+        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${SECURITY_LIMITS.MAX_YAML_LENGTH}`
+      });
+      return false;
+    }
+
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
       // These are trusted internal patterns, so we disable ReDoS rejection
       if (RegexValidator.validate(yamlContent, pattern, { 
@@ -168,6 +187,12 @@ export class ContentValidator {
     // Check all string fields in metadata
     const checkField = (fieldName: string, value: any) => {
       if (typeof value === 'string') {
+        // Check field length first
+        if (value.length > SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH) {
+          detectedPatterns.push(`${fieldName}: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`);
+          return;
+        }
+        
         const result = this.validateAndSanitize(value);
         if (!result.isValid || result.detectedPatterns?.length) {
           detectedPatterns.push(`${fieldName}: ${result.detectedPatterns?.join(', ')}`);

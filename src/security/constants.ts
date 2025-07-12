@@ -8,6 +8,9 @@ export const SECURITY_LIMITS = {
   MAX_FILENAME_LENGTH: 255,                  // Max filename length
   MAX_PATH_DEPTH: 10,                       // Max directory depth for paths
   MAX_CONTENT_LENGTH: 500000,               // Max persona content length (500KB)
+  MAX_YAML_LENGTH: 64 * 1024,               // Max YAML frontmatter length (64KB)
+  MAX_METADATA_FIELD_LENGTH: 1024,          // Max individual metadata field length (1KB)
+  MAX_FILE_SIZE: 1024 * 1024 * 2,          // Max file size (2MB)
   RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
   RATE_LIMIT_WINDOW_MS: 60 * 1000,         // 1 minute window
   CACHE_TTL_MS: 5 * 60 * 1000,             // 5 minute cache TTL

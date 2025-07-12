@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { RegexValidator } from './regexValidator.js';
+import { SECURITY_LIMITS } from './constants.js';
 
 const PersonaMetadataSchema = z.object({
   name: z.string().min(1).max(100),
@@ -36,8 +37,8 @@ export class YamlValidator {
     }
     
     // Size check
-    if (yamlContent.length > 50000) { // 50KB
-      throw new Error('YAML content too large');
+    if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+      throw new Error(`YAML content too large: ${yamlContent.length} bytes (max: ${SECURITY_LIMITS.MAX_YAML_LENGTH})`);
     }
     
     // Check for dangerous tags
