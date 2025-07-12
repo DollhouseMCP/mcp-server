@@ -101,7 +101,12 @@ export class ContentValidator {
 
     // Check for injection patterns
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      if (RegexValidator.validate(content, pattern, { maxLength: 50000 })) {
+      // These are trusted internal patterns, so we disable ReDoS rejection
+      if (RegexValidator.validate(content, pattern, { 
+        maxLength: 50000, 
+        rejectDangerousPatterns: false,
+        logEvents: false  // Don't log our own security patterns as dangerous
+      })) {
         detectedPatterns.push(description);
         
         // Update highest severity
@@ -135,7 +140,12 @@ export class ContentValidator {
    */
   static validateYamlContent(yamlContent: string): boolean {
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
-      if (RegexValidator.validate(yamlContent, pattern, { maxLength: 10000 })) {
+      // These are trusted internal patterns, so we disable ReDoS rejection
+      if (RegexValidator.validate(yamlContent, pattern, { 
+        maxLength: 10000,
+        rejectDangerousPatterns: false,
+        logEvents: false  // Don't log our own security patterns as dangerous
+      })) {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',

@@ -185,7 +185,7 @@ Content here`;
 
       expect(() => {
         ContentValidator.sanitizePersonaContent(maliciousPersona);
-      }).toThrow(SecurityError);
+      }).toThrow('Malicious YAML detected in persona frontmatter');
     });
 
     it('should throw on critical content threats', () => {
@@ -197,7 +197,7 @@ name: "Evil Bot"
 
       expect(() => {
         ContentValidator.sanitizePersonaContent(dangerousPersona);
-      }).toThrow(SecurityError);
+      }).toThrow('Critical security threat detected in persona content');
     });
 
     it('should sanitize non-critical threats', () => {
@@ -221,7 +221,8 @@ This has a path like ../../../ but is otherwise safe.`;
     });
 
     it('should handle very long content', () => {
-      const longContent = 'Safe content. '.repeat(10000);
+      // Create content just under the 50KB limit
+      const longContent = 'Safe content. '.repeat(3500); // ~49KB
       const result = ContentValidator.validateAndSanitize(longContent);
       expect(result.isValid).toBe(true);
     });
