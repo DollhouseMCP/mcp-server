@@ -5,6 +5,7 @@
 import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
+import { RegexValidator } from './regexValidator.js';
 
 /**
  * Enhanced input validation for MCP tools
@@ -335,7 +336,7 @@ export function validateFilename(filename: string): string {
   // Remove any path separators and dangerous characters
   const sanitized = filename.replace(/[\/\\:*?"<>|]/g, '').replace(/^\.+/, '');
   
-  if (!VALIDATION_PATTERNS.SAFE_FILENAME.test(sanitized)) {
+  if (!RegexValidator.validate(sanitized, VALIDATION_PATTERNS.SAFE_FILENAME, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
     throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
   }
   
@@ -410,7 +411,7 @@ export function validateCategory(category: string): string {
     throw new Error('Category must be a non-empty string');
   }
   
-  if (!VALIDATION_PATTERNS.SAFE_CATEGORY.test(category)) {
+  if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, { maxLength: 50 })) {
     throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
   }
   

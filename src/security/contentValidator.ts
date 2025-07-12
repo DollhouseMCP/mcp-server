@@ -7,8 +7,9 @@
  * Security: SEC-001 - Critical vulnerability protection
  */
 
-import { SecurityError } from '../errors/SecurityError.js';
+import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { RegexValidator } from './regexValidator.js';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -100,7 +101,7 @@ export class ContentValidator {
 
     // Check for injection patterns
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      if (pattern.test(content)) {
+      if (RegexValidator.validate(content, pattern, { maxLength: 50000 })) {
         detectedPatterns.push(description);
         
         // Update highest severity
@@ -134,7 +135,7 @@ export class ContentValidator {
    */
   static validateYamlContent(yamlContent: string): boolean {
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
-      if (pattern.test(yamlContent)) {
+      if (RegexValidator.validate(yamlContent, pattern, { maxLength: 10000 })) {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',

@@ -1,5 +1,6 @@
 import { spawn, SpawnOptions } from 'child_process';
 import path from 'path';
+import { RegexValidator } from './regexValidator.js';
 
 const ALLOWED_COMMANDS: Record<string, string[]> = {
   git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', '--abbrev-ref', 'HEAD', '--porcelain'],
@@ -25,7 +26,7 @@ export class CommandValidator {
 
   private static isSafeArgument(arg: string): boolean {
     // Allow alphanumeric, dash, underscore, dot, and forward slash
-    return /^[a-zA-Z0-9\-_.\/]+$/.test(arg);
+    return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_.\/]+$/, { maxLength: 1000 });
   }
 
   static async secureExec(command: string, args: string[], options?: SpawnOptions): Promise<string> {
