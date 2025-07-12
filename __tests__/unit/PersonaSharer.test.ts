@@ -56,7 +56,23 @@ describe('PersonaSharer', () => {
     };
 
     it('should create a GitHub gist when token is available', async () => {
-      process.env.GITHUB_TOKEN = 'test-token';
+      // Use a valid GitHub token format
+      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Mock token validation API call (TokenManager checks permissions)
+      const mockTokenValidation = {
+        ok: true,
+        headers: {
+          get: jest.fn().mockImplementation((header: string) => {
+            switch (header) {
+              case 'x-oauth-scopes': return 'gist,repo,user:email';
+              case 'x-ratelimit-remaining': return '100';
+              case 'x-ratelimit-reset': return '1640995200';
+              default: return null;
+            }
+          })
+        }
+      };
       
       const mockGistResponse = {
         ok: true,
@@ -66,7 +82,10 @@ describe('PersonaSharer', () => {
         })
       };
       
-      mockFetch.mockResolvedValueOnce(mockGistResponse as any);
+      // First call is for token validation, second is for gist creation
+      mockFetch
+        .mockResolvedValueOnce(mockTokenValidation as any)
+        .mockResolvedValueOnce(mockGistResponse as any);
 
       const result = await sharer.sharePersona(mockPersona, 7);
 
@@ -80,7 +99,7 @@ describe('PersonaSharer', () => {
           method: 'POST',
           signal: expect.any(AbortSignal),
           headers: expect.objectContaining({
-            'Authorization': 'Bearer test-token',
+            'Authorization': 'Bearer ghp_1234567890123456789012345678901234567890',
             'Content-Type': 'application/json'
           })
         })

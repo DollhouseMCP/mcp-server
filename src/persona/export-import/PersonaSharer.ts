@@ -5,6 +5,7 @@
 import { Persona } from '../../types/persona.js';
 import { PersonaExporter, ExportedPersona } from './PersonaExporter.js';
 import { GitHubClient } from '../../marketplace/GitHubClient.js';
+import { TokenManager } from '../../security/tokenManager.js';
 import { logger } from '../../utils/logger.js';
 import { RateLimiter } from '../../update/RateLimiter.js';
 
@@ -27,9 +28,10 @@ export class PersonaSharer {
     this.exporter = new PersonaExporter(currentUser);
     
     // GitHub API rate limit: 60 requests per hour for unauthenticated
-    // 5000 per hour for authenticated
+    // 5000 per hour for authenticated - use TokenManager to check
+    const hasValidToken = TokenManager.getGitHubToken() !== null;
     this.githubRateLimiter = new RateLimiter({
-      maxRequests: process.env.GITHUB_TOKEN ? 100 : 30, // Conservative limits
+      maxRequests: hasValidToken ? 100 : 30, // Conservative limits
       windowMs: 60 * 60 * 1000, // 1 hour
       minDelayMs: 1000 // Minimum 1 second between requests
     });
@@ -40,6 +42,17 @@ export class PersonaSharer {
    */
   async sharePersona(persona: Persona, expiryDays: number = 7): Promise<ShareResult> {
     try {
+      // Validate gist permissions if token is available
+      const token = TokenManager.getGitHubToken();
+      if (token) {
+        const validation = await TokenManager.ensureTokenPermissions('gist');
+        if (!validation.isValid) {
+          const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error', token);
+          logger.warn('GitHub token lacks gist permissions, falling back to base64 URL', { error: safeMessage });
+          // Continue to fallback instead of failing
+        }
+      }
+
       // Export persona to structured format
       const exportData = this.exporter.exportPersona(persona);
       
@@ -52,27 +65,32 @@ export class PersonaSharer {
         shareVersion: '1.0.0'
       };
 
-      // Create GitHub Gist
-      const gistResult = await this.createGist(persona.metadata.name, shareData);
-      
-      if (!gistResult.success) {
-        // Fallback to base64 URL if Gist fails
-        return this.createBase64Url(shareData);
+      // Create GitHub Gist if token has proper permissions
+      if (token) {
+        const gistResult = await this.createGist(persona.metadata.name, shareData);
+        
+        if (gistResult.success) {
+          return {
+            success: true,
+            url: gistResult.url!,
+            gistId: gistResult.gistId,
+            expiresAt: shareData.expiresAt,
+            message: this.formatShareSuccess(gistResult.url!, shareData.expiresAt)
+          };
+        }
       }
 
-      return {
-        success: true,
-        url: gistResult.url!,
-        gistId: gistResult.gistId,
-        expiresAt: shareData.expiresAt,
-        message: this.formatShareSuccess(gistResult.url!, shareData.expiresAt)
-      };
+      // Fallback to base64 URL if Gist fails or no token
+      return this.createBase64Url(shareData);
 
     } catch (error) {
-      logger.error('Share error', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const safeMessage = TokenManager.createSafeErrorMessage(errorMessage);
+      logger.error('Share error', { error: safeMessage });
+      
       return {
         success: false,
-        message: `Failed to share persona: ${error instanceof Error ? error.message : String(error)}`
+        message: `Failed to share persona: ${safeMessage}`
       };
     }
   }
@@ -148,10 +166,10 @@ export class PersonaSharer {
    */
   private async createGist(personaName: string, data: any): Promise<{ success: boolean; url?: string; gistId?: string }> {
     try {
-      // Check if we have a GitHub token
-      const token = process.env.GITHUB_TOKEN;
+      // Use TokenManager for secure token handling
+      const token = TokenManager.getGitHubToken();
       if (!token) {
-        logger.info('No GitHub token available for Gist creation');
+        logger.info('No valid GitHub token available for Gist creation');
         return { success: false };
       }
       
@@ -189,7 +207,8 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`GitHub API error: ${response.statusText}`);
+          const errorMsg = `GitHub API error: ${response.status} ${response.statusText}`;
+          throw new Error(errorMsg);
         }
 
         const gist = await response.json();
@@ -207,7 +226,9 @@ export class PersonaSharer {
       }
 
     } catch (error) {
-      logger.error('Gist creation error', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const safeMessage = TokenManager.createSafeErrorMessage(errorMessage);
+      logger.error('Gist creation error', { error: safeMessage });
       return { success: false };
     }
   }

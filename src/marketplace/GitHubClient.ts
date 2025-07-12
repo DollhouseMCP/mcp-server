@@ -38,7 +38,7 @@ export class GitHubClient {
   /**
    * Fetch data from GitHub API with caching and rate limiting
    */
-  async fetchFromGitHub(url: string): Promise<any> {
+  async fetchFromGitHub(url: string, requireAuth: boolean = false): Promise<any> {
     try {
       // Check rate limit
       this.checkRateLimit('github_api');
@@ -55,17 +55,12 @@ export class GitHubClient {
         'User-Agent': 'DollhouseMCP/1.0'
       };
       
-      // Use TokenManager for secure token handling if token is available
-      if (process.env.GITHUB_TOKEN) {
-        try {
-          const token = TokenManager.getGitHubToken();
-          if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-          }
-        } catch (tokenError) {
-          // Log error but continue without token
-          logger.info('GitHub token validation failed, proceeding without authentication');
-        }
+      // Use TokenManager for secure token handling
+      const token = TokenManager.getGitHubToken();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else if (requireAuth) {
+        throw new Error('GitHub authentication required but no valid token available. Please set GITHUB_TOKEN environment variable.');
       }
       
       // Create fetch with timeout
@@ -81,7 +76,13 @@ export class GitHubClient {
       
       if (!response.ok) {
         if (response.status === 403) {
-          throw new Error('GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.');
+          const errorMsg = token 
+            ? 'GitHub API rate limit exceeded or token lacks required permissions.'
+            : 'GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.';
+          throw new Error(errorMsg);
+        }
+        if (response.status === 401) {
+          throw new Error('GitHub API authentication failed. Please check your GITHUB_TOKEN.');
         }
         throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
       }
@@ -93,10 +94,12 @@ export class GitHubClient {
       
       return data;
     } catch (error) {
-      // Preserve original error information with proper error chaining
+      // Use TokenManager for safe error handling
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const safeMessage = TokenManager.createSafeErrorMessage(errorMessage);
+      
       const errorDetails: any = {
-        originalMessage: errorMessage,
+        originalMessage: safeMessage,
         url
       };
       
@@ -113,7 +116,7 @@ export class GitHubClient {
       
       const mcpError = new McpError(
         ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${errorMessage}`,
+        `Failed to fetch from GitHub: ${safeMessage}`,
         errorDetails
       );
       
@@ -121,6 +124,17 @@ export class GitHubClient {
       (mcpError as any).cause = error;
       
       throw mcpError;
+    }
+  }
+
+  /**
+   * Validate token permissions for marketplace operations
+   */
+  async validateMarketplacePermissions(): Promise<void> {
+    const validation = await TokenManager.ensureTokenPermissions('marketplace');
+    if (!validation.isValid) {
+      const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');
+      throw new Error(`GitHub token validation failed: ${safeMessage}`);
     }
   }
 }
