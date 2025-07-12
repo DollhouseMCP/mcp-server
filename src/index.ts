@@ -1065,7 +1065,12 @@ ${sanitizedInstructions}
         parsed.data[normalizedField] = sanitizedValue.toLowerCase();
       } else {
         // Update metadata field
-        parsed.data[normalizedField] = sanitizedValue;
+        // For name field, apply additional sanitization to remove shell metacharacters
+        if (normalizedField === 'name') {
+          parsed.data[normalizedField] = sanitizeInput(sanitizedValue, 100);
+        } else {
+          parsed.data[normalizedField] = sanitizedValue;
+        }
       }
 
       // Update version and modification info
