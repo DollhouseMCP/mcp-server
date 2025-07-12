@@ -64,13 +64,13 @@ jobs:
               const fs = await import('fs/promises');
               await fs.writeFile('security-audit-result.json', JSON.stringify(result, null, 2));
               
-              // Exit with error if critical/high issues found
+              // Set exit code but don't exit immediately
               if (result.summary.critical > 0 || result.summary.high > 0) {
-                process.exit(1);
+                process.exitCode = 1;
               }
             } catch (error) {
               console.error('Security audit failed:', error);
-              process.exit(1);
+              process.exitCode = 1;
             }
           }
           
