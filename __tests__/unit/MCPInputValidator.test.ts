@@ -58,9 +58,9 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
       expect(() => MCPInputValidator.validateMarketplacePath('./admin/secrets')).toThrow('Path traversal not allowed');
       // Test enhanced path traversal protection
       expect(() => MCPInputValidator.validateMarketplacePath('admin/../../../etc/passwd')).toThrow('Path traversal not allowed');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin%2e%2e%2f')).toThrow('Path traversal not allowed');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin%252e%252e')).toThrow('Path traversal not allowed');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin..%2f')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin%2e%2e%2f')).toThrow('Invalid character \'%\'');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin%252e%252e')).toThrow('Invalid character \'%\'');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin..%2f')).toThrow('Invalid character \'%\'');
     });
 
     test('should reject invalid path formats', () => {
