@@ -1,0 +1,249 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run daily at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run Security Audit
+        id: security-audit
+        shell: bash
+        run: |
+          # Create security audit script
+          cat > run-audit.js << 'EOF'
+          import { SecurityAuditor } from './dist/security/audit/index.js';
+          
+          async function runAudit() {
+            const config = SecurityAuditor.getDefaultConfig();
+            
+            // Adjust config for CI
+            config.reporting.formats = ['console', 'markdown', 'json'];
+            config.reporting.createIssues = false; // Handle separately
+            config.reporting.commentOnPr = false; // Handle separately
+            
+            const auditor = new SecurityAuditor(config);
+            
+            try {
+              const result = await auditor.audit();
+              
+              // Save results for later steps
+              const fs = await import('fs/promises');
+              await fs.writeFile('security-audit-result.json', JSON.stringify(result, null, 2));
+              
+              // Set exit code but don't exit immediately
+              if (result.summary.critical > 0 || result.summary.high > 0) {
+                process.exitCode = 1;
+              }
+            } catch (error) {
+              console.error('Security audit failed:', error);
+              process.exitCode = 1;
+            }
+          }
+          
+          runAudit();
+          EOF
+          
+          # Run the audit
+          node run-audit.js || echo "AUDIT_FAILED=true" >> $GITHUB_ENV
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-results
+          path: |
+            security-audit-report.md
+            security-audit-report.json
+            security-audit-result.json
+
+      - name: Generate SARIF report
+        if: always()
+        shell: bash
+        run: |
+          # Convert our JSON report to SARIF format
+          cat > convert-to-sarif.js << 'EOF'
+          import { readFile, writeFile } from 'fs/promises';
+          
+          async function convertToSarif() {
+            const result = JSON.parse(await readFile('security-audit-result.json', 'utf-8'));
+            
+            const sarif = {
+              version: '2.1.0',
+              runs: [{
+                tool: {
+                  driver: {
+                    name: 'DollhouseMCP Security Audit',
+                    version: '1.0.0',
+                    rules: []
+                  }
+                },
+                results: result.findings.map(finding => ({
+                  ruleId: finding.ruleId,
+                  level: mapSeverityToLevel(finding.severity),
+                  message: {
+                    text: finding.message
+                  },
+                  locations: finding.file ? [{
+                    physicalLocation: {
+                      artifactLocation: {
+                        uri: finding.file
+                      },
+                      region: {
+                        startLine: finding.line || 1,
+                        startColumn: finding.column || 1
+                      }
+                    }
+                  }] : []
+                }))
+              }]
+            };
+            
+            await writeFile('security-audit.sarif', JSON.stringify(sarif, null, 2));
+          }
+          
+          function mapSeverityToLevel(severity) {
+            switch (severity) {
+              case 'critical':
+              case 'high':
+                return 'error';
+              case 'medium':
+                return 'warning';
+              default:
+                return 'note';
+            }
+          }
+          
+          convertToSarif().catch(console.error);
+          EOF
+          
+          node convert-to-sarif.js || true
+
+      - name: Upload SARIF to GitHub
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: security-audit.sarif
+          category: security-audit
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read the markdown report
+            let report = '## 🔒 Security Audit Results\n\n';
+            
+            try {
+              if (fs.existsSync('security-audit-report.md')) {
+                report += fs.readFileSync('security-audit-report.md', 'utf8');
+              } else {
+                report += '❌ Security audit report not generated.';
+              }
+            } catch (error) {
+              report += `❌ Error reading report: ${error.message}`;
+            }
+            
+            // Add status badge
+            const failed = process.env.AUDIT_FAILED === 'true';
+            if (failed) {
+              report = '### ❌ Security Audit Failed\n\n' + report;
+            } else {
+              report = '### ✅ Security Audit Passed\n\n' + report;
+            }
+            
+            // Comment on PR
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+      - name: Create issues for critical findings
+        if: github.event_name == 'schedule' && env.AUDIT_FAILED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            try {
+              const result = JSON.parse(fs.readFileSync('security-audit-result.json', 'utf8'));
+              const criticalFindings = result.findings.filter(f => f.severity === 'critical');
+              
+              for (const finding of criticalFindings.slice(0, 5)) { // Limit to 5 issues
+                const title = `Security: ${finding.message}`;
+                const body = `## Security Issue Detected
+
+                **Rule**: ${finding.ruleId}
+                **Severity**: ${finding.severity}
+                **File**: ${finding.file || 'N/A'}
+                **Line**: ${finding.line || 'N/A'}
+
+                ### Description
+                ${finding.message}
+
+                ### Remediation
+                ${finding.remediation}
+
+                ### Code
+                \`\`\`
+                ${finding.code || 'N/A'}
+                \`\`\`
+
+                ---
+                *This issue was automatically created by the Security Audit workflow.*`;
+                
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                  labels: ['security', 'automated', 'priority: critical']
+                });
+              }
+            } catch (error) {
+              console.error('Failed to create issues:', error);
+            }
+
+      - name: Fail if critical issues found
+        if: env.AUDIT_FAILED == 'true'
+        shell: bash
+        run: |
+          echo "❌ Security audit found critical issues. Please review the report above."
+          exit 1

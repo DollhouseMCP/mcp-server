@@ -187,13 +187,13 @@ describe('Persona Lifecycle Integration', () => {
       // Verify in-memory update
       const persona = testServer.personaManager.findPersona('Creative Writer');
       expect(persona?.metadata.description).toBe('An enhanced creative writing assistant');
-      expect(persona?.metadata.version).toBe('1.1'); // Auto-incremented
+      expect(String(persona?.metadata.version)).toBe('1.1'); // Auto-incremented
       
       // Verify file update
       const filePath = path.join(personasDir, 'creative-writer.md');
       const fileContent = await readPersonaFile(filePath);
       expect(fileContent.metadata.description).toBe('An enhanced creative writing assistant');
-      expect(fileContent.metadata.version).toBe('1.1');
+      expect(String(fileContent.metadata.version)).toBe('1.1');
     });
     
     it('should handle concurrent edits gracefully', async () => {
