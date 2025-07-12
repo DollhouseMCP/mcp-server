@@ -875,14 +875,14 @@ ${sanitizedInstructions}
           {
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Created Successfully!**\n\n` +
-              `🎭 **${name}** by ${author}\n` +
+              `🎭 **${sanitizedName}** by ${author}\n` +
               `📁 Category: ${category}\n` +
               `🆔 Unique ID: ${uniqueId}\n` +
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
-              `🎯 **Ready to use:** \`activate_persona "${name}"\`\n` +
-              `📤 **Share it:** \`submit_persona "${name}"\`\n` +
-              `✏️ **Edit it:** \`edit_persona "${name}" "field" "new value"\``,
+              `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
+              `📤 **Share it:** \`submit_persona "${sanitizedName}"\`\n` +
+              `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
           },
         ],
       };
