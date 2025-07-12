@@ -14,7 +14,7 @@ import { SecurityError } from './errors/SecurityError.js';
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory } from './security/InputValidator.js';
+import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
@@ -251,13 +251,16 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async activatePersona(personaIdentifier: string) {
+    // Enhanced input validation for persona identifier
+    const validatedIdentifier = MCPInputValidator.validatePersonaIdentifier(personaIdentifier);
+    
     // Try to find persona by filename first, then by name
-    let persona = this.personas.get(personaIdentifier);
+    let persona = this.personas.get(validatedIdentifier);
     
     if (!persona) {
       // Search by name
       persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+        p.metadata.name.toLowerCase() === validatedIdentifier.toLowerCase()
       );
     }
 
@@ -388,8 +391,11 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async browseMarketplace(category?: string) {
     try {
-      const { items, categories } = await this.marketplaceBrowser.browseMarketplace(category);
-      const text = this.marketplaceBrowser.formatBrowseResults(items, categories, category, this.getPersonaIndicator());
+      // Enhanced input validation for category
+      const validatedCategory = category ? validateCategory(category) : undefined;
+      
+      const { items, categories } = await this.marketplaceBrowser.browseMarketplace(validatedCategory);
+      const text = this.marketplaceBrowser.formatBrowseResults(items, categories, validatedCategory, this.getPersonaIndicator());
       
       return {
         content: [
@@ -413,8 +419,11 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async searchMarketplace(query: string) {
     try {
-      const items = await this.marketplaceSearch.searchMarketplace(query);
-      const text = this.marketplaceSearch.formatSearchResults(items, query, this.getPersonaIndicator());
+      // Enhanced input validation for search query
+      const validatedQuery = MCPInputValidator.validateSearchQuery(query);
+      
+      const items = await this.marketplaceSearch.searchMarketplace(validatedQuery);
+      const text = this.marketplaceSearch.formatSearchResults(items, validatedQuery, this.getPersonaIndicator());
       
       return {
         content: [
@@ -1613,22 +1622,26 @@ Placeholders for custom format:
    */
   async sharePersona(personaName: string, expiryDays = 7) {
     try {
-      const persona = this.personas.get(personaName);
+      // Enhanced input validation
+      const validatedPersonaName = MCPInputValidator.validatePersonaIdentifier(personaName);
+      const validatedExpiryDays = MCPInputValidator.validateExpiryDays(expiryDays);
+      
+      const persona = this.personas.get(validatedPersonaName);
       if (!persona) {
         // Try by filename
-        const byFilename = Array.from(this.personas.values()).find(p => p.filename === personaName);
+        const byFilename = Array.from(this.personas.values()).find(p => p.filename === validatedPersonaName);
         if (!byFilename) {
           return {
             content: [{
               type: "text",
-              text: `${this.getPersonaIndicator()}❌ Persona not found: ${personaName}`
+              text: `${this.getPersonaIndicator()}❌ Persona not found: ${validatedPersonaName}`
             }]
           };
         }
         personaName = byFilename.metadata.name;
       }
 
-      const result = await this.personaSharer.sharePersona(this.personas.get(personaName)!, expiryDays);
+      const result = await this.personaSharer.sharePersona(this.personas.get(personaName)!, validatedExpiryDays);
       
       return {
         content: [{
@@ -1651,7 +1664,10 @@ Placeholders for custom format:
    */
   async importFromUrl(url: string, overwrite = false) {
     try {
-      const fetchResult = await this.personaSharer.importFromUrl(url);
+      // Enhanced input validation for URL
+      const validatedUrl = MCPInputValidator.validateImportUrl(url);
+      
+      const fetchResult = await this.personaSharer.importFromUrl(validatedUrl);
       
       if (!fetchResult.success) {
         return {
