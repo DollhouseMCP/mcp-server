@@ -198,7 +198,8 @@ export class RegexValidator {
     }
 
     // Catastrophic backtracking patterns
-    if (/(\(.+\))+[+*]/.test(source) || /(\.\*)+[+*]/.test(source)) {
+    // Check for patterns like (.+)+, (.*)+, etc. that can cause exponential backtracking
+    if (/\([^)]*\.\+[^)]*\)\+/.test(source) || /\([^)]*\.\*[^)]*\)\+/.test(source) || /\([^)]*\\w\+[^)]*\)\+/.test(source)) {
       risks.push('Potential catastrophic backtracking');
     }
 

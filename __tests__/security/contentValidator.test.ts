@@ -5,7 +5,7 @@
  */
 
 import { ContentValidator } from '../../src/security/contentValidator';
-import { SecurityError } from '../../src/errors/SecurityError';
+import { SecurityError } from '../../src/security/errors.js';
 
 describe('ContentValidator', () => {
   describe('validateAndSanitize', () => {
