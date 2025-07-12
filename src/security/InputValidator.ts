@@ -2,6 +2,7 @@
  * Input validation and sanitization functions
  */
 
+import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
 
@@ -30,9 +31,14 @@ export function validateFilename(filename: string): string {
 /**
  * Validate and sanitize a path
  */
-export function validatePath(inputPath: string): string {
+export function validatePath(inputPath: string, baseDir?: string): string {
   if (!inputPath || typeof inputPath !== 'string') {
     throw new Error('Path must be a non-empty string');
+  }
+  
+  // If baseDir is provided and inputPath is absolute, reject it
+  if (baseDir && path.isAbsolute(inputPath)) {
+    throw new Error('Absolute paths not allowed when base directory is specified');
   }
   
   // Remove leading/trailing slashes and normalize
@@ -52,6 +58,16 @@ export function validatePath(inputPath: string): string {
   const depth = normalized.split('/').length;
   if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
     throw new Error(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
+  }
+  
+  // If baseDir provided, ensure path is within it
+  if (baseDir) {
+    const resolvedPath = path.resolve(baseDir, normalized);
+    const resolvedBase = path.resolve(baseDir);
+    
+    if (!resolvedPath.startsWith(resolvedBase)) {
+      throw new Error('Path traversal attempt detected');
+    }
   }
   
   return normalized;
@@ -119,6 +135,8 @@ export function sanitizeInput(input: string, maxLength: number = 1000): string {
   return input
     .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
     .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
+    .replace(/[;&|`$()]/g, '') // Remove shell metacharacters
+    .replace(/[\u202E\uFEFF]/g, '') // Remove RTL override and zero-width chars
     .substring(0, maxLength)
     .trim();
 }

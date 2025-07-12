@@ -875,14 +875,14 @@ ${sanitizedInstructions}
           {
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Created Successfully!**\n\n` +
-              `🎭 **${name}** by ${author}\n` +
+              `🎭 **${sanitizedName}** by ${author}\n` +
               `📁 Category: ${category}\n` +
               `🆔 Unique ID: ${uniqueId}\n` +
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
-              `🎯 **Ready to use:** \`activate_persona "${name}"\`\n` +
-              `📤 **Share it:** \`submit_persona "${name}"\`\n` +
-              `✏️ **Edit it:** \`edit_persona "${name}" "field" "new value"\``,
+              `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
+              `📤 **Share it:** \`submit_persona "${sanitizedName}"\`\n` +
+              `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
           },
         ],
       };
@@ -1039,7 +1039,10 @@ ${sanitizedInstructions}
       }
       
       // Use sanitized value if needed
-      const sanitizedValue = valueValidation.sanitizedContent || value;
+      let sanitizedValue = valueValidation.sanitizedContent || value;
+      
+      // Always remove shell metacharacters from display output
+      const displayValue = sanitizedValue.replace(/[;&|`$()]/g, '');
       
       if (normalizedField === 'instructions') {
         // Update the main content
@@ -1065,7 +1068,12 @@ ${sanitizedInstructions}
         parsed.data[normalizedField] = sanitizedValue.toLowerCase();
       } else {
         // Update metadata field
-        parsed.data[normalizedField] = sanitizedValue;
+        // For name field, apply additional sanitization to remove shell metacharacters
+        if (normalizedField === 'name') {
+          parsed.data[normalizedField] = sanitizeInput(sanitizedValue, 100);
+        } else {
+          parsed.data[normalizedField] = sanitizedValue;
+        }
       }
 
       // Update version and modification info
@@ -1096,13 +1104,13 @@ ${sanitizedInstructions}
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
               (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
-              `🎭 **${parsed.data.name || persona.metadata.name}**\n` +
+              `🎭 **${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}**\n` +
               `📝 **Field Updated:** ${field}\n` +
-              `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : value}\n` +
+              `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : displayValue}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
               (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
-              `Use \`get_persona_details "${parsed.data.name || persona.metadata.name}"\` to see all changes.`,
+              `Use \`get_persona_details "${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}"\` to see all changes.`,
           },
         ],
       };
@@ -1701,8 +1709,11 @@ Placeholders for custom format:
 
 // Export is already at class declaration
 
-const server = new DollhouseMCPServer();
-server.run().catch((error) => {
-  logger.error("Fatal error starting server", error);
-  process.exit(1);
-});
+// Only start the server if this file is being run directly (not imported by tests)
+if (import.meta.url === `file://${process.argv[1]}` && !process.env.JEST_WORKER_ID) {
+  const server = new DollhouseMCPServer();
+  server.run().catch((error) => {
+    logger.error("Fatal error starting server", error);
+    process.exit(1);
+  });
+}

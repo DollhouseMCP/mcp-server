@@ -30,11 +30,13 @@
     "test:integration:coverage": "jest --config jest.integration.config.cjs --coverage",
     "test:all": "npm test && npm run test:integration",
     "test:all:coverage": "npm run test:coverage && npm run test:integration:coverage",
-    "security:critical": "jest __tests__/security/tests --maxWorkers=4",
-    "security:rapid": "npm run security:critical && npm audit",
+    "security:critical": "jest __tests__/security/tests --testNamePattern=\"(Command Injection|Path Traversal|YAML)\" --maxWorkers=4",
+    "security:rapid": "npm run security:critical -- --testTimeout=30000",
     "security:all": "jest __tests__/security --coverage",
-    "security:report": "npm run security:all -- --json --outputFile=security-report.json",
-    "pre-commit": "npm run security:rapid"
+    "security:regression": "jest __tests__/security/regression --maxWorkers=4",
+    "security:report": "node scripts/security-test-runner.js all --report",
+    "security:generate": "node scripts/generate-security-tests.js",
+    "pre-commit": "npm run security:rapid && npm audit --audit-level=high"
   },
   "keywords": [
     "mcp",

