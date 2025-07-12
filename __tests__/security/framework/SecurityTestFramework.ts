@@ -276,11 +276,11 @@ export class SecurityTestFramework {
         
         switch (toolName) {
           case 'create_persona':
-            result = await server.createPersona(payload, 'test', 'test', 'test');
+            result = await server.createPersona(payload, 'educational', 'educational', 'educational');
             break;
           case 'edit_persona':
             // First create a safe persona
-            await server.createPersona('TestPersona', 'test', 'test', 'test');
+            await server.createPersona('TestPersona', 'educational', 'educational', 'educational');
             result = await server.editPersona('TestPersona', 'name', payload);
             break;
           case 'activate_persona':
@@ -356,7 +356,7 @@ export class SecurityTestFramework {
       const result = await server.createPersona(
         'YAMLTest',
         payload, // description with injection
-        'test',
+        'educational',
         payload  // instructions with injection
       );
       
@@ -389,7 +389,7 @@ export class SecurityTestFramework {
     const result = await server.createPersona(
       'YAMLBomb',
       yamlBomb,
-      'test',
+      'educational',
       'test'
     );
     
@@ -410,8 +410,8 @@ export class SecurityTestFramework {
     
     const result = await server.createPersona(
       'Large',
-      'test',
-      'test',
+      'educational',
+      'educational',
       largeInput
     );
     
@@ -434,8 +434,8 @@ export class SecurityTestFramework {
     for (const input of specialChars) {
       const result = await server.createPersona(
         input,
-        'test',
-        'test',
+        'educational',
+        'educational',
         'test instructions'
       );
       
