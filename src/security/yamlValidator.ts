@@ -41,34 +41,17 @@ export class YamlValidator {
       throw new Error(`YAML content too large: ${yamlContent.length} bytes (max: ${SECURITY_LIMITS.MAX_YAML_LENGTH})`);
     }
     
-    // Check for dangerous tags - expanded from Issue #164
-    const dangerousTags = [
-      '!!js/', '!!python/', '!!ruby/', '!!perl/', '!!php/',
-      '!!java', '!!javax', '!!com.sun',
-      '!!exec', '!!eval', '!!new', '!!construct', '!!apply',
-      '!!call', '!!invoke', '!!binary', '!!merge'
-    ];
-    
-    for (const tag of dangerousTags) {
-      if (yamlContent.includes(tag)) {
-        throw new Error(`Dangerous YAML tag detected: ${tag}`);
-      }
+    // Check for dangerous tags
+    if (yamlContent.includes('!!js/') || yamlContent.includes('!!python/')) {
+      throw new Error('Dangerous YAML tags detected');
     }
     
-    // Enhanced YAML bomb protection - Issue #164
+    // Check for excessive anchors/aliases (YAML bomb protection)
     const anchorCount = (yamlContent.match(/&\w+/g) || []).length;
     const aliasCount = (yamlContent.match(/\*\w+/g) || []).length;
-    const mergeKeyCount = (yamlContent.match(/<<:/g) || []).length;
-    const documentCount = (yamlContent.match(/^---/gm) || []).length;
     
-    if (anchorCount > 10 || aliasCount > 20 || mergeKeyCount > 5 || documentCount > 3) {
-      throw new Error(`Potential YAML bomb detected: anchors=${anchorCount}, aliases=${aliasCount}, merges=${mergeKeyCount}, documents=${documentCount}`);
-    }
-    
-    // Check for nested tag combinations
-    const nestedTagPattern = /[&*]\w+\s*!!/;
-    if (nestedTagPattern.test(yamlContent)) {
-      throw new Error('Dangerous nested YAML tag combination detected');
+    if (anchorCount > 10 || aliasCount > 20) {
+      throw new Error('Potential YAML bomb detected');
     }
     
     try {

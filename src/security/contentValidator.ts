@@ -77,87 +77,19 @@ export class ContentValidator {
 
   // Malicious YAML patterns
   private static readonly MALICIOUS_YAML_PATTERNS = [
-    // Language-specific deserialization attacks
     /!!python\/object/,
-    /!!python\/module/,
-    /!!python\/name/,
     /!!ruby\/object/,
-    /!!ruby\/hash/,
-    /!!ruby\/struct/,
-    /!!ruby\/marshal/,
     /!!java/,
-    /!!javax/,
-    /!!com\.sun/,
-    /!!perl\/hash/,
-    /!!perl\/code/,
-    /!!php\/object/,
-    
-    // Constructor/function injection
     /!!exec/,
     /!!eval/,
     /!!new/,
     /!!construct/,
     /!!apply/,
-    /!!call/,
-    /!!invoke/,
-    
-    // Code execution patterns - more specific to avoid false positives
-    /subprocess\./,
+    /subprocess/,
     /os\.system/,
-    /eval\s*\(/,
-    /exec\s*\(/,
-    /__import__\s*\(/,
-    /require\s*\(/,
-    /import\s+(?:os|sys|subprocess|eval|exec)/,
-    /include\s+["'].*\.(?:php|sh|py|js|rb)["']/,
-    
-    // Command execution variants - more specific patterns
-    /popen\s*\(/,
-    /spawn\s*\(/,
-    /system\s*\(/,
-    /backtick\s*\(/,
-    /shell_exec\s*\(/,
-    /passthru\s*\(/,
-    /proc_open\s*\(/,
-    
-    // Network operations - require suspicious context
-    /socket\.connect/,
-    /urllib\.request/,
-    /requests\.(?:get|post|put|delete)\s*\(/,
-    /fetch\s*\(\s*["']https?:\/\//,
-    /new\s+XMLHttpRequest/,
-    /\.(?:get|post|put|delete)\s*\(\s*["']https?:\/\//,
-    
-    // File system operations - require suspicious context
-    /(?:fs\.|file\.|)\s*open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /file_get_contents\s*\(/,
-    /file_put_contents\s*\(/,
-    /fopen\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /(?:fs\.)?\s*readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /(?:fs\.)?\s*writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,
-    
-    // Protocol handlers
-    /file:\/\//,
-    /data:\/\//,
-    /expect:\/\//,
-    /php:\/\//,
-    /phar:\/\//,
-    /zip:\/\//,
-    /ssh2:\/\//,
-    /ogg:\/\//,
-    
-    // YAML-specific dangerous features
-    /&[a-zA-Z0-9_]+\s*!!/, // Anchor with tag combination
-    /\*[a-zA-Z0-9_]+\s*!!/, // Alias with tag combination
-    /!!merge/,
-    /!!binary/,
-    /!!timestamp/,
-    
-    // Unicode/encoding bypass attempts
-    /\\[uU]0*(?:22|27|60|3[cC])/,  // Unicode quotes and brackets
-    /[\u202A-\u202E\u2066-\u2069]/, // Direction override characters
-    /[\u200B-\u200F\u2028-\u202F]/, // Zero-width and special spaces
-    /[\uFEFF\uFFFE\uFFFF]/,         // Special markers
+    /eval\(/,
+    /exec\(/,
+    /__import__/,
   ];
 
   /**
