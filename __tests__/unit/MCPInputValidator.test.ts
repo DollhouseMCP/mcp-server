@@ -56,6 +56,11 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
     test('should reject path traversal attempts', () => {
       expect(() => MCPInputValidator.validateMarketplacePath('../../../etc/passwd')).toThrow('Path traversal not allowed');
       expect(() => MCPInputValidator.validateMarketplacePath('./admin/secrets')).toThrow('Path traversal not allowed');
+      // Test enhanced path traversal protection
+      expect(() => MCPInputValidator.validateMarketplacePath('admin/../../../etc/passwd')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin%2e%2e%2f')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin%252e%252e')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateMarketplacePath('admin..%2f')).toThrow('Path traversal not allowed');
     });
 
     test('should reject invalid path formats', () => {
@@ -86,6 +91,9 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
       expect(() => MCPInputValidator.validateImportUrl('http://192.168.1.1/config')).toThrow('Private network URLs are not allowed');
       expect(() => MCPInputValidator.validateImportUrl('http://10.0.0.1/secrets')).toThrow('Private network URLs are not allowed');
       expect(() => MCPInputValidator.validateImportUrl('http://172.16.0.1/admin')).toThrow('Private network URLs are not allowed');
+      // Test enhanced SSRF protection
+      expect(() => MCPInputValidator.validateImportUrl('//localhost/admin')).toThrow('Protocol-relative URLs are not allowed');
+      expect(() => MCPInputValidator.validateImportUrl('//127.0.0.1/secrets')).toThrow('Protocol-relative URLs are not allowed');
     });
 
     test('should reject malformed URLs', () => {

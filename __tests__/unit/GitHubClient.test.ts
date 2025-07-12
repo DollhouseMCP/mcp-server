@@ -133,51 +133,23 @@ describe('GitHubClient', () => {
       const validToken = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
       process.env.GITHUB_TOKEN = validToken;
 
-      // Mock the token validation API response
-      const mockTokenValidationResponse = {
-        ok: true,
-        status: 200,
-        headers: {
-          get: jest.fn((key: string) => {
-            if (key === 'x-ratelimit-remaining') return '5000';
-            if (key === 'x-oauth-scopes') return 'repo';
-            return null;
-          })
-        },
-        json: (jest.fn() as any).mockResolvedValue({ login: 'testuser' })
-      } as unknown as Response;
-
-      // Mock the actual API response
+      // Mock the API response (no token validation call needed with new TokenManager)
       const mockApiResponse = {
         ok: true,
         json: (jest.fn() as any).mockResolvedValue({})
       } as unknown as Response;
 
-      // First call is for token validation, second is for the actual API call
-      mockFetch
-        .mockResolvedValueOnce(mockTokenValidationResponse)
-        .mockResolvedValueOnce(mockApiResponse);
+      // Only one call is made to the actual API URL (TokenManager validates format locally)
+      mockFetch.mockResolvedValueOnce(mockApiResponse);
       mockApiCache.get.mockReturnValue(null);
 
       await githubClient.fetchFromGitHub(testUrl);
 
-      // Check that both calls were made
-      expect(global.fetch).toHaveBeenCalledTimes(2);
+      // Check that only the API call was made (no separate token validation call)
+      expect(global.fetch).toHaveBeenCalledTimes(1);
       
-      // First call should be to validate the token
-      expect(global.fetch).toHaveBeenNthCalledWith(
-        1,
-        'https://api.github.com/user',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'Authorization': `Bearer ${validToken}`
-          })
-        })
-      );
-      
-      // Second call should be the actual API request
-      expect(global.fetch).toHaveBeenNthCalledWith(
-        2,
+      // Call should be to the actual URL with the validated token
+      expect(global.fetch).toHaveBeenCalledWith(
         testUrl,
         expect.objectContaining({
           headers: expect.objectContaining({

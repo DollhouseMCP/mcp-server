@@ -75,6 +75,7 @@ export class MCPInputValidator {
     }
 
     // GitHub API paths should be safe filename patterns (efficient validation)
+    
     // Check each character to avoid ReDoS vulnerabilities
     for (let i = 0; i < path.length; i++) {
       const char = path[i];
@@ -83,9 +84,30 @@ export class MCPInputValidator {
       }
     }
 
-    // Prevent path traversal in GitHub paths
-    if (path.includes('..') || path.includes('./')) {
-      throw new Error('Path traversal not allowed in marketplace path');
+    // Prevent path traversal in GitHub paths (comprehensive check)
+    const pathLower = path.toLowerCase();
+    const encodedPath = decodeURIComponent(path.replace(/\+/g, ' ')); // Decode URL encoding
+    
+    // Check for various path traversal patterns
+    const traversalPatterns = [
+      '..',          // Basic traversal
+      './',          // Current directory
+      '/../',        // Directory traversal with slashes
+      '\\',          // Backslash (Windows-style)
+      '%2e%2e',      // URL-encoded ..
+      '%2e%2e%2f',   // URL-encoded ../
+      '%2e%2e%5c',   // URL-encoded ..\
+      '%252e%252e',  // Double URL-encoded ..
+      '..%2f',       // Mixed encoding
+      '..%5c',       // Mixed encoding with backslash
+      '..../',       // Dotdot bypass attempt
+      '..;/',        // Semicolon bypass attempt
+    ];
+    
+    for (const pattern of traversalPatterns) {
+      if (pathLower.includes(pattern) || encodedPath.toLowerCase().includes(pattern)) {
+        throw new Error('Path traversal not allowed in marketplace path');
+      }
     }
 
     return path;
@@ -101,6 +123,11 @@ export class MCPInputValidator {
 
     if (url.length > 2000) {
       throw new Error('URL too long (max 2000 characters)');
+    }
+
+    // Reject protocol-relative URLs that could bypass validation
+    if (url.startsWith('//')) {
+      throw new Error('Protocol-relative URLs are not allowed');
     }
 
     try {
@@ -124,9 +151,11 @@ export class MCPInputValidator {
       
       // Handle IDN (International Domain Names) by converting to ASCII
       try {
-        hostname = new URL(`http://${hostname}`).hostname;
-      } catch {
-        // If IDN conversion fails, continue with original hostname
+        const idnNormalized = new URL(`http://${hostname}`).hostname;
+        hostname = idnNormalized;
+      } catch (idnError) {
+        // If IDN conversion fails, reject the URL for security
+        throw new Error('Invalid hostname: IDN conversion failed - potentially malicious domain name');
       }
       
       // Check for private IPs (now with IDN-normalized hostname)
