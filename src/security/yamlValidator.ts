@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
+import { RegexValidator } from './regexValidator.js';
 
 const PersonaMetadataSchema = z.object({
   name: z.string().min(1).max(100),
