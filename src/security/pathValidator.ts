@@ -107,6 +107,10 @@ export class PathValidator {
       throw new Error('Content too large');
     }
     
+    // Ensure directory exists before atomic write
+    const dirPath = path.dirname(validatedPath);
+    await fs.mkdir(dirPath, { recursive: true });
+    
     // Write to temp file first (atomic write)
     const tempPath = `${validatedPath}.tmp`;
     await fs.writeFile(tempPath, content, 'utf-8');
