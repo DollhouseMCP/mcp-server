@@ -1,11 +1,25 @@
 import { jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { DollhouseMCPServer } from '../../../src/index.js';
+import { SecurityTestPerformance } from './RapidSecurityTesting.js';
 
 /**
  * Security Test Framework for DollhouseMCP
  * Provides utilities for testing security vulnerabilities
  */
+export interface SecurityTestOptions {
+  timeout?: number;
+  category?: 'critical' | 'high' | 'medium' | 'all';
+  parallel?: boolean;
+}
+
+export interface SecurityTestSuite {
+  name: string;
+  category: 'critical' | 'high' | 'medium';
+  tests: Array<() => Promise<void>>;
+}
+
 export class SecurityTestFramework {
   private static readonly MALICIOUS_PAYLOADS = {
     commandInjection: [
@@ -158,6 +172,282 @@ export class SecurityTestFramework {
     return async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     };
+  }
+
+  /**
+   * Run security test suites based on category
+   */
+  static async runSecuritySuite(
+    options: SecurityTestOptions = {}
+  ): Promise<{ passed: number; failed: number; duration: number }> {
+    const startTime = Date.now();
+    const suites = await this.getTestSuites(options.category || 'all');
+    
+    let passed = 0;
+    let failed = 0;
+    
+    for (const suite of suites) {
+      console.log(`\n🔒 Running ${suite.name} (${suite.category.toUpperCase()})...`);
+      
+      for (const test of suite.tests) {
+        try {
+          await test();
+          passed++;
+        } catch (error) {
+          failed++;
+          console.error(`❌ Test failed: ${error.message}`);
+        }
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    return { passed, failed, duration };
+  }
+
+  /**
+   * Get test suites based on category
+   */
+  private static async getTestSuites(
+    category: 'critical' | 'high' | 'medium' | 'all'
+  ): Promise<SecurityTestSuite[]> {
+    const allSuites: SecurityTestSuite[] = [
+      {
+        name: 'Command Injection Tests',
+        category: 'critical',
+        tests: [
+          () => this.testMCPToolCommandInjection('create_persona'),
+          () => this.testMCPToolCommandInjection('edit_persona'),
+          () => this.testMCPToolCommandInjection('activate_persona')
+        ]
+      },
+      {
+        name: 'Path Traversal Tests',
+        category: 'critical',
+        tests: [
+          () => this.testMCPToolPathTraversal('get_persona_details'),
+          () => this.testMCPToolPathTraversal('import_persona'),
+          () => this.testMCPToolPathTraversal('share_persona')
+        ]
+      },
+      {
+        name: 'YAML Injection Tests',
+        category: 'critical',
+        tests: [
+          () => this.testYAMLInjectionPrevention(),
+          () => this.testYAMLBombPrevention()
+        ]
+      },
+      {
+        name: 'Input Validation Tests',
+        category: 'high',
+        tests: [
+          () => this.testInputSizeLimits(),
+          () => this.testSpecialCharacterHandling()
+        ]
+      }
+    ];
+    
+    if (category === 'all') {
+      return allSuites;
+    }
+    
+    const priorities = {
+      critical: ['critical'],
+      high: ['critical', 'high'],
+      medium: ['critical', 'high', 'medium']
+    };
+    
+    return allSuites.filter(suite => 
+      priorities[category].includes(suite.category)
+    );
+  }
+
+  /**
+   * Test MCP tool for command injection vulnerabilities
+   */
+  private static async testMCPToolCommandInjection(toolName: string): Promise<void> {
+    const server = new DollhouseMCPServer();
+    const injectionPayloads = this.MALICIOUS_PAYLOADS.commandInjection;
+    
+    for (const payload of injectionPayloads) {
+      // Test the tool with malicious payload
+      try {
+        let result: any;
+        
+        switch (toolName) {
+          case 'create_persona':
+            result = await server.createPersona(payload, 'test', 'test', 'test');
+            break;
+          case 'edit_persona':
+            // First create a safe persona
+            await server.createPersona('TestPersona', 'test', 'test', 'test');
+            result = await server.editPersona('TestPersona', 'name', payload);
+            break;
+          case 'activate_persona':
+            result = await server.activatePersona(payload);
+            break;
+          default:
+            throw new Error(`Unknown tool: ${toolName}`);
+        }
+        
+        // If no error thrown, check that payload was sanitized
+        if (result && typeof result === 'object') {
+          const content = JSON.stringify(result);
+          expect(content).not.toContain(payload);
+          // Check dangerous characters were removed
+          expect(content).not.toMatch(/[;&|`$()]/g);
+        }
+      } catch (error) {
+        // Expected - tool should reject malicious input
+        // But not all errors are security rejections
+        if (!error.message.match(/not found|does not exist/i)) {
+          // This might be a security rejection
+          expect(error.message).toMatch(/invalid|malicious|dangerous|illegal/i);
+        }
+      }
+    }
+  }
+
+  /**
+   * Test MCP tool for path traversal vulnerabilities
+   */
+  private static async testMCPToolPathTraversal(toolName: string): Promise<void> {
+    const server = new DollhouseMCPServer();
+    const traversalPayloads = this.MALICIOUS_PAYLOADS.pathTraversal;
+    
+    for (const payload of traversalPayloads) {
+      try {
+        let result: any;
+        
+        switch (toolName) {
+          case 'get_persona_details':
+            result = await server.getPersonaDetails(payload);
+            break;
+          case 'import_persona':
+            result = await server.importPersona(payload);
+            break;
+          case 'share_persona':
+            result = await server.sharePersona(payload);
+            break;
+          default:
+            throw new Error(`Unknown tool: ${toolName}`);
+        }
+        
+        // Check result doesn't contain sensitive paths
+        const content = JSON.stringify(result);
+        expect(content).not.toContain('/etc/passwd');
+        expect(content).not.toContain('system32');
+        expect(content).toMatch(/not found|invalid|does not exist/i);
+      } catch (error) {
+        // Expected - should reject path traversal
+        expect(error.message).toMatch(/invalid|traversal|dangerous|not found/i);
+      }
+    }
+  }
+
+  /**
+   * Test YAML injection prevention
+   */
+  private static async testYAMLInjectionPrevention(): Promise<void> {
+    const server = new DollhouseMCPServer();
+    const yamlPayloads = this.MALICIOUS_PAYLOADS.yamlInjection;
+    
+    for (const payload of yamlPayloads) {
+      const result = await server.createPersona(
+        'YAMLTest',
+        payload, // description with injection
+        'test',
+        payload  // instructions with injection
+      );
+      
+      // Check that dangerous YAML was not executed
+      const content = JSON.stringify(result);
+      expect(content).not.toContain('!!js/function');
+      expect(content).not.toContain('!!python/object');
+      expect(content).not.toContain('__proto__');
+      
+      // Verify persona was created safely
+      expect(result.content[0].text).toContain('Created Successfully');
+    }
+  }
+
+  /**
+   * Test YAML bomb prevention
+   */
+  private static async testYAMLBombPrevention(): Promise<void> {
+    const yamlBomb = `
+      a: &a ["lol", "lol", "lol", "lol", "lol", "lol"]
+      b: &b [*a, *a, *a, *a, *a, *a]
+      c: &c [*b, *b, *b, *b, *b, *b]
+      d: &d [*c, *c, *c, *c, *c, *c]
+      e: &e [*d, *d, *d, *d, *d, *d]
+      f: &f [*e, *e, *e, *e, *e, *e]
+    `;
+    
+    const server = new DollhouseMCPServer();
+    
+    const result = await server.createPersona(
+      'YAMLBomb',
+      yamlBomb,
+      'test',
+      'test'
+    );
+    
+    // Should handle without memory explosion
+    expect(result).toBeDefined();
+    
+    // Check memory usage didn't explode
+    const memoryUsage = process.memoryUsage().heapUsed;
+    expect(memoryUsage).toBeLessThan(500 * 1024 * 1024); // Less than 500MB
+  }
+
+  /**
+   * Test input size limits
+   */
+  private static async testInputSizeLimits(): Promise<void> {
+    const server = new DollhouseMCPServer();
+    const largeInput = 'x'.repeat(1024 * 1024); // 1MB
+    
+    const result = await server.createPersona(
+      'Large',
+      'test',
+      'test',
+      largeInput
+    );
+    
+    // Should reject oversized input
+    expect(result.content[0].text).toMatch(/too large|size limit|maximum/i);
+  }
+
+  /**
+   * Test special character handling
+   */
+  private static async testSpecialCharacterHandling(): Promise<void> {
+    const server = new DollhouseMCPServer();
+    const specialChars = [
+      '\x00test', // null byte
+      'test\r\ninjection', // CRLF
+      '\u202Etest', // RTL override
+      'test\x1B[31m', // ANSI escape
+    ];
+    
+    for (const input of specialChars) {
+      const result = await server.createPersona(
+        input,
+        'test',
+        'test',
+        'test instructions'
+      );
+      
+      // Should sanitize special characters
+      const content = JSON.stringify(result);
+      expect(content).not.toContain('\x00');
+      expect(content).not.toContain('\x1B');
+      expect(content).not.toContain('\u202E');
+      
+      // Should still create persona successfully
+      expect(result.content[0].text).toContain('Created Successfully');
+    }
   }
 
   /**
