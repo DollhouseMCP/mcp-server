@@ -97,7 +97,7 @@ describe('Input Validation Security Tests', () => {
     });
     
     test('validateContentSize should accept content within limits', () => {
-      const validContent = 'x'.repeat(1024 * 512); // 512KB
+      const validContent = 'x'.repeat(1024 * 400); // 400KB (well within 500KB limit)
       expect(() => validateContentSize(validContent)).not.toThrow();
     });
   });

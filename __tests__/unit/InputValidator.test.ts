@@ -282,7 +282,8 @@ describe('InputValidator - Security Edge Cases', () => {
     it('should remove HTML-dangerous characters', () => {
       const input = '<script>alert("XSS")</script>&copy;';
       const result = sanitizeInput(input);
-      expect(result).toBe('scriptalert(XSS)/scriptcopy;');
+      // Note: ; is now removed as a shell metacharacter
+      expect(result).toBe('scriptalertXSS/scriptcopy');
     });
 
     it('should enforce length limits', () => {

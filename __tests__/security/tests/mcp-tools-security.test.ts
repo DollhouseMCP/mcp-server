@@ -76,21 +76,27 @@ describe('MCP Tools Security Tests', () => {
           'Test instructions'
         );
         
-        // Verify the payload was sanitized
+        // Verify the response
         expect(result.content[0].text).toBeDefined();
+        const responseText = result.content[0].text;
         
-        // The dangerous payload should have been sanitized
-        // Extract the actual persona name from the output
-        const nameMatch = result.content[0].text.match(/🎭 \*\*([^*]+)\*\*/);
-        expect(nameMatch).toBeTruthy();
-        const createdName = nameMatch?.[1] || '';
-        
-        // The created name should NOT contain the dangerous characters
-        expect(createdName).not.toMatch(/[;&|`$()]/);
-        
-        // If the original payload had dangerous chars, they should be removed
-        if (/[;&|`$()]/.test(payload)) {
-          expect(createdName).not.toBe(payload);
+        // Check if the persona was rejected for security reasons
+        if (responseText.includes('Validation Error') || responseText.includes('prohibited content')) {
+          // Good - the dangerous payload was rejected
+          expect(responseText).toMatch(/Name contains prohibited content|security|validation error/i);
+        } else {
+          // The persona was created with a sanitized name
+          const nameMatch = responseText.match(/🎭 \*\*([^*]+)\*\*/);
+          expect(nameMatch).toBeTruthy();
+          const createdName = nameMatch?.[1] || '';
+          
+          // The created name should NOT contain the dangerous characters
+          expect(createdName).not.toMatch(/[;&|`$()]/);
+          
+          // If the original payload had dangerous chars, they should be removed
+          if (/[;&|`$()]/.test(payload)) {
+            expect(createdName).not.toBe(payload);
+          }
         }
         
         SecurityTestPerformance.checkpoint('create_persona command injection');
