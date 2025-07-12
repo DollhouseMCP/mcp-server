@@ -6,6 +6,7 @@ import { Persona } from '../../types/persona.js';
 import { PersonaExporter, ExportedPersona } from './PersonaExporter.js';
 import { GitHubClient } from '../../marketplace/GitHubClient.js';
 import { TokenManager } from '../../security/tokenManager.js';
+import { SecurityError } from '../../security/errors.js';
 import { logger } from '../../utils/logger.js';
 import { RateLimiter } from '../../update/RateLimiter.js';
 
@@ -44,11 +45,28 @@ export class PersonaSharer {
     try {
       // Validate gist permissions if token is available
       const token = TokenManager.getGitHubToken();
+      let hasValidToken = false;
+      
       if (token) {
-        const validation = await TokenManager.ensureTokenPermissions('gist');
-        if (!validation.isValid) {
-          const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error', token);
-          logger.warn('GitHub token lacks gist permissions, falling back to base64 URL', { error: safeMessage });
+        try {
+          const validation = await TokenManager.ensureTokenPermissions('gist');
+          if (!validation.isValid) {
+            const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error', token);
+            logger.warn('GitHub token lacks gist permissions, falling back to base64 URL', { error: safeMessage });
+            // Continue to fallback instead of failing
+          } else {
+            hasValidToken = true;
+          }
+        } catch (error) {
+          // Handle rate limiting or other security errors gracefully
+          if (error instanceof SecurityError && error.code === 'RATE_LIMIT_EXCEEDED') {
+            logger.warn('Token validation rate limited, falling back to base64 URL', { 
+              error: 'Rate limit exceeded for token validation' 
+            });
+          } else if (error instanceof Error) {
+            const safeMessage = TokenManager.createSafeErrorMessage(error.message, token);
+            logger.warn('Token validation failed, falling back to base64 URL', { error: safeMessage });
+          }
           // Continue to fallback instead of failing
         }
       }
@@ -66,7 +84,7 @@ export class PersonaSharer {
       };
 
       // Create GitHub Gist if token has proper permissions
-      if (token) {
+      if (hasValidToken) {
         const gistResult = await this.createGist(persona.metadata.name, shareData);
         
         if (gistResult.success) {

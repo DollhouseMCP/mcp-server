@@ -156,6 +156,14 @@ export class TokenManager {
     token: string, 
     requiredScopes: TokenScopes
   ): Promise<TokenValidationResult> {
+    // Validate token format before consuming rate limit
+    if (!this.validateTokenFormat(token)) {
+      return {
+        isValid: false,
+        error: 'Invalid token format'
+      };
+    }
+
     // Check rate limit before making API call
     const rateLimiter = this.getTokenValidationLimiter();
     const rateLimitStatus = rateLimiter.checkLimit();
@@ -247,11 +255,11 @@ export class TokenManager {
     } catch (error) {
       // Handle SecurityError (including rate limit errors) separately
       if (error instanceof SecurityError && error.code === 'RATE_LIMIT_EXCEEDED') {
-        const currentStatus = rateLimiter.getStatus();
+        const currentStatus = rateLimiter.checkLimit();
         return {
           isValid: false,
           rateLimitExceeded: true,
-          retryAfterMs: rateLimitStatus.retryAfterMs,
+          retryAfterMs: currentStatus.retryAfterMs,
           error: error.message
         };
       }

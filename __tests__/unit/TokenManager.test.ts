@@ -7,10 +7,14 @@ describe('TokenManager - GitHub Token Security', () => {
   beforeEach(() => {
     // Clear environment
     delete process.env.GITHUB_TOKEN;
+    // Reset rate limiter before each test to prevent interference
+    TokenManager.resetTokenValidationLimiter();
   });
 
   afterEach(() => {
     process.env = originalEnv;
+    // Clean up rate limiter after each test
+    TokenManager.resetTokenValidationLimiter();
   });
 
   describe('validateTokenFormat', () => {
