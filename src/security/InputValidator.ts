@@ -5,6 +5,7 @@
 import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
+import { RegexValidator } from './regexValidator.js';
 
 /**
  * Enhanced input validation for MCP tools
@@ -244,7 +245,10 @@ export class MCPInputValidator {
 
     // Check for private IPv4 ranges
     const ipv4Regex = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
-    const ipv4Match = hostname.match(ipv4Regex);
+    // Use RegexValidator for safe execution
+    const ipv4Match = RegexValidator.validate(hostname, ipv4Regex, { timeoutMs: 20, maxLength: 15 }) 
+      ? hostname.match(ipv4Regex) 
+      : null;
     
     if (ipv4Match) {
       const [, a, b, c, d] = ipv4Match.map(Number);
@@ -289,7 +293,7 @@ export class MCPInputValidator {
    */
   private static isEncodedPrivateIP(hostname: string): boolean {
     // Check for decimal encoded IPs (e.g., 2130706433 = 127.0.0.1)
-    if (/^\d{8,10}$/.test(hostname)) {
+    if (RegexValidator.validate(hostname, /^\d{8,10}$/, { timeoutMs: 20, maxLength: 10 })) {
       const num = parseInt(hostname, 10);
       if (num >= 0 && num <= 4294967295) { // Valid IPv4 range
         // Convert to IP format and check if private
@@ -299,7 +303,7 @@ export class MCPInputValidator {
     }
     
     // Check for hex encoded IPs (e.g., 0x7f000001 = 127.0.0.1)
-    if (/^0x[0-9a-f]{1,8}$/i.test(hostname)) {
+    if (RegexValidator.validate(hostname, /^0x[0-9a-f]{1,8}$/i, { timeoutMs: 20, maxLength: 10 })) {
       const num = parseInt(hostname, 16);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
@@ -308,7 +312,7 @@ export class MCPInputValidator {
     }
     
     // Check for octal encoded IPs (e.g., 017700000001 = 127.0.0.1)
-    if (/^0[0-7]{8,11}$/.test(hostname)) {
+    if (RegexValidator.validate(hostname, /^0[0-7]{8,11}$/, { timeoutMs: 20, maxLength: 12 })) {
       const num = parseInt(hostname, 8);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
@@ -410,7 +414,10 @@ export function validateCategory(category: string): string {
     throw new Error('Category must be a non-empty string');
   }
   
-  if (!VALIDATION_PATTERNS.SAFE_CATEGORY.test(category)) {
+  if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, {
+    maxLength: 50,
+    timeoutMs: 50
+  })) {
     throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
   }
   

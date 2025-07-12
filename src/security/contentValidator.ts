@@ -9,6 +9,7 @@
 
 import { SecurityError } from '../errors/SecurityError.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { RegexValidator } from './regexValidator.js';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -100,7 +101,7 @@ export class ContentValidator {
 
     // Check for injection patterns
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      if (pattern.test(content)) {
+      if (RegexValidator.validate(content, pattern, { timeoutMs: 100, maxLength: content.length })) {
         detectedPatterns.push(description);
         
         // Update highest severity
@@ -134,7 +135,7 @@ export class ContentValidator {
    */
   static validateYamlContent(yamlContent: string): boolean {
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
-      if (pattern.test(yamlContent)) {
+      if (RegexValidator.validate(yamlContent, pattern, { timeoutMs: 50, maxLength: yamlContent.length })) {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',
@@ -188,8 +189,12 @@ export class ContentValidator {
    * Sanitizes a complete persona file (frontmatter + content)
    */
   static sanitizePersonaContent(content: string): string {
-    // Extract frontmatter
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    // Extract frontmatter using safe regex execution
+    const frontmatterPattern = /^---\n([\s\S]*?)\n---/;
+    const frontmatterMatch = RegexValidator.validate(content, frontmatterPattern, { 
+      timeoutMs: 100, 
+      maxLength: content.length 
+    }) ? content.match(frontmatterPattern) : null;
     
     if (!frontmatterMatch) {
       // No frontmatter, just validate content
