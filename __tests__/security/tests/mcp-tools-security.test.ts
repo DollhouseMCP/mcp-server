@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SecurityTestFramework, SecurityTestPerformance } from '../framework/SecurityTestFramework.js';
 import { DollhouseMCPServer } from '../../../src/index.js';
@@ -41,6 +41,15 @@ describe('MCP Tools Security Tests', () => {
     
     // Cleanup test directory
     await fs.rm(testDir, { recursive: true, force: true });
+  });
+  
+  beforeEach(async () => {
+    // Clean up personas directory before each test to avoid conflicts
+    const personasDir = path.join(testDir, 'personas');
+    if (await fs.access(personasDir).then(() => true).catch(() => false)) {
+      await fs.rm(personasDir, { recursive: true, force: true });
+    }
+    await fs.mkdir(personasDir, { recursive: true });
   });
   
   describe('Command Injection Prevention', () => {
