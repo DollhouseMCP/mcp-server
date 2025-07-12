@@ -207,25 +207,25 @@ jobs:
               for (const finding of criticalFindings.slice(0, 5)) { // Limit to 5 issues
                 const title = `Security: ${finding.message}`;
                 const body = `## Security Issue Detected
-                
-**Rule**: ${finding.ruleId}
-**Severity**: ${finding.severity}
-**File**: ${finding.file || 'N/A'}
-**Line**: ${finding.line || 'N/A'}
 
-### Description
-${finding.message}
+                **Rule**: ${finding.ruleId}
+                **Severity**: ${finding.severity}
+                **File**: ${finding.file || 'N/A'}
+                **Line**: ${finding.line || 'N/A'}
 
-### Remediation
-${finding.remediation}
+                ### Description
+                ${finding.message}
 
-### Code
-\`\`\`
-${finding.code || 'N/A'}
-\`\`\`
+                ### Remediation
+                ${finding.remediation}
 
----
-*This issue was automatically created by the Security Audit workflow.*`;
+                ### Code
+                \`\`\`
+                ${finding.code || 'N/A'}
+                \`\`\`
+
+                ---
+                *This issue was automatically created by the Security Audit workflow.*`;
                 
                 await github.rest.issues.create({
                   owner: context.repo.owner,
