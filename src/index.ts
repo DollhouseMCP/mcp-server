@@ -19,6 +19,7 @@ import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
 import { YamlValidator } from './security/yamlValidator.js';
+import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
@@ -848,8 +849,23 @@ ${sanitizedInstructions}
       validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
 
     try {
-      // Write the file
-      await PathValidator.safeWriteFile(filePath, personaContent);
+      // Use file locking to prevent race conditions
+      await FileLockManager.withLock(`persona:${sanitizedName}`, async () => {
+        // Double-check file doesn't exist (in case of race condition)
+        try {
+          await fs.access(filePath);
+          throw new Error(`Persona file "${filename}" already exists`);
+        } catch (error: any) {
+          // If error is not ENOENT (file not found), re-throw it
+          if (error.code !== 'ENOENT' && error.message?.includes('already exists')) {
+            throw error;
+          }
+          // File doesn't exist, proceed
+        }
+        
+        // Write the file atomically
+        await FileLockManager.atomicWriteFile(filePath, personaContent);
+      });
       
       // Reload personas to include the new one
       await this.loadPersonas();
@@ -881,7 +897,7 @@ ${sanitizedInstructions}
           },
         ],
       };
-      }
+    }
     } catch (error) {
       return {
         content: [
@@ -989,7 +1005,11 @@ ${sanitizedInstructions}
         
         // Create copy of the default persona
         const content = await PathValidator.safeReadFile(filePath);
-        await PathValidator.safeWriteFile(newFilePath, content);
+        
+        // Use file locking to prevent race conditions when creating the copy
+        await FileLockManager.withLock(`persona:${persona.metadata.name}-copy`, async () => {
+          await FileLockManager.atomicWriteFile(newFilePath, content);
+        });
         
         // Update file path to point to the copy
         filePath = newFilePath;
@@ -1061,8 +1081,11 @@ ${sanitizedInstructions}
       const secureParser = SecureYamlParser.createSecureMatterParser();
       const updatedContent = secureParser.stringify(parsed.content, parsed.data);
       
-      // Write updated file
-      await PathValidator.safeWriteFile(filePath, updatedContent);
+      // Use file locking to prevent race conditions
+      await FileLockManager.withLock(`persona:${persona.metadata.name}`, async () => {
+        // Write updated file atomically
+        await FileLockManager.atomicWriteFile(filePath, updatedContent);
+      });
       
       // Reload personas
       await this.loadPersonas();

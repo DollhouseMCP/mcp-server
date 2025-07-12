@@ -10,6 +10,7 @@ import { ExportedPersona, ExportBundle } from './PersonaExporter.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { validateFilename, validatePath, sanitizeInput, validateContentSize } from '../../security/InputValidator.js';
+import { FileLockManager } from '../../security/fileLockManager.js';
 import { generateUniqueId } from '../../utils/filesystem.js';
 import { logger } from '../../utils/logger.js';
 
@@ -235,7 +236,10 @@ export class PersonaImporter {
       const personaPath = path.join(this.personasDir, filename);
       const fileContent = matter.stringify(sanitizedContent, metadata);
       
-      await fs.writeFile(personaPath, fileContent, 'utf-8');
+      // Use file locking to prevent race conditions
+      await FileLockManager.withLock(`persona:${metadata.name}`, async () => {
+        await FileLockManager.atomicWriteFile(personaPath, fileContent);
+      });
 
       // Create persona object
       const persona: Persona = {
