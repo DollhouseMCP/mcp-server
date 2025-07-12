@@ -17,7 +17,7 @@ export class SecurityRules {
         description: 'Potential hardcoded secret or API key detected',
         severity: 'critical',
         category: 'code',
-        pattern: /(?:api[_-]?key|secret|password|token|private[_-]?key)\s*[:=]\s*["'][a-zA-Z0-9+/=]{16,}["']/gi,
+        pattern: /(?:api[_-]?key|secret|password|token|private[_-]?key)\s*[:=]\s*["'][a-zA-Z0-9+/=_-]{10,}["']/gi,
         remediation: 'Use environment variables or secure key management services instead of hardcoding secrets',
         references: ['https://owasp.org/Top10/A01_2021-Broken_Access_Control/'],
         tags: ['high-confidence']
@@ -38,7 +38,7 @@ export class SecurityRules {
         description: 'Potential command injection vulnerability',
         severity: 'critical',
         category: 'code',
-        pattern: /(?:exec|spawn|execSync|spawnSync)\s*\([^)]*\$\{[^}]+\}|(?:exec|spawn|execSync|spawnSync)\s*\([^)]*\+\s*[a-zA-Z_]\w*/g,
+        pattern: /(?:exec|spawn|execSync|spawnSync)\s*\([^)]*(?:\$\{[^}]+\}|\+\s*[a-zA-Z_]\w*)/g,
         remediation: 'Validate and sanitize all user input before using in system commands',
         references: ['https://owasp.org/Top10/A03_2021-Injection/']
       },
@@ -106,7 +106,7 @@ export class SecurityRules {
         description: 'SQL query built using string concatenation',
         severity: 'critical',
         category: 'code',
-        pattern: /["'](?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["']\s*\+/gi,
+        pattern: /(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["']\s*\+\s*\w+|["'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER).*["']\s*\+/gi,
         remediation: 'Use parameterized queries instead of string concatenation',
         references: ['https://cwe.mitre.org/data/definitions/89.html']
       },
@@ -170,7 +170,7 @@ export class SecurityRules {
           const toolPattern = /name:\s*["']([^"']+)["'].*handle:/gs;
           const hasRateLimit = /rateLimiter|checkRateLimit|tokenBucket/i.test(content);
           
-          if (toolPattern.test(content) && !hasRateLimit && !context?.isTest) {
+          if (toolPattern.test(content) && !hasRateLimit) {
             findings.push({
               ruleId: 'DMCP-SEC-003',
               severity: 'medium',
@@ -197,7 +197,7 @@ export class SecurityRules {
           const inputPattern = /(?:req\.|request\.|params|query|body|content)/;
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode/i.test(content);
           
-          if (inputPattern.test(content) && !hasUnicodeCheck && !context?.isTest) {
+          if (inputPattern.test(content) && !hasUnicodeCheck) {
             findings.push({
               ruleId: 'DMCP-SEC-004',
               severity: 'medium',
@@ -234,7 +234,7 @@ export class SecurityRules {
           const securityOps = /(?:authenticate|authorize|validate|sanitize|encrypt|decrypt)/i;
           const hasLogging = /SecurityMonitor\.log|logSecurityEvent/i.test(content);
           
-          if (securityOps.test(content) && !hasLogging && !context?.isTest) {
+          if (securityOps.test(content) && !hasLogging) {
             findings.push({
               ruleId: 'DMCP-SEC-006',
               severity: 'low',

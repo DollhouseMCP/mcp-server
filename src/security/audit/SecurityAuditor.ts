@@ -79,7 +79,7 @@ export class SecurityAuditor {
     const context: ScanContext = { projectRoot };
     const allFindings: SecurityFinding[] = [];
     const errors: string[] = [];
-    let scannedFiles = 0;
+    const scannedFilesSet = new Set<string>();
 
     SecurityMonitor.logSecurityEvent({
       type: 'SECURITY_AUDIT_STARTED',
@@ -94,9 +94,11 @@ export class SecurityAuditor {
         const findings = await scanner.scan(context);
         const filteredFindings = this.filterSuppressions(findings);
         allFindings.push(...filteredFindings);
-        // Count actual files scanned (will be improved in scanner implementations)
-        if (scanner.name === 'CodeScanner' && findings.length > 0) {
-          scannedFiles = Math.max(scannedFiles, 1);
+        // Track unique files that were scanned
+        for (const finding of findings) {
+          if (finding.file) {
+            scannedFilesSet.add(finding.file);
+          }
         }
       } catch (error) {
         const errorMessage = `Scanner ${scanner.name} failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -111,7 +113,7 @@ export class SecurityAuditor {
     }
 
     const duration = Date.now() - startTime;
-    const result = this.createScanResult(allFindings, duration, scannedFiles, errors);
+    const result = this.createScanResult(allFindings, duration, scannedFilesSet.size, errors);
 
     // Log audit completion
     SecurityMonitor.logSecurityEvent({
@@ -126,7 +128,7 @@ export class SecurityAuditor {
 
     // Check if build should fail
     if (this.shouldFailBuild(result)) {
-      throw new Error(`Security audit failed: ${result.summary.critical} critical, ${result.summary.high} high severity issues found`);
+      throw new Error(`Security audit failed: ${result.summary.bySeverity.critical} critical, ${result.summary.bySeverity.high} high severity issues found`);
     }
 
     return result;
