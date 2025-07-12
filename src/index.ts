@@ -1701,8 +1701,11 @@ Placeholders for custom format:
 
 // Export is already at class declaration
 
-const server = new DollhouseMCPServer();
-server.run().catch((error) => {
-  logger.error("Fatal error starting server", error);
-  process.exit(1);
-});
+// Only start the server if this file is being run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const server = new DollhouseMCPServer();
+  server.run().catch((error) => {
+    logger.error("Fatal error starting server", error);
+    process.exit(1);
+  });
+}

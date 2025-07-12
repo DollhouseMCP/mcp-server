@@ -9,11 +9,24 @@ import { fileURLToPath } from 'url';
 describe('MCP Tools Security Tests', () => {
   let server: DollhouseMCPServer;
   let testDir: string;
+  let originalCwd: string;
   
   beforeAll(async () => {
+    // Save original working directory
+    originalCwd = process.cwd();
+    
     // Create isolated test environment
-    testDir = path.join(process.cwd(), '__tests__/temp', `security-test-${Date.now()}`);
+    testDir = path.join(originalCwd, '__tests__/temp', `security-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
+    
+    // Create a test package.json to make it look like a safe test directory
+    await fs.writeFile(
+      path.join(testDir, 'package.json'),
+      JSON.stringify({ name: 'test-project', version: '1.0.0' })
+    );
+    
+    // Change to test directory to avoid BackupManager production check
+    process.chdir(testDir);
     
     // Set environment to use test directory
     process.env.DOLLHOUSE_PERSONAS_DIR = path.join(testDir, 'personas');
@@ -23,6 +36,9 @@ describe('MCP Tools Security Tests', () => {
   });
   
   afterAll(async () => {
+    // Restore original working directory
+    process.chdir(originalCwd);
+    
     // Cleanup test directory
     await fs.rm(testDir, { recursive: true, force: true });
   });
@@ -47,7 +63,7 @@ describe('MCP Tools Security Tests', () => {
         const result = await server.createPersona(
           payload, // name
           'Test description',
-          'test',
+          'creative',
           'Test instructions'
         );
         
@@ -66,7 +82,7 @@ describe('MCP Tools Security Tests', () => {
       'should prevent command injection in edit_persona with payload: %s',
       async (payload) => {
         // First create a safe persona
-        await server.createPersona('SafePersona', 'Safe description', 'test', 'Safe instructions');
+        await server.createPersona('SafePersona', 'Safe description', 'creative', 'Safe instructions');
         
         // Try to inject via edit
         const result = await server.editPersona('SafePersona', 'name', payload);
@@ -139,7 +155,7 @@ describe('MCP Tools Security Tests', () => {
         const result = await server.createPersona(
           'YAMLTest',
           payload, // description with YAML injection
-          'test',
+          'creative',
           payload  // instructions with YAML injection
         );
         
@@ -216,7 +232,7 @@ describe('MCP Tools Security Tests', () => {
         const result = await server.createPersona(
           payload,
           'Description',
-          'test',
+          'creative',
           'Instructions'
         );
         
