@@ -4,6 +4,7 @@
 
 import { PersonaSharer } from '../../src/persona/export-import/PersonaSharer.js';
 import { PersonaExporter } from '../../src/persona/export-import/PersonaExporter.js';
+import { TokenManager } from '../../src/security/tokenManager.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 // Mock dependencies
@@ -37,10 +38,15 @@ describe('PersonaSharer', () => {
     
     // Clear environment variables
     delete process.env.GITHUB_TOKEN;
+    
+    // Reset rate limiter to prevent test interference
+    TokenManager.resetTokenValidationLimiter();
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+    // Clean up rate limiter
+    TokenManager.resetTokenValidationLimiter();
   });
 
   describe('sharePersona', () => {
