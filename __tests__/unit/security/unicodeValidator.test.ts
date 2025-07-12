@@ -182,7 +182,7 @@ describe('UnicodeValidator', () => {
       
       expect(result.isValid).toBe(false);
       // Script order may vary, so check if it contains the expected scripts
-      expect(result.detectedIssues.some(issue => 
+      expect(result.detectedIssues!.some(issue => 
         issue.includes('Mixed script usage detected') && 
         issue.includes('LATIN') && 
         issue.includes('GREEK') && 

@@ -25,8 +25,29 @@ export class UnicodeValidator {
   /**
    * Unicode attack patterns and confusable characters
    */
+  
+  /**
+   * Direction override characters that can hide or reverse text display
+   * @see https://unicode.org/reports/tr9/#Directional_Formatting_Characters
+   * U+202A-U+202E: Left/Right embedding and override marks (LRE, RLE, PDF, LRO, RLO)
+   * U+2066-U+2069: Isolate formatting characters (LRI, RLI, FSI, PDI)
+   */
   private static readonly DIRECTION_OVERRIDE_CHARS = /[\u202A-\u202E\u2066-\u2069]/g;
+  
+  /**
+   * Zero-width and invisible formatting characters often used to hide payloads
+   * U+200B-U+200F: Zero-width spaces and directional marks
+   * U+2028-U+202F: Line/paragraph separators and formatting characters
+   * U+FEFF: Zero-width no-break space (Byte Order Mark)
+   */
   private static readonly ZERO_WIDTH_CHARS = /[\u200B-\u200F\u2028-\u202F\uFEFF]/g;
+  
+  /**
+   * Non-printable control characters that should not appear in normal text
+   * U+0000-U+0008, U+000B-U+000C, U+000E-U+001F: C0 control codes (except TAB, LF, CR)
+   * U+007F-U+009F: Delete and C1 control codes
+   * U+FFFE-U+FFFF: Non-characters that should never appear in valid text
+   */
   private static readonly NON_PRINTABLE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uFFFE\uFFFF]/g;
   
   /**
@@ -131,26 +152,23 @@ export class UnicodeValidator {
         });
       }
 
-      // 6. Replace confusable characters with ASCII equivalents (only if suspicious mixing detected)
+      // 6. Always replace confusable characters with ASCII equivalents for security
+      // This prevents homograph attacks regardless of script mixing
       const confusableResult = this.replaceConfusables(normalized);
       if (confusableResult.hasConfusables) {
-        // Only flag as issue if we also detected suspicious script mixing
-        if (mixedScriptResult.isSuspicious) {
-          normalized = confusableResult.normalized;
-          issues.push('Confusable Unicode characters detected and normalized');
-          severity = this.escalateSeverity(severity, 'medium');
-        } else {
-          // Legitimate multilingual content - don't normalize confusables
-          // Just log for monitoring
+        normalized = confusableResult.normalized;
+        issues.push('Confusable Unicode characters detected and normalized');
+        severity = this.escalateSeverity(severity, 'medium');
+        
+        // Log if this happens in legitimate multilingual context
+        if (!mixedScriptResult.isSuspicious) {
           SecurityMonitor.logSecurityEvent({
             type: 'UNICODE_VALIDATION_ERROR',
             severity: 'LOW',
             source: 'unicode_validation',
-            details: 'Confusable characters detected in multilingual content (not normalized)'
+            details: 'Confusable characters normalized in legitimate multilingual content'
           });
         }
-      } else {
-        normalized = confusableResult.normalized;
       }
 
       return {
@@ -186,6 +204,12 @@ export class UnicodeValidator {
     let severity: 'low' | 'medium' | 'high' | 'critical' | undefined;
 
     // Check for excessive Unicode escapes (possible encoding bypass)
+    /**
+     * Pattern to match Unicode escape sequences
+     * \\u: Literal backslash followed by 'u'
+     * [0-9a-fA-F]{4}: Exactly 4 hexadecimal digits
+     * Used to detect attempts to bypass filters using \u0061dmin style encoding
+     */
     const unicodeEscapePattern = /\\u[0-9a-fA-F]{4}/g;
     const unicodeEscapes = content.match(unicodeEscapePattern);
     if (unicodeEscapes && unicodeEscapes.length > 10) {
@@ -196,7 +220,7 @@ export class UnicodeValidator {
     // Check for suspicious Unicode ranges that might hide content
     const suspiciousRanges = [
       { range: /[\uE000-\uF8FF]/g, name: 'Private Use Area' },
-      // Note: Surrogate pairs [\uD800-\uDFFF] are normal for emojis and extended Unicode - removed
+      // Note: Properly paired surrogate pairs [\uD800-\uDFFF] are normal for emojis
       { range: /[\uFDD0-\uFDEF]/g, name: 'Non-characters' },
       { range: /[\uFFFE\uFFFF]/g, name: 'Non-characters' }
     ];
@@ -206,6 +230,27 @@ export class UnicodeValidator {
         issues.push(`Suspicious Unicode range detected: ${name}`);
         severity = this.escalateSeverity(severity, 'medium');
       }
+    }
+
+    // Check for malformed surrogate pairs
+    // High surrogates (U+D800-U+DBFF) must be followed by low surrogates (U+DC00-U+DFFF)
+    /**
+     * Regex to match unpaired high surrogates
+     * [\uD800-\uDBFF]: High surrogate range
+     * (?![\uDC00-\uDFFF]): Negative lookahead - not followed by low surrogate
+     */
+    const unpairedHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g;
+    
+    /**
+     * Regex to match unpaired low surrogates
+     * (?<![\uD800-\uDBFF]): Negative lookbehind - not preceded by high surrogate
+     * [\uDC00-\uDFFF]: Low surrogate range
+     */
+    const unpairedLowSurrogate = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+    
+    if (unpairedHighSurrogate.test(content) || unpairedLowSurrogate.test(content)) {
+      issues.push('Malformed surrogate pairs detected');
+      severity = this.escalateSeverity(severity, 'high');
     }
 
     return { issues, severity };
@@ -280,7 +325,16 @@ export class UnicodeValidator {
     return this.DIRECTION_OVERRIDE_CHARS.test(content) ||
            this.ZERO_WIDTH_CHARS.test(content) ||
            this.NON_PRINTABLE_CHARS.test(content) ||
-           /\\u[0-9a-fA-F]{4}/.test(content) && content.match(/\\u[0-9a-fA-F]{4}/g)!.length > 10;
+           this.hasExcessiveUnicodeEscapes(content);
+  }
+
+  /**
+   * Check if content has excessive Unicode escape sequences
+   * Prevents null pointer exception by safely checking match results
+   */
+  private static hasExcessiveUnicodeEscapes(content: string): boolean {
+    const matches = content.match(/\\u[0-9a-fA-F]{4}/g);
+    return matches !== null && matches.length > 10;
   }
 
   /**
