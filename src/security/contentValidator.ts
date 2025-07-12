@@ -11,6 +11,7 @@ import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
+import { UnicodeValidator } from './validators/unicodeValidator.js';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -175,6 +176,17 @@ export class ContentValidator {
     let sanitized = content;
     let highestSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low';
 
+    // Unicode normalization preprocessing to prevent bypass attacks
+    const unicodeResult = UnicodeValidator.normalize(sanitized);
+    sanitized = unicodeResult.normalizedContent;
+    
+    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
+      detectedPatterns.push(...unicodeResult.detectedIssues.map(issue => `Unicode: ${issue}`));
+      if (unicodeResult.severity) {
+        highestSeverity = unicodeResult.severity;
+      }
+    }
+
     // Check for injection patterns
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
       // These are trusted internal patterns, so we disable ReDoS rejection
@@ -226,9 +238,23 @@ export class ContentValidator {
       return false;
     }
 
+    // Unicode normalization preprocessing for YAML content
+    const unicodeResult = UnicodeValidator.normalize(yamlContent);
+    const normalizedYaml = unicodeResult.normalizedContent;
+    
+    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_UNICODE_ATTACK',
+        severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+        source: 'yaml_validation',
+        details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
+      });
+      return false;
+    }
+
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
       // These are trusted internal patterns, so we disable ReDoS rejection
-      if (RegexValidator.validate(yamlContent, pattern, { 
+      if (RegexValidator.validate(normalizedYaml, pattern, { 
         maxLength: 10000,
         rejectDangerousPatterns: false,
         logEvents: false  // Don't log our own security patterns as dangerous
