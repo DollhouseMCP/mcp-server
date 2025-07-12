@@ -19,6 +19,7 @@ import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
 import { YamlValidator } from './security/yamlValidator.js';
+import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './marketplace/index.js';
@@ -1076,8 +1077,11 @@ ${sanitizedInstructions}
       const secureParser = SecureYamlParser.createSecureMatterParser();
       const updatedContent = secureParser.stringify(parsed.content, parsed.data);
       
-      // Write updated file
-      await PathValidator.safeWriteFile(filePath, updatedContent);
+      // Use file locking to prevent race conditions
+      await FileLockManager.withLock(`persona:${persona.metadata.name}`, async () => {
+        // Write updated file atomically
+        await FileLockManager.atomicWriteFile(filePath, updatedContent);
+      });
       
       // Reload personas
       await this.loadPersonas();
