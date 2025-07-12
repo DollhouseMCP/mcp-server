@@ -3,9 +3,12 @@
  */
 
 export class SecurityError extends Error {
-  constructor(message: string) {
+  public readonly code?: string;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'SecurityError';
+    this.code = code;
     // Maintains proper prototype chain for instanceof checks
     Object.setPrototypeOf(this, SecurityError.prototype);
   }

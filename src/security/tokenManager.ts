@@ -3,6 +3,8 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { RateLimiter } from '../update/RateLimiter.js';
+import { SecurityError } from './errors.js';
 
 export interface TokenScopes {
   required: string[];
@@ -16,6 +18,8 @@ export interface TokenValidationResult {
     remaining: number;
     resetTime: Date;
   };
+  rateLimitExceeded?: boolean;
+  retryAfterMs?: number;
   error?: string;
 }
 
@@ -29,6 +33,40 @@ export class TokenManager {
     USER_ACCESS_TOKEN: /^ghu_[A-Za-z0-9_]{36,}$/,
     REFRESH_TOKEN: /^ghr_[A-Za-z0-9_]{36,}$/
   };
+
+  // Rate limiter for token validation operations - prevents brute force attacks
+  private static tokenValidationLimiter: RateLimiter | null = null;
+
+  /**
+   * Get or create the token validation rate limiter
+   * Prevents brute force token validation attacks
+   */
+  private static getTokenValidationLimiter(): RateLimiter {
+    if (!this.tokenValidationLimiter) {
+      this.tokenValidationLimiter = this.createTokenValidationLimiter();
+    }
+    return this.tokenValidationLimiter;
+  }
+
+  /**
+   * Create a rate limiter specifically for token validation
+   * Conservative limits to prevent abuse while allowing legitimate usage
+   */
+  static createTokenValidationLimiter(): RateLimiter {
+    return new RateLimiter({
+      maxRequests: 10,          // 10 validation attempts
+      windowMs: 60 * 60 * 1000, // per hour
+      minDelayMs: 5 * 1000      // 5 seconds minimum between attempts
+    });
+  }
+
+  /**
+   * Reset the token validation rate limiter
+   * Useful for testing or manual intervention
+   */
+  static resetTokenValidationLimiter(): void {
+    this.tokenValidationLimiter?.reset();
+  }
 
   /**
    * Validate GitHub token format
@@ -118,7 +156,26 @@ export class TokenManager {
     token: string, 
     requiredScopes: TokenScopes
   ): Promise<TokenValidationResult> {
+    // Check rate limit before making API call
+    const rateLimiter = this.getTokenValidationLimiter();
+    const rateLimitStatus = rateLimiter.checkLimit();
+
+    if (!rateLimitStatus.allowed) {
+      logger.warn('Token validation rate limit exceeded', {
+        tokenPrefix: this.getTokenPrefix(token),
+        retryAfterMs: rateLimitStatus.retryAfterMs,
+        remainingTokens: rateLimitStatus.remainingTokens
+      });
+
+      throw new SecurityError(
+        `Token validation rate limit exceeded. Please retry in ${Math.ceil((rateLimitStatus.retryAfterMs || 0) / 1000)} seconds.`,
+        'RATE_LIMIT_EXCEEDED'
+      );
+    }
+
     try {
+      // Consume rate limit token for this validation attempt
+      rateLimiter.consumeToken();
       // Make a test API call to check token validity and scopes
       const response = await fetch('https://api.github.com/user', {
         headers: {
@@ -188,6 +245,17 @@ export class TokenManager {
       };
 
     } catch (error) {
+      // Handle SecurityError (including rate limit errors) separately
+      if (error instanceof SecurityError && error.code === 'RATE_LIMIT_EXCEEDED') {
+        const currentStatus = rateLimiter.getStatus();
+        return {
+          isValid: false,
+          rateLimitExceeded: true,
+          retryAfterMs: rateLimitStatus.retryAfterMs,
+          error: error.message
+        };
+      }
+
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error('Token validation error', {
         error: errorMessage,
