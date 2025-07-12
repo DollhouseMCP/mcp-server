@@ -1005,7 +1005,11 @@ ${sanitizedInstructions}
         
         // Create copy of the default persona
         const content = await PathValidator.safeReadFile(filePath);
-        await PathValidator.safeWriteFile(newFilePath, content);
+        
+        // Use file locking to prevent race conditions when creating the copy
+        await FileLockManager.withLock(`persona:${persona.metadata.name}-copy`, async () => {
+          await FileLockManager.atomicWriteFile(newFilePath, content);
+        });
         
         // Update file path to point to the copy
         filePath = newFilePath;

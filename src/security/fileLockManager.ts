@@ -81,9 +81,11 @@ export class FileLockManager {
       logger.debug(`Lock released for resource: ${resource} (${waitTime}ms)`);
       return result;
     } finally {
-      // Clean up lock only if it's still ours
-      if (this.locks.get(resource) === lockPromise) {
+      // Clean up lock atomically - compare and delete in one operation
+      const currentLock = this.locks.get(resource);
+      if (currentLock === lockPromise) {
         this.locks.delete(resource);
+        logger.debug(`Lock queue cleaned up for resource: ${resource}`);
       }
     }
   }
@@ -142,8 +144,10 @@ export class FileLockManager {
       // Clean up temp file on error
       try {
         await fs.unlink(tempPath);
+        logger.debug(`Cleaned up temp file after error: ${tempPath}`);
       } catch (unlinkError) {
-        // Ignore cleanup errors
+        // Log cleanup failure but don't throw - original error is more important
+        logger.warn(`Failed to clean up temp file ${tempPath}: ${unlinkError}`);
       }
       throw error;
     }
