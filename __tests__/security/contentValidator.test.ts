@@ -122,9 +122,15 @@ name: !!python/object/apply:subprocess.call
       const dangerous = [
         '!!exec',
         '!!eval',
-        'subprocess.run',
+        'subprocess.',
         'os.system',
-        '__import__'
+        '__import__(',
+        'eval(',
+        'exec(',
+        'require(',
+        'popen(',
+        'system(',
+        'shell_exec('
       ];
 
       dangerous.forEach(pattern => {
