@@ -27,6 +27,14 @@ const PersonaMetadataSchema = z.object({
 type DOMPurifyInstance = ReturnType<typeof DOMPurify>;
 
 export class YamlValidator {
+  // YAML bomb detection limits - extracted from Issue #164 review feedback
+  private static readonly YAML_BOMB_LIMITS = {
+    MAX_ANCHORS: 10,        // Maximum allowed anchor definitions (&name)
+    MAX_ALIASES: 20,        // Maximum allowed alias references (*name)
+    MAX_MERGE_KEYS: 5,      // Maximum allowed merge key operations (<<:)
+    MAX_DOCUMENTS: 3        // Maximum allowed documents in a single YAML
+  };
+
   // Static cache for DOMPurify to improve performance
   private static purifyWindow: any = null;
   private static purify: DOMPurifyInstance | null = null;
@@ -61,7 +69,10 @@ export class YamlValidator {
     const mergeKeyCount = (yamlContent.match(/<<:/g) || []).length;
     const documentCount = (yamlContent.match(/^---/gm) || []).length;
     
-    if (anchorCount > 10 || aliasCount > 20 || mergeKeyCount > 5 || documentCount > 3) {
+    if (anchorCount > this.YAML_BOMB_LIMITS.MAX_ANCHORS || 
+        aliasCount > this.YAML_BOMB_LIMITS.MAX_ALIASES || 
+        mergeKeyCount > this.YAML_BOMB_LIMITS.MAX_MERGE_KEYS || 
+        documentCount > this.YAML_BOMB_LIMITS.MAX_DOCUMENTS) {
       throw new Error(`Potential YAML bomb detected: anchors=${anchorCount}, aliases=${aliasCount}, merges=${mergeKeyCount}, documents=${documentCount}`);
     }
     

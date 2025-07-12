@@ -121,20 +121,20 @@ export class ContentValidator {
     /proc_open\s*\(/,
     
     // Network operations - require suspicious context
-    /socket\.connect/,
-    /urllib\.request/,
-    /requests\.(?:get|post|put|delete)\s*\(/,
-    /fetch\s*\(\s*["']https?:\/\//,
-    /new\s+XMLHttpRequest/,
-    /\.(?:get|post|put|delete)\s*\(\s*["']https?:\/\//,
+    /socket\.connect/,                                      // Detects socket connection attempts
+    /urllib\.request/,                                      // Python HTTP library usage
+    /requests\.(?:get|post|put|delete)\s*\(/,              // Detects HTTP requests with method calls
+    /fetch\s*\(\s*["']https?:\/\//,                        // Detects fetch calls to external URLs
+    /new\s+XMLHttpRequest/,                                 // JavaScript AJAX object creation
+    /\.(?:get|post|put|delete)\s*\(\s*["']https?:\/\//,    // Method chaining with HTTP requests
     
     // File system operations - require suspicious context
-    /(?:fs\.|file\.|)\s*open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /file_get_contents\s*\(/,
-    /file_put_contents\s*\(/,
-    /fopen\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /(?:fs\.)?\s*readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,
-    /(?:fs\.)?\s*writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,
+    /(?:fs\.|file\.|)\s*open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,     // File open with suspicious paths
+    /file_get_contents\s*\(/,                                             // PHP file reading function
+    /file_put_contents\s*\(/,                                             // PHP file writing function
+    /fopen\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,                       // File open with dangerous system paths
+    /(?:fs\.)?\s*readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,        // Node.js file read with path traversal
+    /(?:fs\.)?\s*writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,   // Node.js file write to system dirs
     
     // Protocol handlers
     /file:\/\//,
@@ -153,11 +153,11 @@ export class ContentValidator {
     /!!binary/,
     /!!timestamp/,
     
-    // Unicode/encoding bypass attempts
-    /\\[uU]0*(?:22|27|60|3[cC])/,  // Unicode quotes and brackets
-    /[\u202A-\u202E\u2066-\u2069]/, // Direction override characters
-    /[\u200B-\u200F\u2028-\u202F]/, // Zero-width and special spaces
-    /[\uFEFF\uFFFE\uFFFF]/,         // Special markers
+    // Unicode/encoding bypass attempts - prevent visual spoofing attacks
+    /\\[uU]0*(?:22|27|60|3[cC])/,   // Unicode escapes for quotes (") and brackets (<>)
+    /[\u202A-\u202E\u2066-\u2069]/,  // Direction override chars (RLO, LRO, isolates)
+    /[\u200B-\u200F\u2028-\u202F]/,  // Zero-width spaces, line/paragraph separators
+    /[\uFEFF\uFFFE\uFFFF]/,          // BOM, non-characters for payload hiding
   ];
 
   /**
