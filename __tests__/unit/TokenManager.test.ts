@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { TokenManager } from '../../src/security/tokenManager.js';
 
 describe('TokenManager - GitHub Token Security', () => {
@@ -184,6 +184,202 @@ describe('TokenManager - GitHub Token Security', () => {
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
       expect(result.error).toBe('No GitHub token available');
+    });
+
+    test('should validate token with GitHub API when token is available', async () => {
+      // Set a valid token format
+      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Mock fetch to simulate GitHub API response
+      const mockGet = jest.fn()
+        .mockImplementation((header: string) => {
+          switch (header) {
+            case 'x-oauth-scopes': return 'repo,user:email';
+            case 'x-ratelimit-remaining': return '100';
+            case 'x-ratelimit-reset': return '1640995200';
+            default: return null;
+          }
+        });
+      
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: mockGet
+        }
+      });
+      
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.ensureTokenPermissions('read');
+      expect(result.isValid).toBe(true);
+      expect(result.scopes).toContain('repo');
+      expect(mockFetch).toHaveBeenCalledWith('https://api.github.com/user', expect.any(Object));
+    });
+
+    test('should handle GitHub API errors gracefully', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Mock fetch to simulate GitHub API error
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {
+          get: jest.fn().mockReturnValue(null)
+        }
+      });
+      
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.ensureTokenPermissions('read');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('GitHub API error: 401 Unauthorized');
+    });
+
+    test('should detect missing required scopes', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Mock fetch to return token with insufficient scopes
+      const mockGet = jest.fn()
+        .mockImplementation((header: string) => {
+          switch (header) {
+            case 'x-oauth-scopes': return 'user:email'; // missing 'gist'
+            case 'x-ratelimit-remaining': return '100';
+            case 'x-ratelimit-reset': return '1640995200';
+            default: return null;
+          }
+        });
+      
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: mockGet
+        }
+      });
+      
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.ensureTokenPermissions('gist');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('Missing required scopes: gist');
+      expect(result.scopes).toEqual(['user:email']);
+    });
+
+    test('should handle network errors', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Mock fetch to simulate network error
+      const mockFetch = jest.fn().mockRejectedValue(new Error('Network error'));
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.ensureTokenPermissions('read');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('Validation error: Network error');
+    });
+  });
+
+  describe('validateTokenScopes', () => {
+    test('should validate token with sufficient scopes', async () => {
+      const token = 'ghp_1234567890123456789012345678901234567890';
+      const requiredScopes = { required: ['repo'], optional: ['user:email'] };
+      
+      const mockGet = jest.fn()
+        .mockImplementation((header: string) => {
+          switch (header) {
+            case 'x-oauth-scopes': return 'repo,user:email,gist';
+            case 'x-ratelimit-remaining': return '95';
+            case 'x-ratelimit-reset': return '1640995200';
+            default: return null;
+          }
+        });
+      
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: mockGet
+        }
+      });
+      
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.validateTokenScopes(token, requiredScopes);
+      expect(result.isValid).toBe(true);
+      expect(result.scopes).toEqual(['repo', 'user:email', 'gist']);
+      expect(result.rateLimit?.remaining).toBe(95);
+    });
+
+    test('should handle empty scopes header', async () => {
+      const token = 'ghp_1234567890123456789012345678901234567890';
+      const requiredScopes = { required: ['repo'] };
+      
+      const mockGet = jest.fn()
+        .mockImplementation((header: string) => {
+          switch (header) {
+            case 'x-oauth-scopes': return '';
+            case 'x-ratelimit-remaining': return '100';
+            case 'x-ratelimit-reset': return '1640995200';
+            default: return null;
+          }
+        });
+      
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: mockGet
+        }
+      });
+      
+      global.fetch = mockFetch;
+      
+      const result = await TokenManager.validateTokenScopes(token, requiredScopes);
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('Missing required scopes: repo');
+    });
+  });
+
+  describe('Security Integration Tests', () => {
+    test('should prevent token exposure in logs across all methods', () => {
+      const sensitiveToken = 'ghp_1234567890123456789012345678901234567890';
+      
+      // Test redaction
+      const redacted = TokenManager.redactToken(sensitiveToken);
+      expect(redacted).not.toContain('1234567890123456789012345678901234');
+      
+      // Test safe error messages
+      const errorWithToken = `Authentication failed for token ${sensitiveToken}`;
+      const safeError = TokenManager.createSafeErrorMessage(errorWithToken);
+      expect(safeError).not.toContain(sensitiveToken);
+      expect(safeError).toContain('[REDACTED_PAT]');
+      
+      // Test prefix logging
+      const prefix = TokenManager.getTokenPrefix(sensitiveToken);
+      expect(prefix).toBe('ghp_...');
+      expect(prefix).not.toContain('1234567890123456789012345678901234');
+    });
+
+    test('should handle multiple tokens in error messages', () => {
+      const error = 'Failed with ghp_1111111111111111111111111111111111111111 and ghs_2222222222222222222222222222222222222222';
+      const safeMessage = TokenManager.createSafeErrorMessage(error);
+      
+      expect(safeMessage).toContain('[REDACTED_PAT]');
+      expect(safeMessage).toContain('[REDACTED_INSTALL]');
+      expect(safeMessage).not.toContain('1111111111111111111111111111111111111111');
+      expect(safeMessage).not.toContain('2222222222222222222222222222222222222222');
+    });
+
+    test('should validate all supported token formats', () => {
+      const validTokens = [
+        'ghp_1234567890123456789012345678901234567890', // PAT
+        'ghs_1234567890123456789012345678901234567890', // Installation
+        'ghu_1234567890123456789012345678901234567890', // User Access
+        'ghr_1234567890123456789012345678901234567890'  // Refresh
+      ];
+
+      validTokens.forEach(token => {
+        expect(TokenManager.validateTokenFormat(token)).toBe(true);
+        expect(TokenManager.getTokenType(token)).not.toBe('Unknown');
+        expect(TokenManager.redactToken(token)).toContain('...');
+      });
     });
   });
 });
