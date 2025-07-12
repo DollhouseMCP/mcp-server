@@ -1701,8 +1701,8 @@ Placeholders for custom format:
 
 // Export is already at class declaration
 
-// Only start the server if this file is being run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Only start the server if this file is being run directly (not imported by tests)
+if (import.meta.url === `file://${process.argv[1]}` && !process.env.JEST_WORKER_ID) {
   const server = new DollhouseMCPServer();
   server.run().catch((error) => {
     logger.error("Fatal error starting server", error);
