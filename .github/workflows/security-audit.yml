@@ -41,6 +41,7 @@ jobs:
 
       - name: Run Security Audit
         id: security-audit
+        shell: bash
         run: |
           # Create security audit script
           cat > run-audit.js << 'EOF'
@@ -91,6 +92,7 @@ jobs:
 
       - name: Generate SARIF report
         if: always()
+        shell: bash
         run: |
           # Convert our JSON report to SARIF format
           cat > convert-to-sarif.js << 'EOF'
@@ -241,6 +243,7 @@ jobs:
 
       - name: Fail if critical issues found
         if: env.AUDIT_FAILED == 'true'
+        shell: bash
         run: |
           echo "❌ Security audit found critical issues. Please review the report above."
           exit 1
