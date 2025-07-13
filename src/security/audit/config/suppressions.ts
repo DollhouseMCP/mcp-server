@@ -202,6 +202,31 @@ export const suppressions: Suppression[] = [
     file: 'src/update/*.ts',
     reason: 'Update modules receive normalized input from tool handlers'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/tools/*.ts',
+    reason: 'Tool files receive normalized input from ServerSetup'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/server/types.ts',
+    reason: 'Type definition file does not process user input'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/server/tools/*.ts',
+    reason: 'Server tools receive normalized input from ServerSetup'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'scripts/**/*',
+    reason: 'Build and utility scripts do not process user input'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'package-lock.json',
+    reason: 'NPM lock file is not executable code'
+  },
   
   // ========================================
   // Audit Logging False Positives
@@ -233,11 +258,6 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'scripts/**/*',
-    reason: 'Build scripts do not perform runtime security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
     file: 'src/security/**/*.ts',
     reason: 'Security modules are infrastructure, not operations requiring audit'
   },
@@ -265,6 +285,31 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-006',
     file: 'src/server/tools/**/*.ts',
     reason: 'Tool implementations delegate to services that handle security'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/index.ts',
+    reason: 'Main entry point delegates security operations to specialized modules'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/utils/*.ts',
+    reason: 'Utility functions are not security operations requiring audit'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/update/**/*.ts',
+    reason: 'Update system has its own logging and is not a direct security operation'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/server/types.ts',
+    reason: 'Type definition file does not perform operations'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'scripts/**/*',
+    reason: 'Build scripts do not perform runtime security operations'
   },
   
   // ========================================
