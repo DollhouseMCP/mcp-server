@@ -350,7 +350,8 @@ function globToRegex(glob: string): RegExp {
   }
   
   // Escape all regex special characters except * and /
-  let pattern = processedGlob.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  // Fixed: Properly escape backslashes and other special regex characters
+  let pattern = processedGlob.replace(/[\\^$.()+?{}[\]|]/g, '\\$&');
   
   // Handle glob patterns in correct order
   // Replace ** before * to avoid conflicts
