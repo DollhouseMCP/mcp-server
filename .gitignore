@@ -27,8 +27,8 @@ build/
 Thumbs.db
 
 # Test coverage
-coverage/
-coverage-integration/
+test/coverage/
+test/coverage-integration/
 *.lcov
 
 # Integration test temporary files
@@ -62,8 +62,4 @@ jest.config.js
 install.ps1
 
 # Security audit reports (keep private)
-security-audit-report.md
-security-audit-report.json
-security-audit-*.md
-security-audit-*.json
 .security-audit/
