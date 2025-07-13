@@ -38,7 +38,7 @@ const config = {
   ],
   resolver: 'ts-jest-resolver',
   moduleNameMapper: {
-    '^((?:\\.\\./){1,}.*)\\.js$': '$1'
+    '^(\\.{1,2}/.*)\\.js$': '$1'
   }
 };
 

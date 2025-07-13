@@ -323,7 +323,7 @@ describe('Unicode Normalization in Tool Calls', () => {
 describe('UpdateChecker Unicode Normalization', () => {
   it('should have Unicode normalization integrated', async () => {
     // Verify that UpdateChecker imports and would use UnicodeValidator
-    const updateCheckerModule = await import('../../../src/update/UpdateChecker.js');
+    const updateCheckerModule = await import('../../../../src/update/UpdateChecker.js');
     expect(updateCheckerModule.UpdateChecker).toBeDefined();
     
     // The actual Unicode normalization in UpdateChecker is tested through
