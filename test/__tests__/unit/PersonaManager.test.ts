@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { PersonaManager } from '../../../src/persona/PersonaManager';
-import { PersonaLoader } from '../../../src/persona/PersonaLoader';
-import { PersonaValidator } from '../../../src/persona/PersonaValidator';
-import { Persona } from '../../../src/types/persona';
-import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config';
+import { PersonaManager } from '../../../src/persona/PersonaManager.js';
+import { PersonaLoader } from '../../../src/persona/PersonaLoader.js';
+import { PersonaValidator } from '../../../src/persona/PersonaValidator.js';
+import { Persona } from '../../../src/types/persona.js';
+import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config.js';
 
 // Mock dependencies
 jest.mock('fs/promises');

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { UpdateManager } from '../../../src/update/UpdateManager.js';
+import { UpdateManager } from '../../../../src/update/UpdateManager.js';
 import * as path from 'path';
 import * as os from 'os';
 
