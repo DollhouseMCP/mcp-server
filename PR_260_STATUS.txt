@@ -1,0 +1,1 @@
+Branch: fix-security-audit-suppressions | PR: #260 | Local findings: 32 | CI findings: 172 | Key issue: Test file suppressions not working in CI due to path resolution

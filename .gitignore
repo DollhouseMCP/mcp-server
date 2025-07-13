@@ -60,3 +60,10 @@ jest.config.js
 
 # Windows installer (keep the shell script, ignore PowerShell for now)
 install.ps1
+
+# Security audit reports (keep private)
+security-audit-report.md
+security-audit-report.json
+security-audit-*.md
+security-audit-*.json
+.security-audit/

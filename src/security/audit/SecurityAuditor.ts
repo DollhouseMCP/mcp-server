@@ -18,6 +18,7 @@ import { ConfigurationScanner } from './scanners/ConfigurationScanner.js';
 import { ConsoleReporter } from './reporters/ConsoleReporter.js';
 import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
+import { shouldSuppress } from './config/suppressions.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -119,23 +120,69 @@ export class SecurityAuditor {
    * Filter out suppressed findings
    */
   private filterSuppressions(findings: SecurityFinding[]): SecurityFinding[] {
-    return findings.filter(finding => {
-      // Check global suppressions
-      const globalSuppressions = this.suppressions.get('*');
-      if (globalSuppressions?.has(finding.ruleId)) {
-        return false;
-      }
-
-      // Check file-specific suppressions
-      if (finding.file) {
-        const fileSuppressions = this.suppressions.get(finding.file);
-        if (fileSuppressions?.has(finding.ruleId)) {
+    const suppressedFindings: Array<{rule: string; file?: string; reason?: string}> = [];
+    
+    const filtered = findings.filter(finding => {
+      try {
+        // Check comprehensive suppressions (includes both file-based and pattern-based)
+        if (shouldSuppress(finding.ruleId, finding.file)) {
+          // Log suppression for audit trail if verbose mode is enabled
+          if (this.config.reporting?.verbose) {
+            suppressedFindings.push({
+              rule: finding.ruleId,
+              file: finding.file
+            });
+          }
           return false;
         }
-      }
+        
+        // Check legacy config-based suppressions if they exist
+        // This maintains backward compatibility with existing configs
+        if (this.config.suppressions && this.config.suppressions.length > 0) {
+          const globalSuppressions = this.suppressions.get('*');
+          if (globalSuppressions?.has(finding.ruleId)) {
+            if (this.config.reporting?.verbose) {
+              suppressedFindings.push({
+                rule: finding.ruleId,
+                file: finding.file,
+                reason: 'Config-based global suppression'
+              });
+            }
+            return false;
+          }
 
-      return true;
+          if (finding.file) {
+            const fileSuppressions = this.suppressions.get(finding.file);
+            if (fileSuppressions?.has(finding.ruleId)) {
+              if (this.config.reporting?.verbose) {
+                suppressedFindings.push({
+                  rule: finding.ruleId,
+                  file: finding.file,
+                  reason: 'Config-based file suppression'
+                });
+              }
+              return false;
+            }
+          }
+        }
+
+        return true;
+      } catch (error) {
+        // If suppression check fails, log error but don't suppress the finding
+        console.error(`Error checking suppression for ${finding.ruleId} in ${finding.file}:`, error);
+        return true;
+      }
     });
+    
+    // Log suppression summary if verbose and suppressions were applied
+    if (this.config.reporting?.verbose && suppressedFindings.length > 0) {
+      console.log(`\nSecurityAuditor: Suppressed ${suppressedFindings.length} findings:`);
+      suppressedFindings.forEach(s => {
+        console.log(`  - ${s.rule} in ${s.file || 'global'}${s.reason ? ` (${s.reason})` : ''}`);
+      });
+    }
+    
+    return filtered;
   }
 
   /**
