@@ -84,7 +84,7 @@ LABEL security.non-root="true" \
 
 # Set environment variables with security considerations
 ENV NODE_ENV=production \
-    PERSONAS_DIR=/app/personas \
+    PERSONAS_DIR=/app/data/personas \
     NODE_OPTIONS="--max-old-space-size=256" \
     DOLLHOUSE_DISABLE_UPDATES=true \
     DOLLHOUSE_SECURITY_MODE=strict \

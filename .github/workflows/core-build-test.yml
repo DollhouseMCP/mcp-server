@@ -108,16 +108,16 @@ jobs:
           echo "=== NODE_PATH ==="
           echo $NODE_PATH
           echo "=== Jest config ==="
-          cat jest.config.cjs
+          if [ -f "test/jest.config.cjs" ]; then cat test/jest.config.cjs; else echo "Jest config not found"; fi
 
       - name: Cache Jest
         uses: actions/cache@v4
         with:
           path: |
             .jest-cache/
-            coverage/
+            test/coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('test/__tests__/**/*.ts', 'test/jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
@@ -157,7 +157,7 @@ jobs:
           # Build the tests first
           npm run build:test
           # Run the compiled tests using cross-env
-          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config jest.config.compiled.cjs --ci --watchAll=false
+          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config test/jest.config.compiled.cjs --ci --watchAll=false
 
       - name: Validation complete
         run: |
