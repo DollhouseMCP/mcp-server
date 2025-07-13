@@ -22,7 +22,7 @@ RUN npm ci
 
 # Copy source code
 COPY src/ ./src/
-COPY personas/ ./personas/
+COPY data/personas/ ./data/personas/
 
 # Build the application
 RUN npm run build
@@ -61,7 +61,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/personas ./personas
+COPY --from=builder /app/data/personas ./data/personas
 
 # Security hardening - Set proper permissions
 RUN chmod -R 750 /app && \

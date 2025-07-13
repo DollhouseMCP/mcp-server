@@ -8,7 +8,7 @@ import { TokenManager } from '../../../src/security/tokenManager.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 // Mock dependencies
-jest.mock('../../src/utils/logger.js', () => ({
+jest.mock('../../../src/utils/logger.js', () => ({
   logger: {
     info: jest.fn(),
     error: jest.fn(),

@@ -9,8 +9,8 @@ import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config';
 
 // Mock dependencies
 jest.mock('fs/promises');
-jest.mock('../../src/persona/PersonaLoader');
-jest.mock('../../src/persona/PersonaValidator');
+jest.mock('../../../src/persona/PersonaLoader');
+jest.mock('../../../src/persona/PersonaValidator');
 
 describe('PersonaManager', () => {
   let personaManager: PersonaManager;
@@ -36,8 +36,8 @@ describe('PersonaManager', () => {
     } as unknown as jest.Mocked<PersonaValidator>;
     
     // Mock the PersonaLoader and PersonaValidator constructors
-    jest.mock('../../src/persona/PersonaLoader');
-    jest.mock('../../src/persona/PersonaValidator');
+    jest.mock('../../../src/persona/PersonaLoader');
+    jest.mock('../../../src/persona/PersonaValidator');
     
     personaManager = new PersonaManager(mockPersonasDir, DEFAULT_INDICATOR_CONFIG);
     

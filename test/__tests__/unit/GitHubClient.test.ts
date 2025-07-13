@@ -9,7 +9,7 @@ const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 global.fetch = mockFetch;
 
 // Mock SecurityMonitor to avoid security event logging in tests
-jest.mock('../../src/security/securityMonitor.js', () => ({
+jest.mock('../../../src/security/securityMonitor.js', () => ({
   SecurityMonitor: {
     logSecurityEvent: jest.fn()
   }
