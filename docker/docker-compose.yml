@@ -4,8 +4,8 @@
 services:
   dollhousemcp:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       target: production
     image: dollhousemcp:latest
     container_name: dollhousemcp
@@ -34,12 +34,12 @@ services:
     
     environment:
       - NODE_ENV=production
-      - PERSONAS_DIR=/app/personas
+      - PERSONAS_DIR=/app/data/personas
       - DOLLHOUSE_SECURITY_MODE=strict
     
     volumes:
       # Mount custom personas directory (optional - extends default personas)
-      - ./custom-personas:/app/personas/custom:ro
+      - ./custom-personas:/app/data/personas/custom:ro
     
     # Resource limits for standalone Docker Compose
     mem_limit: 512m
@@ -55,8 +55,8 @@ services:
   # Development service (security relaxed for development)
   dollhousemcp-dev:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
       target: builder
     image: dollhousemcp:dev
     container_name: dollhousemcp-dev
@@ -73,10 +73,10 @@ services:
     
     environment:
       - NODE_ENV=development
-      - PERSONAS_DIR=/app/personas
+      - PERSONAS_DIR=/app/data/personas
     
     volumes:
-      - .:/app
+      - ..:/app
       - /app/node_modules
     
     working_dir: /app
