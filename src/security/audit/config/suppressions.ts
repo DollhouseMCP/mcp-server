@@ -5,11 +5,48 @@
  * Each suppression should be well-documented with a clear reason.
  */
 
+import * as path from 'path';
+
 export interface Suppression {
   rule: string;
   file?: string;
   reason: string;
 }
+
+/**
+ * Suppression cache for performance optimization
+ */
+class SuppressionCache {
+  private cache = new Map<string, boolean>();
+  private regexCache = new Map<string, RegExp>();
+  
+  clear(): void {
+    this.cache.clear();
+    this.regexCache.clear();
+  }
+  
+  getCacheKey(ruleId: string, filePath: string): string {
+    return `${ruleId}::${filePath}`;
+  }
+  
+  get(ruleId: string, filePath: string): boolean | undefined {
+    return this.cache.get(this.getCacheKey(ruleId, filePath));
+  }
+  
+  set(ruleId: string, filePath: string, value: boolean): void {
+    this.cache.set(this.getCacheKey(ruleId, filePath), value);
+  }
+  
+  getRegex(pattern: string): RegExp | undefined {
+    return this.regexCache.get(pattern);
+  }
+  
+  setRegex(pattern: string, regex: RegExp): void {
+    this.regexCache.set(pattern, regex);
+  }
+}
+
+const cache = new SuppressionCache();
 
 export const suppressions: Suppression[] = [
   // ========================================
@@ -191,7 +228,7 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
-    file: '*.json',
+    file: '**/*.json',
     reason: 'JSON files cannot contain executable code'
   },
   {
@@ -235,7 +272,7 @@ export const suppressions: Suppression[] = [
   // ========================================
   {
     rule: '*',
-    file: '*.md',
+    file: '**/*.md',
     reason: 'Markdown documentation files'
   },
   {
@@ -250,109 +287,266 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: '*',
-    file: '*.yml',
+    file: '**/*.yml',
     reason: 'YAML configuration files are data, not code'
   },
   {
     rule: '*',
-    file: '*.yaml',
+    file: '**/*.yaml',
     reason: 'YAML configuration files are data, not code'
   }
 ];
 
 /**
- * Get suppressions as a map for efficient lookup
+ * Validate suppression configuration at startup
  */
-export function getSuppressionMap(): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
+export function validateSuppressions(): string[] {
+  const errors: string[] = [];
+  const seenPatterns = new Set<string>();
   
   for (const suppression of suppressions) {
-    const key = suppression.file || '*';
-    if (!map.has(key)) {
-      map.set(key, new Set());
+    // Check for empty reasons
+    if (!suppression.reason || suppression.reason.trim().length < 10) {
+      errors.push(`Suppression for ${suppression.rule} has insufficient reason`);
     }
-    map.get(key)!.add(suppression.rule);
+    
+    // Check for valid rule patterns
+    const rulePattern = /^(DMCP-SEC-\d{3}|OWASP-[A-Z]\d{2}-\d{3}|CWE-\d+-\d{3}|\*)$/;
+    if (!suppression.rule.match(rulePattern)) {
+      errors.push(`Invalid rule pattern: ${suppression.rule}`);
+    }
+    
+    // Check for duplicate suppressions
+    const key = `${suppression.rule}:${suppression.file || '*'}`;
+    if (seenPatterns.has(key)) {
+      errors.push(`Duplicate suppression: ${key}`);
+    }
+    seenPatterns.add(key);
+    
+    // Validate glob patterns
+    if (suppression.file?.includes('**') && !suppression.file.includes('**/')) {
+      errors.push(`Invalid glob pattern in ${suppression.file} - ** must be followed by /`);
+    }
   }
   
-  return map;
+  return errors;
 }
 
 /**
  * Convert glob pattern to regex pattern safely
+ * Using a proper glob-to-regex conversion that handles all edge cases
  */
 function globToRegex(glob: string): RegExp {
-  // Escape special regex characters except * and /
-  const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  // Check cache first
+  const cached = cache.getRegex(glob);
+  if (cached) return cached;
   
-  // Convert glob patterns to regex
-  const pattern = escaped
-    .replace(/\*\*/g, '__DOUBLE_STAR__')  // Temporary placeholder
-    .replace(/\*/g, '[^/]*')              // Single * matches anything except /
-    .replace(/__DOUBLE_STAR__/g, '.*')    // ** matches anything including /
-    .replace(/\//g, '\\/');               // Escape forward slashes
-    
-  return new RegExp(`^${pattern}$`);
+  // Special case: if glob starts with *, it should match anything at the beginning
+  let processedGlob = glob;
+  let prefix = '';
+  if (glob.startsWith('*') && !glob.startsWith('**')) {
+    prefix = '(?:.*/)?';  // Optional path prefix
+    processedGlob = glob.substring(1);
+  }
+  
+  // Escape all regex special characters except * and /
+  let pattern = processedGlob.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  
+  // Handle glob patterns in correct order
+  // Replace ** before * to avoid conflicts
+  pattern = pattern
+    .replace(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder for **
+    .replace(/\*/g, '<<STAR>>')            // Temporary placeholder for *
+    .replace(/<<GLOBSTAR>>/g, '.*')       // ** matches any number of directories
+    .replace(/<<STAR>>/g, '[^/]*')        // * matches anything except directory separator
+    .replace(/\//g, '\\/');                // Escape forward slashes
+  
+  // Combine prefix and pattern
+  const fullPattern = prefix + pattern;
+  
+  // Add anchors to ensure full path match
+  const regex = new RegExp(`^${fullPattern}$`);
+  
+  // Cache the compiled regex
+  cache.setRegex(glob, regex);
+  
+  return regex;
 }
 
 /**
- * Get relative path from absolute path
+ * Normalize file path for consistent matching
+ * Handles both absolute and relative paths across different platforms
+ */
+function normalizePath(filePath: string): string {
+  // Convert backslashes to forward slashes for Windows paths
+  let normalized = filePath.replace(/\\/g, '/');
+  
+  // Remove duplicate slashes
+  normalized = normalized.replace(/\/+/g, '/');
+  
+  // Remove trailing slash if present
+  if (normalized.endsWith('/') && normalized.length > 1) {
+    normalized = normalized.slice(0, -1);
+  }
+  
+  return normalized;
+}
+
+/**
+ * Extract relative path from absolute path
+ * Handles various CI/CD and local development path formats
  */
 function getRelativePath(absolutePath: string): string {
-  // Find the last occurrence of /mcp-server/ (case-insensitive)
-  const match = absolutePath.match(/\/mcp-server\//i);
-  if (match) {
-    const index = absolutePath.lastIndexOf(match[0]);
-    return absolutePath.substring(index + match[0].length);
+  const normalized = normalizePath(absolutePath);
+  
+  // If already a relative path, return as-is
+  if (!normalized.startsWith('/') && !normalized.match(/^[A-Z]:/i)) {
+    return normalized;
   }
   
-  // Fallback: if path starts with /, assume it's absolute and try to extract src/...
-  if (absolutePath.startsWith('/') && absolutePath.includes('/src/')) {
-    const srcIndex = absolutePath.indexOf('/src/');
-    return absolutePath.substring(srcIndex + 1);
+  // Common patterns for extracting relative paths
+  // Look for the last occurrence of these patterns
+  const patterns = [
+    { regex: /\/mcp-server\//i, name: 'mcp-server' },
+    { regex: /\/DollhouseMCP\//i, name: 'DollhouseMCP' },
+    { regex: /\/workspace\//i, name: 'workspace' },
+  ];
+  
+  for (const { regex } of patterns) {
+    const matches = normalized.match(new RegExp(regex.source, 'gi'));
+    if (matches && matches.length > 0) {
+      // Find the last occurrence
+      const lastMatch = matches[matches.length - 1];
+      const lastIndex = normalized.lastIndexOf(lastMatch);
+      if (lastIndex >= 0) {
+        const relative = normalized.substring(lastIndex + lastMatch.length);
+        // Only return if it looks like a source file
+        if (relative && (relative.startsWith('src/') || relative.startsWith('__tests__/') || 
+            relative.startsWith('scripts/') || relative.includes('.'))) {
+          return relative;
+        }
+      }
+    }
   }
   
-  // Return as-is if we can't determine relative path
-  return absolutePath;
+  // Try to find src/, __tests__/, or scripts/ anywhere in the path
+  const srcPatterns = [
+    { pattern: '/src/', start: 'src/' },
+    { pattern: '/__tests__/', start: '__tests__/' },
+    { pattern: '/scripts/', start: 'scripts/' }
+  ];
+  
+  for (const { pattern, start } of srcPatterns) {
+    const index = normalized.indexOf(pattern);
+    if (index >= 0) {
+      const afterPattern = normalized.substring(index + 1);
+      if (afterPattern.startsWith(start)) {
+        return afterPattern;
+      }
+    }
+  }
+  
+  // Windows path handling - look for src\ or similar
+  if (normalized.includes(':')) {
+    const srcIndex = normalized.search(/[\\\/]src[\\\/]/);
+    if (srcIndex >= 0) {
+      return normalized.substring(srcIndex + 1).replace(/\\/g, '/');
+    }
+  }
+  
+  // Return the normalized path if we can't extract relative
+  return normalized;
 }
 
 /**
  * Check if a finding should be suppressed
+ * Optimized with caching and early returns
  */
 export function shouldSuppress(ruleId: string, filePath?: string): boolean {
   if (!filePath) return false;
   
-  // Convert absolute path to relative path for matching
-  const relativePath = getRelativePath(filePath);
+  // Normalize paths for consistent matching
+  const normalizedPath = normalizePath(filePath);
+  const relativePath = getRelativePath(normalizedPath);
   
-  // Check exact file match
+  // Check cache first
+  const cacheKey = `${ruleId}::${relativePath}`;
+  const cached = cache.get(ruleId, relativePath);
+  if (cached !== undefined) return cached;
+  
+  // Process suppressions with early returns
   for (const suppression of suppressions) {
-    if (suppression.rule === ruleId || suppression.rule === '*') {
-      // Check exact match with both relative and absolute paths
-      if (suppression.file === relativePath || suppression.file === filePath) {
-        return true;
-      }
+    // Skip if rule doesn't match
+    if (suppression.rule !== '*' && suppression.rule !== ruleId) {
+      continue;
     }
-  }
-  
-  // Check pattern matches
-  for (const suppression of suppressions) {
-    if (!suppression.file) continue;
     
-    // Handle wildcard patterns
+    // Handle global suppressions (no file specified)
+    if (!suppression.file) {
+      cache.set(ruleId, relativePath, true);
+      return true;
+    }
+    
+    // Check exact file match (most common case)
+    if (suppression.file === relativePath || suppression.file === normalizedPath) {
+      cache.set(ruleId, relativePath, true);
+      return true;
+    }
+    
+    // Check pattern match only if file contains wildcards
     if (suppression.file.includes('*')) {
       try {
         const regex = globToRegex(suppression.file);
-        
-        // Test both relative and absolute paths
-        if ((regex.test(relativePath) || regex.test(filePath)) && 
-            (suppression.rule === '*' || suppression.rule === ruleId)) {
+        if (regex.test(relativePath) || regex.test(normalizedPath)) {
+          cache.set(ruleId, relativePath, true);
           return true;
         }
-      } catch (e) {
-        console.error(`Invalid suppression pattern: ${suppression.file}`, e);
+      } catch (error) {
+        console.error(`Invalid suppression pattern "${suppression.file}":`, error);
       }
     }
   }
   
+  // Not suppressed
+  cache.set(ruleId, relativePath, false);
   return false;
+}
+
+/**
+ * Clear suppression cache (useful for testing)
+ */
+export function clearSuppressionCache(): void {
+  cache.clear();
+}
+
+/**
+ * Get suppression statistics for reporting
+ */
+export function getSuppressionStats(): { 
+  total: number; 
+  byRule: Record<string, number>;
+  byCategory: Record<string, number>;
+} {
+  const stats = {
+    total: suppressions.length,
+    byRule: {} as Record<string, number>,
+    byCategory: {} as Record<string, number>
+  };
+  
+  for (const suppression of suppressions) {
+    // Count by rule
+    stats.byRule[suppression.rule] = (stats.byRule[suppression.rule] || 0) + 1;
+    
+    // Count by category (extract from rule prefix)
+    const category = suppression.rule.split('-')[0];
+    stats.byCategory[category] = (stats.byCategory[category] || 0) + 1;
+  }
+  
+  return stats;
+}
+
+// Validate suppressions on module load
+const validationErrors = validateSuppressions();
+if (validationErrors.length > 0) {
+  console.warn('Suppression configuration warnings:', validationErrors);
 }

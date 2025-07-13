@@ -7,10 +7,15 @@
  * Reports are automatically gitignored to keep security findings private.
  * 
  * Usage:
- *   npm run security:audit
- *   npm run security:audit -- --json
- *   npm run security:audit -- --markdown
- *   npm run security:audit -- --verbose
+ *   npm run security:audit                    # Run audit without failing
+ *   npm run security:audit -- --json          # Output JSON report
+ *   npm run security:audit -- --markdown      # Output Markdown report (default)
+ *   npm run security:audit -- --verbose       # Show all findings in console
+ *   npm run security:audit -- --fail-on-critical  # Exit 1 if critical issues found
+ *   npm run security:audit -- --fail-on-high      # Exit 1 if high/critical issues found
+ * 
+ * Multiple options can be combined:
+ *   npm run security:audit -- --verbose --fail-on-high
  */
 
 import { SecurityAuditor } from '../src/security/audit/SecurityAuditor.js';
@@ -63,8 +68,17 @@ async function runSecurityAudit() {
     }
   ];
   
-  // Don't fail the local run
-  config.reporting.failOnSeverity = 'none';
+  // Configure fail behavior based on command line args
+  const failOnCritical = args.includes('--fail-on-critical');
+  const failOnHigh = args.includes('--fail-on-high');
+  
+  if (failOnCritical) {
+    config.reporting.failOnSeverity = 'critical';
+  } else if (failOnHigh) {
+    config.reporting.failOnSeverity = 'high';
+  } else {
+    config.reporting.failOnSeverity = 'none';
+  }
 
   const auditor = new SecurityAuditor(config);
   
@@ -160,8 +174,12 @@ ${result.findings.slice(0, 10).map(f =>
       console.log('\n💡 Tip: Run with --verbose to see all findings in console');
     }
 
-    // Exit with error code if critical/high issues found
-    if (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0) {
+    // Exit with error code based on configuration
+    if (config.reporting.failOnSeverity === 'critical' && result.summary.bySeverity.critical > 0) {
+      console.log('\n⚠️  Critical severity issues found!');
+      process.exit(1);
+    } else if (config.reporting.failOnSeverity === 'high' && 
+               (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0)) {
       console.log('\n⚠️  Critical or high severity issues found!');
       process.exit(1);
     }

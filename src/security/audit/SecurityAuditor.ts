@@ -120,10 +120,19 @@ export class SecurityAuditor {
    * Filter out suppressed findings
    */
   private filterSuppressions(findings: SecurityFinding[]): SecurityFinding[] {
-    return findings.filter(finding => {
+    const suppressedFindings: Array<{rule: string; file?: string; reason?: string}> = [];
+    
+    const filtered = findings.filter(finding => {
       try {
         // Check comprehensive suppressions (includes both file-based and pattern-based)
         if (shouldSuppress(finding.ruleId, finding.file)) {
+          // Log suppression for audit trail if verbose mode is enabled
+          if (this.config.reporting?.verbose) {
+            suppressedFindings.push({
+              rule: finding.ruleId,
+              file: finding.file
+            });
+          }
           return false;
         }
         
@@ -132,12 +141,26 @@ export class SecurityAuditor {
         if (this.config.suppressions && this.config.suppressions.length > 0) {
           const globalSuppressions = this.suppressions.get('*');
           if (globalSuppressions?.has(finding.ruleId)) {
+            if (this.config.reporting?.verbose) {
+              suppressedFindings.push({
+                rule: finding.ruleId,
+                file: finding.file,
+                reason: 'Config-based global suppression'
+              });
+            }
             return false;
           }
 
           if (finding.file) {
             const fileSuppressions = this.suppressions.get(finding.file);
             if (fileSuppressions?.has(finding.ruleId)) {
+              if (this.config.reporting?.verbose) {
+                suppressedFindings.push({
+                  rule: finding.ruleId,
+                  file: finding.file,
+                  reason: 'Config-based file suppression'
+                });
+              }
               return false;
             }
           }
@@ -150,6 +173,16 @@ export class SecurityAuditor {
         return true;
       }
     });
+    
+    // Log suppression summary if verbose and suppressions were applied
+    if (this.config.reporting?.verbose && suppressedFindings.length > 0) {
+      console.log(`\nSecurityAuditor: Suppressed ${suppressedFindings.length} findings:`);
+      suppressedFindings.forEach(s => {
+        console.log(`  - ${s.rule} in ${s.file || 'global'}${s.reason ? ` (${s.reason})` : ''}`);
+      });
+    }
+    
+    return filtered;
   }
 
   /**
