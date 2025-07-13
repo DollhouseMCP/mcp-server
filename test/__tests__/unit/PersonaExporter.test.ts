@@ -1,5 +1,5 @@
-import { PersonaExporter } from '../../../src/persona/export-import/PersonaExporter.js';
-import { Persona } from '../../../src/types/persona.js';
+import { PersonaExporter } from '../../../../src/persona/export-import/PersonaExporter.js';
+import { Persona } from '../../../../src/types/persona.js';
 
 describe('PersonaExporter', () => {
   let exporter: PersonaExporter;

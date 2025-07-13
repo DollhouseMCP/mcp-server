@@ -1,5 +1,5 @@
 import { describe, test, expect } from '@jest/globals';
-import { MCPInputValidator } from '../../../src/security/InputValidator.js';
+import { MCPInputValidator } from '../../../../src/security/InputValidator.js';
 
 describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
   describe('validatePersonaIdentifier', () => {

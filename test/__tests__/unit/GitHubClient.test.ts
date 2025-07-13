@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { GitHubClient } from '../../../src/marketplace/GitHubClient';
-import { APICache } from '../../../src/cache/APICache';
+import { GitHubClient } from '../../../../src/marketplace/GitHubClient';
+import { APICache } from '../../../../src/cache/APICache';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import { SECURITY_LIMITS } from '../../../src/security/constants';
+import { SECURITY_LIMITS } from '../../../../src/security/constants';
 
 // Create a properly typed mock for fetch
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
