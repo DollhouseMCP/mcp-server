@@ -3,7 +3,7 @@
  */
 
 import { jest } from '@jest/globals';
-import { SecurityMonitor } from '../../../src/security/securityMonitor';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor';
 
 describe('SecurityMonitor', () => {
   let consoleErrorSpy: jest.SpiedFunction<typeof console.error>;

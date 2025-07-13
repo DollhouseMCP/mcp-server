@@ -12,8 +12,8 @@
 // codeql[js/redos]: This entire file tests ReDoS detection with intentionally vulnerable patterns
 
 import { describe, test, expect } from '@jest/globals';
-import { RegexValidator } from '../../../src/security/regexValidator.js';
-import { SecurityError } from '../../../src/security/errors.js';
+import { RegexValidator } from '../../../../src/security/regexValidator.js';
+import { SecurityError } from '../../../../src/security/errors.js';
 
 describe('RegexValidator', () => {
   describe('Basic Validation', () => {

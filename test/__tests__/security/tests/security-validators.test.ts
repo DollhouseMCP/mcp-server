@@ -1,9 +1,9 @@
 import { describe, test, expect, beforeAll } from '@jest/globals';
-import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
-import { ContentValidator } from '../../../src/security/contentValidator.js';
-import { PathValidator } from '../../../src/security/pathValidator.js';
-import { YamlValidator } from '../../../src/security/yamlValidator.js';
-import { validatePath, sanitizeInput } from '../../../src/security/InputValidator.js';
+import { SecureYamlParser } from '../../../../src/security/secureYamlParser.js';
+import { ContentValidator } from '../../../../src/security/contentValidator.js';
+import { PathValidator } from '../../../../src/security/pathValidator.js';
+import { YamlValidator } from '../../../../src/security/yamlValidator.js';
+import { validatePath, sanitizeInput } from '../../../../src/security/InputValidator.js';
 
 describe('Security Validators Tests', () => {
   beforeAll(() => {

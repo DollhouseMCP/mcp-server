@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SecurityTestFramework, SecurityTestPerformance } from '../framework/SecurityTestFramework.js';
-import { DollhouseMCPServer } from '../../../src/index.js';
+import { DollhouseMCPServer } from '../../../../src/index.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';

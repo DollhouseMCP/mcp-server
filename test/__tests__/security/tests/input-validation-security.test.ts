@@ -6,7 +6,7 @@ import {
   validateContentSize,
   validateUsername,
   validateCategory 
-} from '../../../src/security/InputValidator.js';
+} from '../../../../src/security/InputValidator.js';
 import { SecurityTestFramework } from '../framework/SecurityTestFramework.js';
 
 describe('Input Validation Security Tests', () => {

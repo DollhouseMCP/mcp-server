@@ -4,7 +4,7 @@
  * Tests integration of Unicode normalization with the security validation system
  */
 
-import { ContentValidator } from '../../../src/security/contentValidator.js';
+import { ContentValidator } from '../../../../src/security/contentValidator.js';
 
 describe('Unicode Normalization Integration', () => {
   describe('ContentValidator with Unicode preprocessing', () => {

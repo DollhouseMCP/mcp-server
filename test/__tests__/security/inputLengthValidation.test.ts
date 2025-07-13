@@ -7,12 +7,12 @@ import {
   validateInputLengths, 
   validateContentSize,
   ContentValidationOptions 
-} from '../../../src/security/InputValidator.js';
-import { ContentValidator } from '../../../src/security/contentValidator.js';
-import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
-import { YamlValidator } from '../../../src/security/yamlValidator.js';
-import { SECURITY_LIMITS } from '../../../src/security/constants.js';
-import { SecurityError } from '../../../src/security/errors.js';
+} from '../../../../src/security/InputValidator.js';
+import { ContentValidator } from '../../../../src/security/contentValidator.js';
+import { SecureYamlParser } from '../../../../src/security/secureYamlParser.js';
+import { YamlValidator } from '../../../../src/security/yamlValidator.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
+import { SecurityError } from '../../../../src/security/errors.js';
 
 describe('Input Length Validation', () => {
   describe('validateInputLengths', () => {
