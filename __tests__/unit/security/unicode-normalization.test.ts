@@ -249,6 +249,44 @@ describe('Unicode Normalization in Tool Calls', () => {
     });
   });
 
+  it('should normalize object keys containing Unicode', async () => {
+    const request = {
+      params: {
+        name: 'testTool',
+        arguments: {
+          // Object with Unicode in keys
+          'nаme': 'value1', // Cyrillic 'а' in key
+          'test\u200B': 'value2', // Zero-width space in key
+          normal: {
+            'innеr': 'value3' // Cyrillic 'е' in nested key
+          }
+        }
+      }
+    };
+
+    await capturedHandler(request);
+
+    expect(mockHandler).toHaveBeenCalledWith({
+      'name': 'value1', // Key normalized
+      'test': 'value2', // Zero-width removed from key
+      normal: {
+        'inner': 'value3' // Nested key normalized
+      }
+    });
+  });
+
+  it('should handle tool names with Unicode gracefully', async () => {
+    const request = {
+      params: {
+        name: 'tеstTool', // Cyrillic 'е' in tool name - won't match any registered tool
+        arguments: { test: 'value' }
+      }
+    };
+
+    // Should throw error for unknown tool (Unicode in tool names not normalized for security)
+    await expect(capturedHandler(request)).rejects.toThrow('Unknown tool: tеstTool');
+  });
+
   it('should detect and log Unicode security issues', async () => {
     const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation();
 
@@ -290,5 +328,38 @@ describe('UpdateChecker Unicode Normalization', () => {
     
     // The actual Unicode normalization in UpdateChecker is tested through
     // its existing test suite. This test just verifies the integration exists.
+  });
+});
+
+describe('ReDoS Protection', () => {
+  it('should handle malformed surrogates without ReDoS', async () => {
+    // Test with a string that would cause ReDoS with the old regex
+    const maliciousInput = 'A' + '\uD800'.repeat(1000) + 'B'; // Many unpaired high surrogates
+    
+    const startTime = Date.now();
+    const result = UnicodeValidator.normalize(maliciousInput);
+    const endTime = Date.now();
+    
+    // Should complete quickly (under 100ms) even with malicious input
+    expect(endTime - startTime).toBeLessThan(100);
+    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+  });
+
+  it('should correctly identify various surrogate pair issues', () => {
+    // High surrogate at end of string
+    let result = UnicodeValidator.normalize('test\uD800');
+    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    
+    // Low surrogate without high surrogate
+    result = UnicodeValidator.normalize('test\uDC00');
+    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    
+    // High surrogate followed by non-surrogate
+    result = UnicodeValidator.normalize('test\uD800a');
+    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    
+    // Valid surrogate pair (should not detect issues)
+    result = UnicodeValidator.normalize('test\uD800\uDC00'); // Valid pair
+    expect(result.detectedIssues || []).not.toContain('Malformed surrogate pairs detected');
   });
 });

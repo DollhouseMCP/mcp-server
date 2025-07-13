@@ -232,23 +232,9 @@ export class UnicodeValidator {
       }
     }
 
-    // Check for malformed surrogate pairs
-    // High surrogates (U+D800-U+DBFF) must be followed by low surrogates (U+DC00-U+DFFF)
-    /**
-     * Regex to match unpaired high surrogates
-     * [\uD800-\uDBFF]: High surrogate range
-     * (?![\uDC00-\uDFFF]): Negative lookahead - not followed by low surrogate
-     */
-    const unpairedHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g;
-    
-    /**
-     * Regex to match unpaired low surrogates
-     * (?<![\uD800-\uDBFF]): Negative lookbehind - not preceded by high surrogate
-     * [\uDC00-\uDFFF]: Low surrogate range
-     */
-    const unpairedLowSurrogate = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-    
-    if (unpairedHighSurrogate.test(content) || unpairedLowSurrogate.test(content)) {
+    // Check for malformed surrogate pairs using safe character-by-character validation
+    // This avoids ReDoS vulnerabilities from complex regex patterns
+    if (this.hasMalformedSurrogates(content)) {
       issues.push('Malformed surrogate pairs detected');
       severity = this.escalateSeverity(severity, 'high');
     }
@@ -335,6 +321,34 @@ export class UnicodeValidator {
   private static hasExcessiveUnicodeEscapes(content: string): boolean {
     const matches = content.match(/\\u[0-9a-fA-F]{4}/g);
     return matches !== null && matches.length > 10;
+  }
+
+  /**
+   * Safely check for malformed surrogate pairs without ReDoS vulnerability
+   * Uses character-by-character validation instead of complex regex
+   */
+  private static hasMalformedSurrogates(content: string): boolean {
+    for (let i = 0; i < content.length; i++) {
+      const char = content.charCodeAt(i);
+      
+      // High surrogate (U+D800-U+DBFF)
+      if (char >= 0xD800 && char <= 0xDBFF) {
+        // Check if it's followed by a low surrogate
+        if (i + 1 >= content.length) {
+          return true; // High surrogate at end of string
+        }
+        const nextChar = content.charCodeAt(i + 1);
+        if (nextChar < 0xDC00 || nextChar > 0xDFFF) {
+          return true; // High surrogate not followed by low surrogate
+        }
+        i++; // Skip the valid low surrogate
+      }
+      // Low surrogate (U+DC00-U+DFFF) without preceding high surrogate
+      else if (char >= 0xDC00 && char <= 0xDFFF) {
+        return true; // Unpaired low surrogate
+      }
+    }
+    return false;
   }
 
   /**

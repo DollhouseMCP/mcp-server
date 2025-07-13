@@ -124,7 +124,10 @@ export class ServerSetup {
     if (typeof args === 'object') {
       const normalized: any = {};
       for (const [key, value] of Object.entries(args)) {
-        normalized[key] = this.normalizeArgumentsUnicode(value, toolName);
+        // Normalize both keys and values to prevent Unicode attacks in property names
+        const normalizedKey = typeof key === 'string' ? 
+          UnicodeValidator.normalize(key).normalizedContent : key;
+        normalized[normalizedKey] = this.normalizeArgumentsUnicode(value, toolName);
       }
       return normalized;
     }
