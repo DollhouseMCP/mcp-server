@@ -222,11 +222,6 @@ export const suppressions: Suppression[] = [
     file: 'scripts/**/*',
     reason: 'Build and utility scripts do not process user input'
   },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'package-lock.json',
-    reason: 'NPM lock file is not executable code'
-  },
   
   // ========================================
   // Audit Logging False Positives
@@ -329,6 +324,11 @@ export const suppressions: Suppression[] = [
     rule: '*',
     file: '.gitignore',
     reason: 'Git configuration file'
+  },
+  {
+    rule: '*',
+    file: 'package-lock.json',
+    reason: 'NPM lock file - auto-generated, no user input processing'
   },
   {
     rule: '*',
@@ -451,55 +451,74 @@ function getRelativePath(absolutePath: string): string {
     return normalized;
   }
   
-  // Common patterns for extracting relative paths
-  // Look for the last occurrence of these patterns
-  // Order matters - more specific patterns first
-  const patterns = [
-    { regex: /\/mcp-server\//i, name: 'mcp-server' },
-    { regex: /\/DollhouseMCP\//i, name: 'DollhouseMCP' },
-    { regex: /\/project\//i, name: 'project' },
-    { regex: /\/workspace\//i, name: 'workspace' },
-  ];
+  // Define common project source directories
+  const projectDirs = ['src/', '__tests__/', 'scripts/', 'docs/', 'test/', 'tests/', 'lib/'];
   
-  for (const { regex } of patterns) {
-    const matches = normalized.match(new RegExp(regex.source, 'gi'));
-    if (matches && matches.length > 0) {
-      // Find the last occurrence
-      const lastMatch = matches[matches.length - 1];
-      const lastIndex = normalized.lastIndexOf(lastMatch);
-      if (lastIndex >= 0) {
-        const relative = normalized.substring(lastIndex + lastMatch.length);
-        // Only return if it looks like a source file
-        if (relative && (relative.startsWith('src/') || relative.startsWith('__tests__/') || 
-            relative.startsWith('scripts/') || relative.includes('.'))) {
-          return relative;
+  // Find the position of common project directories in the path
+  let bestMatch = { index: -1, dir: '', relativePath: '' };
+  
+  for (const dir of projectDirs) {
+    // Look for /dir pattern (with leading slash to avoid false matches)
+    const searchPattern = `/${dir}`;
+    const index = normalized.lastIndexOf(searchPattern);
+    
+    if (index >= 0) {
+      // Extract everything after the parent of this directory
+      // For example: /home/user/project/src/file.ts -> src/file.ts
+      const dirStartIndex = index + 1; // Skip the leading slash
+      const relativePath = normalized.substring(dirStartIndex);
+      
+      // Verify this looks like a valid project file
+      if (relativePath.startsWith(dir) && relativePath.includes('.')) {
+        // Keep the match that appears latest in the path (most specific)
+        if (index > bestMatch.index) {
+          bestMatch = { index, dir, relativePath };
         }
       }
     }
   }
   
-  // Try to find src/, __tests__/, or scripts/ anywhere in the path
-  const srcPatterns = [
-    { pattern: '/src/', start: 'src/' },
-    { pattern: '/__tests__/', start: '__tests__/' },
-    { pattern: '/scripts/', start: 'scripts/' }
+  // If we found a match, return it
+  if (bestMatch.index >= 0) {
+    return bestMatch.relativePath;
+  }
+  
+  // Fallback: Try to find common file patterns that indicate project files
+  const filePatterns = [
+    /\/(src|__tests__|scripts|test|tests|lib)\/.*\.[jt]sx?$/,
+    /\/(src|__tests__|scripts|test|tests|lib)\/.*\.json$/,
+    /\/(src|__tests__|scripts|test|tests|lib)\/.*\.ya?ml$/,
+    /\/package\.json$/,
+    /\/package-lock\.json$/,
+    /\/tsconfig.*\.json$/,
+    /\/\..*rc\.json$/  // .eslintrc.json, etc.
   ];
   
-  for (const { pattern, start } of srcPatterns) {
-    const index = normalized.indexOf(pattern);
-    if (index >= 0) {
-      const afterPattern = normalized.substring(index + 1);
-      if (afterPattern.startsWith(start)) {
-        return afterPattern;
+  for (const pattern of filePatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      // Find where the match starts and extract from there
+      const matchIndex = normalized.indexOf(match[0]);
+      if (matchIndex >= 0) {
+        return normalized.substring(matchIndex + 1); // Skip leading /
       }
     }
   }
   
-  // Windows path handling - look for src\ or similar
-  if (normalized.includes(':')) {
-    const srcIndex = normalized.search(/[\\\/]src[\\\/]/);
-    if (srcIndex >= 0) {
-      return normalized.substring(srcIndex + 1).replace(/\\/g, '/');
+  // Last resort: if path contains common extensions, try to extract a reasonable relative path
+  if (normalized.match(/\.(ts|js|tsx|jsx|json|yaml|yml)$/)) {
+    // Find the last segment that looks like a project directory
+    const segments = normalized.split('/');
+    for (let i = segments.length - 2; i >= 0; i--) {
+      if (projectDirs.some(dir => dir.startsWith(segments[i]))) {
+        return segments.slice(i).join('/');
+      }
+    }
+    
+    // For root-level files like package-lock.json, just return the filename
+    const filename = segments[segments.length - 1];
+    if (filename && filename.includes('.')) {
+      return filename;
     }
   }
   
