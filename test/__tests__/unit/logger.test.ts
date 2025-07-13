@@ -3,7 +3,7 @@
  */
 
 import { jest } from '@jest/globals';
-import { logger } from '../../../../src/utils/logger';
+import { logger } from '../../../../src/utils/logger.js';
 
 describe('MCPLogger', () => {
   let consoleErrorSpy: jest.SpiedFunction<typeof console.error>;
