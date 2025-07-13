@@ -79,6 +79,7 @@ export interface SecurityAuditConfig {
     createIssues: boolean;
     commentOnPr: boolean;
     failOnSeverity: SeverityLevel;
+    verbose?: boolean;
   };
   suppressions?: {
     rule: string;

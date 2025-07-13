@@ -357,7 +357,8 @@ function globToRegex(glob: string): RegExp {
   pattern = pattern
     .replace(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder for **
     .replace(/\*/g, '<<STAR>>')            // Temporary placeholder for *
-    .replace(/<<GLOBSTAR>>/g, '.*')       // ** matches any number of directories
+    .replace(/<<GLOBSTAR>>\//g, '(?:.*/)?') // **/ matches any number of directories including none
+    .replace(/<<GLOBSTAR>>/g, '.*')       // ** matches anything
     .replace(/<<STAR>>/g, '[^/]*')        // * matches anything except directory separator
     .replace(/\//g, '\\/');                // Escape forward slashes
   
@@ -406,9 +407,11 @@ function getRelativePath(absolutePath: string): string {
   
   // Common patterns for extracting relative paths
   // Look for the last occurrence of these patterns
+  // Order matters - more specific patterns first
   const patterns = [
     { regex: /\/mcp-server\//i, name: 'mcp-server' },
     { regex: /\/DollhouseMCP\//i, name: 'DollhouseMCP' },
+    { regex: /\/project\//i, name: 'project' },
     { regex: /\/workspace\//i, name: 'workspace' },
   ];
   

@@ -69,7 +69,7 @@ describe('Security Audit Suppressions', () => {
       it('should handle * rule (suppress all)', () => {
         expect(shouldSuppress('ANY-RULE', '__tests__/example.test.ts')).toBe(true);
         expect(shouldSuppress('RANDOM-123', 'src/test.spec.ts')).toBe(true);
-        expect(shouldSuppress('UNKNOWN', '*.md')).toBe(true);
+        expect(shouldSuppress('UNKNOWN', 'README.md')).toBe(true); // Test actual .md file, not literal *.md
       });
     });
 
@@ -172,13 +172,13 @@ describe('Security Audit Suppressions', () => {
     describe('special characters in paths', () => {
       it('should handle paths with dots', () => {
         expect(shouldSuppress('DMCP-SEC-004', 'src/utils/version.ts')).toBe(true);
-        expect(shouldSuppress('*', 'package.json')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-006', 'package.json')).toBe(true); // JSON files are suppressed for DMCP-SEC-006
       });
 
       it('should handle paths with special characters', () => {
-        // These paths with special chars won't match wildcards but should work with exact matches
-        expect(shouldSuppress('*', 'test[1].md')).toBe(false);
-        expect(shouldSuppress('*', 'test(1).yaml')).toBe(false);
+        // Special characters should be properly escaped and still match glob patterns
+        expect(shouldSuppress('*', 'test[1].md')).toBe(true); // **/*.md should match any .md file
+        expect(shouldSuppress('*', 'test(1).yaml')).toBe(true); // **/*.yaml should match any .yaml file
       });
     });
   });
