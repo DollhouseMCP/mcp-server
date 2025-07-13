@@ -4,8 +4,8 @@
  * Tests protection against prompt injection attacks in marketplace personas
  */
 
-import { ContentValidator } from '../../../../src/security/contentValidator.js';
-import { SecurityError } from '../../../../src/security/errors.js';
+import { ContentValidator } from '../../../src/security/contentValidator.js';
+import { SecurityError } from '../../../src/security/errors.js';
 
 describe('ContentValidator', () => {
   describe('validateAndSanitize', () => {

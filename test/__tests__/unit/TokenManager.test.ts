@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { TokenManager } from '../../../../src/security/tokenManager.js';
+import { TokenManager } from '../../../src/security/tokenManager.js';
 
 describe('TokenManager - GitHub Token Security', () => {
   const originalEnv = process.env;

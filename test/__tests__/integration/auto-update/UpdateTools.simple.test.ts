@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { UpdateManager } from '../../../../src/update/UpdateManager.js';
+import { UpdateManager } from '../../../src/update/UpdateManager.js';
 import * as path from 'path';
 import * as os from 'os';
 

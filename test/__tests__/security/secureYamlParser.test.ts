@@ -1,7 +1,7 @@
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
-import { SecureYamlParser, SecureParseOptions } from '../../../../src/security/secureYamlParser.js';
-import { SecurityError } from '../../../../src/security/errors.js';
-import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+import { SecureYamlParser, SecureParseOptions } from '../../../src/security/secureYamlParser.js';
+import { SecurityError } from '../../../src/security/errors.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 describe('SecureYamlParser', () => {
   beforeEach(() => {

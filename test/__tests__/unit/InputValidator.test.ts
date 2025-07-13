@@ -6,8 +6,8 @@ import {
   validateCategory,
   sanitizeInput,
   validateContentSize
-} from '../../../../src/security/InputValidator.js';
-import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
+} from '../../../src/security/InputValidator.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('InputValidator - Security Edge Cases', () => {
   describe('validateFilename', () => {

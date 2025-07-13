@@ -2,9 +2,9 @@
  * Unit tests for PersonaSharer
  */
 
-import { PersonaSharer } from '../../../../src/persona/export-import/PersonaSharer.js';
-import { PersonaExporter } from '../../../../src/persona/export-import/PersonaExporter.js';
-import { TokenManager } from '../../../../src/security/tokenManager.js';
+import { PersonaSharer } from '../../../src/persona/export-import/PersonaSharer.js';
+import { PersonaExporter } from '../../../src/persona/export-import/PersonaExporter.js';
+import { TokenManager } from '../../../src/security/tokenManager.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 // Mock dependencies
