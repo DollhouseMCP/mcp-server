@@ -18,6 +18,7 @@ import { ConfigurationScanner } from './scanners/ConfigurationScanner.js';
 import { ConsoleReporter } from './reporters/ConsoleReporter.js';
 import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
+import { shouldSuppress } from './config/suppressions.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -120,18 +121,23 @@ export class SecurityAuditor {
    */
   private filterSuppressions(findings: SecurityFinding[]): SecurityFinding[] {
     return findings.filter(finding => {
-      // Check global suppressions
+      // First check configured suppressions from config
       const globalSuppressions = this.suppressions.get('*');
       if (globalSuppressions?.has(finding.ruleId)) {
         return false;
       }
 
-      // Check file-specific suppressions
+      // Check file-specific suppressions from config
       if (finding.file) {
         const fileSuppressions = this.suppressions.get(finding.file);
         if (fileSuppressions?.has(finding.ruleId)) {
           return false;
         }
+      }
+      
+      // Then check comprehensive suppressions
+      if (shouldSuppress(finding.ruleId, finding.file)) {
+        return false;
       }
 
       return true;

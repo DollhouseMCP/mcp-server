@@ -36,6 +36,9 @@
     "security:regression": "jest __tests__/security/regression --maxWorkers=4",
     "security:report": "node scripts/security-test-runner.js all --report",
     "security:generate": "node scripts/generate-security-tests.js",
+    "security:audit": "tsx scripts/run-security-audit.ts",
+    "security:audit:json": "tsx scripts/run-security-audit.ts --json",
+    "security:audit:verbose": "tsx scripts/run-security-audit.ts --verbose",
     "pre-commit": "npm run security:rapid && npm audit --audit-level=high"
   },
   "keywords": [
