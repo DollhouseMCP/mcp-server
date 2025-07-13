@@ -1,5 +1,5 @@
-import { PersonaImporter } from '../../../src/persona/export-import/PersonaImporter.js';
-import { ExportedPersona } from '../../../src/persona/export-import/PersonaExporter.js';
+import { PersonaImporter } from '../../../../src/persona/export-import/PersonaImporter.js';
+import { ExportedPersona } from '../../../../src/persona/export-import/PersonaExporter.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';

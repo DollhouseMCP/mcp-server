@@ -12,9 +12,9 @@ jest.unstable_mockModule('../../../../src/update/SignatureVerifier.js', () => ({
   }))
 }));
 
-const { UpdateChecker } = await import('../../../src/update/UpdateChecker.js');
-import { VersionManager } from '../../../src/update/VersionManager.js';
-import { RateLimiter } from '../../../src/update/RateLimiter.js';
+const { UpdateChecker } = await import('../../../../src/update/UpdateChecker.js');
+import { VersionManager } from '../../../../src/update/VersionManager.js';
+import { RateLimiter } from '../../../../src/update/RateLimiter.js';
 
 // Mock fetch globally
 global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
