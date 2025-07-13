@@ -28,7 +28,7 @@ const config = {
   ],
   
   // Setup file - use the original .mjs since it's just setting env vars
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.mjs'],
+  setupFilesAfterEnv: ['<rootDir>/test/jest.setup.mjs'],
   
   // Module paths to ignore
   modulePathIgnorePatterns: ['<rootDir>/src/'],
