@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { BackupManager } from '../../../src/update/BackupManager.js';
+import { BackupManager } from '../../../../src/update/BackupManager.js';
 import * as path from 'path';
 import * as os from 'os';
 

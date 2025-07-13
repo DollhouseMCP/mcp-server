@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { RateLimiter, RateLimiterFactory } from '../../../src/update/RateLimiter.js';
+import { RateLimiter, RateLimiterFactory } from '../../../../src/update/RateLimiter.js';
 
 describe('RateLimiter', () => {
   beforeEach(() => {
