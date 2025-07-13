@@ -121,26 +121,34 @@ export class SecurityAuditor {
    */
   private filterSuppressions(findings: SecurityFinding[]): SecurityFinding[] {
     return findings.filter(finding => {
-      // First check configured suppressions from config
-      const globalSuppressions = this.suppressions.get('*');
-      if (globalSuppressions?.has(finding.ruleId)) {
-        return false;
-      }
-
-      // Check file-specific suppressions from config
-      if (finding.file) {
-        const fileSuppressions = this.suppressions.get(finding.file);
-        if (fileSuppressions?.has(finding.ruleId)) {
+      try {
+        // Check comprehensive suppressions (includes both file-based and pattern-based)
+        if (shouldSuppress(finding.ruleId, finding.file)) {
           return false;
         }
-      }
-      
-      // Then check comprehensive suppressions
-      if (shouldSuppress(finding.ruleId, finding.file)) {
-        return false;
-      }
+        
+        // Check legacy config-based suppressions if they exist
+        // This maintains backward compatibility with existing configs
+        if (this.config.suppressions && this.config.suppressions.length > 0) {
+          const globalSuppressions = this.suppressions.get('*');
+          if (globalSuppressions?.has(finding.ruleId)) {
+            return false;
+          }
 
-      return true;
+          if (finding.file) {
+            const fileSuppressions = this.suppressions.get(finding.file);
+            if (fileSuppressions?.has(finding.ruleId)) {
+              return false;
+            }
+          }
+        }
+
+        return true;
+      } catch (error) {
+        // If suppression check fails, log error but don't suppress the finding
+        console.error(`Error checking suppression for ${finding.ruleId} in ${finding.file}:`, error);
+        return true;
+      }
     });
   }
 

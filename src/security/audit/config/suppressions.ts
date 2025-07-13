@@ -39,6 +39,26 @@ export const suppressions: Suppression[] = [
     file: '**/*.spec.ts',
     reason: 'Test files may contain intentional security patterns for testing'
   },
+  {
+    rule: 'OWASP-A01-001',
+    file: '__tests__/**/*',
+    reason: 'Test files use fake tokens and secrets for testing security features'
+  },
+  {
+    rule: 'CWE-89-001',
+    file: '__tests__/**/*',
+    reason: 'Test files contain SQL injection patterns for security testing'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '__tests__/**/*',
+    reason: 'Test files contain command injection patterns for security testing'
+  },
+  {
+    rule: 'OWASP-A03-003',
+    file: '__tests__/**/*',
+    reason: 'Test files contain path traversal patterns for security testing'
+  },
   
   // ========================================
   // YAML Parsing False Positives
@@ -97,8 +117,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/utils/*.ts',
-    reason: 'Utility functions receive already-normalized input from ServerSetup'
+    file: 'src/utils/version.ts',
+    reason: 'Version utility only handles internal version strings, not user input'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -258,24 +278,59 @@ export function getSuppressionMap(): Map<string, Set<string>> {
 }
 
 /**
+ * Convert glob pattern to regex pattern safely
+ */
+function globToRegex(glob: string): RegExp {
+  // Escape special regex characters except * and /
+  const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  
+  // Convert glob patterns to regex
+  const pattern = escaped
+    .replace(/\*\*/g, '__DOUBLE_STAR__')  // Temporary placeholder
+    .replace(/\*/g, '[^/]*')              // Single * matches anything except /
+    .replace(/__DOUBLE_STAR__/g, '.*')    // ** matches anything including /
+    .replace(/\//g, '\\/');               // Escape forward slashes
+    
+  return new RegExp(`^${pattern}$`);
+}
+
+/**
+ * Get relative path from absolute path
+ */
+function getRelativePath(absolutePath: string): string {
+  // Find the last occurrence of /mcp-server/ (case-insensitive)
+  const match = absolutePath.match(/\/mcp-server\//i);
+  if (match) {
+    const index = absolutePath.lastIndexOf(match[0]);
+    return absolutePath.substring(index + match[0].length);
+  }
+  
+  // Fallback: if path starts with /, assume it's absolute and try to extract src/...
+  if (absolutePath.startsWith('/') && absolutePath.includes('/src/')) {
+    const srcIndex = absolutePath.indexOf('/src/');
+    return absolutePath.substring(srcIndex + 1);
+  }
+  
+  // Return as-is if we can't determine relative path
+  return absolutePath;
+}
+
+/**
  * Check if a finding should be suppressed
  */
 export function shouldSuppress(ruleId: string, filePath?: string): boolean {
   if (!filePath) return false;
   
   // Convert absolute path to relative path for matching
-  const relativePath = filePath.includes('/DollhouseMCP/') 
-    ? filePath.split('/DollhouseMCP/')[1] 
-    : filePath;
+  const relativePath = getRelativePath(filePath);
   
   // Check exact file match
   for (const suppression of suppressions) {
-    if (suppression.rule === ruleId && suppression.file === relativePath) {
-      return true;
-    }
-    // Also check absolute path
-    if (suppression.rule === ruleId && suppression.file === filePath) {
-      return true;
+    if (suppression.rule === ruleId || suppression.rule === '*') {
+      // Check exact match with both relative and absolute paths
+      if (suppression.file === relativePath || suppression.file === filePath) {
+        return true;
+      }
     }
   }
   
@@ -285,16 +340,16 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
     
     // Handle wildcard patterns
     if (suppression.file.includes('*')) {
-      const pattern = suppression.file
-        .replace(/\*\*/g, '.*')
-        .replace(/\*/g, '[^/]*')
-        .replace(/\//g, '\\/');
-      const regex = new RegExp(`^${pattern}$`);
-      
-      // Test both relative and absolute paths
-      if ((regex.test(relativePath) || regex.test(filePath)) && 
-          (suppression.rule === '*' || suppression.rule === ruleId)) {
-        return true;
+      try {
+        const regex = globToRegex(suppression.file);
+        
+        // Test both relative and absolute paths
+        if ((regex.test(relativePath) || regex.test(filePath)) && 
+            (suppression.rule === '*' || suppression.rule === ruleId)) {
+          return true;
+        }
+      } catch (e) {
+        console.error(`Invalid suppression pattern: ${suppression.file}`, e);
       }
     }
   }
