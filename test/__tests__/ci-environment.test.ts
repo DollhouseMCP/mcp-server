@@ -233,7 +233,7 @@ describe('CI Environment Tests', () => {
     it('should use safe directories in CI environment', async () => {
       if (isCI) {
         // In CI, BackupManager should use temporary directories
-        const { BackupManager } = await import('../src/update/BackupManager.js');
+        const { BackupManager } = await import('../../src/update/BackupManager.js');
         
         // Create a test directory in tmp
         const testDir = path.join(os.tmpdir(), 'backup-ci-test-' + Date.now());
@@ -253,7 +253,7 @@ describe('CI Environment Tests', () => {
   describe('UpdateManager CI Compatibility', () => {
     it('should handle rootDir configuration in CI', async () => {
       if (isCI) {
-        const { UpdateManager } = await import('../src/update/UpdateManager.js');
+        const { UpdateManager } = await import('../../src/update/UpdateManager.js');
         
         // Create a test directory
         const testDir = path.join(os.tmpdir(), 'update-ci-test-' + Date.now());
