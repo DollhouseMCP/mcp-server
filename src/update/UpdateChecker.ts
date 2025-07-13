@@ -21,6 +21,7 @@ import { RateLimiter, RateLimiterFactory } from './RateLimiter.js';
 import { SignatureVerifier } from './SignatureVerifier.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -448,8 +449,18 @@ export class UpdateChecker {
   private sanitizeReleaseNotes(notes: string): string {
     if (!notes) return 'See release notes on GitHub';
     
+    // First, normalize Unicode to prevent bypass attacks
+    const unicodeResult = UnicodeValidator.normalize(notes);
+    let sanitized = unicodeResult.normalizedContent;
+    
+    if (unicodeResult.detectedIssues && unicodeResult.detectedIssues.length > 0) {
+      this.logSecurityEvent('unicode_issues_in_release_notes', {
+        issues: unicodeResult.detectedIssues,
+        severity: unicodeResult.severity
+      });
+    }
+    
     // Apply length limit
-    let sanitized = notes;
     if (sanitized.length > this.releaseNotesMaxLength) {
       this.logSecurityEvent('release_notes_truncated', { 
         originalLength: sanitized.length, 

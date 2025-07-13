@@ -11,6 +11,8 @@ import { getUserTools } from './tools/UserTools.js';
 import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
 import { IToolHandler } from './types.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { logger } from '../utils/logger.js';
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
@@ -79,7 +81,10 @@ export class ServerSetup {
           );
         }
         
-        return await handler(args);
+        // Normalize Unicode in all string arguments to prevent security bypasses
+        const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
+        
+        return await handler(normalizedArgs);
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
@@ -91,6 +96,41 @@ export class ServerSetup {
         );
       }
     });
+  }
+  
+  /**
+   * Recursively normalize Unicode in all string values within arguments
+   */
+  private normalizeArgumentsUnicode(args: any, toolName: string): any {
+    if (args === null || args === undefined) {
+      return args;
+    }
+    
+    if (typeof args === 'string') {
+      const result = UnicodeValidator.normalize(args);
+      if (result.detectedIssues && result.detectedIssues.length > 0) {
+        logger.warn(`Unicode security issues detected in tool ${toolName}:`, {
+          issues: result.detectedIssues,
+          severity: result.severity
+        });
+      }
+      return result.normalizedContent;
+    }
+    
+    if (Array.isArray(args)) {
+      return args.map(item => this.normalizeArgumentsUnicode(item, toolName));
+    }
+    
+    if (typeof args === 'object') {
+      const normalized: any = {};
+      for (const [key, value] of Object.entries(args)) {
+        normalized[key] = this.normalizeArgumentsUnicode(value, toolName);
+      }
+      return normalized;
+    }
+    
+    // For non-string primitive types, return as-is
+    return args;
   }
   
   /**
