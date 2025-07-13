@@ -37,26 +37,27 @@ After moving files, each directory level requires different import paths to reac
 
 ## Current Status
 
-### Test Results
+### Test Results (Updated)
 ```
-Test Suites: 17 failed, 36 passed, 53 total
-Tests: 541 passed, 541 total
+Test Suites: 5 failed, 48 passed, 53 total
+Tests: 807 passed out of 829 total
 ```
+
+### Progress Update
+After fixing import path depths in 15 test files:
+- Fixed from 17 failing → 5 failing test suites
+- Fixed from 36 passing → 48 passing test suites  
+- 91% of test suites now passing!
 
 ### Remaining Issues
-17 test suites failing due to missing `.js` extensions in imports. These files need `.js` added to their import statements for ESM compatibility.
+5 test suites still failing with various errors. Need investigation.
 
-### Known Failing Test Suites
-Based on error patterns, these likely need .js extensions added:
-- `test/__tests__/unit/InputValidator.test.ts`
-- `test/__tests__/security/inputLengthValidation.test.ts`
-- `test/__tests__/security/contentValidator.test.ts`
-- `test/__tests__/ci-safety-verification.test.ts`
-- `test/__tests__/security/regexValidator.test.ts`
-- `test/__tests__/security/securityMonitor.test.ts`
-- `test/__tests__/security/secureYamlParser.test.ts`
-- `test/__tests__/security/tests/mcp-tools-security.test.ts`
-- And 9 more...
+### Currently Failing Test Suites
+1. `test/__tests__/unit/PersonaManager.test.ts` - Multiple test failures
+2. `test/__tests__/security/secureYamlParser.test.ts` - Test assertions failing
+3. `test/__tests__/unit/auto-update/SignatureVerifier.test.ts` - Module transformation error
+4. `test/__tests__/security/regexValidator.test.ts` - Unknown issue
+5. `test/__tests__/security/tests/mcp-tools-security.test.ts` - Unknown issue
 
 ## Key Discoveries
 
