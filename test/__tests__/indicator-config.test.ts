@@ -7,7 +7,7 @@ import {
   INDICATOR_STYLES,
   BRACKETS,
   type IndicatorConfig 
-} from '../../src/config/indicator-config.js';
+} from '../../../src/config/indicator-config.js';
 
 describe('Indicator Configuration', () => {
   const originalEnv = process.env;

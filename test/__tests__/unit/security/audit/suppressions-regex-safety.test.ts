@@ -3,7 +3,7 @@
  * Addresses CodeQL security vulnerability
  */
 
-import { shouldSuppress } from '../../../src/security/audit/config/suppressions.js';
+import { shouldSuppress } from '../../../../../src/security/audit/config/suppressions.js';
 
 describe('Suppression Regex Safety', () => {
   describe('regex injection prevention', () => {

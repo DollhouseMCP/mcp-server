@@ -4,11 +4,11 @@
  */
 
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
-import { ServerSetup } from '../../../src/server/ServerSetup.js';
+import { ServerSetup } from '../../../../src/server/ServerSetup.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { UnicodeValidator } from '../../../src/security/validators/unicodeValidator.js';
-import { logger } from '../../../src/utils/logger.js';
+import { UnicodeValidator } from '../../../../src/security/validators/unicodeValidator.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 describe('Unicode Normalization in Tool Calls', () => {
   let serverSetup: ServerSetup;

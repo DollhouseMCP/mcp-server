@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { FileLockManager } from '../../../src/security/fileLockManager.js';
+import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 
 describe('FileLockManager', () => {
   beforeEach(() => {

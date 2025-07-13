@@ -9,7 +9,7 @@
  * - Unicode normalization bypasses
  */
 
-import { UnicodeValidator } from '../../../src/security/validators/unicodeValidator.js';
+import { UnicodeValidator } from '../../../../src/security/validators/unicodeValidator.js';
 
 describe('UnicodeValidator', () => {
   describe('normalize', () => {

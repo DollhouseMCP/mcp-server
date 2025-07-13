@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { PersonaManager } from '../../../src/persona/PersonaManager.js';
-import { PersonaLoader } from '../../../src/persona/PersonaLoader.js';
-import { PersonaValidator } from '../../../src/persona/PersonaValidator.js';
-import { Persona } from '../../../src/types/persona.js';
-import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config.js';
+import { PersonaManager } from '../../../../src/persona/PersonaManager.js';
+import { PersonaLoader } from '../../../../src/persona/PersonaLoader.js';
+import { PersonaValidator } from '../../../../src/persona/PersonaValidator.js';
+import { Persona } from '../../../../src/types/persona.js';
+import { DEFAULT_INDICATOR_CONFIG } from '../../../../src/config/indicator-config.js';
 
 // Mock dependencies
 jest.mock('fs/promises');
@@ -36,8 +36,8 @@ describe('PersonaManager', () => {
     } as unknown as jest.Mocked<PersonaValidator>;
     
     // Mock the PersonaLoader and PersonaValidator constructors
-    jest.mock('../../../src/persona/PersonaLoader');
-    jest.mock('../../../src/persona/PersonaValidator');
+    jest.mock('../../../../src/persona/PersonaLoader');
+    jest.mock('../../../../src/persona/PersonaValidator');
     
     personaManager = new PersonaManager(mockPersonasDir, DEFAULT_INDICATOR_CONFIG);
     

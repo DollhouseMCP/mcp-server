@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { TokenManager } from '../../../src/security/tokenManager.js';
-import { SecurityError } from '../../../src/security/errors.js';
+import { TokenManager } from '../../../../src/security/tokenManager.js';
+import { SecurityError } from '../../../../src/security/errors.js';
 
 // Mock the logger to avoid console output during tests
 jest.mock('../../../../src/utils/logger.js', () => ({

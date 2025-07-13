@@ -8,7 +8,7 @@ import {
   validateSuppressions,
   clearSuppressionCache,
   getSuppressionStats
-} from '../../../src/security/audit/config/suppressions.js';
+} from '../../../../../src/security/audit/config/suppressions.js';
 
 describe('Security Audit Suppressions', () => {
   beforeEach(() => {

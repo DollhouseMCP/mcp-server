@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from '@jest/globals';
-import { YamlValidator } from '../../../src/security/yamlValidator.js';
+import { YamlValidator } from '../../../../src/security/yamlValidator.js';
 
 describe('YamlValidator', () => {
   beforeEach(() => {

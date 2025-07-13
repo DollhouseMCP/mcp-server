@@ -2,8 +2,8 @@
  * Security Auditor Tests
  */
 
-import { SecurityAuditor } from '../../../src/security/audit/SecurityAuditor.js';
-import type { SecurityAuditConfig } from '../../../src/security/audit/types.js';
+import { SecurityAuditor } from '../../../../../src/security/audit/SecurityAuditor.js';
+import type { SecurityAuditConfig } from '../../../../../src/security/audit/types.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
