@@ -80,9 +80,9 @@ jobs:
         with:
           path: |
             .jest-cache/
-            coverage/
+            test/coverage/
             node_modules/.cache/jest/
-          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('__tests__/**/*.ts', 'jest.config.*', 'package-lock.json') }}
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('test/__tests__/**/*.ts', 'test/jest.config.*', 'package-lock.json') }}
           restore-keys: |
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-

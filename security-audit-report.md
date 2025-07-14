@@ -1,102 +1,28 @@
 # Security Audit Report
 
-Generated: 2025-07-13T14:52:12.001Z
-Duration: 38ms
+Generated: 2025-07-14T13:38:02.659Z
+Duration: 5ms
 
 ## Summary
 
-- **Total Findings**: 13
-- **Files Scanned**: 47
+- **Total Findings**: 1
+- **Files Scanned**: 1
 
 ### Findings by Severity
 
 - 🔴 **Critical**: 0
 - 🟠 **High**: 0
-- 🟡 **Medium**: 5
-- 🟢 **Low**: 8
+- 🟡 **Medium**: 0
+- 🟢 **Low**: 1
 - ℹ️ **Info**: 0
 
 ## Detailed Findings
 
-### MEDIUM (5)
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/tools/debug.ts`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/server/types.ts`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/server/tools/MarketplaceTools.ts`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/scripts/generate-security-tests.js`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/package-lock.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-### LOW (8)
+### LOW (1)
 
 #### DMCP-SEC-006: Security operation without audit logging
 
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/index.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/utils/version.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/update/VersionManager.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/update/SignatureVerifier.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/update/RateLimiter.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/update/DependencyChecker.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/update/BackupManager.ts`
-- **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
-
-#### DMCP-SEC-006: Security operation without audit logging
-
-- **File**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/src/server/types.ts`
+- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-XsfsVn/auth-handler.js`
 - **Confidence**: medium
 - **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
 

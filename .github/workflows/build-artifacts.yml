@@ -74,10 +74,10 @@ jobs:
           fi
           
           # Check personas directory
-          if [ -d "personas" ]; then
-            echo "✅ personas directory exists"
+          if [ -d "data/personas" ]; then
+            echo "✅ data/personas directory exists"
           else
-            echo "❌ Missing personas directory"
+            echo "❌ Missing data/personas directory"
             exit 1
           fi
           
@@ -93,5 +93,5 @@ jobs:
           name: build-artifacts
           path: |
             dist/
-            personas/
+            data/personas/
           retention-days: 30

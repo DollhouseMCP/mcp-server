@@ -66,6 +66,7 @@ jobs:
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --load \
+            --file docker/Dockerfile \
             .
 
       - name: Build Docker image (production stage)
@@ -81,6 +82,7 @@ jobs:
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --load \
+            --file docker/Dockerfile \
             .
 
       - name: Scan Docker image for vulnerabilities
@@ -220,7 +222,7 @@ jobs:
         shell: bash
         run: |
           echo "🐳 Testing Docker Compose build..."
-          docker compose build dollhousemcp
+          docker compose --file docker/docker-compose.yml build dollhousemcp
 
       - name: Test Docker Compose startup
         shell: bash
@@ -229,7 +231,7 @@ jobs:
           
           # Run MCP server and capture logs directly (MCP servers exit after initialization)
           echo "⏳ Running MCP server via Docker Compose..."
-          docker_output=$(docker compose run --rm dollhousemcp 2>&1 || true)
+          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
@@ -261,7 +263,7 @@ jobs:
           
           # Run MCP server again to capture output for functionality testing
           echo "⏳ Running MCP server again for functionality testing..."
-          docker_output=$(docker compose run --rm dollhousemcp 2>&1)
+          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1)
           
           # Test that server starts without errors
           echo "Testing MCP server initialization..."
@@ -296,8 +298,8 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker compose down
-          docker compose rm -f
+          docker compose --file docker/docker-compose.yml down
+          docker compose --file docker/docker-compose.yml rm -f
 
       - name: Docker Compose testing complete
         shell: bash

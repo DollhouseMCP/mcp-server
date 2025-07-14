@@ -1,0 +1,88 @@
+# Docker Compose configuration for DollhouseMCP
+# Note: version field is obsolete and removed per Docker Compose v2
+
+services:
+  dollhousemcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    image: dollhousemcp:latest
+    container_name: dollhousemcp
+    # MCP servers are stdio-based and exit after initialization (expected behavior)
+    restart: "no"
+    
+    # Security hardening - Run as non-root user
+    user: "1001:1001"
+    
+    # Security hardening - Drop all Linux capabilities
+    cap_drop:
+      - ALL
+    
+    # Security hardening - Prevent privilege escalation
+    security_opt:
+      - no-new-privileges:true
+    
+    # Security hardening - Read-only root filesystem
+    read_only: true
+    
+    # Temporary filesystems for writable areas
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100M
+      - /app/tmp:noexec,nosuid,size=50M
+      - /app/logs:noexec,nosuid,size=50M
+    
+    environment:
+      - NODE_ENV=production
+      - PERSONAS_DIR=/app/data/personas
+      - DOLLHOUSE_SECURITY_MODE=strict
+    
+    volumes:
+      # Mount custom personas directory (optional - extends default personas)
+      - ./custom-personas:/app/data/personas/custom:ro
+    
+    # Resource limits for standalone Docker Compose
+    mem_limit: 512m
+    cpus: 0.5
+    
+    # Additional security - Disable inter-container communication
+    ipc: private
+    
+    # Note: MCP servers use stdio communication, no special network mode needed
+    # No health check needed for stdio-based MCP servers
+    # MCP servers initialize, load personas, and exit (expected behavior)
+
+  # Development service (security relaxed for development)
+  dollhousemcp-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: builder
+    image: dollhousemcp:dev
+    container_name: dollhousemcp-dev
+    
+    # Development mode - Still run as non-root but with more permissions
+    user: "1001:1001"
+    
+    # Development needs some capabilities
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE  # Needed for file operations in development
+      - CHOWN         # Needed for npm operations
+    
+    environment:
+      - NODE_ENV=development
+      - PERSONAS_DIR=/app/data/personas
+    
+    volumes:
+      - ..:/app
+      - /app/node_modules
+    
+    working_dir: /app
+    command: npm run dev
+    profiles: ["dev"]
+    
+    # Resource limits for development
+    mem_limit: 1024m
+    cpus: 1.0
