@@ -51,7 +51,8 @@ describe('PersonaExporter', () => {
   
   describe('toBase64', () => {
     it('should encode persona to base64', async () => {
-      const base64 = await exporter.toBase64(mockPersona);
+      const exportedPersona = await exporter.exportPersona(mockPersona);
+      const base64 = await exporter.toBase64(exportedPersona);
       
       expect(typeof base64).toBe('string');
       expect(base64.length).toBeGreaterThan(0);

@@ -106,7 +106,7 @@ ${r.error ? `- Error: ${r.error}` : ''}
         test: 'Command Injection Prevention',
         passed: false,
         severity: 'CRITICAL',
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - start
       };
     }
@@ -147,7 +147,7 @@ ${r.error ? `- Error: ${r.error}` : ''}
         test: 'Path Traversal Prevention',
         passed: false,
         severity: 'CRITICAL',
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - start
       };
     }
@@ -190,7 +190,7 @@ ${r.error ? `- Error: ${r.error}` : ''}
         test: 'YAML Deserialization Safety',
         passed: false,
         severity: 'CRITICAL',
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - start
       };
     }
@@ -208,7 +208,9 @@ ${r.error ? `- Error: ${r.error}` : ''}
         await this.server.browseMarketplace('../../../invalid');
       } catch (err) {
         // Check error doesn't contain token
-        if (err.message.includes(fakeToken) || err.stack?.includes(fakeToken)) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : '';
+        if (errorMessage.includes(fakeToken) || errorStack?.includes(fakeToken)) {
           throw new Error('GitHub token exposed in error message');
         }
       }
@@ -228,7 +230,7 @@ ${r.error ? `- Error: ${r.error}` : ''}
         test: 'Token Security',
         passed: false,
         severity: 'HIGH',
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         duration: Date.now() - start
       };
     }

@@ -210,9 +210,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(true);
@@ -231,9 +231,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: jest.fn().mockReturnValue(null)
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -259,9 +259,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('gist');
       expect(result.isValid).toBe(false);
@@ -274,7 +274,7 @@ describe('TokenManager - GitHub Token Security', () => {
       
       // Mock fetch to simulate network error
       const mockFetch = jest.fn().mockRejectedValue(new Error('Network error'));
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -302,9 +302,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(true);
@@ -331,9 +331,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(false);

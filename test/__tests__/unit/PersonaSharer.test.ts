@@ -32,8 +32,8 @@ describe('PersonaSharer', () => {
   const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
 
   beforeEach(() => {
-    exporter = new PersonaExporter();
-    sharer = new PersonaSharer(mockGitHubClient as any);
+    exporter = new PersonaExporter('test-user');
+    sharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
     jest.clearAllMocks();
     
     // Clear environment variables
@@ -83,7 +83,10 @@ describe('PersonaSharer', () => {
       
       const mockGistResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve({
           id: 'test-gist-id',
           html_url: 'https://gist.github.com/test-gist-id'
         })
@@ -218,7 +221,10 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(mockGistData)
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve(mockGistData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -295,7 +301,10 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(expiredData)
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve(expiredData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -324,7 +333,10 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(personaData)
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve(personaData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -358,7 +370,10 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(mockGistData)
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve(mockGistData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -382,7 +397,10 @@ describe('PersonaSharer', () => {
       for (const url of validUrls) {
         const mockResponse = {
           ok: true,
-          json: jest.fn().mockResolvedValue({ metadata: {}, content: '' })
+          headers: {
+            get: jest.fn().mockReturnValue('application/json')
+          },
+          json: () => Promise.resolve({ metadata: {}, content: '' })
         };
         
         mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -451,7 +469,7 @@ describe('PersonaSharer', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Create a new sharer with low rate limit for testing
-      const testSharer = new PersonaSharer(mockGitHubClient as any);
+      const testSharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
       
       // Mock token validation for all the API calls
       const mockTokenValidation = {
@@ -472,7 +490,10 @@ describe('PersonaSharer', () => {
       // Mock successful responses
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({ id: 'test-id', html_url: 'https://gist.github.com/test-id' })
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
+        json: () => Promise.resolve({ id: 'test-id', html_url: 'https://gist.github.com/test-id' })
       };
       
       // Set up mocks for all requests - token validation happens once, then 35 gist requests
@@ -515,7 +536,7 @@ describe('PersonaSharer', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Create sharer and immediately consume all tokens
-      const testSharer = new PersonaSharer(mockGitHubClient as any);
+      const testSharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
       
       // Mock token validation for all requests
       const mockTokenValidation = {
@@ -537,7 +558,10 @@ describe('PersonaSharer', () => {
       for (let i = 0; i < 101; i++) {
         const mockResponse = {
           ok: true,
-          json: jest.fn().mockResolvedValue({
+          headers: {
+            get: jest.fn().mockReturnValue('application/json')
+          },
+          json: () => Promise.resolve({
             files: { 'persona.json': { content: '{}' } }
           })
         };
