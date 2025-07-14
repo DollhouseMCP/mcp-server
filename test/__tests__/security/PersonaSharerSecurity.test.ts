@@ -145,8 +145,8 @@ describe('PersonaSharer Security Tests', () => {
         headers: new Headers({
           'content-type': 'text/html'
         }),
-        json: jest.fn()
-      } as any);
+        json: () => Promise.resolve({})
+      } as Response);
 
       const result = await sharer.importFromUrl('https://example.com/persona.json');
       
@@ -162,8 +162,8 @@ describe('PersonaSharer Security Tests', () => {
         headers: new Headers({
           'content-type': 'application/json; charset=utf-8'
         }),
-        json: jest.fn().mockResolvedValue(mockData)
-      } as any);
+        json: () => Promise.resolve(mockData)
+      } as Response);
 
       const result = await sharer.importFromUrl('https://example.com/persona.json');
       
@@ -179,8 +179,8 @@ describe('PersonaSharer Security Tests', () => {
           'content-type': 'application/json',
           'content-length': '10000000' // 10MB
         }),
-        json: jest.fn()
-      } as any);
+        json: () => Promise.resolve({})
+      } as Response);
 
       const result = await sharer.importFromUrl('https://example.com/persona.json');
       
@@ -195,8 +195,9 @@ describe('PersonaSharer Security Tests', () => {
         ok: false,
         status: 500,
         statusText: 'Internal Server Error: Database connection failed at 10.0.0.5',
-        headers: new Headers()
-      } as any);
+        headers: new Headers(),
+        json: () => Promise.resolve({})
+      } as Response);
 
       const result = await sharer.importFromUrl('https://example.com/persona.json');
       
@@ -225,8 +226,8 @@ describe('PersonaSharer Security Tests', () => {
           headers: new Headers({
             'content-type': 'application/json'
           }),
-          json: jest.fn().mockResolvedValue({ test: 'data' })
-        } as any);
+          json: () => Promise.resolve({ test: 'data' })
+        } as Response);
 
         const result = await sharer.importFromUrl(url);
         

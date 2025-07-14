@@ -33,7 +33,7 @@ describe('PersonaSharer', () => {
 
   beforeEach(() => {
     exporter = new PersonaExporter();
-    sharer = new PersonaSharer(mockGitHubClient as any);
+    sharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
     jest.clearAllMocks();
     
     // Clear environment variables
@@ -451,7 +451,7 @@ describe('PersonaSharer', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Create a new sharer with low rate limit for testing
-      const testSharer = new PersonaSharer(mockGitHubClient as any);
+      const testSharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
       
       // Mock token validation for all the API calls
       const mockTokenValidation = {
@@ -515,7 +515,7 @@ describe('PersonaSharer', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Create sharer and immediately consume all tokens
-      const testSharer = new PersonaSharer(mockGitHubClient as any);
+      const testSharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
       
       // Mock token validation for all requests
       const mockTokenValidation = {
