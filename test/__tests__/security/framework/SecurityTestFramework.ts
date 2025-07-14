@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { DollhouseMCPServer } from '../../../../../src/index.js';
+import { DollhouseMCPServer } from '../../../../src/index.js';
 import { SecurityTestPerformance } from './RapidSecurityTesting.js';
 
 /**
