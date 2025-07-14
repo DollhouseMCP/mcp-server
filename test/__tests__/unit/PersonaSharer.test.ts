@@ -83,6 +83,9 @@ describe('PersonaSharer', () => {
       
       const mockGistResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve({
           id: 'test-gist-id',
           html_url: 'https://gist.github.com/test-gist-id'
@@ -218,6 +221,9 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve(mockGistData)
       };
       
@@ -295,6 +301,9 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve(expiredData)
       };
       
@@ -324,6 +333,9 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve(personaData)
       };
       
@@ -358,6 +370,9 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve(mockGistData)
       };
       
@@ -382,6 +397,9 @@ describe('PersonaSharer', () => {
       for (const url of validUrls) {
         const mockResponse = {
           ok: true,
+          headers: {
+            get: jest.fn().mockReturnValue('application/json')
+          },
           json: () => Promise.resolve({ metadata: {}, content: '' })
         };
         
@@ -472,6 +490,9 @@ describe('PersonaSharer', () => {
       // Mock successful responses
       const mockResponse = {
         ok: true,
+        headers: {
+          get: jest.fn().mockReturnValue('application/json')
+        },
         json: () => Promise.resolve({ id: 'test-id', html_url: 'https://gist.github.com/test-id' })
       };
       
@@ -537,6 +558,9 @@ describe('PersonaSharer', () => {
       for (let i = 0; i < 101; i++) {
         const mockResponse = {
           ok: true,
+          headers: {
+            get: jest.fn().mockReturnValue('application/json')
+          },
           json: () => Promise.resolve({
             files: { 'persona.json': { content: '{}' } }
           })
