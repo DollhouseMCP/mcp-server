@@ -16,7 +16,7 @@ describe('MCP Tools Security Tests', () => {
     originalCwd = process.cwd();
     
     // Create isolated test environment
-    testDir = path.join(originalCwd, '__tests__/temp', `security-test-${Date.now()}`);
+    testDir = path.join(originalCwd, 'test/__tests__/temp', `security-test-${Date.now()}`);
     await fs.mkdir(testDir, { recursive: true });
     
     // Create a test package.json to make it look like a safe test directory
