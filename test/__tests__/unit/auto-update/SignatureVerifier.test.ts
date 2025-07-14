@@ -13,8 +13,8 @@ jest.unstable_mockModule('../../../../src/utils/git.js', () => ({
 }));
 
 // Import after mocking
-const { safeExec } = await import('../../../src/utils/git.js');
-const { SignatureVerifier } = await import('../../../src/update/SignatureVerifier.js');
+const { safeExec } = await import('../../../../src/utils/git.js');
+const { SignatureVerifier } = await import('../../../../src/update/SignatureVerifier.js');
 const mockSafeExec = safeExec as jest.MockedFunction<typeof safeExec>;
 
 describe('SignatureVerifier', () => {
