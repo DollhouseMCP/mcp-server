@@ -5,7 +5,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import matter from 'gray-matter';
-import { Persona } from '../../../src/types/persona.js';
+import { Persona } from '../../../../src/types/persona.js';
 import { createPersonaFileContent } from './test-fixtures.js';
 
 /**

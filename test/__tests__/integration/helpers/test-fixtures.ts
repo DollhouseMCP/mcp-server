@@ -2,7 +2,7 @@
  * Test fixtures for integration tests
  */
 
-import { Persona, PersonaMetadata } from '../../../src/types/persona.js';
+import { Persona, PersonaMetadata } from '../../../../src/types/persona.js';
 
 export const TEST_PERSONAS = {
   creative: {

@@ -2,10 +2,10 @@
  * Test helper for integration tests
  */
 
-import { PersonaManager } from '../../../src/persona/PersonaManager.js';
-import { GitHubClient } from '../../../src/marketplace/GitHubClient.js';
-import { APICache } from '../../../src/cache/APICache.js';
-import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config.js';
+import { PersonaManager } from '../../../../src/persona/PersonaManager.js';
+import { GitHubClient } from '../../../../src/marketplace/GitHubClient.js';
+import { APICache } from '../../../../src/cache/APICache.js';
+import { DEFAULT_INDICATOR_CONFIG } from '../../../../src/config/indicator-config.js';
 
 export interface TestServerOptions {
   personasDir?: string;

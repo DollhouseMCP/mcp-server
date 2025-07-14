@@ -4,7 +4,7 @@
  */
 
 import { SecurityTestFramework } from './SecurityTestFramework.js';
-import { DollhouseMCPServer } from '../../../src/index.js';
+import { DollhouseMCPServer } from '../../../../../src/index.js';
 
 export interface SecurityTestResult {
   test: string;
