@@ -104,7 +104,7 @@ jobs:
           echo "=== Dist files ==="
           if [ -d "dist/update/" ]; then ls dist/update/; else echo "dist/update not found"; fi
           echo "=== Test files ==="
-          if [ -d "__tests__/unit/auto-update/" ]; then ls __tests__/unit/auto-update/; else echo "auto-update tests not found"; fi
+          if [ -d "test/__tests__/unit/auto-update/" ]; then ls test/__tests__/unit/auto-update/; else echo "auto-update tests not found"; fi
           echo "=== NODE_PATH ==="
           echo $NODE_PATH
           echo "=== Jest config ==="

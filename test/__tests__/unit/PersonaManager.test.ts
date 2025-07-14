@@ -35,9 +35,7 @@ describe('PersonaManager', () => {
       suggestImprovements: jest.fn()
     } as unknown as jest.Mocked<PersonaValidator>;
     
-    // Mock the PersonaLoader and PersonaValidator constructors
-    jest.mock('../../../../src/persona/PersonaLoader');
-    jest.mock('../../../../src/persona/PersonaValidator');
+    // Mocks are already set up at the top of the file
     
     personaManager = new PersonaManager(mockPersonasDir, DEFAULT_INDICATOR_CONFIG);
     
