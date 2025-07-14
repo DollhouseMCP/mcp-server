@@ -157,7 +157,20 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
         
         if (!response.ok) {
-          throw new Error(`Failed to fetch: ${response.statusText}`);
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+
+        // Validate Content-Type header
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+          throw new Error('Invalid response type: expected JSON');
+        }
+
+        // Check response size to prevent memory exhaustion
+        const contentLength = response.headers.get('content-length');
+        const maxSize = 5 * 1024 * 1024; // 5MB max
+        if (contentLength && parseInt(contentLength) > maxSize) {
+          throw new Error('Response too large');
         }
 
         const data = await response.json();
@@ -225,8 +238,13 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          const errorMsg = `GitHub API error: ${response.status} ${response.statusText}`;
-          throw new Error(errorMsg);
+          throw new Error(`GitHub API error: ${response.status}`);
+        }
+
+        // Validate Content-Type for GitHub API response
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+          throw new Error('Invalid GitHub API response type');
         }
 
         const gist = await response.json();
@@ -299,7 +317,13 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch gist: ${response.statusText}`);
+          throw new Error(`Failed to fetch gist: ${response.status}`);
+        }
+
+        // Validate Content-Type for GitHub API response
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+          throw new Error('Invalid GitHub API response type');
         }
 
         const gist = await response.json();
@@ -345,28 +369,144 @@ export class PersonaSharer {
    */
   private validateShareUrl(url: string): boolean {
     try {
+      // 1. URL length check to prevent DoS
+      if (url.length > 2048) {
+        logger.warn('URL exceeds maximum length', { urlLength: url.length });
+        return false;
+      }
+
       const parsed = new URL(url);
       
-      // Only allow http/https protocols
+      // 2. Protocol check - only allow http/https
       if (!['https:', 'http:'].includes(parsed.protocol)) {
+        logger.warn('Invalid protocol in URL', { protocol: parsed.protocol });
         return false;
       }
       
-      // Prevent SSRF attacks - block local/private networks
-      const hostname = parsed.hostname.toLowerCase();
-      if (hostname === 'localhost' || 
-          hostname.startsWith('127.') ||
-          hostname.startsWith('10.') ||
-          hostname.startsWith('192.168.') ||
-          hostname.startsWith('172.') ||
-          hostname.startsWith('169.254.') ||
-          hostname === '0.0.0.0' ||
-          hostname.includes(':')) { // IPv6 localhost
+      // 3. Port restrictions - block non-standard ports that could be internal services
+      const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+      const allowedPorts = ['80', '443', '8080', '8443'];
+      if (!allowedPorts.includes(port)) {
+        logger.warn('Blocked non-standard port', { port });
         return false;
       }
+      
+      // 4. Hostname validation
+      const hostname = parsed.hostname.toLowerCase();
+      
+      // Block various localhost representations
+      const blockedHostnames = [
+        'localhost', 
+        'localhost.localdomain',
+        '0.0.0.0',
+        '0',
+        '0x0',
+        '0x00000000',
+        '[::1]',
+        '[::ffff:127.0.0.1]',
+        '[0000:0000:0000:0000:0000:0000:0000:0001]'
+      ];
+      
+      if (blockedHostnames.includes(hostname)) {
+        logger.warn('Blocked localhost hostname', { hostname });
+        return false;
+      }
+      
+      // Block private IP ranges with comprehensive patterns
+      const privateIpPatterns = [
+        /^127\./,                                    // Loopback
+        /^10\./,                                     // Private class A
+        /^192\.168\./,                               // Private class C
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./,          // Private class B
+        /^169\.254\./,                               // Link-local
+        /^fc00:/i,                                   // IPv6 private
+        /^fe80:/i,                                   // IPv6 link-local
+        /^::1$/,                                     // IPv6 loopback
+        /^::ffff:0?:?0?:?0?:?0?$/i,                // IPv6 mapped IPv4
+        /^100\.6[4-9]\./,                           // Carrier-grade NAT
+        /^100\.[7-9][0-9]\./,                       // Carrier-grade NAT
+        /^100\.1[0-2][0-9]\./,                      // Carrier-grade NAT
+        /^0\./,                                      // Reserved
+        /^255\.255\.255\.255$/                      // Broadcast
+      ];
+      
+      if (privateIpPatterns.some(pattern => pattern.test(hostname))) {
+        logger.warn('Blocked private IP range', { hostname });
+        return false;
+      }
+      
+      // Block cloud metadata endpoints
+      const metadataEndpoints = [
+        '169.254.169.254',     // AWS/GCP/Azure
+        'metadata.google.internal',
+        'metadata.azure.com',
+        '100.100.100.200'      // Alibaba Cloud
+      ];
+      
+      if (metadataEndpoints.includes(hostname)) {
+        logger.warn('Blocked cloud metadata endpoint', { hostname });
+        return false;
+      }
+      
+      // Block numeric IP representations that could bypass checks
+      if (/^\d+$/.test(hostname)) {
+        // Convert decimal to IP and check
+        const num = parseInt(hostname, 10);
+        if (num <= 0xFFFFFFFF) {
+          const ip = `${(num >>> 24) & 0xFF}.${(num >>> 16) & 0xFF}.${(num >>> 8) & 0xFF}.${num & 0xFF}`;
+          logger.warn('Blocked numeric IP representation', { hostname, resolvedIp: ip });
+          return false;
+        }
+      }
+      
+      // Block hex IP representations
+      if (/^0x[0-9a-f]+$/i.test(hostname)) {
+        logger.warn('Blocked hex IP representation', { hostname });
+        return false;
+      }
+      
+      // Validate domain format (basic check)
+      // Allow GitHub domains and common share platforms
+      const trustedDomains = [
+        'github.com',
+        'gist.github.com', 
+        'api.github.com',
+        'raw.githubusercontent.com',
+        'dollhousemcp.com'
+      ];
+      
+      // Check if it's a trusted domain
+      const isTrustedDomain = trustedDomains.some(domain => 
+        hostname === domain || hostname.endsWith(`.${domain}`)
+      );
+      
+      if (!isTrustedDomain) {
+        // For non-trusted domains, apply stricter validation
+        // Must be a valid domain format, not just an IP
+        const domainPattern = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i;
+        const ipv4Pattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+        const ipv6Pattern = /^\[?([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\]?$/i;
+        
+        if (ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname)) {
+          logger.warn('Direct IP access not allowed for untrusted sources', { hostname });
+          return false;
+        }
+        
+        if (!domainPattern.test(hostname)) {
+          logger.warn('Invalid domain format', { hostname });
+          return false;
+        }
+      }
+      
+      logger.debug('URL validation passed', { 
+        hostname, 
+        protocol: parsed.protocol,
+        isTrusted: isTrustedDomain 
+      });
       
       return true;
-    } catch {
+    } catch (error) {
+      logger.warn('URL validation error', { error: error instanceof Error ? error.message : 'Unknown error' });
       return false;
     }
   }
@@ -376,7 +516,8 @@ export class PersonaSharer {
    */
   private importFromBase64Url(url: string): { success: boolean; data?: any; message: string } {
     try {
-      const match = url.match(/#dollhouse-persona=([A-Za-z0-9+/=]+)$/);
+      // Limit base64 length to prevent ReDoS attacks (10KB max for base64 encoded data)
+      const match = url.match(/#dollhouse-persona=([A-Za-z0-9+/=]{1,10000})$/);
       if (!match) {
         throw new Error('Invalid share URL format');
       }
