@@ -52,7 +52,8 @@ describe('MCP Tools Security Tests', () => {
     await fs.mkdir(personasDir, { recursive: true });
     
     // Reload personas to clear server cache
-    await server.loadPersonas();
+    // Note: loadPersonas is private, so we'll trigger reload by calling list_personas
+    await server.listPersonas();
   });
   
   describe('Command Injection Prevention', () => {
@@ -291,8 +292,10 @@ describe('MCP Tools Security Tests', () => {
         await server.browseMarketplace('../../../invalid/path');
       } catch (error) {
         // Token should not be in error message
-        expect(error.message).not.toContain(fakeToken);
-        expect(error.stack).not.toContain(fakeToken);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : '';
+        expect(errorMessage).not.toContain(fakeToken);
+        expect(errorStack).not.toContain(fakeToken);
       }
       
       delete process.env.GITHUB_TOKEN;

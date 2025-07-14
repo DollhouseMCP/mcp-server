@@ -2,7 +2,6 @@ import { jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { DollhouseMCPServer } from '../../../../src/index.js';
-import { SecurityTestPerformance } from './RapidSecurityTesting.js';
 
 /**
  * Security Test Framework for DollhouseMCP
@@ -195,7 +194,7 @@ export class SecurityTestFramework {
           passed++;
         } catch (error) {
           failed++;
-          console.error(`❌ Test failed: ${error.message}`);
+          console.error(`❌ Test failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -328,9 +327,10 @@ export class SecurityTestFramework {
         } catch (error) {
           // Expected - tool should reject malicious input
           // Allow common error patterns
-          if (!error.message.match(/not found|does not exist|already exists/i)) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (!errorMessage.match(/not found|does not exist|already exists/i)) {
             // This might be a security rejection
-            expect(error.message).toMatch(/invalid|malicious|dangerous|illegal/i);
+            expect(errorMessage).toMatch(/invalid|malicious|dangerous|illegal/i);
           }
         }
       }
@@ -391,7 +391,8 @@ export class SecurityTestFramework {
           expect(content).toMatch(/not found|invalid|does not exist/i);
         } catch (error) {
           // Expected - should reject path traversal
-          expect(error.message).toMatch(/invalid|traversal|dangerous|not found|does not exist/i);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          expect(errorMessage).toMatch(/invalid|traversal|dangerous|not found|does not exist/i);
         }
       }
       

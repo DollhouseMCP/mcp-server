@@ -18,7 +18,7 @@ describe('Unicode Normalization in Tool Calls', () => {
 
   beforeEach(() => {
     serverSetup = new ServerSetup();
-    mockHandler = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'success' }] });
+    mockHandler = jest.fn(() => Promise.resolve({ content: [{ type: 'text', text: 'success' }] }));
     
     // Mock server to capture the request handler
     mockServer = {
@@ -70,7 +70,7 @@ describe('Unicode Normalization in Tool Calls', () => {
       name: 'testTool',
       description: 'Test tool',
       inputSchema: { type: 'object', properties: {} }
-    }, mockHandler);
+    }, mockHandler as any);
   });
 
   it('should normalize Unicode in string arguments', async () => {
@@ -288,7 +288,7 @@ describe('Unicode Normalization in Tool Calls', () => {
   });
 
   it('should detect and log Unicode security issues', async () => {
-    const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation();
+    const loggerSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
     const request = {
       params: {

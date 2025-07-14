@@ -195,7 +195,7 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to simulate GitHub API response
-      const mockGet = jest.fn()
+      const mockGet = jest.fn<string | null, [string]>()
         .mockImplementation((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return 'repo,user:email';
@@ -210,9 +210,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(true);
@@ -231,9 +231,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: jest.fn().mockReturnValue(null)
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -244,7 +244,7 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to return token with insufficient scopes
-      const mockGet = jest.fn()
+      const mockGet = jest.fn<string | null, [string]>()
         .mockImplementation((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return 'user:email'; // missing 'gist'
@@ -259,9 +259,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('gist');
       expect(result.isValid).toBe(false);
@@ -274,7 +274,7 @@ describe('TokenManager - GitHub Token Security', () => {
       
       // Mock fetch to simulate network error
       const mockFetch = jest.fn().mockRejectedValue(new Error('Network error'));
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -287,7 +287,7 @@ describe('TokenManager - GitHub Token Security', () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
       const requiredScopes = { required: ['repo'], optional: ['user:email'] };
       
-      const mockGet = jest.fn()
+      const mockGet = jest.fn<string | null, [string]>()
         .mockImplementation((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return 'repo,user:email,gist';
@@ -302,9 +302,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(true);
@@ -316,7 +316,7 @@ describe('TokenManager - GitHub Token Security', () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
       const requiredScopes = { required: ['repo'] };
       
-      const mockGet = jest.fn()
+      const mockGet = jest.fn<string | null, [string]>()
         .mockImplementation((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return '';
@@ -331,9 +331,9 @@ describe('TokenManager - GitHub Token Security', () => {
         headers: {
           get: mockGet
         }
-      });
+      } as unknown as Response);
       
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(false);

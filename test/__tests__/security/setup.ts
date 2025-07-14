@@ -12,12 +12,15 @@ process.env.NODE_ENV = 'test';
 process.env.SECURITY_TEST = 'true';
 
 // Mock file system for security tests
-jest.mock('fs/promises', () => ({
-  ...jest.requireActual('fs/promises'),
-  unlink: jest.fn(),
-  rmdir: jest.fn(),
-  rm: jest.fn()
-}));
+jest.mock('fs/promises', () => {
+  const actual = jest.requireActual('fs/promises') as any;
+  return {
+    ...actual,
+    unlink: jest.fn(),
+    rmdir: jest.fn(),
+    rm: jest.fn()
+  };
+});
 
 // Export test utilities
 export { SecurityTestFramework } from './framework/SecurityTestFramework.js';

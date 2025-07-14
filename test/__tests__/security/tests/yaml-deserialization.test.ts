@@ -64,8 +64,9 @@ triggers:
       });
       
       // Verify only basic types
-      expect(typeof loaded.name).toBe('string');
-      expect(Array.isArray(loaded.triggers)).toBe(true);
+      const loadedData = loaded as any;
+      expect(typeof loadedData.name).toBe('string');
+      expect(Array.isArray(loadedData.triggers)).toBe(true);
     });
   });
   
@@ -139,7 +140,7 @@ malicious_field: !!js/function "alert()"
       for (const { yaml: yamlContent, valid } of testCases) {
         if (valid) {
           expect(() => {
-            const data = yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA });
+            const data = yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA }) as any;
             // Basic validation
             if (!data.name || data.name.length > 100) {
               throw new Error('Invalid name');
@@ -155,8 +156,8 @@ malicious_field: !!js/function "alert()"
               throw new Error('Dangerous tag');
             }
             
-            const data = yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA });
-            if (!data.name || data.name.length === 0 || data.name.length > 100) {
+            const data = yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA }) as any;
+            if (!data || !data.name || data.name.length === 0 || data.name.length > 100) {
               throw new Error('Invalid name');
             }
           }).toThrow();

@@ -32,7 +32,7 @@ describe('PersonaSharer', () => {
   const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
 
   beforeEach(() => {
-    exporter = new PersonaExporter();
+    exporter = new PersonaExporter('test-user');
     sharer = new PersonaSharer(mockGitHubClient as any, 'test-user');
     jest.clearAllMocks();
     
@@ -83,7 +83,7 @@ describe('PersonaSharer', () => {
       
       const mockGistResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({
+        json: () => Promise.resolve({
           id: 'test-gist-id',
           html_url: 'https://gist.github.com/test-gist-id'
         })
@@ -218,7 +218,7 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(mockGistData)
+        json: () => Promise.resolve(mockGistData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -295,7 +295,7 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(expiredData)
+        json: () => Promise.resolve(expiredData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -324,7 +324,7 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(personaData)
+        json: () => Promise.resolve(personaData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -358,7 +358,7 @@ describe('PersonaSharer', () => {
       
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue(mockGistData)
+        json: () => Promise.resolve(mockGistData)
       };
       
       mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -382,7 +382,7 @@ describe('PersonaSharer', () => {
       for (const url of validUrls) {
         const mockResponse = {
           ok: true,
-          json: jest.fn().mockResolvedValue({ metadata: {}, content: '' })
+          json: () => Promise.resolve({ metadata: {}, content: '' })
         };
         
         mockFetch.mockResolvedValueOnce(mockResponse as any);
@@ -472,7 +472,7 @@ describe('PersonaSharer', () => {
       // Mock successful responses
       const mockResponse = {
         ok: true,
-        json: jest.fn().mockResolvedValue({ id: 'test-id', html_url: 'https://gist.github.com/test-id' })
+        json: () => Promise.resolve({ id: 'test-id', html_url: 'https://gist.github.com/test-id' })
       };
       
       // Set up mocks for all requests - token validation happens once, then 35 gist requests
@@ -537,7 +537,7 @@ describe('PersonaSharer', () => {
       for (let i = 0; i < 101; i++) {
         const mockResponse = {
           ok: true,
-          json: jest.fn().mockResolvedValue({
+          json: () => Promise.resolve({
             files: { 'persona.json': { content: '{}' } }
           })
         };
