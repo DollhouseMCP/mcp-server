@@ -46,7 +46,7 @@ version: 1.0.0
       
       expect(() => {
         SecureYamlParser.parse(largeContent);
-      }).toThrow(SecurityError);
+      }).toThrow('Content exceeds maximum allowed size');
     });
 
     it('should reject YAML exceeding size limit', () => {
@@ -260,7 +260,7 @@ name: !!python/object/apply:os.system
 
       expect(() => {
         SecureYamlParser.safeMatter(maliciousContent);
-      }).toThrow(SecurityError);
+      }).toThrow('Malicious YAML content detected');
     });
   });
 
