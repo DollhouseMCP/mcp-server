@@ -1,27 +1,4 @@
----
 name: Claude Code
-
-# User Access Controls & Workflow Triggering
-# ============================================
-# WHO CAN TRIGGER: Only explicitly authorized users can mention @claude:
-#   - Currently authorized: mickdarling (repository owner)
-#   - Add new users by updating the conditional logic below
-#   - Triggers work in: issue comments, PR comments, reviews, issue titles
-#
-# SECURITY MODEL:
-#   - Restricted to authorized users only (not all repository contributors)
-#   - Prevents unauthorized API usage and potential security vulnerabilities
-#   - Repository owner controls who can trigger Claude workflows
-#
-# SECURITY NOTES:
-#   - Claude has write permissions and can modify repository content
-#   - All Claude actions are logged in GitHub Actions history
-#   - Unauthorized users will see workflow skipped (not failed)
-#
-# USAGE GUIDELINES:
-#   - Use @claude for code assistance, bug fixes, feature implementation
-#   - Be specific in requests for better results
-#   - Claude will respond in the same thread where mentioned
 
 on:
   issue_comment:
@@ -33,79 +10,55 @@ on:
   pull_request_review:
     types: [submitted]
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  id-token: write
-
 jobs:
   claude:
     if: |
-      (contains(github.event.comment.body || '', '@claude') ||
-       contains(github.event.review.body || '', '@claude') ||
-       contains(github.event.issue.body || '', '@claude') ||
-       contains(github.event.issue.title || '', '@claude')) &&
-      (github.actor == 'mickdarling')
-      # Add new authorized users here: || github.actor == 'username'
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
-      contents: write          # Write needed: Claude may create branches/commits for fixes
-      pull-requests: write     # Write needed: to create PRs and post comments
-      issues: write            # Write needed: to post comments and manage issues
-      id-token: write          # Write needed: for OIDC authentication
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@v4
         with:
-          # Full git history for comprehensive review context
-          # TODO: Consider fetch-depth: 50-100 when repo reaches 500+ commits
-          fetch-depth: 0
-
-      - name: Validate Workflow YAML
-        uses: ./.github/actions/validate-yaml
+          fetch-depth: 1
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@000297be9a9ca68b19d4e49ed1ea32b2daf07d60  # v0.0.27
-        continue-on-error: true
+        uses: anthropics/claude-code-action@beta
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
+          # This is an optional setting that allows Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+          
           # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
           # model: "claude-opus-4-20250514"
-
+          
           # Optional: Customize the trigger phrase (default: @claude)
           # trigger_phrase: "/claude"
-
+          
           # Optional: Trigger when specific user is assigned to an issue
           # assignee_trigger: "claude-bot"
-
+          
           # Optional: Allow Claude to run specific commands
           # allowed_tools: "Bash(npm install),Bash(npm run build),Bash(npm run test:*),Bash(npm run lint:*)"
-
+          
           # Optional: Add custom instructions for Claude to customize its behavior for your project
           # custom_instructions: |
           #   Follow our coding standards
           #   Ensure all new code has tests
           #   Use TypeScript for new files
-
+          
           # Optional: Custom environment variables for Claude
           # claude_env: |
           #   NODE_ENV: test
 
-      - name: Handle Claude API Failure
-        if: steps.claude.outcome == 'failure'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
-        with:
-          script: |
-            const issueNumber = context.issue?.number || context.payload.pull_request?.number;
-            if (issueNumber) {
-              github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '🤖 **Claude Code temporarily unavailable**\n\nThe Claude API appears to be experiencing issues. Please try again later or contact support if the problem persists.'
-              });
-            }
