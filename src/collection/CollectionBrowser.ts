@@ -4,7 +4,7 @@
 
 import { GitHubClient } from './GitHubClient.js';
 
-export class MarketplaceBrowser {
+export class CollectionBrowser {
   private githubClient: GitHubClient;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   

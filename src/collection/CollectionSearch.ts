@@ -4,7 +4,7 @@
 
 import { GitHubClient } from './GitHubClient.js';
 
-export class MarketplaceSearch {
+export class CollectionSearch {
   private githubClient: GitHubClient;
   private searchBaseUrl = 'https://api.github.com/search/code';
   
@@ -57,7 +57,7 @@ export class MarketplaceSearch {
         `   ${icon} **${item.name.replace('.md', '')}**\n`,
         `      📂 Path: ${item.path}\n`,
         `      📥 Install: \`install_content "${item.path}"\`\n`,
-        `      👁️ Details: \`get_marketplace_content "${item.path}"\`\n\n`
+        `      👁️ Details: \`get_collection_content "${item.path}"\`\n\n`
       );
     });
     

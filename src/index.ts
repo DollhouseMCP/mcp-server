@@ -22,7 +22,7 @@ import { YamlValidator } from './security/yamlValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
-import { GitHubClient, MarketplaceBrowser, MarketplaceSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './collection/index.js';
+import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { logger } from './utils/logger.js';
@@ -42,8 +42,8 @@ export class DollhouseMCPServer implements IToolHandler {
   private indicatorConfig: IndicatorConfig;
   private personaManager: PersonaManager;
   private githubClient: GitHubClient;
-  private marketplaceBrowser: MarketplaceBrowser;
-  private marketplaceSearch: MarketplaceSearch;
+  private collectionBrowser: CollectionBrowser;
+  private collectionSearch: CollectionSearch;
   private personaDetails: PersonaDetails;
   private personaInstaller: PersonaInstaller;
   private personaSubmitter: PersonaSubmitter;
@@ -91,8 +91,8 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize marketplace modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
-    this.marketplaceBrowser = new MarketplaceBrowser(this.githubClient);
-    this.marketplaceSearch = new MarketplaceSearch(this.githubClient);
+    this.collectionBrowser = new CollectionBrowser(this.githubClient);
+    this.collectionSearch = new CollectionSearch(this.githubClient);
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.personaInstaller = new PersonaInstaller(this.githubClient, this.personasDir);
     this.personaSubmitter = new PersonaSubmitter();
@@ -395,13 +395,13 @@ export class DollhouseMCPServer implements IToolHandler {
       const validatedSection = section ? validateCategory(section) : undefined;
       const validatedCategory = category ? validateCategory(category) : undefined;
       
-      const result = await this.marketplaceBrowser.browseCollection(validatedSection, validatedCategory);
+      const result = await this.collectionBrowser.browseCollection(validatedSection, validatedCategory);
       
       // Handle sections view
       const items = result.items;
       const categories = result.sections || result.categories;
       
-      const text = this.marketplaceBrowser.formatBrowseResults(
+      const text = this.collectionBrowser.formatBrowseResults(
         items, 
         categories, 
         validatedSection, 
@@ -434,8 +434,8 @@ export class DollhouseMCPServer implements IToolHandler {
       // Enhanced input validation for search query
       const validatedQuery = MCPInputValidator.validateSearchQuery(query);
       
-      const items = await this.marketplaceSearch.searchCollection(validatedQuery);
-      const text = this.marketplaceSearch.formatSearchResults(items, validatedQuery, this.getPersonaIndicator());
+      const items = await this.collectionSearch.searchCollection(validatedQuery);
+      const text = this.collectionSearch.formatSearchResults(items, validatedQuery, this.getPersonaIndicator());
       
       return {
         content: [
@@ -902,7 +902,7 @@ ${sanitizedInstructions}
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
               `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
-              `📤 **Share it:** \`submit_persona "${sanitizedName}"\`\n` +
+              `📤 **Share it:** \`submit_content "${sanitizedName}"\`\n` +
               `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
           },
         ],
