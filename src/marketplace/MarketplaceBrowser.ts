@@ -6,22 +6,52 @@ import { GitHubClient } from './GitHubClient.js';
 
 export class MarketplaceBrowser {
   private githubClient: GitHubClient;
-  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/personas/contents/personas';
+  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
   constructor(githubClient: GitHubClient) {
     this.githubClient = githubClient;
   }
   
   /**
-   * Browse marketplace personas by category
+   * Browse marketplace content by section and category
+   * @param section - Top level section: library, showcase, or catalog
+   * @param category - Optional category within the section
    */
-  async browseMarketplace(category?: string): Promise<{ items: any[], categories: any[] }> {
-    const url = category ? `${this.baseUrl}/${category}` : this.baseUrl;
+  async browseMarketplace(section?: string, category?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
+    let url = this.baseUrl;
+    
+    // If no section provided, show top-level sections
+    if (!section) {
+      const data = await this.githubClient.fetchFromGitHub(url);
+      if (!Array.isArray(data)) {
+        throw new Error('Invalid marketplace response. Expected directory listing.');
+      }
+      
+      // Filter to only show content directories
+      const sections = data.filter((item: any) => 
+        item.type === 'dir' && ['library', 'showcase', 'catalog'].includes(item.name)
+      );
+      
+      return { items: [], categories: [], sections };
+    }
+    
+    // Browse within a section
+    url = category 
+      ? `${this.baseUrl}/${section}/${category}` 
+      : `${this.baseUrl}/${section}`;
     
     const data = await this.githubClient.fetchFromGitHub(url);
     
     if (!Array.isArray(data)) {
       throw new Error('Invalid marketplace response. Expected directory listing.');
+    }
+    
+    // In the library section, we have content type directories
+    if (section === 'library' && !category) {
+      const contentTypes = data.filter((item: any) => 
+        item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles'].includes(item.name)
+      );
+      return { items: [], categories: contentTypes };
     }
     
     const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
@@ -33,25 +63,78 @@ export class MarketplaceBrowser {
   /**
    * Format marketplace browse results
    */
-  formatBrowseResults(items: any[], categories: any[], category?: string, personaIndicator: string = ''): string {
+  formatBrowseResults(items: any[], categories: any[], section?: string, category?: string, personaIndicator: string = ''): string {
     const textParts = [`${personaIndicator}🏪 **DollhouseMCP Marketplace**\n\n`];
     
-    if (!category) {
-      textParts.push(`**📁 Categories (${categories.length}):**\n`);
+    // Show top-level sections if no section specified
+    if (!section && categories.length > 0) {
+      textParts.push(`**📚 Marketplace Sections (${categories.length}):**\n`);
+      categories.forEach((sec: any) => {
+        const sectionIcons: { [key: string]: string } = {
+          'library': '📖',
+          'showcase': '⭐',
+          'catalog': '💎'
+        };
+        const icon = sectionIcons[sec.name] || '📁';
+        const descriptions: { [key: string]: string } = {
+          'library': 'Free community content',
+          'showcase': 'Featured high-quality content',
+          'catalog': 'Premium content (coming soon)'
+        };
+        textParts.push(
+          `   ${icon} **${sec.name}** - ${descriptions[sec.name] || 'Content collection'}\n`,
+          `      Browse: \`browse_marketplace "${sec.name}"\`\n\n`
+        );
+      });
+      return textParts.join('');
+    }
+    
+    // Show content types within library section
+    if (section === 'library' && !category && categories.length > 0) {
+      textParts.push(`**📖 Library Content Types (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
-        textParts.push(`   📂 **${cat.name}** - Browse with: \`browse_marketplace "${cat.name}"\`\n`);
+        const typeIcons: { [key: string]: string } = {
+          'personas': '🎭',
+          'skills': '🛠️',
+          'agents': '🤖',
+          'prompts': '💬',
+          'templates': '📄',
+          'tools': '🔧',
+          'ensembles': '🎼'
+        };
+        const icon = typeIcons[cat.name] || '📁';
+        textParts.push(`   ${icon} **${cat.name}** - Browse: \`browse_marketplace "library" "${cat.name}"\`\n`);
+      });
+      textParts.push('\n');
+    } else if (categories.length > 0) {
+      textParts.push(`**📁 Categories in ${section}${category ? `/${category}` : ''} (${categories.length}):**\n`);
+      categories.forEach((cat: any) => {
+        const browsePath = category ? `"${section}" "${category}/${cat.name}"` : `"${section}" "${cat.name}"`;
+        textParts.push(`   📂 **${cat.name}** - Browse: \`browse_marketplace ${browsePath}\`\n`);
       });
       textParts.push('\n');
     }
     
     if (items.length > 0) {
-      textParts.push(`**🎭 Personas in ${category || 'root'} (${items.length}):**\n`);
+      const contentType = category?.split('/').pop() || 'content';
+      const contentIcons: { [key: string]: string } = {
+        'personas': '🎭',
+        'skills': '🛠️',
+        'agents': '🤖',
+        'prompts': '💬',
+        'templates': '📄',
+        'tools': '🔧',
+        'ensembles': '🎼'
+      };
+      const icon = contentIcons[contentType] || '📄';
+      
+      textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${category ? `/${category}` : ''} (${items.length}):**\n`);
       items.forEach((item: any) => {
-        const path = category ? `${category}/${item.name}` : item.name;
+        const fullPath = section + (category ? `/${category}` : '') + `/${item.name}`;
         textParts.push(
-          `   ▫️ **${item.name}**\n`,
-          `      📥 Install: \`install_persona "${path}"\`\n`,
-          `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
+          `   ▫️ **${item.name.replace('.md', '')}**\n`,
+          `      📥 Install: \`install_persona "${fullPath}"\`\n`,
+          `      👁️ Details: \`get_marketplace_persona "${fullPath}"\`\n\n`
         );
       });
     }

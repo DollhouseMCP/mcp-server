@@ -13,10 +13,10 @@ export class MarketplaceSearch {
   }
   
   /**
-   * Search marketplace for personas matching query
+   * Search marketplace for content matching query
    */
   async searchMarketplace(query: string): Promise<any[]> {
-    const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/personas+extension:md`;
+    const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/collection+path:library+extension:md`;
     
     const data = await this.githubClient.fetchFromGitHub(searchUrl);
     
@@ -32,18 +32,32 @@ export class MarketplaceSearch {
    */
   formatSearchResults(items: any[], query: string, personaIndicator: string = ''): string {
     if (items.length === 0) {
-      return `${personaIndicator}🔍 No personas found for query: "${query}"`;
+      return `${personaIndicator}🔍 No content found for query: "${query}"`;
     }
     
     const textParts = [`${personaIndicator}🔍 **Search Results for "${query}"** (${items.length} found)\n\n`];
     
     items.forEach((item: any) => {
-      const path = item.path.replace('personas/', '');
+      // Extract content type from path (library/personas/creative/writer.md -> personas)
+      const pathParts = item.path.split('/');
+      const contentType = pathParts[1] || 'content';
+      
+      const contentIcons: { [key: string]: string } = {
+        'personas': '🎭',
+        'skills': '🛠️',
+        'agents': '🤖',
+        'prompts': '💬',
+        'templates': '📄',
+        'tools': '🔧',
+        'ensembles': '🎼'
+      };
+      const icon = contentIcons[contentType] || '📄';
+      
       textParts.push(
-        `   🎭 **${item.name}**\n`,
-        `      📂 Path: ${path}\n`,
-        `      📥 Install: \`install_persona "${path}"\`\n`,
-        `      👁️ Details: \`get_marketplace_persona "${path}"\`\n\n`
+        `   ${icon} **${item.name.replace('.md', '')}**\n`,
+        `      📂 Path: ${item.path}\n`,
+        `      📥 Install: \`install_persona "${item.path}"\`\n`,
+        `      👁️ Details: \`get_marketplace_persona "${item.path}"\`\n\n`
       );
     });
     

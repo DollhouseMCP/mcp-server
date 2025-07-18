@@ -10,29 +10,33 @@ export function getMarketplaceTools(server: IToolHandler): Array<{ tool: ToolDef
     {
       tool: {
         name: "browse_marketplace",
-        description: "Browse personas from the DollhouseMCP marketplace by category",
+        description: "Browse content from the DollhouseMCP marketplace by section and category",
         inputSchema: {
           type: "object",
           properties: {
+            section: {
+              type: "string",
+              description: "Marketplace section to browse (library, showcase, catalog). Leave empty to see all sections.",
+            },
             category: {
               type: "string",
-              description: "Category to browse (creative, professional, educational, gaming, personal)",
+              description: "Category within the section. For library: personas, skills, agents, prompts, templates, tools, ensembles",
             },
           },
         },
       },
-      handler: (args: any) => server.browseMarketplace(args?.category)
+      handler: (args: any) => server.browseMarketplace(args?.section, args?.category)
     },
     {
       tool: {
         name: "search_marketplace",
-        description: "Search for personas in the marketplace by keywords",
+        description: "Search for content in the marketplace by keywords",
         inputSchema: {
           type: "object",
           properties: {
             query: {
               type: "string",
-              description: "Search query for finding personas",
+              description: "Search query for finding content (personas, skills, agents, etc.)",
             },
           },
           required: ["query"],

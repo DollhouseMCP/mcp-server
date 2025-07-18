@@ -40,7 +40,7 @@ ${persona.content}
 ---
 *Please review this persona for inclusion in the marketplace.*`;
     
-    const githubIssueUrl = `https://github.com/DollhouseMCP/personas/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
+    const githubIssueUrl = `https://github.com/DollhouseMCP/collection/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
     
     return {
       issueTitle,

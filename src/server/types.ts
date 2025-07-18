@@ -15,7 +15,7 @@ export interface IToolHandler {
   validatePersona(persona: string): Promise<any>;
   
   // Marketplace tools
-  browseMarketplace(category?: string): Promise<any>;
+  browseMarketplace(section?: string, category?: string): Promise<any>;
   searchMarketplace(query: string): Promise<any>;
   getMarketplacePersona(path: string): Promise<any>;
   installPersona(path: string): Promise<any>;

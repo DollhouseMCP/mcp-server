@@ -16,7 +16,7 @@ import { SecurityError } from '../errors/SecurityError.js';
 export class PersonaInstaller {
   private githubClient: GitHubClient;
   private personasDir: string;
-  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/personas/contents/personas';
+  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
   constructor(githubClient: GitHubClient, personasDir: string) {
     this.githubClient = githubClient;

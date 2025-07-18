@@ -389,13 +389,25 @@ export class DollhouseMCPServer implements IToolHandler {
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
-  async browseMarketplace(category?: string) {
+  async browseMarketplace(section?: string, category?: string) {
     try {
-      // Enhanced input validation for category
+      // Enhanced input validation for section and category
+      const validatedSection = section ? validateCategory(section) : undefined;
       const validatedCategory = category ? validateCategory(category) : undefined;
       
-      const { items, categories } = await this.marketplaceBrowser.browseMarketplace(validatedCategory);
-      const text = this.marketplaceBrowser.formatBrowseResults(items, categories, validatedCategory, this.getPersonaIndicator());
+      const result = await this.marketplaceBrowser.browseMarketplace(validatedSection, validatedCategory);
+      
+      // Handle sections view
+      const items = result.items;
+      const categories = result.sections || result.categories;
+      
+      const text = this.marketplaceBrowser.formatBrowseResults(
+        items, 
+        categories, 
+        validatedSection, 
+        validatedCategory, 
+        this.getPersonaIndicator()
+      );
       
       return {
         content: [
