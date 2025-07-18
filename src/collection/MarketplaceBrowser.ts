@@ -83,7 +83,7 @@ export class MarketplaceBrowser {
         };
         textParts.push(
           `   ${icon} **${sec.name}** - ${descriptions[sec.name] || 'Content collection'}\n`,
-          `      Browse: \`browse_marketplace "${sec.name}"\`\n\n`
+          `      Browse: \`browse_collection "${sec.name}"\`\n\n`
         );
       });
       return textParts.join('');
@@ -103,14 +103,14 @@ export class MarketplaceBrowser {
           'ensembles': '🎼'
         };
         const icon = typeIcons[cat.name] || '📁';
-        textParts.push(`   ${icon} **${cat.name}** - Browse: \`browse_marketplace "library" "${cat.name}"\`\n`);
+        textParts.push(`   ${icon} **${cat.name}** - Browse: \`browse_collection "library" "${cat.name}"\`\n`);
       });
       textParts.push('\n');
     } else if (categories.length > 0) {
       textParts.push(`**📁 Categories in ${section}${category ? `/${category}` : ''} (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
         const browsePath = category ? `"${section}" "${category}/${cat.name}"` : `"${section}" "${cat.name}"`;
-        textParts.push(`   📂 **${cat.name}** - Browse: \`browse_marketplace ${browsePath}\`\n`);
+        textParts.push(`   📂 **${cat.name}** - Browse: \`browse_collection ${browsePath}\`\n`);
       });
       textParts.push('\n');
     }
@@ -134,7 +134,7 @@ export class MarketplaceBrowser {
         textParts.push(
           `   ▫️ **${item.name.replace('.md', '')}**\n`,
           `      📥 Install: \`install_content "${fullPath}"\`\n`,
-          `      👁️ Details: \`get_marketplace_content "${fullPath}"\`\n\n`
+          `      👁️ Details: \`get_collection_content "${fullPath}"\`\n\n`
         );
       });
     }
