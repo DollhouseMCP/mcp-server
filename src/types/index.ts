@@ -4,5 +4,5 @@
 
 export * from './persona.js';
 export * from './cache.js';
-export * from './marketplace.js';
+export * from './collection.js';
 export * from './mcp.js';

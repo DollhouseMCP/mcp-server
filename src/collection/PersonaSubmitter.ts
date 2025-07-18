@@ -54,7 +54,7 @@ ${persona.content}
    */
   formatSubmissionResponse(persona: Persona, githubIssueUrl: string, personaIndicator: string = ''): string {
     return `${personaIndicator}📤 **Persona Submission Prepared**\n\n` +
-      `🎭 **${persona.metadata.name}** is ready for marketplace submission!\n\n` +
+      `🎭 **${persona.metadata.name}** is ready for collection submission!\n\n` +
       `**Next Steps:**\n` +
       `1. Click this link to create a GitHub issue: \n` +
       `   ${githubIssueUrl}\n\n` +

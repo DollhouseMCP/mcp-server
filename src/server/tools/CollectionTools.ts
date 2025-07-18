@@ -81,7 +81,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     {
       tool: {
         name: "submit_content",
-        description: "Submit local content to the collection for community review. Use this when users want to 'share their persona' or 'submit a persona to the marketplace'. This handles all content types including personas (AI behavioral profiles).",
+        description: "Submit local content to the collection for community review. Use this when users want to 'share their persona' or 'submit a persona to the collection'. This handles all content types including personas (AI behavioral profiles).",
         inputSchema: {
           type: "object",
           properties: {

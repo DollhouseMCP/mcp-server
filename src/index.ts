@@ -422,7 +422,7 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error browsing marketplace: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error browsing collection: ${error}`,
           },
         ],
       };
@@ -450,7 +450,7 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error searching marketplace: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${error}`,
           },
         ],
       };

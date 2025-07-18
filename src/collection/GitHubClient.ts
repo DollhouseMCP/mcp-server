@@ -128,9 +128,9 @@ export class GitHubClient {
   }
 
   /**
-   * Validate token permissions for marketplace operations
+   * Validate token permissions for collection operations
    */
-  async validateMarketplacePermissions(): Promise<void> {
+  async validateCollectionPermissions(): Promise<void> {
     const validation = await TokenManager.ensureTokenPermissions('marketplace');
     if (!validation.isValid) {
       const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');

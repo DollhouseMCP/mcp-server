@@ -1,8 +1,8 @@
 /**
- * Type definitions for marketplace functionality
+ * Type definitions for collection functionality
  */
 
-export interface MarketplacePersona {
+export interface CollectionContent {
   name: string;
   path: string;
   sha: string;
@@ -11,7 +11,7 @@ export interface MarketplacePersona {
   html_url: string;
 }
 
-export interface MarketplaceSearchResult {
+export interface CollectionSearchResult {
   path: string;
   html_url: string;
   repository: {

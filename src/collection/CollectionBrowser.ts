@@ -43,7 +43,7 @@ export class CollectionBrowser {
     const data = await this.githubClient.fetchFromGitHub(url);
     
     if (!Array.isArray(data)) {
-      throw new Error('Invalid marketplace response. Expected directory listing.');
+      throw new Error('Invalid collection response. Expected directory listing.');
     }
     
     // In the library section, we have content type directories
