@@ -1,5 +1,5 @@
 /**
- * Search for personas in the marketplace
+ * Search for content in the collection
  */
 
 import { GitHubClient } from './GitHubClient.js';
@@ -13,9 +13,9 @@ export class MarketplaceSearch {
   }
   
   /**
-   * Search marketplace for content matching query
+   * Search collection for content matching query
    */
-  async searchMarketplace(query: string): Promise<any[]> {
+  async searchCollection(query: string): Promise<any[]> {
     const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/collection+path:library+extension:md`;
     
     const data = await this.githubClient.fetchFromGitHub(searchUrl);
@@ -56,8 +56,8 @@ export class MarketplaceSearch {
       textParts.push(
         `   ${icon} **${item.name.replace('.md', '')}**\n`,
         `      📂 Path: ${item.path}\n`,
-        `      📥 Install: \`install_persona "${item.path}"\`\n`,
-        `      👁️ Details: \`get_marketplace_persona "${item.path}"\`\n\n`
+        `      📥 Install: \`install_content "${item.path}"\`\n`,
+        `      👁️ Details: \`get_marketplace_content "${item.path}"\`\n\n`
       );
     });
     

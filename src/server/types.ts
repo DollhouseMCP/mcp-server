@@ -14,12 +14,12 @@ export interface IToolHandler {
   editPersona(persona: string, field: string, value: string): Promise<any>;
   validatePersona(persona: string): Promise<any>;
   
-  // Marketplace tools
-  browseMarketplace(section?: string, category?: string): Promise<any>;
-  searchMarketplace(query: string): Promise<any>;
-  getMarketplacePersona(path: string): Promise<any>;
-  installPersona(path: string): Promise<any>;
-  submitPersona(persona: string): Promise<any>;
+  // Collection tools
+  browseCollection(section?: string, category?: string): Promise<any>;
+  searchCollection(query: string): Promise<any>;
+  getCollectionContent(path: string): Promise<any>;
+  installContent(path: string): Promise<any>;
+  submitContent(content: string): Promise<any>;
   
   // User tools
   setUserIdentity(username: string, email?: string): Promise<any>;

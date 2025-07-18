@@ -1,5 +1,5 @@
 /**
- * Submit personas to the marketplace
+ * Submit personas to the collection
  */
 
 import { Persona } from '../types/persona.js';

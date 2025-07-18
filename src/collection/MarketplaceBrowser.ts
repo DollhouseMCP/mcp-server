@@ -1,5 +1,5 @@
 /**
- * Browse marketplace personas from GitHub
+ * Browse collection content from GitHub
  */
 
 import { GitHubClient } from './GitHubClient.js';
@@ -13,18 +13,18 @@ export class MarketplaceBrowser {
   }
   
   /**
-   * Browse marketplace content by section and category
+   * Browse collection content by section and category
    * @param section - Top level section: library, showcase, or catalog
    * @param category - Optional category within the section
    */
-  async browseMarketplace(section?: string, category?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
+  async browseCollection(section?: string, category?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
     let url = this.baseUrl;
     
     // If no section provided, show top-level sections
     if (!section) {
       const data = await this.githubClient.fetchFromGitHub(url);
       if (!Array.isArray(data)) {
-        throw new Error('Invalid marketplace response. Expected directory listing.');
+        throw new Error('Invalid collection response. Expected directory listing.');
       }
       
       // Filter to only show content directories
@@ -61,14 +61,14 @@ export class MarketplaceBrowser {
   }
   
   /**
-   * Format marketplace browse results
+   * Format collection browse results
    */
   formatBrowseResults(items: any[], categories: any[], section?: string, category?: string, personaIndicator: string = ''): string {
-    const textParts = [`${personaIndicator}🏪 **DollhouseMCP Marketplace**\n\n`];
+    const textParts = [`${personaIndicator}🏪 **DollhouseMCP Collection**\n\n`];
     
     // Show top-level sections if no section specified
     if (!section && categories.length > 0) {
-      textParts.push(`**📚 Marketplace Sections (${categories.length}):**\n`);
+      textParts.push(`**📚 Collection Sections (${categories.length}):**\n`);
       categories.forEach((sec: any) => {
         const sectionIcons: { [key: string]: string } = {
           'library': '📖',
@@ -133,8 +133,8 @@ export class MarketplaceBrowser {
         const fullPath = section + (category ? `/${category}` : '') + `/${item.name}`;
         textParts.push(
           `   ▫️ **${item.name.replace('.md', '')}**\n`,
-          `      📥 Install: \`install_persona "${fullPath}"\`\n`,
-          `      👁️ Details: \`get_marketplace_persona "${fullPath}"\`\n\n`
+          `      📥 Install: \`install_content "${fullPath}"\`\n`,
+          `      👁️ Details: \`get_marketplace_content "${fullPath}"\`\n\n`
         );
       });
     }

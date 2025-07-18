@@ -1,5 +1,5 @@
 /**
- * Get persona details from marketplace
+ * Get content details from collection
  */
 
 import matter from 'gray-matter';
@@ -18,9 +18,9 @@ export class PersonaDetails {
   }
   
   /**
-   * Get detailed information about a marketplace persona
+   * Get detailed information about collection content
    */
-  async getMarketplacePersona(path: string): Promise<{ metadata: PersonaMetadata; content: string }> {
+  async getCollectionContent(path: string): Promise<{ metadata: PersonaMetadata; content: string }> {
     const url = `${this.baseUrl}/${path}`;
     
     const data = await this.githubClient.fetchFromGitHub(url);
@@ -41,7 +41,7 @@ export class PersonaDetails {
       parsed = SecureYamlParser.safeMatter(sanitizedContent);
     } catch (error) {
       if (error instanceof SecurityError) {
-        throw new Error(`Security warning: This persona contains potentially malicious content - ${error.message}`);
+        throw new Error(`Security warning: This content contains potentially malicious content - ${error.message}`);
       }
       throw error;
     }
@@ -51,7 +51,7 @@ export class PersonaDetails {
     // Additional validation for display
     const metadataValidation = ContentValidator.validateMetadata(metadata);
     if (!metadataValidation.isValid && metadataValidation.severity === 'critical') {
-      throw new Error(`Security warning: This persona contains potentially malicious content`);
+      throw new Error(`Security warning: This content contains potentially malicious content`);
     }
     
     return {
@@ -65,7 +65,7 @@ export class PersonaDetails {
    */
   formatPersonaDetails(metadata: PersonaMetadata, content: string, path: string, personaIndicator: string = ''): string {
     const textParts = [
-      `${personaIndicator}🎭 **Marketplace Persona: ${metadata.name}**\n\n`,
+      `${personaIndicator}🎭 **Collection Content: ${metadata.name}**\n\n`,
       `**📋 Details:**\n`,
       `   🆔 ID: ${metadata.unique_id || 'Not specified'}\n`,
       `   👤 Author: ${metadata.author || 'Unknown'}\n`,
@@ -83,7 +83,7 @@ export class PersonaDetails {
     
     textParts.push(
       `**📥 Installation:**\n`,
-      `Use: \`install_persona "${path}"\`\n\n`,
+      `Use: \`install_content "${path}"\`\n\n`,
       `**📄 Full Content:**\n\`\`\`\n${content}\n\`\`\``
     );
     

@@ -1,5 +1,5 @@
 /**
- * Install personas from marketplace
+ * Install content from collection
  */
 
 import * as fs from 'fs/promises';
@@ -24,9 +24,9 @@ export class PersonaInstaller {
   }
   
   /**
-   * Install a persona from the marketplace
+   * Install content from the collection
    */
-  async installPersona(inputPath: string): Promise<{ 
+  async installContent(inputPath: string): Promise<{ 
     success: boolean; 
     message: string;
     metadata?: PersonaMetadata;
@@ -67,7 +67,7 @@ export class PersonaInstaller {
       parsed = SecureYamlParser.safeMatter(sanitizedContent);
     } catch (error) {
       if (error instanceof SecurityError) {
-        throw new Error(`Security threat in persona: ${error.message}`);
+        throw new Error(`Security threat in content: ${error.message}`);
       }
       throw error;
     }
@@ -82,7 +82,7 @@ export class PersonaInstaller {
     
     // Validate metadata
     if (!metadata.name || !metadata.description) {
-      throw new Error('Invalid persona: missing required name or description');
+      throw new Error('Invalid content: missing required name or description');
     }
     
     // Generate and validate local filename
@@ -95,7 +95,7 @@ export class PersonaInstaller {
       await fs.access(localPath);
       return {
         success: false,
-        message: `Persona already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`
+        message: `Content already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`
       };
     } catch {
       // File doesn't exist, proceed with installation
@@ -106,7 +106,7 @@ export class PersonaInstaller {
     
     return {
       success: true,
-      message: `Persona installed successfully!`,
+      message: `Content installed successfully!`,
       metadata,
       filename
     };
@@ -116,7 +116,7 @@ export class PersonaInstaller {
    * Format installation success message
    */
   formatInstallSuccess(metadata: PersonaMetadata, filename: string, totalPersonas: number, personaIndicator: string = ''): string {
-    return `${personaIndicator}✅ **Persona Installed Successfully!**\n\n` +
+    return `${personaIndicator}✅ **Content Installed Successfully!**\n\n` +
       `🎭 **${metadata.name}** by ${metadata.author}\n` +
       `📁 Saved as: ${filename}\n` +
       `📊 Total personas: ${totalPersonas}\n\n` +
