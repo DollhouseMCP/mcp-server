@@ -152,10 +152,17 @@ These are unrelated to the file deletion issue and documented for future work.
 
 See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_CI_ISSUES.md` for details.
 
-## Current Active Issues (July 10, 2025 - MCP Protocol Fix):
+## Current Active Issues (July 19, 2025 - Post PR #280):
 🔴 **Critical/Urgent**:
-- #189: Fix MCP console output breaking protocol (tests failing)
-- #188: Follow-up improvements for path resolution
+- #282: Add backward compatibility aliases (USERS ARE BROKEN!)
+- #284: Create migration guide for users
+
+⚠️ **Breaking Changes Now Live**:
+PR #280 merged - all tool names changed:
+- `browse_marketplace` → `browse_collection` 
+- `search_marketplace` → `search_collection`
+- etc.
+Users need backward compatibility ASAP!
 
 🟡 **High Priority**:
 - #40: Complete npm publishing (after v1.2.4)
