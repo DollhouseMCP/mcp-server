@@ -3,7 +3,7 @@
  */
 
 import { PersonaManager } from '../../../../src/persona/PersonaManager.js';
-import { GitHubClient } from '../../../../src/marketplace/GitHubClient.js';
+import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 import { APICache } from '../../../../src/cache/APICache.js';
 import { DEFAULT_INDICATOR_CONFIG } from '../../../../src/config/indicator-config.js';
 

@@ -4,7 +4,7 @@
 
 import { Persona } from '../../types/persona.js';
 import { PersonaExporter, ExportedPersona } from './PersonaExporter.js';
-import { GitHubClient } from '../../marketplace/GitHubClient.js';
+import { GitHubClient } from '../../collection/GitHubClient.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { SecurityError } from '../../security/errors.js';
 import { logger } from '../../utils/logger.js';

@@ -33,7 +33,7 @@ export class MCPInputValidator {
   }
 
   /**
-   * Validate search query for marketplace
+   * Validate search query for collection
    */
   static validateSearchQuery(query: string): string {
     if (!query || typeof query !== 'string') {
@@ -64,15 +64,15 @@ export class MCPInputValidator {
   }
 
   /**
-   * Validate marketplace path
+   * Validate collection path
    */
-  static validateMarketplacePath(path: string): string {
+  static validateCollectionPath(path: string): string {
     if (!path || typeof path !== 'string') {
-      throw new Error('Marketplace path must be a non-empty string');
+      throw new Error('Collection path must be a non-empty string');
     }
 
     if (path.length > 500) {
-      throw new Error('Marketplace path too long (max 500 characters)');
+      throw new Error('Collection path too long (max 500 characters)');
     }
 
     // GitHub API paths should be safe filename patterns (efficient validation)
@@ -81,7 +81,7 @@ export class MCPInputValidator {
     for (let i = 0; i < path.length; i++) {
       const char = path[i];
       if (!/[a-zA-Z0-9\/\-_.]/.test(char)) {
-        throw new Error(`Invalid character '${char}' in marketplace path at position ${i + 1}`);
+        throw new Error(`Invalid character '${char}' in collection path at position ${i + 1}`);
       }
     }
 
@@ -107,7 +107,7 @@ export class MCPInputValidator {
     
     for (const pattern of traversalPatterns) {
       if (pathLower.includes(pattern) || encodedPath.toLowerCase().includes(pattern)) {
-        throw new Error('Path traversal not allowed in marketplace path');
+        throw new Error('Path traversal not allowed in collection path');
       }
     }
 

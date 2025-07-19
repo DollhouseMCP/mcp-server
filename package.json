@@ -97,14 +97,14 @@
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
     "jsdom": "^26.1.0",
-    "zod": "^3.25.76"
+    "zod": "^4.0.5"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",
-    "@types/node": "^24.0.11",
+    "@types/node": "^24.0.15",
     "cross-env": "^7.0.3",
     "jest": "^30.0.4",
     "ts-jest": "^29.4.0",

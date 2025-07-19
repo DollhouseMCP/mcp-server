@@ -298,6 +298,10 @@ export class TokenManager {
 
   /**
    * Get minimum required scopes for different operations
+   * 
+   * NOTE: The 'marketplace' scope identifier is kept for backward compatibility
+   * with existing token validations. This is an internal scope name and does not
+   * affect user-facing functionality. (PR #280)
    */
   static getRequiredScopes(operation: 'read' | 'write' | 'marketplace' | 'gist'): TokenScopes {
     switch (operation) {
@@ -313,7 +317,7 @@ export class TokenManager {
           optional: ['user:email']
         };
       
-      case 'marketplace':
+      case 'marketplace': // Internal scope name kept for compatibility (PR #280)
         return {
           required: ['repo'],
           optional: ['user:email']
@@ -334,6 +338,9 @@ export class TokenManager {
 
   /**
    * Check if token has sufficient permissions for operation
+   * 
+   * NOTE: The 'marketplace' operation type is kept for backward compatibility.
+   * This is called internally when accessing collection features. (PR #280)
    */
   static async ensureTokenPermissions(
     operation: 'read' | 'write' | 'marketplace' | 'gist'

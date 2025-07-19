@@ -54,9 +54,9 @@ describe('Security Audit Suppressions', () => {
       });
 
       it('should match double wildcard patterns', () => {
-        expect(shouldSuppress('DMCP-SEC-004', 'src/marketplace/PersonaInstaller.ts')).toBe(true);
-        expect(shouldSuppress('DMCP-SEC-004', 'src/marketplace/api/PersonaAPI.ts')).toBe(true);
-        expect(shouldSuppress('DMCP-SEC-004', 'src/marketplace/deep/nested/file.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/PersonaInstaller.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/api/PersonaAPI.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/deep/nested/file.ts')).toBe(true);
       });
 
       it('should match test file patterns', () => {

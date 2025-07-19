@@ -1,5 +1,5 @@
 /**
- * GitHub API client for marketplace integration
+ * GitHub API client for collection integration
  */
 
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
@@ -128,9 +128,11 @@ export class GitHubClient {
   }
 
   /**
-   * Validate token permissions for marketplace operations
+   * Validate token permissions for collection operations
    */
-  async validateMarketplacePermissions(): Promise<void> {
+  async validateCollectionPermissions(): Promise<void> {
+    // NOTE: Using 'marketplace' scope for backward compatibility with TokenManager.
+    // This is an internal implementation detail that doesn't affect functionality. (PR #280)
     const validation = await TokenManager.ensureTokenPermissions('marketplace');
     if (!validation.isValid) {
       const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');
