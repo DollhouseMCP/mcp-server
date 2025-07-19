@@ -1,8 +1,8 @@
 # Claude Project Context: DollhouseMCP
 
-@docs/development/SESSION_SUMMARY_2025_01_08.md
-@docs/development/PRIORITY_TASKS_2025_01_08.md
-@docs/development/SECURITY_IMPLEMENTATION_2025_01_08.md
+@docs/development/SESSION_SUMMARY_2025_07_08.md
+@docs/development/PRIORITY_TASKS_2025_07_08.md
+@docs/development/SECURITY_IMPLEMENTATION_2025_07_08.md
 @docs/development/BRANCH_PROTECTION_CONFIG.md
 @docs/development/PR_BEST_PRACTICES.md
 

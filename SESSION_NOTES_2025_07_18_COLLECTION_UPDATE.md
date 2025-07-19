@@ -60,9 +60,9 @@ Fixed all critical issues from Claude's comprehensive review:
 Several docs still reference old tool names:
 - `/docs/security/API_WORKFLOW_ARCHITECTURE.md`
 - `/docs/security/SECURITY_ARCHITECTURE.md`
-- `/docs/development/SECURITY_ARCHITECTURE_2025_01_10.md`
+- `/docs/development/SECURITY_ARCHITECTURE_2025_07_10.md`
 - `/docs/security/SEC-001-IMPLEMENTATION.md`
-- `/docs/development/SECURITY_SESSION_2025_01_09.md`
+- `/docs/development/SECURITY_SESSION_2025_07_09.md`
 - `/docs/project/PROJECT_SUMMARY.md`
 - `/docs/development/NEXT_SESSION_PRIORITIES.md`
 

@@ -33,7 +33,7 @@ gh release create v1.2.1 --title "v1.2.1 - Critical Data Protection Release" --n
 
 ## Key Files
 - Full checklist: `/docs/development/NPM_RELEASE_CHECKLIST_v1.2.1.md`
-- Session summary: `/docs/development/SESSION_SUMMARY_2025_01_08_v1.2.1_READY.md`
+- Session summary: `/docs/development/SESSION_SUMMARY_2025_07_08_v1.2.1_READY.md`
 - Original guide: `/docs/development/NPM_PUBLISH_QUICK_REFERENCE.md`
 
 ## What's New in v1.2.1
