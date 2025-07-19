@@ -6,7 +6,7 @@ import { ToolDefinition } from './ToolRegistry.js';
 import { IToolHandler } from '../types.js';
 
 export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
-  return [
+  const tools: Array<{ tool: ToolDefinition; handler: any }> = [
     {
       tool: {
         name: "browse_collection",
@@ -96,4 +96,50 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
       handler: (args: any) => server.submitContent(args.content)
     }
   ];
+
+  // Backward compatibility aliases (deprecated)
+  const deprecatedAliases: Array<{ tool: ToolDefinition; handler: any }> = [
+    {
+      tool: {
+        name: "browse_marketplace",
+        description: "[DEPRECATED - Use browse_collection] " + tools[0].tool.description,
+        inputSchema: tools[0].tool.inputSchema as any
+      },
+      handler: tools[0].handler
+    },
+    {
+      tool: {
+        name: "search_marketplace",
+        description: "[DEPRECATED - Use search_collection] " + tools[1].tool.description,
+        inputSchema: tools[1].tool.inputSchema as any
+      },
+      handler: tools[1].handler
+    },
+    {
+      tool: {
+        name: "get_marketplace_persona",
+        description: "[DEPRECATED - Use get_collection_content] " + tools[2].tool.description,
+        inputSchema: tools[2].tool.inputSchema as any
+      },
+      handler: tools[2].handler
+    },
+    {
+      tool: {
+        name: "install_persona",
+        description: "[DEPRECATED - Use install_content] " + tools[3].tool.description,
+        inputSchema: tools[3].tool.inputSchema as any
+      },
+      handler: tools[3].handler
+    },
+    {
+      tool: {
+        name: "submit_persona",
+        description: "[DEPRECATED - Use submit_content] " + tools[4].tool.description,
+        inputSchema: tools[4].tool.inputSchema as any
+      },
+      handler: tools[4].handler
+    }
+  ];
+
+  return [...tools, ...deprecatedAliases];
 }
