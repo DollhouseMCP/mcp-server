@@ -68,7 +68,8 @@ The term "collection" better represents what DollhouseMCP provides:
 ## Timeline
 
 - **Version 1.2.5**: Both old and new tool names work (current)
-- **Future versions**: Deprecated tools will be removed (date TBD, with advance notice)
+- **Version 2.0.0 (Q2 2025)**: Deprecated tools will be removed
+- **Advance Notice**: At least 3 months warning before removal
 
 ## Need Help?
 

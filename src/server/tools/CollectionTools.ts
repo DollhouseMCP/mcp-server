@@ -98,44 +98,45 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
   ];
 
   // Backward compatibility aliases (deprecated)
+  // Will be removed in version 2.0.0 (estimated Q2 2025)
   const deprecatedAliases: Array<{ tool: ToolDefinition; handler: any }> = [
     {
       tool: {
         name: "browse_marketplace",
-        description: "[DEPRECATED - Use browse_collection] " + tools[0].tool.description,
-        inputSchema: tools[0].tool.inputSchema as any
+        description: "[DEPRECATED - Use browse_collection] " + tools[0].tool.description + " | Will be removed in v2.0.0",
+        inputSchema: { ...tools[0].tool.inputSchema }
       },
       handler: tools[0].handler
     },
     {
       tool: {
         name: "search_marketplace",
-        description: "[DEPRECATED - Use search_collection] " + tools[1].tool.description,
-        inputSchema: tools[1].tool.inputSchema as any
+        description: "[DEPRECATED - Use search_collection] " + tools[1].tool.description + " | Will be removed in v2.0.0",
+        inputSchema: { ...tools[1].tool.inputSchema }
       },
       handler: tools[1].handler
     },
     {
       tool: {
         name: "get_marketplace_persona",
-        description: "[DEPRECATED - Use get_collection_content] " + tools[2].tool.description,
-        inputSchema: tools[2].tool.inputSchema as any
+        description: "[DEPRECATED - Use get_collection_content] " + tools[2].tool.description + " | Will be removed in v2.0.0",
+        inputSchema: { ...tools[2].tool.inputSchema }
       },
       handler: tools[2].handler
     },
     {
       tool: {
         name: "install_persona",
-        description: "[DEPRECATED - Use install_content] " + tools[3].tool.description,
-        inputSchema: tools[3].tool.inputSchema as any
+        description: "[DEPRECATED - Use install_content] " + tools[3].tool.description + " | Will be removed in v2.0.0",
+        inputSchema: { ...tools[3].tool.inputSchema }
       },
       handler: tools[3].handler
     },
     {
       tool: {
         name: "submit_persona",
-        description: "[DEPRECATED - Use submit_content] " + tools[4].tool.description,
-        inputSchema: tools[4].tool.inputSchema as any
+        description: "[DEPRECATED - Use submit_content] " + tools[4].tool.description + " | Will be removed in v2.0.0",
+        inputSchema: { ...tools[4].tool.inputSchema }
       },
       handler: tools[4].handler
     }
