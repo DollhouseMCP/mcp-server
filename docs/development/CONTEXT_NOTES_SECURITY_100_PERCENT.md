@@ -94,7 +94,7 @@ Tomorrow we'll know we succeeded when:
 
 ### The Journey
 ```
-January: Started security implementation (60%)
+July: Started security implementation (60%)
   ↓ (Sanitization, validation)
 March: Enhanced protections (75%)
   ↓ (ReDoS, patterns)

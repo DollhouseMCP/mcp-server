@@ -528,7 +528,7 @@ export class UpdateChecker {
   /**
    * Format date to human-readable format with consistent timezone handling
    * @param dateStr - ISO date string to format
-   * @returns Human-readable date string (e.g., "January 5, 2025")
+   * @returns Human-readable date string (e.g., "July 5, 2025")
    */
   private formatDate(dateStr: string): string {
     try {

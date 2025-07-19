@@ -71,7 +71,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 git push -u origin implement-unicode-normalization-162
 
 # 6. Create PR with comprehensive description
-gh pr create --title "Implement Unicode normalization to prevent bypass attacks (Issue #162)" --body "See UNICODE_IMPLEMENTATION_COMPLETE_2025_01_15.md for full PR description template"
+gh pr create --title "Implement Unicode normalization to prevent bypass attacks (Issue #162)" --body "See UNICODE_IMPLEMENTATION_COMPLETE_2025_07_15.md for full PR description template"
 ```
 
 ## 🎯 PRIORITY 2: Post-Merge Actions

@@ -1047,7 +1047,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **TypeScript compilation fixes** for all test files
 - ✅ **All security vulnerabilities resolved** (0 active alerts)
 
-### v1.2.1 - January 8, 2025
+### v1.2.1 - July 8, 2025
 - ✅ **Critical bug fixes** for data protection:
   - Copy-on-write for default personas (Issue #145)
   - User personas included in backups (Issue #144)
@@ -1056,7 +1056,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **Enhanced security** with all vulnerabilities resolved
 - ✅ **Improved documentation** with clear prerequisites
 
-### v1.2.0 - January 7, 2025
+### v1.2.0 - July 7, 2025
 - ✅ **Rate limiting implementation** to prevent API abuse
 - ✅ **GPG signature verification** for release authenticity
 - ✅ **GitHub Advanced Security** integration
