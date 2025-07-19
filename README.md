@@ -25,6 +25,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌍 Website**: https://dollhousemcp.com (planned)  
 **📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
 
+> **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
+
 ## 🚀 Quick Start
 
 ```bash
@@ -1047,7 +1049,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **TypeScript compilation fixes** for all test files
 - ✅ **All security vulnerabilities resolved** (0 active alerts)
 
-### v1.2.1 - January 8, 2025
+### v1.2.1 - July 8, 2025
 - ✅ **Critical bug fixes** for data protection:
   - Copy-on-write for default personas (Issue #145)
   - User personas included in backups (Issue #144)
@@ -1056,7 +1058,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **Enhanced security** with all vulnerabilities resolved
 - ✅ **Improved documentation** with clear prerequisites
 
-### v1.2.0 - January 7, 2025
+### v1.2.0 - July 7, 2025
 - ✅ **Rate limiting implementation** to prevent API abuse
 - ✅ **GPG signature verification** for release authenticity
 - ✅ **GitHub Advanced Security** integration

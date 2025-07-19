@@ -217,5 +217,5 @@ gh pr review --request-changes -b "Please address..."
 ---
 
 **Last Updated**: July 2025
-**Review Date**: January 2026
+**Review Date**: July 2026
 **Maintainer**: @mickdarling

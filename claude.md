@@ -1,8 +1,8 @@
 # Claude Project Context: DollhouseMCP
 
-@docs/development/SESSION_SUMMARY_2025_01_08.md
-@docs/development/PRIORITY_TASKS_2025_01_08.md
-@docs/development/SECURITY_IMPLEMENTATION_2025_01_08.md
+@docs/development/SESSION_SUMMARY_2025_07_08.md
+@docs/development/PRIORITY_TASKS_2025_07_08.md
+@docs/development/SECURITY_IMPLEMENTATION_2025_07_08.md
 @docs/development/BRANCH_PROTECTION_CONFIG.md
 @docs/development/PR_BEST_PRACTICES.md
 
@@ -105,7 +105,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Configuration Validation** - Minimum security limits enforced (releaseNotesMaxLength >= 100)
 ✅ **28 Tests** - Complete coverage of security scenarios, performance, and edge cases
 
-### Completed (v1.2.0 Security & Reliability Release - January 7, 2025):
+### Completed (v1.2.0 Security & Reliability Release - July 7, 2025):
 ✅ **Rate Limiting Implementation** - Issue #72 - Token bucket algorithm prevents API abuse
 ✅ **Signature Verification** - Issue #73 - GPG signature verification for release authenticity
 ✅ **CI Environment Tests** - 44 new tests for CI compatibility and security
@@ -116,7 +116,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **All CI Workflows**: Passing at 100% reliability
 ✅ **Branch Protection**: Enabled with all checks passing
 
-### Completed (GitHub Advanced Security Implementation - January 8, 2025):
+### Completed (GitHub Advanced Security Implementation - July 8, 2025):
 ✅ **GitHub Advanced Security** - Fully configured with CodeQL, secret scanning, Dependabot
 ✅ **All Security Alerts Resolved** - 2 high-severity + 7 medium-severity alerts fixed and merged
 ✅ **All Dependabot Updates Merged** - 5 PRs including major updates (MCP SDK 1.15.0, Node.js 24)
@@ -152,10 +152,17 @@ These are unrelated to the file deletion issue and documented for future work.
 
 See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_CI_ISSUES.md` for details.
 
-## Current Active Issues (July 10, 2025 - MCP Protocol Fix):
+## Current Active Issues (July 19, 2025 - Post PR #280):
 🔴 **Critical/Urgent**:
-- #189: Fix MCP console output breaking protocol (tests failing)
-- #188: Follow-up improvements for path resolution
+- #282: Add backward compatibility aliases (USERS ARE BROKEN!)
+- #284: Create migration guide for users
+
+⚠️ **Breaking Changes Now Live**:
+PR #280 merged - all tool names changed:
+- `browse_marketplace` → `browse_collection` 
+- `search_marketplace` → `search_collection`
+- etc.
+Users need backward compatibility ASAP!
 
 🟡 **High Priority**:
 - #40: Complete npm publishing (after v1.2.4)
@@ -177,7 +184,7 @@ See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_
 - v1.2.3 (July 10): Fixed /personas filesystem root error  
 - v1.2.4 (July 10): Fixed console output breaking MCP protocol  
 
-## Current Workflow Status (January 8, 2025)
+## Current Workflow Status (July 8, 2025)
 
 | Workflow | Status | Reliability | Purpose |
 |----------|--------|-------------|---------|
@@ -195,7 +202,7 @@ See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_
 **Project Board**: https://github.com/users/mickdarling/projects/1
 **Milestones**:
 - v1.1.0 - CI/CD Reliability ✅ (Completed: July 4, 2025)
-- v1.2.0 - Security & Reliability ✅ (Completed: January 7, 2025)
+- v1.2.0 - Security & Reliability ✅ (Completed: July 7, 2025)
 - v1.3.0 - Universal Platform Support (Due: Feb 15, 2025)
 - v1.4.0 - Enhanced UX & Marketplace (Due: Mar 15, 2025)
 
@@ -602,10 +609,10 @@ rollback_update true                # Revert to previous version if needed
 **Package Status**: 279.3 kB ready for npm (consider Node.js 24 LTS timeline)  
 
 **Session History**:
-- **January 8, 2025**: Resolved 9 security alerts, merged Dependabot PRs, fixed critical bugs #144/#145, v1.2.1 ready
-- **January 9, 2025**: Implemented SEC-001 prompt injection protection (PR #156), created security research roadmap
+- **July 8, 2025**: Resolved 9 security alerts, merged Dependabot PRs, fixed critical bugs #144/#145, v1.2.1 ready
+- **July 9, 2025**: Implemented SEC-001 prompt injection protection (PR #156), created security research roadmap
 
-**Security Implementation Status (January 9, 2025)**:
+**Security Implementation Status (July 9, 2025)**:
 - ✅ SEC-001: Content sanitization implemented (PR #156 awaiting review)
 - ⏳ SEC-003: YAML parsing security (next priority)
 - ⏳ SEC-004: Token management system (high priority)
