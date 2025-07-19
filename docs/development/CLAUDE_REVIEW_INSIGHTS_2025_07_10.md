@@ -1,4 +1,4 @@
-# Claude Code Review Insights - January 10, 2025
+# Claude Code Review Insights - July 10, 2025
 
 ## Important Learnings About Claude Code Reviews
 

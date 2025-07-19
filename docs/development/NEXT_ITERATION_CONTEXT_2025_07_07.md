@@ -1,4 +1,4 @@
-# DollhouseMCP Development Context - January 7, 2025
+# DollhouseMCP Development Context - July 7, 2025
 
 This document provides context for the next Claude instance to continue development work on DollhouseMCP.
 

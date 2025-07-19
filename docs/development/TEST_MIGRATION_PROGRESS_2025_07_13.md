@@ -1,4 +1,4 @@
-# Test Migration Progress - January 13, 2025
+# Test Migration Progress - July 13, 2025
 
 ## Overview
 This document tracks the progress of migrating test files from the root directory to the `test/` directory as part of PR #273 (root directory cleanup).

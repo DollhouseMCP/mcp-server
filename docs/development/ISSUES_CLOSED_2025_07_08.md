@@ -1,7 +1,7 @@
-# Issues Closed - January 8, 2025
+# Issues Closed - July 8, 2025
 
 ## Summary
-This document tracks all issues that were closed during the January 8, 2025 sessions (morning and afternoon).
+This document tracks all issues that were closed during the July 8, 2025 sessions (morning and afternoon).
 
 ## Issues Closed
 

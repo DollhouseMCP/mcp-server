@@ -165,17 +165,19 @@
   "active": "d150a0cd99ad3552",
   "lastOpenFiles": [
     "Users/mick/Downloads/dollhouse_platform_structure.md",
-    "SECURITY_ARCHITECTURE.md",
     "Users/mick/Downloads",
     "Users/mick",
     "Users",
     "Untitled.md",
+    "SECURITY_MEASURES.md",
+    "SECURITY_DOCUMENTATION_GUIDE.md",
+    "SECURITY_ARCHITECTURE.md",
+    "PERSONA_MARKETPLACE_ECOSYSTEM.md",
     "CRITICAL_SECURITY_GAP_ANALYSIS.md",
     "CLOUD_API_SECURITY_ARCHITECTURE.md",
+    "API_WORKFLOW_ARCHITECTURE.md",
     "SEC-002-VERIFICATION-EVIDENCE.md",
     "SEC-002-RESOLUTION.md",
-    "SEC-001-IMPLEMENTATION.md",
-    "PERSONA_MARKETPLACE_ECOSYSTEM.md",
-    "API_WORKFLOW_ARCHITECTURE.md"
+    "SEC-001-IMPLEMENTATION.md"
   ]
 }
