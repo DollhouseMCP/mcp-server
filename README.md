@@ -25,6 +25,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌍 Website**: https://dollhousemcp.com (planned)  
 **📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
 
+> **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
+
 ## 🚀 Quick Start
 
 ```bash
