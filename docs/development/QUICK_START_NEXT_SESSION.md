@@ -29,7 +29,7 @@ gh issue view 62  # Auto-update documentation
 - **Node.js 24**: Successfully upgraded but NOT LTS until October 2025
 - **MCP SDK 1.15.0**: Major upgrade with breaking changes (reject → decline)
 - **PR #138**: Created but has test failures that need fixing
-- **All dependencies**: Current as of January 8, 2025
+- **All dependencies**: Current as of July 8, 2025
 
 ## 🔧 If You Need to Fix PR #138
 

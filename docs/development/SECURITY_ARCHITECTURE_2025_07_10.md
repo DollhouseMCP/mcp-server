@@ -1,4 +1,4 @@
-# DollhouseMCP Security Architecture - January 10, 2025
+# DollhouseMCP Security Architecture - July 10, 2025
 
 ## Overview
 This document describes the complete security architecture implemented in DollhouseMCP following the security audit of July 9, 2025.
