@@ -289,7 +289,7 @@ describe('MCP Tools Security Tests', () => {
       
       try {
         // Trigger an error that might expose the token
-        await server.browseMarketplace('../../../invalid/path');
+        await server.browseCollection('../../../invalid/path');
       } catch (error) {
         // Token should not be in error message
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -313,7 +313,7 @@ describe('MCP Tools Security Tests', () => {
       for (const token of invalidTokens) {
         process.env.GITHUB_TOKEN = token;
         
-        const result = await server.browseMarketplace();
+        const result = await server.browseCollection();
         
         // Should handle invalid tokens gracefully
         expect(result.content[0].text).toBeDefined();

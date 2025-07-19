@@ -10,7 +10,7 @@ export function getUserTools(server: IToolHandler): Array<{ tool: ToolDefinition
     {
       tool: {
         name: "set_user_identity",
-        description: "Set your username for persona attribution and marketplace participation",
+        description: "Set your username for persona attribution and collection participation",
         inputSchema: {
           type: "object",
           properties: {

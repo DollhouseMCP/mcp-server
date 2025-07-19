@@ -27,8 +27,8 @@ export * from './cache/APICache.js';
 // Persona
 export * from './persona/index.js';
 
-// Marketplace
-export * from './marketplace/index.js';
+// Collection
+export * from './collection/index.js';
 
 // Update
 export * from './update/index.js';

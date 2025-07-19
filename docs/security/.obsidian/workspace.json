@@ -1,0 +1,181 @@
+{
+  "main": {
+    "id": "73f93455523f1d7d",
+    "type": "split",
+    "children": [
+      {
+        "id": "05c6414dfc05f4d3",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d150a0cd99ad3552",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "770735c1a1dfdea3",
+    "type": "split",
+    "children": [
+      {
+        "id": "49616840b6986336",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "5369d535ef9f132c",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "301bae9aee9bf372",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "b305825f95cf1d70",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "088b51ce01913de6",
+    "type": "split",
+    "children": [
+      {
+        "id": "7618cd9911ad5f16",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d8c560c0d907dea1",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "f10f974a41384486",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "API_WORKFLOW_ARCHITECTURE.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from API_WORKFLOW_ARCHITECTURE"
+            }
+          },
+          {
+            "id": "ea5681c61cc022e8",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "78b8607c281af4cf",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "API_WORKFLOW_ARCHITECTURE.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of API_WORKFLOW_ARCHITECTURE"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false
+    }
+  },
+  "active": "d150a0cd99ad3552",
+  "lastOpenFiles": [
+    "Users/mick/Downloads/dollhouse_platform_structure.md",
+    "SECURITY_ARCHITECTURE.md",
+    "Users/mick/Downloads",
+    "Users/mick",
+    "Users",
+    "Untitled.md",
+    "CRITICAL_SECURITY_GAP_ANALYSIS.md",
+    "CLOUD_API_SECURITY_ARCHITECTURE.md",
+    "SEC-002-VERIFICATION-EVIDENCE.md",
+    "SEC-002-RESOLUTION.md",
+    "SEC-001-IMPLEMENTATION.md",
+    "PERSONA_MARKETPLACE_ECOSYSTEM.md",
+    "API_WORKFLOW_ARCHITECTURE.md"
+  ]
+}

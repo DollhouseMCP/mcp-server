@@ -6,7 +6,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ToolRegistry } from './tools/ToolRegistry.js';
 import { getPersonaTools } from './tools/PersonaTools.js';
-import { getMarketplaceTools } from './tools/MarketplaceTools.js';
+import { getCollectionTools } from './tools/CollectionTools.js';
 import { getUserTools } from './tools/UserTools.js';
 import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
@@ -40,8 +40,8 @@ export class ServerSetup {
     // Register persona tools
     this.toolRegistry.registerMany(getPersonaTools(instance));
     
-    // Register marketplace tools
-    this.toolRegistry.registerMany(getMarketplaceTools(instance));
+    // Register collection tools
+    this.toolRegistry.registerMany(getCollectionTools(instance));
     
     // Register user tools
     this.toolRegistry.registerMany(getUserTools(instance));

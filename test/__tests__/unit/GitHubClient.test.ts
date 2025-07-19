@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { GitHubClient } from '../../../src/marketplace/GitHubClient.js';
+import { GitHubClient } from '../../../src/collection/GitHubClient.js';
 import { APICache } from '../../../src/cache/APICache.js';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { SECURITY_LIMITS } from '../../../src/security/constants.js';

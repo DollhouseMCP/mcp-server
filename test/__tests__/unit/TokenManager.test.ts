@@ -167,8 +167,8 @@ describe('TokenManager - GitHub Token Security', () => {
       expect(scopes.required).toContain('repo');
     });
 
-    test('should return marketplace scopes', () => {
-      const scopes = TokenManager.getRequiredScopes('marketplace');
+    test('should return collection scopes', () => {
+      const scopes = TokenManager.getRequiredScopes('collection');
       expect(scopes.required).toContain('repo');
     });
 

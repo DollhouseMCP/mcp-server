@@ -1,5 +1,5 @@
 /**
- * Submit personas to the marketplace
+ * Submit personas to the collection
  */
 
 import { Persona } from '../types/persona.js';
@@ -38,9 +38,9 @@ ${persona.content}
 - Unique ID: ${persona.unique_id}
 
 ---
-*Please review this persona for inclusion in the marketplace.*`;
+*Please review this persona for inclusion in the collection.*`;
     
-    const githubIssueUrl = `https://github.com/DollhouseMCP/personas/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
+    const githubIssueUrl = `https://github.com/DollhouseMCP/collection/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
     
     return {
       issueTitle,
@@ -54,7 +54,7 @@ ${persona.content}
    */
   formatSubmissionResponse(persona: Persona, githubIssueUrl: string, personaIndicator: string = ''): string {
     return `${personaIndicator}📤 **Persona Submission Prepared**\n\n` +
-      `🎭 **${persona.metadata.name}** is ready for marketplace submission!\n\n` +
+      `🎭 **${persona.metadata.name}** is ready for collection submission!\n\n` +
       `**Next Steps:**\n` +
       `1. Click this link to create a GitHub issue: \n` +
       `   ${githubIssueUrl}\n\n` +
