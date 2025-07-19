@@ -24,24 +24,29 @@ export const GetPersonaDetailsArgsSchema = z.object({
 
 export const ReloadPersonasArgsSchema = z.object({});
 
-export const BrowseMarketplaceArgsSchema = z.object({
+// Updated schema name from marketplace to collection for consistency (PR #280)
+export const BrowseCollectionArgsSchema = z.object({
   category: z.string().optional().describe("Category to browse (creative, professional, etc.)")
 });
 
-export const SearchMarketplaceArgsSchema = z.object({
+// Updated schema name from marketplace to collection for consistency (PR #280)
+export const SearchCollectionArgsSchema = z.object({
   query: z.string().describe("Search query")
 });
 
-export const GetMarketplacePersonaArgsSchema = z.object({
-  path: z.string().describe("Path to the persona file in the collection repository")
+// Updated schema name from marketplace to collection for consistency (PR #280)
+export const GetCollectionContentArgsSchema = z.object({
+  path: z.string().describe("Path to the content file in the collection repository")
 });
 
-export const InstallPersonaArgsSchema = z.object({
-  path: z.string().describe("Path to the persona file in the collection repository")
+// Updated schema name from InstallPersona to InstallContent for consistency (PR #280)
+export const InstallContentArgsSchema = z.object({
+  path: z.string().describe("Path to the content file in the collection repository")
 });
 
-export const SubmitPersonaArgsSchema = z.object({
-  persona_name: z.string().describe("Name of the local persona to submit")
+// Updated schema name from SubmitPersona to SubmitContent for consistency (PR #280)
+export const SubmitContentArgsSchema = z.object({
+  content_name: z.string().describe("Name of the local content to submit")
 });
 
 export const SetUserIdentityArgsSchema = z.object({

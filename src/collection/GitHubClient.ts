@@ -131,6 +131,8 @@ export class GitHubClient {
    * Validate token permissions for collection operations
    */
   async validateCollectionPermissions(): Promise<void> {
+    // NOTE: Using 'marketplace' scope for backward compatibility with TokenManager.
+    // This is an internal implementation detail that doesn't affect functionality. (PR #280)
     const validation = await TokenManager.ensureTokenPermissions('marketplace');
     if (!validation.isValid) {
       const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');
