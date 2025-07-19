@@ -1,7 +1,7 @@
 /**
  * Content Validator for DollhouseMCP
  * 
- * Protects against prompt injection attacks in marketplace personas
+ * Protects against prompt injection attacks in collection personas
  * by detecting and sanitizing malicious content patterns.
  * 
  * Security: SEC-001 - Critical vulnerability protection

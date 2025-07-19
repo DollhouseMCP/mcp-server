@@ -1,5 +1,5 @@
 /**
- * GitHub API client for marketplace integration
+ * GitHub API client for collection integration
  */
 
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';

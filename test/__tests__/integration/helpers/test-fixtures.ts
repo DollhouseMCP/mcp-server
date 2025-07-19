@@ -39,7 +39,7 @@ export const TEST_PERSONAS = {
 };
 
 export const MOCK_GITHUB_RESPONSES = {
-  marketplaceContents: {
+  collectionContents: {
     creative: [
       {
         name: 'storyteller.md',
@@ -63,7 +63,7 @@ export const MOCK_GITHUB_RESPONSES = {
 name: Storyteller
 description: Master storyteller for engaging narratives
 category: creative
-author: marketplace
+author: collection
 version: 1.0
 ---
 

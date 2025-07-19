@@ -89,7 +89,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize persona manager
     this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
     
-    // Initialize marketplace modules
+    // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.collectionBrowser = new CollectionBrowser(this.githubClient);
     this.collectionSearch = new CollectionSearch(this.githubClient);
@@ -565,7 +565,7 @@ export class DollhouseMCPServer implements IToolHandler {
               text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
               `This persona contains content that could be used for prompt injection attacks:\n` +
               `• ${contentValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please remove these patterns before submitting to the marketplace.`,
+              `Please remove these patterns before submitting to the collection.`,
             },
           ],
         };

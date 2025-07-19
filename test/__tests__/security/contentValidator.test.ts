@@ -1,7 +1,7 @@
 /**
  * Tests for ContentValidator security implementation
  * 
- * Tests protection against prompt injection attacks in marketplace personas
+ * Tests protection against prompt injection attacks in collection personas
  */
 
 import { ContentValidator } from '../../../src/security/contentValidator.js';

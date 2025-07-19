@@ -46,30 +46,30 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
     });
   });
 
-  describe('validateMarketplacePath', () => {
+  describe('validateCollectionPath', () => {
     test('should accept valid GitHub paths', () => {
-      expect(MCPInputValidator.validateMarketplacePath('creative/storyteller.md')).toBe('creative/storyteller.md');
-      expect(MCPInputValidator.validateMarketplacePath('professional/excel-expert.md')).toBe('professional/excel-expert.md');
-      expect(MCPInputValidator.validateMarketplacePath('category/sub-category/persona.md')).toBe('category/sub-category/persona.md');
+      expect(MCPInputValidator.validateCollectionPath('creative/storyteller.md')).toBe('creative/storyteller.md');
+      expect(MCPInputValidator.validateCollectionPath('professional/excel-expert.md')).toBe('professional/excel-expert.md');
+      expect(MCPInputValidator.validateCollectionPath('category/sub-category/persona.md')).toBe('category/sub-category/persona.md');
     });
 
     test('should reject path traversal attempts', () => {
-      expect(() => MCPInputValidator.validateMarketplacePath('../../../etc/passwd')).toThrow('Path traversal not allowed');
-      expect(() => MCPInputValidator.validateMarketplacePath('./admin/secrets')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateCollectionPath('../../../etc/passwd')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateCollectionPath('./admin/secrets')).toThrow('Path traversal not allowed');
       // Test enhanced path traversal protection
-      expect(() => MCPInputValidator.validateMarketplacePath('admin/../../../etc/passwd')).toThrow('Path traversal not allowed');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin%2e%2e%2f')).toThrow('Invalid character \'%\'');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin%252e%252e')).toThrow('Invalid character \'%\'');
-      expect(() => MCPInputValidator.validateMarketplacePath('admin..%2f')).toThrow('Invalid character \'%\'');
+      expect(() => MCPInputValidator.validateCollectionPath('admin/../../../etc/passwd')).toThrow('Path traversal not allowed');
+      expect(() => MCPInputValidator.validateCollectionPath('admin%2e%2e%2f')).toThrow('Invalid character \'%\'');
+      expect(() => MCPInputValidator.validateCollectionPath('admin%252e%252e')).toThrow('Invalid character \'%\'');
+      expect(() => MCPInputValidator.validateCollectionPath('admin..%2f')).toThrow('Invalid character \'%\'');
     });
 
     test('should reject invalid path formats', () => {
-      expect(() => MCPInputValidator.validateMarketplacePath('invalid<>path')).toThrow('Invalid character \'<\' in marketplace path at position 8');
-      expect(() => MCPInputValidator.validateMarketplacePath('path with spaces')).toThrow('Invalid character \' \' in marketplace path at position 5');
+      expect(() => MCPInputValidator.validateCollectionPath('invalid<>path')).toThrow('Invalid character \'<\' in collection path at position 8');
+      expect(() => MCPInputValidator.validateCollectionPath('path with spaces')).toThrow('Invalid character \' \' in collection path at position 5');
     });
 
     test('should enforce length limits', () => {
-      expect(() => MCPInputValidator.validateMarketplacePath('a'.repeat(501))).toThrow('Marketplace path too long');
+      expect(() => MCPInputValidator.validateCollectionPath('a'.repeat(501))).toThrow('Collection path too long');
     });
   });
 
@@ -181,7 +181,7 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
       // All validators should throw Error objects with descriptive messages
       expect(() => MCPInputValidator.validatePersonaIdentifier('')).toThrow(Error);
       expect(() => MCPInputValidator.validateSearchQuery('')).toThrow(Error);
-      expect(() => MCPInputValidator.validateMarketplacePath('')).toThrow(Error);
+      expect(() => MCPInputValidator.validateCollectionPath('')).toThrow(Error);
       expect(() => MCPInputValidator.validateImportUrl('')).toThrow(Error);
     });
 

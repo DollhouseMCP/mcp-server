@@ -33,11 +33,11 @@ export const SearchMarketplaceArgsSchema = z.object({
 });
 
 export const GetMarketplacePersonaArgsSchema = z.object({
-  path: z.string().describe("Path to the persona file in the marketplace repository")
+  path: z.string().describe("Path to the persona file in the collection repository")
 });
 
 export const InstallPersonaArgsSchema = z.object({
-  path: z.string().describe("Path to the persona file in the marketplace repository")
+  path: z.string().describe("Path to the persona file in the collection repository")
 });
 
 export const SubmitPersonaArgsSchema = z.object({

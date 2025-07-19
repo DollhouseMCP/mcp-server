@@ -38,7 +38,7 @@ ${persona.content}
 - Unique ID: ${persona.unique_id}
 
 ---
-*Please review this persona for inclusion in the marketplace.*`;
+*Please review this persona for inclusion in the collection.*`;
     
     const githubIssueUrl = `https://github.com/DollhouseMCP/collection/issues/new?title=${encodeURIComponent(issueTitle)}&body=${encodeURIComponent(issueBody)}`;
     

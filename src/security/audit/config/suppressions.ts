@@ -179,12 +179,12 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/marketplace/*.ts',
+    file: 'src/collection/*.ts',
     reason: 'Marketplace modules receive normalized input from tool handlers'
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/marketplace/**/*.ts',
+    file: 'src/collection/**/*.ts',
     reason: 'Marketplace modules receive normalized input from tool handlers'
   },
   {
@@ -258,12 +258,12 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'src/marketplace/*.ts',
+    file: 'src/collection/*.ts',
     reason: 'Marketplace operations are not security-sensitive requiring audit'
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'src/marketplace/**/*.ts',
+    file: 'src/collection/**/*.ts',
     reason: 'Marketplace operations are not security-sensitive requiring audit'
   },
   {
