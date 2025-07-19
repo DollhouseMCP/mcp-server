@@ -98,7 +98,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
   ];
 
   // Backward compatibility aliases (deprecated)
-  // Will be removed in version 2.0.0 (estimated Q2 2025)
+  // Will be removed in version 2.0.0 (estimated Q1 2026)
   const deprecatedAliases: Array<{ tool: ToolDefinition; handler: any }> = [
     {
       tool: {
