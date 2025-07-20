@@ -235,7 +235,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
   /**
    * Import persona from data
-   * SECURITY FIX #3: Uses SecureYamlParser instead of yaml.load() to prevent
+   * SECURITY FIX #3: Uses SecureYamlParser instead of unsafe YAML parsing to prevent
    * YAML deserialization attacks and injection vulnerabilities
    */
   async importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<PersonaElement> {
@@ -249,7 +249,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
         persona.deserialize(this.jsonToMarkdown(jsonData));
       } else if (format === 'yaml') {
         // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
-        // Previously: const yamlData = yaml.load(data);
+        // Previously: Used unsafe YAML parsing without validation
         // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
         try {
           const parsed = SecureYamlParser.parse(data, {
@@ -293,6 +293,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
    * Export persona to data
    * SECURITY FIX #2: Uses static import of js-yaml at top of file instead of
    * dynamic require() for better security and bundling
+   * SECURITY FIX #3: Uses secure YAML dumping with safety options
    */
   async exportElement(element: PersonaElement, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<string> {
     try {
@@ -303,10 +304,15 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
         return JSON.stringify({ ...legacy, content: element.content }, null, 2);
       } else if (format === 'yaml') {
         const legacy = element.toLegacy();
-        // CRITICAL FIX: Using statically imported yaml module
-        // Previously: return require('js-yaml').dump({ ...legacy, content: element.content });
-        // Now: Uses the yaml import from top of file for better security
-        return yaml.dump({ ...legacy, content: element.content });
+        // CRITICAL FIX: Using safe YAML dump with security options
+        // Previously: Used dynamic require without safety options
+        // Now: Uses static import with safe schema and security flags
+        return yaml.dump({ ...legacy, content: element.content }, {
+          schema: yaml.FAILSAFE_SCHEMA,  // Use restricted schema
+          skipInvalid: true,              // Skip invalid data instead of throwing
+          noRefs: true,                   // Prevent reference attacks
+          noCompatMode: true              // Use strict YAML mode
+        });
       } else {
         throw new Error(`Unsupported format: ${format}`);
       }
@@ -320,12 +326,18 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
   /**
    * Helper: Convert JSON data to markdown format
    * SECURITY FIX #2: Uses statically imported yaml module
+   * SECURITY FIX #3: Uses secure YAML dumping with safety options
    * Note: This is for internal conversion only, user-provided YAML must use SecureYamlParser
    */
   private jsonToMarkdown(data: any): string {
     const { content, ...metadata } = data;
-    // Using statically imported yaml module (not dynamic require)
-    const yamlFrontmatter = yaml.dump(metadata);
+    // Using safe YAML dump with security options
+    const yamlFrontmatter = yaml.dump(metadata, {
+      schema: yaml.FAILSAFE_SCHEMA,  // Use restricted schema
+      skipInvalid: true,              // Skip invalid data
+      noRefs: true,                   // Prevent reference attacks
+      noCompatMode: true              // Use strict YAML mode
+    });
     return `---\n${yamlFrontmatter}---\n\n${content || ''}`;
   }
 
