@@ -28,6 +28,8 @@ import { ServerSetup, IToolHandler } from './server/index.js';
 import { logger } from './utils/logger.js';
 import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
+import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
+import { MigrationManager } from './portfolio/MigrationManager.js';
 
 
 
@@ -52,6 +54,8 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaExporter: PersonaExporter;
   private personaImporter: PersonaImporter;
   private personaSharer: PersonaSharer;
+  private portfolioManager: PortfolioManager;
+  private migrationManager: MigrationManager;
 
   constructor() {
     this.server = new Server(
@@ -66,13 +70,12 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
-    // Get the directory of this file for proper path resolution
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
+    // Initialize portfolio system
+    this.portfolioManager = PortfolioManager.getInstance();
+    this.migrationManager = new MigrationManager(this.portfolioManager);
     
-    // Use environment variable if set, otherwise default to personas subdirectory relative to the project root
-    // Note: Assumes compiled output is in a subdirectory (e.g., dist/ or build/)
-    this.personasDir = process.env.PERSONAS_DIR || path.join(__dirname, "..", "personas");
+    // Use portfolio personas directory
+    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
     
     // Log resolved path for debugging
     logger.info(`Personas directory resolved to: ${this.personasDir}`);
@@ -109,7 +112,40 @@ export class DollhouseMCPServer implements IToolHandler {
     this.serverSetup = new ServerSetup();
     this.serverSetup.setupServer(this.server, this);
     
-    this.loadPersonas();
+    // Initialize portfolio and perform migration if needed
+    this.initializePortfolio().then(() => {
+      this.loadPersonas();
+    }).catch(error => {
+      logger.error(`Failed to initialize portfolio: ${error}`);
+    });
+  }
+  
+  private async initializePortfolio(): Promise<void> {
+    // Check if migration is needed
+    const needsMigration = await this.migrationManager.needsMigration();
+    
+    if (needsMigration) {
+      logger.info('Legacy personas detected. Starting migration...');
+      
+      const result = await this.migrationManager.migrate({ backup: true });
+      
+      if (result.success) {
+        logger.info(`Successfully migrated ${result.migratedCount} personas`);
+        if (result.backedUp && result.backupPath) {
+          logger.info(`Backup created at: ${result.backupPath}`);
+        }
+      } else {
+        logger.error('Migration completed with errors:');
+        result.errors.forEach(err => logger.error(`  - ${err}`));
+      }
+    }
+    
+    // Ensure portfolio structure exists
+    const portfolioExists = await this.portfolioManager.exists();
+    if (!portfolioExists) {
+      logger.info('Creating portfolio directory structure...');
+      await this.portfolioManager.initialize();
+    }
   }
 
   // Tool handler methods - now public for access from tool modules

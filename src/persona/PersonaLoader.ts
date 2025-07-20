@@ -10,12 +10,18 @@ import { ensureDirectory, generateUniqueId } from '../utils/filesystem.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
 import { logger } from '../utils/logger.js';
+import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 
 export class PersonaLoader {
   private personasDir: string;
+  private portfolioManager: PortfolioManager;
   
-  constructor(personasDir: string) {
-    this.personasDir = personasDir;
+  constructor(personasDir?: string) {
+    // Use PortfolioManager for new portfolio structure
+    this.portfolioManager = PortfolioManager.getInstance();
+    // If personasDir is provided, it's for legacy compatibility
+    // Otherwise use the portfolio personas directory
+    this.personasDir = personasDir || this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
   
   /**
