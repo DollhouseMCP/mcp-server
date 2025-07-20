@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PortfolioManager, ElementType } from './PortfolioManager.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface MigrationResult {
   success: boolean;
@@ -95,7 +96,17 @@ export class MigrationManager {
       result.success = false;
       const errorMsg = `Migration failed: ${error instanceof Error ? error.message : String(error)}`;
       result.errors.push(errorMsg);
-      logger.error(`[MigrationManager] ${errorMsg}`);
+      
+      // Log with full error details including stack trace
+      if (error instanceof Error) {
+        logger.error(`[MigrationManager] ${errorMsg}`, { 
+          stack: error.stack,
+          name: error.name,
+          cause: error.cause
+        });
+      } else {
+        logger.error(`[MigrationManager] ${errorMsg}`, { rawError: error });
+      }
     }
     
     return result;
@@ -105,14 +116,34 @@ export class MigrationManager {
    * Migrate a single persona file
    */
   private async migratePersona(filename: string): Promise<void> {
+    // Normalize filename to prevent Unicode attacks
+    const filenameValidation = UnicodeValidator.normalize(filename);
+    const normalizedFilename = filenameValidation.normalizedContent;
+    
+    if (normalizedFilename !== filename) {
+      logger.warn(`[MigrationManager] Filename normalized from "${filename}" to "${normalizedFilename}"`);
+    }
+    
+    if (!filenameValidation.isValid) {
+      logger.warn(`[MigrationManager] Filename has Unicode issues: ${filenameValidation.detectedIssues?.join(', ')}`);
+    }
+    
     const legacyPath = path.join(this.portfolioManager.getLegacyPersonasDir(), filename);
-    const newPath = this.portfolioManager.getElementPath(ElementType.PERSONA, filename);
+    const newPath = this.portfolioManager.getElementPath(ElementType.PERSONA, normalizedFilename);
     
     // Read the content
     const content = await fs.readFile(legacyPath, 'utf-8');
     
+    // Normalize content to prevent Unicode issues
+    const contentValidation = UnicodeValidator.normalize(content);
+    const normalizedContent = contentValidation.normalizedContent;
+    
+    if (!contentValidation.isValid) {
+      logger.warn(`[MigrationManager] Content has Unicode issues in ${filename}: ${contentValidation.detectedIssues?.join(', ')}`);
+    }
+    
     // Write to new location
-    await fs.writeFile(newPath, content, 'utf-8');
+    await fs.writeFile(newPath, normalizedContent, 'utf-8');
     
     logger.debug(`[MigrationManager] Migrated: ${filename}`);
   }

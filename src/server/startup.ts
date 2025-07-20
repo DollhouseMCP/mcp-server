@@ -2,7 +2,7 @@
  * Server startup utilities including migration
  */
 
-import { PortfolioManager } from '../portfolio/PortfolioManager.js';
+import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
 import { logger } from '../utils/logger.js';
 
@@ -77,6 +77,6 @@ export class ServerStartup {
    * Get the personas directory path for legacy compatibility
    */
   getPersonasDir(): string {
-    return this.portfolioManager.getElementDir('personas' as any);
+    return this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
 }
