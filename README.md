@@ -17,13 +17,15 @@
 [![Test Coverage](https://img.shields.io/badge/Coverage-500%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
 
-A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered marketplace. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
+A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered collection. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
 
 **🌐 Repository**: https://github.com/DollhouseMCP/mcp-server  
-**🏪 Marketplace**: https://github.com/DollhouseMCP/personas  
+**🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
+**📦 Version**: v1.2.4 (Current) | v1.2.5 (Next Release)
+
+> **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
 ## 🚀 Quick Start
 
@@ -55,7 +57,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 | Feature | Description |
 |---------|-------------|
 | 🎭 **23 MCP Tools** | Complete persona lifecycle management through chat interface |
-| 🏪 **GitHub Marketplace** | Browse, search, install, and submit personas to community marketplace |
+| 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
@@ -205,12 +207,12 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`get_persona_details`** - View complete persona details
 - **`reload_personas`** - Refresh from filesystem
 
-### GitHub Marketplace Integration
-- **`browse_marketplace`** - Browse personas by category
-- **`search_marketplace`** - Search across all marketplace personas
-- **`get_marketplace_persona`** - View detailed marketplace persona info
+### GitHub Collection Integration
+- **`browse_collection`** - Browse personas by category
+- **`search_collection`** - Search across all collection personas
+- **`get_collection_persona`** - View detailed collection persona info
 - **`install_persona`** - One-click download and installation
-- **`submit_persona`** - Submit to marketplace via GitHub issue
+- **`submit_persona`** - Submit to collection via GitHub issue
 
 ### User Identity Management
 - **`set_user_identity`** - Set username for persona attribution
@@ -234,12 +236,12 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 ## 📖 Usage Examples
 
-### Marketplace Operations
+### Collection Operations
 ```
-browse_marketplace                          # See all categories
-browse_marketplace "creative"               # Browse creative personas
-search_marketplace "writing"                # Search for writing personas
-install_persona "creative/storyteller.md"  # Install from marketplace
+browse_collection                          # See all categories
+browse_collection "creative"               # Browse creative personas
+search_collection "writing"                # Search for writing personas
+install_persona "creative/storyteller.md"  # Install from collection
 ```
 
 ### Persona Creation & Management
@@ -543,7 +545,7 @@ npm run test:watch
 # Run specific test suites
 npm run test:auto-update
 npm run test:personas
-npm run test:marketplace
+npm run test:collection
 ```
 
 ### Test Coverage
@@ -640,7 +642,7 @@ DollhouseMCP/
 │   ├── index.ts                  # Main MCP server (DollhouseMCPServer)
 │   ├── cache/                    # API caching layer
 │   ├── config/                   # Configuration management
-│   ├── marketplace/              # GitHub marketplace integration
+│   ├── marketplace/              # GitHub collection integration
 │   ├── persona/                  # Persona management core
 │   ├── security/                 # Input validation and security
 │   ├── server/                   # MCP server setup and tools
@@ -737,19 +739,28 @@ Your persona instructions go here. This content defines how the AI should behave
 | **Business Consultant** | Strategic business analysis and recommendations | Strategy planning, business decisions, market analysis |
 | **Debug Detective** | Systematic debugging and troubleshooting | Bug hunting, system troubleshooting, root cause analysis |
 
-## 🏪 Marketplace Integration (Beta)
+## 🏪 Collection Integration (Beta)
 
-> **🧪 Beta Feature**: The GitHub-powered marketplace is currently in beta. Features may change based on community feedback.
+> **🧪 Beta Feature**: The GitHub-powered collection is currently in beta. Features may change based on community feedback.
 
-DollhouseMCP includes an experimental GitHub-powered marketplace:
+DollhouseMCP includes an experimental GitHub-powered collection:
 
 - **Browse by Category**: creative, professional, educational, gaming, personal
 - **Search Content**: Find personas by keywords and descriptions
-- **One-Click Install**: Download and integrate marketplace personas
+- **One-Click Install**: Download and integrate collection personas
 - **Community Submissions**: Submit your personas via `submit_persona` tool
-- **Version Control**: Full Git history for all marketplace content
+- **Version Control**: Full Git history for all collection content
 
-> **Note**: Marketplace features require internet connection and GitHub API access. Rate limits may apply.
+> **Note**: Collection features require internet connection and GitHub API access. Rate limits may apply.
+
+### ⚠️ Migration Guide - Breaking Changes
+
+**Important**: Tool names have changed in recent versions:
+- `browse_marketplace` → `browse_collection`
+- `search_marketplace` → `search_collection`
+- `get_marketplace_persona` → `get_collection_persona`
+
+If you have scripts or workflows using the old tool names, please update them to use the new names.
 
 ## 💼 Business Model & Legal
 
@@ -808,7 +819,7 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 |-------|----------|
 | **Personas not loading** | Check `personas/` directory exists and has read permissions |
 | **Server won't start** | Run `npm run rebuild` to clean and rebuild |
-| **Marketplace not working** | Check internet connection and GitHub API access |
+| **Collection not working** | Check internet connection and GitHub API access |
 | **User identity not saving** | Set `DOLLHOUSE_USER` environment variable before starting Claude |
 | **"Cannot find module" errors** | Ensure `npm install` completed successfully |
 | **TypeScript compilation errors** | Verify Node.js version is 20+ with `node --version` |
@@ -872,7 +883,7 @@ We welcome contributions! DollhouseMCP includes integrated tools for submitting 
    validate_persona "My Awesome Persona"
    ```
 
-3. **Submit to the marketplace** directly from Claude:
+3. **Submit to the collection** directly from Claude:
    ```
    submit_persona "My Awesome Persona"
    ```
@@ -960,11 +971,11 @@ interface DollhouseTool {
 // reload_personas - No parameters
 ```
 
-#### Marketplace Integration
+#### Collection Integration
 ```typescript
-// browse_marketplace - { category?: string }
-// search_marketplace - { query: string }
-// get_marketplace_persona - { path: string }
+// browse_collection - { category?: string }
+// search_collection - { query: string }
+// get_collection_persona - { path: string }
 // install_persona - { path: string }
 // submit_persona - { persona: string }
 ```
@@ -997,7 +1008,7 @@ The server provides detailed error messages for:
 - **Invalid persona identifiers** - Clear suggestions for valid names
 - **File system issues** - Permission and path resolution errors
 - **Malformed persona files** - YAML parsing and validation errors
-- **Network errors** - GitHub API and marketplace connectivity issues
+- **Network errors** - GitHub API and collection connectivity issues
 - **Runtime errors** - Server startup and operation failures
 
 ### Response Formats
@@ -1019,6 +1030,20 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - Community advisory input
 
 ## 🏷️ Version History
+
+### v1.2.5 - July 2025 (Next Release)
+
+**Collection Rename & Breaking Changes**:
+- 🔄 **Renamed all "marketplace" tools to "collection"**:
+  - `browse_marketplace` → `browse_collection`
+  - `search_marketplace` → `search_collection`
+  - `get_marketplace_persona` → `get_collection_persona`
+  - `install_persona` → `install_persona` (unchanged)
+  - `submit_persona` → `submit_persona` (unchanged)
+- ✅ **Added backward compatibility aliases** (deprecated, will be removed in v2.0.0)
+- ✅ **Updated repository** from `/personas` to `/collection`
+- ✅ **Created migration guide** for users to update their scripts
+- ✅ **Fixed all date references** from January to July 2025
 
 ### v1.2.4 - July 10, 2025 (Current)
 
@@ -1096,4 +1121,4 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 **🎭 Transform your AI interactions with the power of personas**
 
-For support, please [open an issue](https://github.com/DollhouseMCP/mcp-server/issues) or visit our [marketplace](https://github.com/DollhouseMCP/personas).
+For support, please [open an issue](https://github.com/DollhouseMCP/mcp-server/issues) or visit our [collection](https://github.com/DollhouseMCP/collection).
