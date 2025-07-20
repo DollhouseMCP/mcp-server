@@ -8,6 +8,8 @@ import {
   FeedbackEntity 
 } from '../types/elements/index.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export class FeedbackProcessor implements IFeedbackProcessor {
   // Maximum input length to prevent ReDoS attacks
@@ -92,34 +94,52 @@ export class FeedbackProcessor implements IFeedbackProcessor {
    * Process natural language feedback into structured data.
    */
   public async process(feedback: string): Promise<ProcessedFeedback> {
+    // Normalize Unicode input to prevent security issues
+    const validationResult = UnicodeValidator.normalize(feedback);
+    let normalizedFeedback = validationResult.normalizedContent;
+    
+    // Log security event for feedback processing
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_INJECTION_ATTEMPT',
+      severity: 'LOW',
+      source: 'FeedbackProcessor.process',
+      details: `Natural language feedback processed`,
+      additionalData: { 
+        feedbackLength: feedback.length,
+        normalizedLength: normalizedFeedback.length,
+        hasUnicodeIssues: !validationResult.isValid,
+        detectedIssues: validationResult.detectedIssues
+      }
+    });
+    
     // Validate input length to prevent ReDoS
-    if (feedback.length > this.MAX_FEEDBACK_LENGTH) {
-      logger.warn(`Feedback truncated from ${feedback.length} to ${this.MAX_FEEDBACK_LENGTH} characters`);
-      feedback = feedback.substring(0, this.MAX_FEEDBACK_LENGTH);
+    if (normalizedFeedback.length > this.MAX_FEEDBACK_LENGTH) {
+      logger.warn(`Feedback truncated from ${normalizedFeedback.length} to ${this.MAX_FEEDBACK_LENGTH} characters`);
+      normalizedFeedback = normalizedFeedback.substring(0, this.MAX_FEEDBACK_LENGTH);
     }
     
-    const normalizedFeedback = feedback.toLowerCase();
+    const feedbackLower = normalizedFeedback.toLowerCase();
     
     // Analyze sentiment
-    const sentiment = await this.analyzeSentiment(feedback);
+    const sentiment = await this.analyzeSentiment(normalizedFeedback);
     
     // Infer rating
-    const inferredRating = await this.inferRating(feedback);
+    const inferredRating = await this.inferRating(normalizedFeedback);
     
     // Extract keywords
     const keywords = this.extractKeywords(normalizedFeedback);
     
     // Extract suggestions
-    const suggestions = await this.extractSuggestions(feedback);
+    const suggestions = await this.extractSuggestions(normalizedFeedback);
     
     // Extract entities
-    const entities = this.extractEntities(feedback);
+    const entities = this.extractEntities(normalizedFeedback);
     
     // Calculate confidence based on clarity of feedback
-    const confidence = this.calculateConfidence(feedback, sentiment, inferredRating);
+    const confidence = this.calculateConfidence(normalizedFeedback, sentiment, inferredRating);
     
     return {
-      originalFeedback: feedback,
+      originalFeedback: normalizedFeedback,
       sentiment,
       inferredRating: inferredRating ?? undefined,
       confidence,

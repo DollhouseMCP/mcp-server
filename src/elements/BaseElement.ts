@@ -18,6 +18,8 @@ import {
 import { ElementType } from '../portfolio/types.js';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export abstract class BaseElement implements IElement {
   // Identity
@@ -92,6 +94,15 @@ export abstract class BaseElement implements IElement {
    * Subclasses should override and call super.validate() first.
    */
   public validate(): ElementValidationResult {
+    // Log security-relevant validation event
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_PARSE_SUCCESS',
+      severity: 'LOW',
+      source: 'BaseElement.validate',
+      details: `Element validation performed for ${this.type}:${this.id}`,
+      additionalData: { elementType: this.type, elementId: this.id }
+    });
+    
     const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
     const suggestions: string[] = [];
@@ -200,7 +211,9 @@ export abstract class BaseElement implements IElement {
    */
   public deserialize(data: string): void {
     try {
-      const parsed = JSON.parse(data);
+      // Normalize Unicode input before parsing
+      const validationResult = UnicodeValidator.normalize(data);
+      const parsed = JSON.parse(validationResult.normalizedContent);
       
       // Validate required fields
       if (!parsed.id || !parsed.type || !parsed.metadata) {
@@ -227,6 +240,24 @@ export abstract class BaseElement implements IElement {
    * Process user feedback and update ratings.
    */
   public receiveFeedback(feedback: string, context?: FeedbackContext): void {
+    // Normalize Unicode input to prevent security issues
+    const validationResult = UnicodeValidator.normalize(feedback);
+    const normalizedFeedback = validationResult.normalizedContent;
+    
+    // Log security event for feedback processing
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_INJECTION_ATTEMPT',
+      severity: 'LOW',
+      source: 'BaseElement.receiveFeedback',
+      details: `Feedback processed for element ${this.type}:${this.id}`,
+      additionalData: { 
+        elementType: this.type, 
+        elementId: this.id,
+        feedbackLength: feedback.length,
+        hasUnicodeIssues: !validationResult.isValid
+      }
+    });
+    
     if (!this.ratings) {
       this.ratings = {
         aiRating: 0,
@@ -239,12 +270,12 @@ export abstract class BaseElement implements IElement {
       };
     }
     
-    // Create feedback entry
+    // Create feedback entry with normalized content
     const userFeedback: UserFeedback = {
       timestamp: new Date(),
-      feedback,
-      sentiment: this.analyzeSentiment(feedback),
-      inferredRating: this.inferRating(feedback),
+      feedback: normalizedFeedback,
+      sentiment: this.analyzeSentiment(normalizedFeedback),
+      inferredRating: this.inferRating(normalizedFeedback),
       context,
       elementVersion: this.version
     };
