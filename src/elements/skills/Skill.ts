@@ -7,6 +7,9 @@ import { BaseElement } from '../BaseElement.js';
 import { IElement, IElementMetadata, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
+import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 // Extend IElementMetadata with skill-specific fields
 export interface SkillMetadata extends IElementMetadata {
@@ -43,10 +46,21 @@ export class Skill extends BaseElement implements IElement {
   public declare metadata: SkillMetadata;
   public instructions: string;
   public parameters: Map<string, any> = new Map();
+  
+  // Constants for memory management
+  private readonly MAX_PARAMETER_COUNT = 100;
+  private readonly MAX_PARAMETER_SIZE = 10000; // Max size per parameter value
 
   constructor(metadata: Partial<SkillMetadata>, instructions: string = '') {
-    super(ElementType.SKILL, metadata);
-    this.instructions = instructions;
+    // Validate and sanitize metadata
+    const sanitizedMetadata = {
+      ...metadata,
+      name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : undefined
+    };
+    
+    super(ElementType.SKILL, sanitizedMetadata);
+    this.instructions = instructions ? sanitizeInput(UnicodeValidator.normalize(instructions).normalizedContent, 10000) : '';
     
     // Ensure skill-specific metadata
     this.metadata = {
@@ -59,6 +73,16 @@ export class Skill extends BaseElement implements IElement {
       examples: metadata.examples || [],
       proficiency_level: metadata.proficiency_level || 0
     };
+
+    // Validate parameter definitions
+    if (this.metadata.parameters) {
+      this.metadata.parameters = this.metadata.parameters.map(param => ({
+        ...param,
+        name: sanitizeInput(UnicodeValidator.normalize(param.name).normalizedContent, 50),
+        description: sanitizeInput(UnicodeValidator.normalize(param.description).normalizedContent, 200),
+        options: param.options?.map(opt => sanitizeInput(opt, 100))
+      }));
+    }
 
     // Initialize parameter values with defaults
     this.initializeParameters();
@@ -81,18 +105,63 @@ export class Skill extends BaseElement implements IElement {
    * Set a parameter value
    */
   setParameter(name: string, value: any): void {
-    const param = this.metadata.parameters?.find(p => p.name === name);
+    // Sanitize parameter name
+    const sanitizedName = sanitizeInput(name, 50);
+    
+    const param = this.metadata.parameters?.find(p => p.name === sanitizedName);
     if (!param) {
-      throw new Error(`Parameter '${name}' not found in skill definition`);
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_PARSING_WARNING',
+        severity: 'MEDIUM',
+        source: 'Skill.setParameter',
+        details: `Attempt to set unknown parameter: ${sanitizedName} for skill: ${this.metadata.name}`
+      });
+      throw new Error(`Parameter '${sanitizedName}' not found in skill definition`);
+    }
+
+    // Sanitize and validate the value based on type
+    let sanitizedValue = value;
+    
+    if (param.type === 'string') {
+      // Normalize Unicode and sanitize string values
+      const normalized = UnicodeValidator.normalize(String(value));
+      sanitizedValue = sanitizeInput(normalized.normalizedContent, param.max || 1000);
+      
+      // Additional validation for potential injection attacks
+      if (sanitizedValue.includes('<script') || sanitizedValue.includes('javascript:')) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'HIGH',
+          source: 'Skill.setParameter',
+          details: `Potential XSS attempt in skill parameter: ${sanitizedName} for skill: ${this.metadata.name}`
+        });
+        throw new Error('Invalid characters in parameter value');
+      }
     }
 
     // Type validation
-    if (!this.validateParameterValue(param, value)) {
-      throw new Error(`Invalid value for parameter '${name}': expected ${param.type}`);
+    if (!this.validateParameterValue(param, sanitizedValue)) {
+      throw new Error(`Invalid value for parameter '${sanitizedName}': expected ${param.type}`);
     }
 
-    this.parameters.set(name, value);
-    logger.debug(`Set parameter ${name} = ${value} for skill ${this.metadata.name}`);
+    // Memory management - check parameter count
+    if (this.parameters.size >= this.MAX_PARAMETER_COUNT && !this.parameters.has(sanitizedName)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'Skill.setParameter',
+        details: `Parameter limit exceeded for skill: ${this.metadata.name}. Max: ${this.MAX_PARAMETER_COUNT}`
+      });
+      throw new Error(`Parameter limit exceeded. Maximum ${this.MAX_PARAMETER_COUNT} parameters allowed`);
+    }
+    
+    // Check parameter value size for strings
+    if (param.type === 'string' && sanitizedValue.length > this.MAX_PARAMETER_SIZE) {
+      throw new Error(`Parameter value too large. Maximum ${this.MAX_PARAMETER_SIZE} characters allowed`);
+    }
+
+    this.parameters.set(sanitizedName, sanitizedValue);
+    logger.debug(`Set parameter ${sanitizedName} = ${sanitizedValue} for skill ${this.metadata.name}`);
   }
 
   /**
@@ -332,5 +401,25 @@ export class Skill extends BaseElement implements IElement {
     }
     
     return cloned;
+  }
+  
+  /**
+   * Skill deactivation lifecycle
+   */
+  public override async deactivate(): Promise<void> {
+    logger.info(`Deactivating skill: ${this.metadata.name} (${this.id})`);
+    
+    // Clear parameters to free memory
+    this.clearParameters();
+    
+    await super.deactivate?.();
+  }
+  
+  /**
+   * Clear all parameters (for memory management)
+   */
+  clearParameters(): void {
+    this.parameters.clear();
+    logger.debug(`Cleared all parameters for skill: ${this.metadata.name}`);
   }
 }

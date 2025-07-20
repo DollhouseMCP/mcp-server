@@ -5,6 +5,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 import { IElementManager, ElementValidationResult } from '../types/elements/index.js';
 import { ElementType } from '../portfolio/types.js';
 import { PersonaElement, PersonaElementMetadata } from './PersonaElement.js';
@@ -12,6 +13,7 @@ import { PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { logger } from '../utils/logger.js';
 import { validatePath, validateFilename } from '../security/InputValidator.js';
 import { ensureDirectory } from '../utils/filesystem.js';
+import { FileLockManager } from '../security/fileLockManager.js';
 
 export class PersonaElementManager implements IElementManager<PersonaElement> {
   private portfolioManager: PortfolioManager;
@@ -35,7 +37,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
         throw new Error(`Invalid or unsafe path: ${filePath}`);
       }
 
-      const content = await fs.readFile(fullPath, 'utf-8');
+      const content = await FileLockManager.atomicReadFile(fullPath, { encoding: 'utf-8' });
       
       // Create a new PersonaElement and deserialize
       const persona = new PersonaElement({}, '', path.basename(fullPath));
@@ -69,8 +71,8 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       // Serialize the persona
       const content = element.serialize();
       
-      // Write to file
-      await fs.writeFile(fullPath, content, 'utf-8');
+      // Write to file atomically to prevent corruption
+      await FileLockManager.atomicWriteFile(fullPath, content, { encoding: 'utf-8' });
       
       // Update filename in element
       element.filename = path.basename(fullPath);
@@ -226,7 +228,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
         persona.deserialize(this.jsonToMarkdown(jsonData));
       } else if (format === 'yaml') {
         // Convert YAML to markdown format
-        const yamlData = require('js-yaml').load(data);
+        const yamlData = yaml.load(data);
         persona.deserialize(this.jsonToMarkdown(yamlData));
       } else {
         throw new Error(`Unsupported format: ${format}`);
@@ -252,7 +254,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
         return JSON.stringify({ ...legacy, content: element.content }, null, 2);
       } else if (format === 'yaml') {
         const legacy = element.toLegacy();
-        return require('js-yaml').dump({ ...legacy, content: element.content });
+        return yaml.dump({ ...legacy, content: element.content });
       } else {
         throw new Error(`Unsupported format: ${format}`);
       }
@@ -268,7 +270,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
    */
   private jsonToMarkdown(data: any): string {
     const { content, ...metadata } = data;
-    const yamlFrontmatter = require('js-yaml').dump(metadata);
+    const yamlFrontmatter = yaml.dump(metadata);
     return `---\n${yamlFrontmatter}---\n\n${content || ''}`;
   }
 
