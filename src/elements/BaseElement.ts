@@ -9,7 +9,7 @@ import {
   ElementStatus,
   ElementRatings,
   Reference,
-  ValidationResult,
+  ElementValidationResult,
   ValidationError,
   ValidationWarning,
   FeedbackContext,
@@ -36,6 +36,9 @@ export abstract class BaseElement implements IElement {
   // Internal state
   protected _status: ElementStatus = ElementStatus.INACTIVE;
   protected _isDirty: boolean = false;
+  
+  // Constants
+  private readonly MAX_FEEDBACK_HISTORY = 100;
   
   constructor(type: ElementType, metadata: Partial<IElementMetadata> = {}) {
     this.type = type;
@@ -88,7 +91,7 @@ export abstract class BaseElement implements IElement {
    * Core validation that all elements share.
    * Subclasses should override and call super.validate() first.
    */
-  public validate(): ValidationResult {
+  public validate(): ElementValidationResult {
     const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
     const suggestions: string[] = [];
@@ -246,11 +249,17 @@ export abstract class BaseElement implements IElement {
       elementVersion: this.version
     };
     
-    // Add to history
+    // Add to history with bounds checking
     if (!this.ratings.feedbackHistory) {
       this.ratings.feedbackHistory = [];
     }
     this.ratings.feedbackHistory.push(userFeedback);
+    
+    // Prevent unbounded growth
+    if (this.ratings.feedbackHistory.length > this.MAX_FEEDBACK_HISTORY) {
+      this.ratings.feedbackHistory = this.ratings.feedbackHistory.slice(-this.MAX_FEEDBACK_HISTORY);
+      logger.debug(`Feedback history trimmed to ${this.MAX_FEEDBACK_HISTORY} entries for element ${this.id}`);
+    }
     
     // Update user rating if we inferred one
     if (userFeedback.inferredRating !== undefined) {

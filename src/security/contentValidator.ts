@@ -13,7 +13,7 @@ import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
 
-export interface ValidationResult {
+export interface ContentValidationResult {
   isValid: boolean;
   sanitizedContent?: string;
   detectedPatterns?: string[];
@@ -164,7 +164,7 @@ export class ContentValidator {
   /**
    * Validates and sanitizes persona content for security threats
    */
-  static validateAndSanitize(content: string): ValidationResult {
+  static validateAndSanitize(content: string): ContentValidationResult {
     // Length validation before pattern matching
     if (content.length > SECURITY_LIMITS.MAX_CONTENT_LENGTH) {
       throw new SecurityError(
@@ -275,7 +275,7 @@ export class ContentValidator {
   /**
    * Validates persona metadata fields
    */
-  static validateMetadata(metadata: any): ValidationResult {
+  static validateMetadata(metadata: any): ContentValidationResult {
     const detectedPatterns: string[] = [];
 
     // Check all string fields in metadata

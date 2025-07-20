@@ -5,7 +5,7 @@
 import { Persona, PersonaMetadata } from '../types/persona.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
 
-export interface ValidationResult {
+export interface PersonaValidationResult {
   valid: boolean;
   issues: string[];
   warnings: string[];
@@ -17,7 +17,7 @@ export class PersonaValidator {
   /**
    * Validate a persona's metadata and content
    */
-  validatePersona(persona: Persona): ValidationResult {
+  validatePersona(persona: Persona): PersonaValidationResult {
     const issues: string[] = [];
     const warnings: string[] = [];
     const metadata = persona.metadata;
@@ -80,7 +80,7 @@ export class PersonaValidator {
   /**
    * Validate persona metadata only
    */
-  validateMetadata(metadata: PersonaMetadata): ValidationResult {
+  validateMetadata(metadata: PersonaMetadata): PersonaValidationResult {
     const issues: string[] = [];
     const warnings: string[] = [];
     

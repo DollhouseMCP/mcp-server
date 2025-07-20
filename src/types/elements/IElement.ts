@@ -26,7 +26,7 @@ export interface IElement {
   ratings?: ElementRatings;
   
   // Core operations
-  validate(): ValidationResult;
+  validate(): ElementValidationResult;
   serialize(): string;
   deserialize(data: string): void;
   receiveFeedback?(feedback: string, context?: FeedbackContext): void;
@@ -87,7 +87,7 @@ export interface ElementDependency {
 }
 
 // Validation result for elements
-export interface ValidationResult {
+export interface ElementValidationResult {
   valid: boolean;
   errors?: ValidationError[];
   warnings?: ValidationWarning[];

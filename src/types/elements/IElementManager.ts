@@ -3,7 +3,7 @@
  * Each element type should have a corresponding manager implementation.
  */
 
-import { IElement, ValidationResult } from './IElement.js';
+import { IElement, ElementValidationResult } from './IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 
 // Generic element manager interface
@@ -20,7 +20,7 @@ export interface IElementManager<T extends IElement> {
   findMany(predicate: (element: T) => boolean): Promise<T[]>;
   
   // Validation
-  validate(element: T): ValidationResult;
+  validate(element: T): ElementValidationResult;
   validatePath(path: string): boolean;
   
   // Element type info
@@ -62,7 +62,7 @@ export interface IBatchOperations<T extends IElement> {
   loadMany(paths: string[]): Promise<T[]>;
   saveMany(elements: Map<string, T>): Promise<void>;
   deleteMany(paths: string[]): Promise<void>;
-  validateMany(elements: T[]): Map<T, ValidationResult>;
+  validateMany(elements: T[]): Map<T, ElementValidationResult>;
 }
 
 // Search and filter interface

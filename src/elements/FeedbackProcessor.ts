@@ -10,6 +10,12 @@ import {
 import { logger } from '../utils/logger.js';
 
 export class FeedbackProcessor implements IFeedbackProcessor {
+  // Maximum input length to prevent ReDoS attacks
+  private readonly MAX_FEEDBACK_LENGTH = 5000;
+  
+  // Pre-compiled regex patterns for better performance
+  private readonly suggestionPatterns: RegExp[];
+  
   // Sentiment patterns with ratings
   private readonly sentimentPatterns = {
     veryPositive: {
@@ -70,10 +76,28 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     'doesn\'t work', 'not working', 'glitch', 'defect', 'flaw'
   ];
   
+  constructor() {
+    // Pre-compile regex patterns for performance
+    this.suggestionPatterns = [
+      /(?:should|could|would|might)\s+(?:be\s+)?(.+?)(?:\.|,|;|$)/g,
+      /(?:suggest|recommend|propose)\s+(?:that\s+)?(.+?)(?:\.|,|;|$)/g,
+      /(?:try|consider|think about)\s+(.+?)(?:\.|,|;|$)/g,
+      /(?:it would be (?:better|nice|good) if)\s+(.+?)(?:\.|,|;|$)/g,
+      /(?:needs?|requires?)\s+(?:to\s+)?(?:have\s+)?(?:be\s+)?(.+?)(?:\.|,|;|$)/g,
+      /(?:add|include|implement)\s+(.+?)(?:\.|,|;|$)/g
+    ];
+  }
+  
   /**
    * Process natural language feedback into structured data.
    */
   public async process(feedback: string): Promise<ProcessedFeedback> {
+    // Validate input length to prevent ReDoS
+    if (feedback.length > this.MAX_FEEDBACK_LENGTH) {
+      logger.warn(`Feedback truncated from ${feedback.length} to ${this.MAX_FEEDBACK_LENGTH} characters`);
+      feedback = feedback.substring(0, this.MAX_FEEDBACK_LENGTH);
+    }
+    
     const normalizedFeedback = feedback.toLowerCase();
     
     // Analyze sentiment
@@ -97,7 +121,7 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     return {
       originalFeedback: feedback,
       sentiment,
-      inferredRating,
+      inferredRating: inferredRating ?? undefined,
       confidence,
       keywords,
       suggestions,
@@ -208,27 +232,34 @@ export class FeedbackProcessor implements IFeedbackProcessor {
    * Extract improvement suggestions from feedback.
    */
   public async extractSuggestions(text: string): Promise<string[]> {
+    // Length check to prevent ReDoS
+    if (text.length > this.MAX_FEEDBACK_LENGTH) {
+      text = text.substring(0, this.MAX_FEEDBACK_LENGTH);
+    }
+    
     const suggestions: string[] = [];
     const normalized = text.toLowerCase();
     
-    // Patterns that indicate suggestions
-    const suggestionPatterns = [
-      /(?:should|could|would|might)\s+(?:be\s+)?(.+?)(?:\.|,|;|$)/g,
-      /(?:suggest|recommend|propose)\s+(?:that\s+)?(.+?)(?:\.|,|;|$)/g,
-      /(?:try|consider|think about)\s+(.+?)(?:\.|,|;|$)/g,
-      /(?:it would be (?:better|nice|good) if)\s+(.+?)(?:\.|,|;|$)/g,
-      /(?:needs?|requires?)\s+(?:to\s+)?(?:have\s+)?(?:be\s+)?(.+?)(?:\.|,|;|$)/g,
-      /(?:add|include|implement)\s+(.+?)(?:\.|,|;|$)/g
-    ];
-    
-    for (const pattern of suggestionPatterns) {
-      let match;
-      while ((match = pattern.exec(normalized)) !== null) {
-        const suggestion = match[1].trim();
-        if (suggestion.length > 10 && suggestion.length < 200) {
-          suggestions.push(this.capitalizeSentence(suggestion));
+    // Use pre-compiled patterns with error handling
+    try {
+      for (const pattern of this.suggestionPatterns) {
+        // Reset regex state
+        pattern.lastIndex = 0;
+        
+        let match;
+        let iterations = 0;
+        const MAX_ITERATIONS = 100; // Prevent infinite loops
+        
+        while ((match = pattern.exec(normalized)) !== null && iterations < MAX_ITERATIONS) {
+          iterations++;
+          const suggestion = match[1].trim();
+          if (suggestion.length > 10 && suggestion.length < 200) {
+            suggestions.push(this.capitalizeSentence(suggestion));
+          }
         }
       }
+    } catch (error) {
+      logger.error('Error extracting suggestions', { error });
     }
     
     // Remove duplicates and clean up

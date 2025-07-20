@@ -4,7 +4,7 @@
 
 import { BaseElement } from '../../../../src/elements/BaseElement.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
-import { ElementStatus } from '../../../../src/types/elements/IElement.js';
+import { ElementStatus } from '../../../../src/types/elements/index.js';
 
 // Create a concrete implementation for testing
 class TestElement extends BaseElement {

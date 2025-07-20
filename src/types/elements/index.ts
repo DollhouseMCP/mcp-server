@@ -4,6 +4,7 @@
 
 // Core element interfaces
 export * from './IElement.js';
+
 export * from './IElementManager.js';
 export * from './IReferenceResolver.js';
 export * from './IRatingManager.js';

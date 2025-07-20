@@ -57,13 +57,13 @@ export interface CachedReference {
 
 // Reference validation
 export interface IReferenceValidator {
-  validate(ref: Reference): ValidationResult;
+  validate(ref: Reference): ReferenceValidationResult;
   validateUri(uri: string, type: Reference['type']): boolean;
   sanitizeUri(uri: string): string;
 }
 
-// Validation result
-export interface ValidationResult {
+// Validation result for references
+export interface ReferenceValidationResult {
   valid: boolean;
   errors?: string[];
   sanitizedReference?: Reference;
