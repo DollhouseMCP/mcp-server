@@ -12,15 +12,18 @@ import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
+import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 
 export class PersonaInstaller {
   private githubClient: GitHubClient;
   private personasDir: string;
+  private portfolioManager: PortfolioManager;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
-  constructor(githubClient: GitHubClient, personasDir: string) {
+  constructor(githubClient: GitHubClient, personasDir?: string) {
     this.githubClient = githubClient;
-    this.personasDir = personasDir;
+    this.portfolioManager = PortfolioManager.getInstance();
+    this.personasDir = personasDir || this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
   
   /**

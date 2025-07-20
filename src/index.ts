@@ -97,7 +97,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.collectionBrowser = new CollectionBrowser(this.githubClient);
     this.collectionSearch = new CollectionSearch(this.githubClient);
     this.personaDetails = new PersonaDetails(this.githubClient);
-    this.personaInstaller = new PersonaInstaller(this.githubClient, this.personasDir);
+    this.personaInstaller = new PersonaInstaller(this.githubClient);
     this.personaSubmitter = new PersonaSubmitter();
     
     // Initialize update manager
