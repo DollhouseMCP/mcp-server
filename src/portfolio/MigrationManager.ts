@@ -4,7 +4,8 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { PortfolioManager, ElementType } from './PortfolioManager.js';
+import { PortfolioManager } from './PortfolioManager.js';
+import { ElementType } from './types.js';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 

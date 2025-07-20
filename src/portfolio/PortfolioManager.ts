@@ -6,21 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
-
-export enum ElementType {
-  PERSONA = 'personas',
-  SKILL = 'skills',
-  TEMPLATE = 'templates',
-  ENSEMBLE = 'ensembles',
-  AGENT = 'agents',
-  MEMORY = 'memories'
-}
-
-export interface PortfolioConfig {
-  baseDir?: string;  // Override default location
-  createIfMissing?: boolean;
-  migrateExisting?: boolean;
-}
+import { ElementType, PortfolioConfig } from './types.js';
 
 export class PortfolioManager {
   private static instance: PortfolioManager;
