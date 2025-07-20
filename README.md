@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.4 - MCP Protocol Compatibility Fix
+**📦 Version**: v1.2.4 (Current) | v1.2.5 (Next Release)
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -1031,7 +1031,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.2.5 - July 19, 2025 (Upcoming)
+### v1.2.5 - July 2025 (Next Release)
 
 **Collection Rename & Breaking Changes**:
 - 🔄 **Renamed all "marketplace" tools to "collection"**:
