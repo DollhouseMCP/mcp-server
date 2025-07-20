@@ -16,3 +16,6 @@ export interface PortfolioConfig {
   createIfMissing?: boolean;
   migrateExisting?: boolean;
 }
+
+// Re-export for convenience
+export { PortfolioConfig as PortfolioConfiguration };

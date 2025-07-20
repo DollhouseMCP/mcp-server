@@ -8,7 +8,8 @@ import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { ElementType, PortfolioConfig } from './types.js';
 
-export { ElementType, PortfolioConfig };
+export { ElementType };
+export type { PortfolioConfig };
 
 export class PortfolioManager {
   private static instance: PortfolioManager;
