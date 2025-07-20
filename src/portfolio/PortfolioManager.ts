@@ -6,21 +6,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
+import { ElementType, PortfolioConfig } from './types.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
-export enum ElementType {
-  PERSONA = 'personas',
-  SKILL = 'skills',
-  TEMPLATE = 'templates',
-  ENSEMBLE = 'ensembles',
-  AGENT = 'agents',
-  MEMORY = 'memories'
-}
-
-export interface PortfolioConfig {
-  baseDir?: string;  // Override default location
-  createIfMissing?: boolean;
-  migrateExisting?: boolean;
-}
+export { ElementType };
+export type { PortfolioConfig };
 
 export class PortfolioManager {
   private static instance: PortfolioManager;
@@ -177,16 +167,37 @@ export class PortfolioManager {
   public getElementPath(type: ElementType, filename: string): string {
     // Validate filename to prevent path traversal
     if (!filename || typeof filename !== 'string') {
+      SecurityMonitor.logSecurityEvent({
+        type: 'PATH_TRAVERSAL_ATTEMPT',
+        severity: 'MEDIUM',
+        source: 'PortfolioManager.getElementPath',
+        details: `Invalid filename provided: ${typeof filename}`,
+        additionalData: { elementType: type, filename: String(filename) }
+      });
       throw new Error('Invalid filename: must be a non-empty string');
     }
     
     // Check for path traversal attempts
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\') || path.isAbsolute(filename)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'PATH_TRAVERSAL_ATTEMPT',
+        severity: 'HIGH',
+        source: 'PortfolioManager.getElementPath',
+        details: `Path traversal attempt detected in filename: ${filename}`,
+        additionalData: { elementType: type, filename }
+      });
       throw new Error(`Invalid filename: contains path traversal characters: ${filename}`);
     }
     
     // Additional validation for hidden files and special characters
     if (filename.startsWith('.') || filename.includes('\0')) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'PATH_TRAVERSAL_ATTEMPT',
+        severity: 'MEDIUM',
+        source: 'PortfolioManager.getElementPath',
+        details: `Invalid filename characters detected: ${filename}`,
+        additionalData: { elementType: type, filename, hasHiddenFile: filename.startsWith('.'), hasNullByte: filename.includes('\0') }
+      });
       throw new Error(`Invalid filename: contains invalid characters: ${filename}`);
     }
     

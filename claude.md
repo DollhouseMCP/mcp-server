@@ -1,8 +1,10 @@
 # Claude Project Context: DollhouseMCP
 
-@docs/development/SESSION_SUMMARY_2025_07_20_MORNING.md
-@docs/development/NEXT_SESSION_CONTEXT_2025_07_20.md
+@docs/development/SESSION_SUMMARY_2025_07_20_AFTERNOON.md
+@docs/development/NEXT_SESSION_CONTEXT_2025_07_20_AFTERNOON.md
+@docs/development/PORTFOLIO_IMPLEMENTATION_REFERENCE.md
 @docs/development/ELEMENT_IMPLEMENTATION_GUIDE.md
+@docs/development/PR_310_ABSTRACT_ELEMENT_INTERFACE_STATUS.md
 @docs/development/SESSION_SUMMARY_2025_07_08.md
 @docs/development/PRIORITY_TASKS_2025_07_08.md
 @docs/development/SECURITY_IMPLEMENTATION_2025_07_08.md
