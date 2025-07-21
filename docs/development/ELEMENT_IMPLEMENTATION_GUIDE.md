@@ -147,6 +147,9 @@ interface ElementRatings {
 - Privacy levels
 - Search capabilities
 - Learning from interactions
+- **Future**: Intelligent content-based sequencing
+- **Future**: RAG system integration (import/export)
+- **Future**: Memory collection sharing
 
 ### Ensembles
 - Activation strategies (sequential, parallel, lazy, conditional)
