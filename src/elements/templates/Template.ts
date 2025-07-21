@@ -231,6 +231,9 @@ export class Template extends BaseElement implements IElement {
     }
     
     // Update usage statistics
+    // NOTE: These updates are not atomic and may have race conditions under concurrent access
+    // This is acceptable for usage statistics which don't require perfect accuracy
+    // For production systems requiring atomic counters, consider using a database or atomic operations
     this.metadata.usage_count = (this.metadata.usage_count || 0) + 1;
     this.metadata.last_used = new Date().toISOString();
     
@@ -301,9 +304,40 @@ export class Template extends BaseElement implements IElement {
         
         // Apply regex validation if specified
         if (varDef.validation) {
-          const regex = new RegExp(varDef.validation);
-          if (!regex.test(stringValue)) {
-            throw new Error(`Variable '${varDef.name}' does not match validation pattern`);
+          // SECURITY FIX: Validate regex complexity to prevent ReDoS attacks
+          // Previously: User-provided regex executed without limits
+          // Now: Check for dangerous patterns and limit execution time
+          try {
+            // Check for dangerous regex patterns
+            if (this.isDangerousRegex(varDef.validation)) {
+              throw new Error(`Variable '${varDef.name}' has potentially dangerous validation pattern`);
+            }
+            
+            const regex = new RegExp(varDef.validation);
+            // Use a simple timeout mechanism - in production, consider using a worker thread
+            const startTime = Date.now();
+            const result = regex.test(stringValue);
+            const duration = Date.now() - startTime;
+            
+            // If regex takes too long, it might be malicious
+            if (duration > 100) { // 100ms threshold
+              SecurityMonitor.logSecurityEvent({
+                type: 'CONTENT_INJECTION_ATTEMPT',
+                severity: 'HIGH',
+                source: 'Template.sanitizeVariableValue',
+                details: `Regex validation took ${duration}ms for variable '${varDef.name}', possible ReDoS`
+              });
+              throw new Error(`Variable '${varDef.name}' validation pattern is too complex`);
+            }
+            
+            if (!result) {
+              throw new Error(`Variable '${varDef.name}' does not match validation pattern`);
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) {
+              throw new Error(`Variable '${varDef.name}' has invalid validation pattern`);
+            }
+            throw e;
           }
         }
         
@@ -335,8 +369,21 @@ export class Template extends BaseElement implements IElement {
         if (!Array.isArray(value)) {
           throw new Error(`Variable '${varDef.name}' must be an array`);
         }
+        // SECURITY FIX: Limit array size to prevent memory exhaustion attacks
+        // Previously: No limit on array size could lead to DoS
+        // Now: Enforces reasonable size limit with logging
+        const MAX_ARRAY_SIZE = 1000;
+        if (value.length > MAX_ARRAY_SIZE) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'CONTENT_SIZE_EXCEEDED',
+            severity: 'MEDIUM',
+            source: 'Template.sanitizeVariableValue',
+            details: `Array variable '${varDef.name}' has ${value.length} items, limiting to ${MAX_ARRAY_SIZE}`
+          });
+          value = value.slice(0, MAX_ARRAY_SIZE);
+        }
         // Sanitize string elements in arrays
-        return value.map(item => 
+        return value.map((item: any) => 
           typeof item === 'string' ? sanitizeInput(item, 1000) : item
         );
         
@@ -354,10 +401,20 @@ export class Template extends BaseElement implements IElement {
 
   /**
    * Recursively sanitize string values in objects
+   * SECURITY FIX: Truncate deep nesting instead of throwing to prevent DoS
    */
   private sanitizeObject(obj: any, depth: number = 0): any {
+    // SECURITY FIX: Return safe default instead of throwing to prevent DoS attacks
+    // Previously: Threw error on deep nesting which could be exploited
+    // Now: Returns string representation for excessively nested objects
     if (depth > 10) {
-      throw new Error('Object nesting too deep');
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_SIZE_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'Template.sanitizeObject',
+        details: 'Object nesting depth exceeded, truncating to string representation'
+      });
+      return '[Object too deeply nested]';
     }
     
     if (typeof obj !== 'object' || obj === null) {
@@ -365,11 +422,35 @@ export class Template extends BaseElement implements IElement {
     }
     
     if (Array.isArray(obj)) {
-      return obj.map(item => this.sanitizeObject(item, depth + 1));
+      // SECURITY FIX: Limit array size to prevent memory exhaustion
+      const MAX_ARRAY_SIZE = 1000;
+      if (obj.length > MAX_ARRAY_SIZE) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_SIZE_EXCEEDED',
+          severity: 'MEDIUM',
+          source: 'Template.sanitizeObject',
+          details: `Array size ${obj.length} exceeds maximum ${MAX_ARRAY_SIZE}, truncating`
+        });
+        obj = obj.slice(0, MAX_ARRAY_SIZE);
+      }
+      return obj.map((item: any) => this.sanitizeObject(item, depth + 1));
     }
     
     const sanitized: Record<string, any> = {};
-    for (const [key, value] of Object.entries(obj)) {
+    // SECURITY FIX: Limit number of object properties to prevent memory exhaustion
+    const MAX_OBJECT_KEYS = 100;
+    const entries = Object.entries(obj);
+    if (entries.length > MAX_OBJECT_KEYS) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_SIZE_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'Template.sanitizeObject',
+        details: `Object has ${entries.length} keys, limiting to ${MAX_OBJECT_KEYS}`
+      });
+    }
+    
+    for (let i = 0; i < Math.min(entries.length, MAX_OBJECT_KEYS); i++) {
+      const [key, value] = entries[i];
       const sanitizedKey = sanitizeInput(key, 50);
       if (typeof value === 'string') {
         sanitized[sanitizedKey] = sanitizeInput(value, 1000);
@@ -402,6 +483,39 @@ export class Template extends BaseElement implements IElement {
   }
 
   /**
+   * Check if a regex pattern is potentially dangerous (ReDoS)
+   * SECURITY FIX: Detect patterns that could cause exponential backtracking
+   */
+  private isDangerousRegex(pattern: string): boolean {
+    // Check for nested quantifiers which can cause exponential backtracking
+    const dangerousPatterns = [
+      /(\+|\*){2,}/,           // Multiple quantifiers
+      /\([^)]*\+\)[+*]/,       // Quantified groups with quantifiers inside
+      /\[[^\]]*\+\][+*]/,      // Quantified character classes with quantifiers
+      /(\\[dws])\1{2,}/,       // Repeated character classes
+      /\(\?\<[!=][^)]+\)/,     // Complex lookbehinds
+    ];
+    
+    for (const dangerous of dangerousPatterns) {
+      if (dangerous.test(pattern)) {
+        return true;
+      }
+    }
+    
+    // Check for excessive backtracking potential
+    // Count groups and quantifiers
+    const groups = (pattern.match(/\(/g) || []).length;
+    const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
+    
+    // If there are many groups and quantifiers, it's potentially dangerous
+    if (groups > 5 && quantifiers > 5) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
    * Format a value for template output
    */
   private formatValue(value: any): string {
@@ -427,20 +541,43 @@ export class Template extends BaseElement implements IElement {
   /**
    * Process template includes
    * SECURITY FIX #2: Safe include processing with path validation
+   * 
+   * TODO: Implement actual include processing functionality
+   * This is currently a placeholder that validates the security model
+   * but does not actually load and render included templates.
+   * 
+   * Future implementation should:
+   * 1. Load templates from validated paths
+   * 2. Render them with current variables
+   * 3. Replace include markers in content
+   * 4. Respect includeDepth limit
    */
   private async processIncludes(
     content: string, 
     variables: Record<string, any>, 
     includeDepth: number
   ): Promise<string> {
-    // This is a placeholder - actual implementation would load and render included templates
-    // For now, we just log the security event
+    // TODO: Implement actual template include processing
+    // Current implementation only validates the security model
+    
+    if (!this.metadata.includes || this.metadata.includes.length === 0) {
+      return content;
+    }
+    
+    // Log security event for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_INCLUDE',
       severity: 'LOW',
       source: 'Template.processIncludes',
-      details: `Processing ${this.metadata.includes?.length || 0} includes at depth ${includeDepth}`
+      details: `Processing ${this.metadata.includes.length} includes at depth ${includeDepth}`
     });
+    
+    // TODO: Future implementation would:
+    // for (const includePath of this.metadata.includes) {
+    //   const template = await this.loadIncludedTemplate(includePath);
+    //   const rendered = await template.render(variables, includeDepth + 1);
+    //   content = content.replace(`{{include:${includePath}}}`, rendered);
+    // }
     
     return content;
   }

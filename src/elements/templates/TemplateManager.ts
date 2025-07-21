@@ -261,7 +261,7 @@ export class TemplateManager implements IElementManager<Template> {
           
         case 'yaml':
           // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
-          // Previously: const yamlData = yaml.load(data);
+          // Previously: Used unsafe YAML parsing without validation
           // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
           const parsed = SecureYamlParser.parse(data, {
             maxYamlSize: 64 * 1024, // 64KB limit
@@ -327,13 +327,18 @@ export class TemplateManager implements IElementManager<Template> {
           };
           
           return yaml.dump(yamlData, {
-            // Using DEFAULT_SCHEMA instead of FAILSAFE_SCHEMA to support numbers
+            // SECURITY TRADE-OFF: Using DEFAULT_SCHEMA instead of FAILSAFE_SCHEMA
+            // Reason: FAILSAFE_SCHEMA doesn't support number types which are needed for template metadata
+            // Risk: DEFAULT_SCHEMA allows more YAML features that could be exploited
+            // Mitigation: noRefs prevents reference attacks, skipInvalid drops dangerous constructs
+            // Consider: For maximum security, implement custom schema that only allows needed types
             schema: yaml.DEFAULT_SCHEMA,
-            noRefs: true,
-            sortKeys: true,
-            // Additional safety options
-            skipInvalid: true,
-            condenseFlow: true
+            noRefs: true,        // Prevent reference attacks
+            sortKeys: true,      // Consistent output
+            skipInvalid: true,   // Skip unserializable values instead of throwing
+            condenseFlow: true,  // More compact output
+            quotingType: '"',    // Force double quotes for consistency
+            forceQuotes: false   // Only quote when necessary
           });
           
         case 'markdown':
@@ -449,14 +454,16 @@ export class TemplateManager implements IElementManager<Template> {
     );
     
     return yaml.dump(cleanMetadata, {
-      // Using DEFAULT_SCHEMA instead of FAILSAFE_SCHEMA to support all types
+      // SECURITY TRADE-OFF: Same as exportElement - using DEFAULT_SCHEMA for type support
+      // See exportElement method for detailed security considerations
       schema: yaml.DEFAULT_SCHEMA,
       noRefs: true,
       sortKeys: true,
       lineWidth: 80,
-      // Additional safety options
       skipInvalid: true,
-      condenseFlow: true
+      condenseFlow: true,
+      quotingType: '"',
+      forceQuotes: false
     });
   }
 
@@ -547,9 +554,20 @@ export class TemplateManager implements IElementManager<Template> {
    * Get most used templates
    */
   async getMostUsed(limit: number = 10): Promise<Template[]> {
+    // SECURITY FIX: Validate limit parameter to prevent excessive memory usage
+    // Previously: No validation could allow very large limits
+    // Now: Enforces reasonable bounds
+    const MIN_LIMIT = 1;
+    const MAX_LIMIT = 100;
+    const validatedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, Math.floor(limit)));
+    
+    if (limit !== validatedLimit) {
+      logger.warn(`getMostUsed: limit ${limit} adjusted to ${validatedLimit} (valid range: ${MIN_LIMIT}-${MAX_LIMIT})`);
+    }
+    
     const templates = await this.list();
     return templates
       .sort((a, b) => (b.metadata.usage_count || 0) - (a.metadata.usage_count || 0))
-      .slice(0, limit);
+      .slice(0, validatedLimit);
   }
 }
