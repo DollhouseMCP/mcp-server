@@ -139,6 +139,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/types/elements/*.ts',
+    reason: 'Element interface files are type definitions that do not process user input'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/errors/*.ts',
     reason: 'Error classes do not process user input'
   },
@@ -233,6 +238,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
+    file: 'src/types/elements/*.ts',
+    reason: 'Element interface files are type definitions that do not perform security operations'
+  },
+  {
+    rule: 'DMCP-SEC-006',
     file: 'src/constants/*.ts',
     reason: 'Constant files do not perform security operations'
   },
@@ -305,6 +315,20 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-006',
     file: 'scripts/**/*',
     reason: 'Build scripts do not perform runtime security operations'
+  },
+  
+  // ========================================
+  // Coverage Report Files
+  // ========================================
+  {
+    rule: '*',
+    file: 'test/coverage/**/*',
+    reason: 'Coverage report files are auto-generated and not part of the application code'
+  },
+  {
+    rule: '*',
+    file: '**/lcov-report/**/*',
+    reason: 'LCOV coverage report files are auto-generated and not part of the application code'
   },
   
   // ========================================
