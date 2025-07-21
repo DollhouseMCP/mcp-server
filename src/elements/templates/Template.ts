@@ -149,9 +149,10 @@ export class Template extends BaseElement implements IElement {
       return false;
     }
     
-    // Only allow alphanumeric, dash, underscore, forward slash, and .md extension
-    const validPathPattern = /^[a-zA-Z0-9\-_\/]+\.md$/;
-    return validPathPattern.test(normalized);
+    // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
+    // Note: We test against the original path to preserve cross-platform compatibility
+    const validPathPattern = /^[a-zA-Z0-9\-_\/\\]+\.md$/;
+    return validPathPattern.test(includePath);
   }
 
   /**
