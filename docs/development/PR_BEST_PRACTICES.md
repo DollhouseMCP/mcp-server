@@ -179,6 +179,67 @@ gh pr view 106 --comments
 3. **Create issues for future considerations**
 4. **Thank the reviewer and summarize actions taken**
 
+### Critical: Synchronizing Code Fixes with PR Comments
+
+**Problem**: When you push fixes and then add comments separately, reviewers often miss that the fixes are already implemented.
+
+**Solution**: Always push code and explanation together!
+
+#### Method 1: Push + Immediate Comment with Commit Reference
+```bash
+# After pushing fixes
+git push
+
+# IMMEDIATELY add comment with commit SHA
+gh pr comment [PR-NUMBER] --body "$(cat <<'EOF'
+## ✅ All Issues Fixed in commit b226dbe
+
+I've addressed all security issues from the review in the latest commit.
+
+[Click here to view the changes](https://github.com/DollhouseMCP/mcp-server/pull/331/commits/b226dbe)
+
+### What was fixed:
+1. **yaml.load false positive** - Removed from comment (TemplateManager.ts:277)
+2. **Object nesting DoS** - Returns safe default (Template.ts:410-418)
+3. **Array size limits** - Added MAX_ARRAY_SIZE (Template.ts:375-384)
+
+All fixes include inline documentation explaining the security improvements.
+EOF
+)"
+```
+
+#### Method 2: Update PR Description After Fixes
+```bash
+# After pushing all fixes
+gh pr edit [PR-NUMBER] --body "$(cat <<'EOF'
+[Original PR description...]
+
+## UPDATE: Review Fixes Complete ✅
+
+All issues from the security review have been addressed in commit b226dbe:
+
+| Issue | Status | Location | Commit |
+|-------|--------|----------|--------|
+| yaml.load false positive | ✅ Fixed | TemplateManager.ts:277 | b226dbe |
+| Object nesting DoS | ✅ Fixed | Template.ts:410-418 | b226dbe |
+| Array size limits | ✅ Fixed | Template.ts:375-384 | b226dbe |
+
+Ready for re-review!
+EOF
+)"
+```
+
+#### Common Mistake to Avoid
+```bash
+# ❌ DON'T DO THIS:
+git push
+# ... wait 30 minutes ...
+gh pr comment --body "Fixed all issues!"  # Reviewer won't know WHEN you fixed them!
+
+# ✅ DO THIS INSTEAD:
+git push && gh pr comment --body "Fixed in $(git rev-parse --short HEAD): [view changes](link)"
+```
+
 ## Post-Review Actions
 
 ### Create Follow-up Issues
