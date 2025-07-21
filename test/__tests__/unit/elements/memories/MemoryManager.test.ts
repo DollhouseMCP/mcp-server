@@ -186,16 +186,15 @@ data:
       const memory = new Memory({ name: 'To Delete' });
       await manager.save(memory, 'delete-me.yaml');
       
-      const deleted = await manager.delete('delete-me.yaml');
-      expect(deleted).toBe(true);
+      await manager.delete('delete-me.yaml');
       
       const exists = await manager.exists('delete-me.yaml');
       expect(exists).toBe(false);
     });
     
-    it('should return false for non-existent file', async () => {
-      const deleted = await manager.delete('non-existent.yaml');
-      expect(deleted).toBe(false);
+    it('should not throw when deleting non-existent file', async () => {
+      // Should not throw
+      await expect(manager.delete('non-existent.yaml')).resolves.not.toThrow();
     });
     
     it('should remove from cache on delete', async () => {

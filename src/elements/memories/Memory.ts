@@ -402,7 +402,7 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Validate the memory element
    */
-  public validate(): ElementValidationResult {
+  public override validate(): ElementValidationResult {
     const result = super.validate();
     
     // Initialize errors array if not present
@@ -447,7 +447,7 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Serialize memory to string
    */
-  public serialize(): string {
+  public override serialize(): string {
     const data = {
       id: this.id,
       type: this.type,
@@ -464,7 +464,7 @@ export class Memory extends BaseElement implements IElement {
    * Deserialize memory from string
    * SECURITY: Validates all loaded data
    */
-  public deserialize(data: string): void {
+  public override deserialize(data: string): void {
     try {
       const parsed = JSON.parse(data);
       

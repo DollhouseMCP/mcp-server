@@ -233,7 +233,7 @@ export class MemoryManager implements IElementManager<Memory> {
    * Delete a memory file
    * SECURITY: Validates path and logs deletion
    */
-  async delete(filePath: string): Promise<boolean> {
+  async delete(filePath: string): Promise<void> {
     try {
       const fullPath = await this.validateAndResolvePath(filePath);
       
@@ -253,11 +253,10 @@ export class MemoryManager implements IElementManager<Memory> {
         details: `Deleted memory file: ${path.basename(fullPath)}`
       });
       
-      return true;
-      
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
-        return false;
+        // File doesn't exist, not an error for delete operation
+        return;
       }
       throw error;
     }
@@ -299,8 +298,7 @@ export class MemoryManager implements IElementManager<Memory> {
         try {
           parsed = yaml.load(data, {
             schema: yaml.FAILSAFE_SCHEMA, // Only allows strings, ints, floats, booleans
-            json: false,
-            maxAliasCount: 10 // Prevent billion laughs attack
+            json: false
           });
         } catch (yamlError) {
           throw new Error(`Invalid YAML: ${yamlError}`);
@@ -378,7 +376,7 @@ export class MemoryManager implements IElementManager<Memory> {
   /**
    * Validate a memory element
    */
-  async validate(element: Memory): Promise<ElementValidationResult> {
+  validate(element: Memory): ElementValidationResult {
     return element.validate();
   }
   
@@ -386,9 +384,21 @@ export class MemoryManager implements IElementManager<Memory> {
    * Validate and resolve a file path
    * SECURITY: Prevents directory traversal attacks
    */
-  async validatePath(filePath: string): Promise<boolean> {
+  validatePath(filePath: string): boolean {
     try {
-      await this.validateAndResolvePath(filePath);
+      // Perform synchronous validation checks
+      const normalized = path.normalize(filePath);
+      
+      // Check for path traversal attempts
+      if (normalized.includes('..') || path.isAbsolute(normalized)) {
+        return false;
+      }
+      
+      // Ensure proper extension
+      if (!normalized.endsWith('.md') && !normalized.endsWith('.yaml') && !normalized.endsWith('.yml')) {
+        return false;
+      }
+      
       return true;
     } catch {
       return false;
@@ -449,7 +459,7 @@ export class MemoryManager implements IElementManager<Memory> {
       name: sanitizeInput(parsed.metadata?.name || 'Unnamed Memory', 100),
       description: parsed.metadata?.description ? 
         sanitizeInput(parsed.metadata.description, 500) : 
-        undefined,
+        '',
       version: parsed.metadata?.version || '1.0.0',
       author: parsed.metadata?.author,
       created: parsed.metadata?.created,
