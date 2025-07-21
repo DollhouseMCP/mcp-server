@@ -20,6 +20,7 @@ import { IElementMetadata } from '../../types/elements/IElement.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import * as path from 'path';
@@ -59,9 +60,9 @@ function sanitizeMemoryContent(content: string, maxLength: number): string {
 }
 
 export interface MemoryMetadata extends IElementMetadata {
-  storageBackend?: 'memory' | 'file' | 'indexed';
+  storageBackend?: StorageBackend;
   retentionDays?: number;
-  privacyLevel?: 'public' | 'private' | 'sensitive';
+  privacyLevel?: PrivacyLevel;
   searchable?: boolean;
   maxEntries?: number;
   encryptionEnabled?: boolean;
@@ -74,7 +75,7 @@ export interface MemoryEntry {
   tags?: string[];
   metadata?: Record<string, any>;
   expiresAt?: Date;
-  privacyLevel?: 'public' | 'private' | 'sensitive';
+  privacyLevel?: PrivacyLevel;
 }
 
 export interface MemorySearchOptions {
@@ -83,24 +84,17 @@ export interface MemorySearchOptions {
   startDate?: Date;
   endDate?: Date;
   limit?: number;
-  privacyLevel?: 'public' | 'private' | 'sensitive';
+  privacyLevel?: PrivacyLevel;
 }
 
 export class Memory extends BaseElement implements IElement {
   // Memory-specific properties
   private entries: Map<string, MemoryEntry> = new Map();
-  private storageBackend: 'memory' | 'file' | 'indexed';
+  private storageBackend: StorageBackend;
   private retentionDays: number;
-  private privacyLevel: 'public' | 'private' | 'sensitive';
+  private privacyLevel: PrivacyLevel;
   private searchable: boolean;
   private maxEntries: number;
-  
-  // Security limits
-  private readonly MAX_MEMORY_SIZE = 1024 * 1024; // 1MB per memory
-  private readonly MAX_ENTRY_SIZE = 100 * 1024; // 100KB per entry
-  private readonly MAX_ENTRIES_DEFAULT = 1000;
-  private readonly MAX_TAG_LENGTH = 50;
-  private readonly MAX_TAGS_PER_ENTRY = 20;
   
   constructor(metadata: Partial<MemoryMetadata> = {}) {
     // SECURITY FIX: Sanitize all inputs during construction
@@ -117,13 +111,16 @@ export class Memory extends BaseElement implements IElement {
     super(ElementType.MEMORY, sanitizedMetadata);
     
     // Initialize memory-specific properties with defaults
-    this.storageBackend = metadata.storageBackend || 'memory';
-    this.retentionDays = metadata.retentionDays || 30;
-    this.privacyLevel = metadata.privacyLevel || 'private';
+    this.storageBackend = metadata.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND;
+    this.retentionDays = metadata.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
+    // Validate privacy level - default to private if invalid
+    this.privacyLevel = (metadata.privacyLevel && MEMORY_CONSTANTS.PRIVACY_LEVELS.includes(metadata.privacyLevel)) 
+      ? metadata.privacyLevel 
+      : MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL;
     this.searchable = metadata.searchable !== false;
     this.maxEntries = Math.min(
-      metadata.maxEntries || this.MAX_ENTRIES_DEFAULT,
-      this.MAX_ENTRIES_DEFAULT
+      metadata.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+      MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
     
     // Set up extensions
@@ -138,7 +135,7 @@ export class Memory extends BaseElement implements IElement {
     
     // Log memory creation
     SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_CREATED',
+      type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
       severity: 'LOW',
       source: 'Memory.constructor',
       details: `Memory created: ${this.metadata.name} with ${this.storageBackend} backend`
@@ -155,13 +152,18 @@ export class Memory extends BaseElement implements IElement {
       // SECURITY FIX: Enforce retention policy when at capacity
       await this.enforceRetentionPolicy();
       
+      // If still at capacity after retention, remove oldest to make room
       if (this.entries.size >= this.maxEntries) {
-        throw new Error(`Memory capacity reached: ${this.maxEntries} entries`);
+        const oldestEntry = Array.from(this.entries.values())
+          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())[0];
+        if (oldestEntry) {
+          this.entries.delete(oldestEntry.id);
+        }
       }
     }
     
     // SECURITY FIX: Validate and sanitize content
-    const sanitizedContent = sanitizeMemoryContent(content, this.MAX_ENTRY_SIZE);
+    const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
     
     if (!sanitizedContent || sanitizedContent.trim().length === 0) {
       throw new Error('Memory content cannot be empty');
@@ -187,7 +189,7 @@ export class Memory extends BaseElement implements IElement {
     
     // Log memory addition
     SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_ADDED',
+      type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
       details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags`
@@ -206,38 +208,43 @@ export class Memory extends BaseElement implements IElement {
       sanitizeInput(UnicodeValidator.normalize(options.query).normalizedContent, 200) : 
       undefined;
     
-    let results = Array.from(this.entries.values());
+    // PERFORMANCE OPTIMIZATION: Single-pass filtering to reduce allocations
+    let results: MemoryEntry[] = [];
+    const queryLower = sanitizedQuery?.toLowerCase();
+    const searchTags = options.tags && options.tags.length > 0 ? this.sanitizeTags(options.tags) : null;
     
-    // Filter by privacy level
-    if (options.privacyLevel) {
-      results = results.filter(entry => 
-        this.canAccessPrivacyLevel(entry.privacyLevel || 'private', options.privacyLevel!)
-      );
-    }
-    
-    // Filter by query
-    if (sanitizedQuery) {
-      const queryLower = sanitizedQuery.toLowerCase();
-      results = results.filter(entry => 
-        entry.content.toLowerCase().includes(queryLower) ||
-        entry.tags?.some(tag => tag.toLowerCase().includes(queryLower))
-      );
-    }
-    
-    // Filter by tags
-    if (options.tags && options.tags.length > 0) {
-      const searchTags = this.sanitizeTags(options.tags);
-      results = results.filter(entry =>
-        searchTags.some(searchTag => entry.tags?.includes(searchTag))
-      );
-    }
-    
-    // Filter by date range
-    if (options.startDate) {
-      results = results.filter(entry => entry.timestamp >= options.startDate!);
-    }
-    if (options.endDate) {
-      results = results.filter(entry => entry.timestamp <= options.endDate!);
+    // Single iteration through entries with all filters applied
+    for (const entry of this.entries.values()) {
+      // Privacy level check
+      if (options.privacyLevel && 
+          !this.canAccessPrivacyLevel(entry.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL, options.privacyLevel)) {
+        continue;
+      }
+      
+      // Query text check
+      if (queryLower) {
+        const contentMatch = entry.content.toLowerCase().includes(queryLower);
+        const tagMatch = entry.tags?.some(tag => tag.toLowerCase().includes(queryLower));
+        if (!contentMatch && !tagMatch) {
+          continue;
+        }
+      }
+      
+      // Tag filter check
+      if (searchTags && !searchTags.some(searchTag => entry.tags?.includes(searchTag))) {
+        continue;
+      }
+      
+      // Date range checks
+      if (options.startDate && entry.timestamp < options.startDate) {
+        continue;
+      }
+      if (options.endDate && entry.timestamp > options.endDate) {
+        continue;
+      }
+      
+      // Entry passes all filters
+      results.push(entry);
     }
     
     // Sort by timestamp (newest first) - using string comparison for IDs as secondary sort
@@ -255,7 +262,7 @@ export class Memory extends BaseElement implements IElement {
     
     // Log search operation
     SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_SEARCHED',
+      type: MEMORY_SECURITY_EVENTS.MEMORY_SEARCHED,
       severity: 'LOW',
       source: 'Memory.search',
       details: `Searched memories with query: ${sanitizedQuery || 'none'}, found ${results.length} results`
@@ -284,7 +291,7 @@ export class Memory extends BaseElement implements IElement {
     // SECURITY: Check if sensitive memories can be deleted
     if (entry.privacyLevel === 'sensitive') {
       SecurityMonitor.logSecurityEvent({
-        type: 'SENSITIVE_MEMORY_DELETED',
+        type: MEMORY_SECURITY_EVENTS.SENSITIVE_MEMORY_DELETED,
         severity: 'MEDIUM',
         source: 'Memory.deleteEntry',
         details: `Sensitive memory ${id} deleted`
@@ -329,7 +336,7 @@ export class Memory extends BaseElement implements IElement {
     if (deletedCount > 0) {
       this._isDirty = true;
       SecurityMonitor.logSecurityEvent({
-        type: 'RETENTION_POLICY_ENFORCED',
+        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
         severity: 'LOW',
         source: 'Memory.enforceRetentionPolicy',
         details: `Removed ${deletedCount} expired memories`
@@ -353,7 +360,7 @@ export class Memory extends BaseElement implements IElement {
     this._isDirty = true;
     
     SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_CLEARED',
+      type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED,
       severity: 'HIGH',
       source: 'Memory.clearAll',
       details: `Cleared all ${count} memory entries`
@@ -411,28 +418,28 @@ export class Memory extends BaseElement implements IElement {
     }
     
     // Additional memory-specific validation
-    if (this.retentionDays < 1 || this.retentionDays > 365) {
+    if (this.retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || this.retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {
       result.errors.push({
         field: 'retentionDays',
-        message: 'Retention days must be between 1 and 365',
+        message: `Retention days must be between ${MEMORY_CONSTANTS.MIN_RETENTION_DAYS} and ${MEMORY_CONSTANTS.MAX_RETENTION_DAYS}`,
         severity: 'error'
       } as ValidationError);
     }
     
-    if (this.maxEntries < 1 || this.maxEntries > this.MAX_ENTRIES_DEFAULT) {
+    if (this.maxEntries < 1 || this.maxEntries > MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT) {
       result.errors.push({
         field: 'maxEntries',
-        message: `Max entries must be between 1 and ${this.MAX_ENTRIES_DEFAULT}`,
+        message: `Max entries must be between 1 and ${MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT}`,
         severity: 'error'
       } as ValidationError);
     }
     
     // Check memory size
     const stats = this.getStats();
-    if (stats.totalSize > this.MAX_MEMORY_SIZE) {
+    if (stats.totalSize > MEMORY_CONSTANTS.MAX_MEMORY_SIZE) {
       result.errors.push({
         field: 'memory',
-        message: `Total memory size (${stats.totalSize}) exceeds limit (${this.MAX_MEMORY_SIZE})`,
+        message: `Total memory size (${stats.totalSize}) exceeds limit (${MEMORY_CONSTANTS.MAX_MEMORY_SIZE})`,
         severity: 'error'
       } as ValidationError);
     }
@@ -485,7 +492,7 @@ export class Memory extends BaseElement implements IElement {
         for (const entry of parsed.entries) {
           if (this.isValidEntry(entry)) {
             // Re-sanitize on load
-            entry.content = sanitizeMemoryContent(entry.content, this.MAX_ENTRY_SIZE);
+            entry.content = sanitizeMemoryContent(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
             entry.tags = this.sanitizeTags(entry.tags || []);
             entry.timestamp = new Date(entry.timestamp);
             if (entry.expiresAt) {
@@ -501,7 +508,7 @@ export class Memory extends BaseElement implements IElement {
       
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_DESERIALIZE_FAILED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_DESERIALIZE_FAILED,
         severity: 'HIGH',
         source: 'Memory.deserialize',
         details: `Failed to deserialize memory: ${error}`
@@ -520,12 +527,12 @@ export class Memory extends BaseElement implements IElement {
   
   private sanitizeTags(tags: string[]): string[] {
     // SECURITY FIX: Limit number of tags and sanitize each
-    const limitedTags = tags.slice(0, this.MAX_TAGS_PER_ENTRY);
+    const limitedTags = tags.slice(0, MEMORY_CONSTANTS.MAX_TAGS_PER_ENTRY);
     
     return limitedTags
       .map(tag => {
         const normalized = UnicodeValidator.normalize(tag).normalizedContent;
-        return sanitizeInput(normalized, this.MAX_TAG_LENGTH);
+        return sanitizeInput(normalized, MEMORY_CONSTANTS.MAX_TAG_LENGTH);
       })
       .filter(tag => tag && tag.length > 0);
   }
@@ -535,15 +542,15 @@ export class Memory extends BaseElement implements IElement {
     
     // SECURITY FIX: Sanitize metadata values
     const sanitized: Record<string, any> = {};
-    const maxKeys = 20;
+    const maxKeys = MEMORY_CONSTANTS.MAX_METADATA_KEYS;
     let keyCount = 0;
     
     for (const [key, value] of Object.entries(metadata)) {
       if (keyCount >= maxKeys) break;
       
-      const sanitizedKey = sanitizeInput(key, 50);
+      const sanitizedKey = sanitizeInput(key, MEMORY_CONSTANTS.MAX_METADATA_KEY_LENGTH);
       if (sanitizedKey && typeof value === 'string') {
-        sanitized[sanitizedKey] = sanitizeInput(value, 200);
+        sanitized[sanitizedKey] = sanitizeInput(value, MEMORY_CONSTANTS.MAX_METADATA_VALUE_LENGTH);
         keyCount++;
       } else if (sanitizedKey && typeof value === 'number') {
         sanitized[sanitizedKey] = value;
@@ -556,9 +563,9 @@ export class Memory extends BaseElement implements IElement {
   }
   
   private canAccessPrivacyLevel(entryLevel: string, requestedLevel: string): boolean {
-    const levels = ['public', 'private', 'sensitive'];
-    const entryIndex = levels.indexOf(entryLevel);
-    const requestedIndex = levels.indexOf(requestedLevel);
+    const levels = MEMORY_CONSTANTS.PRIVACY_LEVELS;
+    const entryIndex = levels.indexOf(entryLevel as PrivacyLevel);
+    const requestedIndex = levels.indexOf(requestedLevel as PrivacyLevel);
     
     // Can only access entries at or below the requested privacy level
     // e.g., if requesting 'private', can see 'public' and 'private' but not 'sensitive'

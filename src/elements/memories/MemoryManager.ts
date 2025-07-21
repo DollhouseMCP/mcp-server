@@ -20,6 +20,7 @@ import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
@@ -59,7 +60,7 @@ export class MemoryManager implements IElementManager<Memory> {
       // Previously: Could use unsafe YAML parsing
       // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
       const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: 256 * 1024, // 256KB limit for memory files
+        maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
         validateContent: true
       });
       
@@ -86,7 +87,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
       // Log successful load
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_LOADED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_LOADED,
         severity: 'LOW',
         source: 'MemoryManager.load',
         details: `Loaded memory from ${path.basename(fullPath)}`
@@ -96,7 +97,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_LOAD_FAILED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_LOAD_FAILED,
         severity: 'MEDIUM',
         source: 'MemoryManager.load',
         details: `Failed to load memory from ${filePath}: ${error}`
@@ -160,7 +161,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
       // Log successful save
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_SAVED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
         severity: 'LOW',
         source: 'MemoryManager.save',
         details: `Saved memory to ${path.basename(fullPath)} with ${stats.totalEntries} entries`
@@ -168,7 +169,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_SAVE_FAILED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
         source: 'MemoryManager.save',
         details: `Failed to save memory to ${filePath}: ${error}`
@@ -193,7 +194,7 @@ export class MemoryManager implements IElementManager<Memory> {
           } catch (error) {
             // Log but continue with other files
             SecurityMonitor.logSecurityEvent({
-              type: 'MEMORY_LIST_ITEM_FAILED',
+              type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
               severity: 'LOW',
               source: 'MemoryManager.list',
               details: `Failed to load ${file}: ${error}`
@@ -247,7 +248,7 @@ export class MemoryManager implements IElementManager<Memory> {
       this.memoryCache.delete(fullPath);
       
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_DELETED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_DELETED,
         severity: 'MEDIUM',
         source: 'MemoryManager.delete',
         details: `Deleted memory file: ${path.basename(fullPath)}`
@@ -297,7 +298,7 @@ export class MemoryManager implements IElementManager<Memory> {
         // Memory import expects pure YAML (not frontmatter), so we parse it securely
         try {
           // First validate the YAML content size
-          if (data.length > 256 * 1024) {
+          if (data.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
             throw new Error('YAML content exceeds maximum allowed size');
           }
           
@@ -306,7 +307,7 @@ export class MemoryManager implements IElementManager<Memory> {
           const wrappedYaml = `---\n${data}\n---\n`;
           
           const parseResult = SecureYamlParser.parse(wrappedYaml, {
-            maxYamlSize: 256 * 1024,
+            maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
             validateContent: true
           });
           
@@ -351,7 +352,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_IMPORT_FAILED',
+        type: MEMORY_SECURITY_EVENTS.MEMORY_IMPORT_FAILED,
         severity: 'MEDIUM',
         source: 'MemoryManager.importElement',
         details: `Failed to import memory: ${error}`
@@ -480,11 +481,11 @@ export class MemoryManager implements IElementManager<Memory> {
       tags: Array.isArray(parsed.metadata?.tags) ? 
         parsed.metadata.tags.map((tag: string) => sanitizeInput(tag, 50)) : 
         [],
-      storageBackend: parsed.metadata?.storageBackend || 'memory',
-      retentionDays: parsed.metadata?.retentionDays || 30,
-      privacyLevel: parsed.metadata?.privacyLevel || 'private',
+      storageBackend: parsed.metadata?.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
+      retentionDays: parsed.metadata?.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS,
+      privacyLevel: parsed.metadata?.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: parsed.metadata?.searchable !== false,
-      maxEntries: parsed.metadata?.maxEntries || 1000
+      maxEntries: parsed.metadata?.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     };
     
     // Extract content (if any)
