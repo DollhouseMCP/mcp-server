@@ -294,12 +294,25 @@ export class MemoryManager implements IElementManager<Memory> {
         parsed = JSON.parse(data);
       } else {
         // HIGH SEVERITY FIX: Use secure YAML parsing
-        // For pure YAML (not frontmatter), use yaml.load with FAILSAFE_SCHEMA
+        // Memory import expects pure YAML (not frontmatter), so we parse it securely
         try {
-          parsed = yaml.load(data, {
-            schema: yaml.FAILSAFE_SCHEMA, // Only allows strings, ints, floats, booleans
-            json: false
+          // First validate the YAML content size
+          if (data.length > 256 * 1024) {
+            throw new Error('YAML content exceeds maximum allowed size');
+          }
+          
+          // Create a wrapper to use SecureYamlParser with pure YAML
+          // Add minimal frontmatter markers to satisfy parser
+          const wrappedYaml = `---\n${data}\n---\n`;
+          
+          const parseResult = SecureYamlParser.parse(wrappedYaml, {
+            maxYamlSize: 256 * 1024,
+            validateContent: true
           });
+          
+          // Extract the parsed data (will be in the 'data' property)
+          parsed = parseResult.data;
+          
         } catch (yamlError) {
           throw new Error(`Invalid YAML: ${yamlError}`);
         }
