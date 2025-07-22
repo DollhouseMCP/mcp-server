@@ -174,11 +174,11 @@ See `/docs/development/CI_FIX_PR86_SUMMARY.md` and `/docs/development/REMAINING_
 - #9: Document branch protection
 - Security issues: #153-159
 
-### Current Session Status (July 10 Evening):
-1. **v1.2.4 Released** ✅ - Fixed MCP protocol compatibility
-2. **NPM Published** ✅ - @mickdarling/dollhousemcp@1.2.4
-3. **User Confirmed Working** ✅ - Using npm global installation
-4. **Known Issue**: NPM package missing personas (fix in v1.2.5)
+### Current Session Status (July 22, 2025):
+1. **Security Fixes Complete** ✅ - PR #353 addresses all ReDoS vulnerabilities
+2. **Performance Tests Added** ✅ - PR #357 implements Issues #354-356
+3. **All Tests Passing** ✅ - 1339/1339 tests green
+4. **Ready for Review**: Two PRs pending review/merge
 
 ### Latest Releases:
 - v1.2.3 (July 10): Fixed /personas filesystem root error  
