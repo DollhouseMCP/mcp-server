@@ -356,11 +356,40 @@ export function validatePath(inputPath: string, baseDir?: string): string {
     throw new Error('Absolute paths not allowed when base directory is specified');
   }
   
-  // SECURITY FIX: More efficient path normalization to prevent ReDoS
-  // Previously: Using {1,100} quantifiers which is inefficient
-  // Now: Direct string manipulation for better performance
-  const trimmed = inputPath.replace(/^\/+|\/+$/g, ''); // Remove all leading/trailing slashes
-  const normalized = trimmed.replace(/\/+/g, '/'); // Replace multiple slashes with single slash
+  // SECURITY FIX: Non-regex approach to prevent ReDoS
+  // Previously: Using regex with + quantifiers that could still cause issues
+  // Now: Character-by-character processing without regex backtracking risk
+  
+  // Remove leading slashes
+  let start = 0;
+  while (start < inputPath.length && inputPath[start] === '/') {
+    start++;
+  }
+  
+  // Remove trailing slashes
+  let end = inputPath.length;
+  while (end > start && inputPath[end - 1] === '/') {
+    end--;
+  }
+  
+  // Extract the trimmed portion
+  const trimmed = inputPath.substring(start, end);
+  
+  // Normalize multiple slashes to single slash without regex
+  let normalized = '';
+  let prevWasSlash = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    if (char === '/') {
+      if (!prevWasSlash) {
+        normalized += char;
+      }
+      prevWasSlash = true;
+    } else {
+      normalized += char;
+      prevWasSlash = false;
+    }
+  }
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
     throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
