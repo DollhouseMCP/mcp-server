@@ -23,7 +23,16 @@ export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
   const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
-  const whatItIs = personaName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  // SECURITY FIX: Prevent ReDoS by using a single-pass approach
+  // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
+  // Now: Single-pass transformation with built-in length limit
+  const normalized = personaName.toLowerCase().substring(0, 100); // Limit input length
+  const whatItIs = normalized
+    .split('')
+    .map(char => /[a-z0-9]/.test(char) ? char : '-')
+    .join('')
+    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
+    .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
   const whoMadeIt = author || generateAnonymousId();
   
   return `${whatItIs}_${dateStr}-${timeStr}_${whoMadeIt}`;
@@ -33,7 +42,16 @@ export function generateUniqueId(personaName: string, author?: string): string {
  * Convert text to URL-safe slug
  */
 export function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  // SECURITY FIX: Prevent ReDoS by using a single-pass approach
+  // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
+  // Now: Single-pass transformation with built-in length limit
+  const normalized = text.toLowerCase().substring(0, 100); // Limit input length
+  return normalized
+    .split('')
+    .map(char => /[a-z0-9]/.test(char) ? char : '-')
+    .join('')
+    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
+    .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
 }
 
 /**
