@@ -24,7 +24,8 @@ describe('ReDoS Pathological Input Tests', () => {
       expect(() => {
         const result = generateUniqueId(pathological);
         // Verify the result is properly sanitized
-        expect(result).toMatch(/^a-b_\d{8}-\d{6}_/);
+        // After processing and limiting to 100 chars, we expect just 'a'
+        expect(result).toMatch(/^a_\d{8}-\d{6}_/);
       }).not.toThrow();
     });
 
@@ -161,13 +162,13 @@ describe('ReDoS Pathological Input Tests', () => {
      * These tests document the current behavior
      */
     
-    it('should handle empty base64 strings', () => {
-      const importer = new PersonaImporter();
+    it('should handle empty base64 strings', async () => {
+      const importer = new PersonaImporter('/tmp/test', 'test-user');
       
       // Empty string might be accepted by the importer
       // but should fail during processing
       try {
-        importer.importFromBase64('');
+        await importer.importPersona('', new Map(), false);
         // If it doesn't throw, that's still a valid test result
       } catch (e) {
         // Expected to throw at some point
@@ -175,20 +176,20 @@ describe('ReDoS Pathological Input Tests', () => {
       }
     });
 
-    it('should process base64-like patterns', () => {
-      const importer = new PersonaImporter();
+    it('should process base64-like patterns', async () => {
+      const importer = new PersonaImporter('/tmp/test', 'test-user');
       
       // Test various patterns
       const testCases = ['=', '==', 'A', 'AB', 'ABC', 'AAAA'];
       
-      testCases.forEach(testCase => {
+      for (const testCase of testCases) {
         try {
-          importer.importFromBase64(testCase);
+          await importer.importPersona(testCase, new Map(), false);
         } catch (e) {
           // Any error is fine - we're testing it doesn't hang
           expect(e).toBeDefined();
         }
-      });
+      }
     });
   });
 

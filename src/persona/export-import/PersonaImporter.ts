@@ -313,8 +313,10 @@ export class PersonaImporter {
     // Check length is multiple of 4
     if (str.length % 4 !== 0) return false;
     
-    // Check for valid base64 characters and padding
-    return /^[A-Za-z0-9+/]*={0,2}$/.test(str);
+    // SECURITY FIX: Ensure base64 string is not empty
+    // Previously: /^[A-Za-z0-9+/]*={0,2}$/ allowed empty strings
+    // Now: Require at least one character before optional padding
+    return /^[A-Za-z0-9+/]+={0,2}$/.test(str);
   }
 
   /**

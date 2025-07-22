@@ -5,18 +5,20 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { promises as fs } from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+
+// Mock the security modules before importing anything that uses them
+jest.mock('../../../../../src/security/fileLockManager.js');
+jest.mock('../../../../../src/security/securityMonitor.js');
+jest.mock('../../../../../src/utils/logger.js');
+
+// Import after mocking
 import { AgentManager } from '../../../../../src/elements/agents/AgentManager.js';
 import { Agent } from '../../../../../src/elements/agents/Agent.js';
 import { AgentMetadata } from '../../../../../src/elements/agents/types.js';
 import { ElementType } from '../../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../../src/security/securityMonitor.js';
-import * as os from 'os';
-
-// Mock dependencies
-jest.mock('../../../../../src/security/fileLockManager.js');
-jest.mock('../../../../../src/security/securityMonitor.js');
-jest.mock('../../../../../src/utils/logger.js');
 
 describe('AgentManager', () => {
   let agentManager: AgentManager;
@@ -34,14 +36,17 @@ describe('AgentManager', () => {
 
     // Set up mocks
     jest.clearAllMocks();
-    (FileLockManager.atomicWriteFile as jest.Mock) = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager.atomicReadFile as jest.Mock) = jest.fn();
-    (SecurityMonitor.logSecurityEvent as jest.Mock) = jest.fn();
+    
+    // Set default mock implementations by assigning functions directly
+    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
+    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
+    (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
+    (SecurityMonitor as any).logSecurityEvent = jest.fn();
     
     // Mock fs.open for atomic file creation
     const mockFileHandle = {
-      writeFile: jest.fn().mockResolvedValue(undefined),
-      close: jest.fn().mockResolvedValue(undefined)
+      writeFile: jest.fn(() => Promise.resolve()),
+      close: jest.fn(() => Promise.resolve())
     };
     jest.spyOn(fs, 'open').mockResolvedValue(mockFileHandle as any);
   });

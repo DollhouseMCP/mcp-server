@@ -195,24 +195,23 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to simulate GitHub API response
-      const mockGet = jest.fn()
-        .mockImplementation((header: string) => {
-          switch (header) {
-            case 'x-oauth-scopes': return 'repo,user:email';
-            case 'x-ratelimit-remaining': return '100';
-            case 'x-ratelimit-reset': return '1640995200';
-            default: return null;
-          }
-        });
+      const mockGet = jest.fn((header: string) => {
+        switch (header) {
+          case 'x-oauth-scopes': return 'repo,user:email';
+          case 'x-ratelimit-remaining': return '100';
+          case 'x-ratelimit-reset': return '1640995200';
+          default: return null;
+        }
+      });
       
-      const mockFetch = jest.fn().mockResolvedValue({
+      const mockFetch = jest.fn((_url: string, _options?: any) => Promise.resolve({
         ok: true,
         headers: {
           get: mockGet
         }
-      } as unknown as Response);
+      } as unknown as Response));
       
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(true);
@@ -224,16 +223,16 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to simulate GitHub API error
-      const mockFetch = jest.fn().mockResolvedValue({
+      const mockFetch = jest.fn(() => Promise.resolve({
         ok: false,
         status: 401,
         statusText: 'Unauthorized',
         headers: {
           get: jest.fn().mockReturnValue(null)
         }
-      } as unknown as Response);
+      } as unknown as Response));
       
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -244,8 +243,7 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to return token with insufficient scopes
-      const mockGet = jest.fn()
-        .mockImplementation((header: string) => {
+      const mockGet = jest.fn((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return 'user:email'; // missing 'gist'
             case 'x-ratelimit-remaining': return '100';
@@ -254,14 +252,14 @@ describe('TokenManager - GitHub Token Security', () => {
           }
         });
       
-      const mockFetch = jest.fn().mockResolvedValue({
+      const mockFetch = jest.fn(() => Promise.resolve({
         ok: true,
         headers: {
           get: mockGet
         }
-      } as unknown as Response);
+      } as unknown as Response));
       
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.ensureTokenPermissions('gist');
       expect(result.isValid).toBe(false);
@@ -273,8 +271,8 @@ describe('TokenManager - GitHub Token Security', () => {
       process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
       
       // Mock fetch to simulate network error
-      const mockFetch = jest.fn().mockRejectedValue(new Error('Network error'));
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      const mockFetch = jest.fn(() => Promise.reject(new Error('Network error')));
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(false);
@@ -287,8 +285,7 @@ describe('TokenManager - GitHub Token Security', () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
       const requiredScopes = { required: ['repo'], optional: ['user:email'] };
       
-      const mockGet = jest.fn()
-        .mockImplementation((header: string) => {
+      const mockGet = jest.fn((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return 'repo,user:email,gist';
             case 'x-ratelimit-remaining': return '95';
@@ -297,14 +294,14 @@ describe('TokenManager - GitHub Token Security', () => {
           }
         });
       
-      const mockFetch = jest.fn().mockResolvedValue({
+      const mockFetch = jest.fn(() => Promise.resolve({
         ok: true,
         headers: {
           get: mockGet
         }
-      } as unknown as Response);
+      } as unknown as Response));
       
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(true);
@@ -316,8 +313,7 @@ describe('TokenManager - GitHub Token Security', () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
       const requiredScopes = { required: ['repo'] };
       
-      const mockGet = jest.fn()
-        .mockImplementation((header: string) => {
+      const mockGet = jest.fn((header: string) => {
           switch (header) {
             case 'x-oauth-scopes': return '';
             case 'x-ratelimit-remaining': return '100';
@@ -326,14 +322,14 @@ describe('TokenManager - GitHub Token Security', () => {
           }
         });
       
-      const mockFetch = jest.fn().mockResolvedValue({
+      const mockFetch = jest.fn(() => Promise.resolve({
         ok: true,
         headers: {
           get: mockGet
         }
-      } as unknown as Response);
+      } as unknown as Response));
       
-      global.fetch = mockFetch as jest.MockedFunction<typeof fetch>;
+      global.fetch = mockFetch as any;
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(false);
