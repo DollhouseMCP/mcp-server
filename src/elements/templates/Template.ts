@@ -37,7 +37,7 @@ export interface TemplateVariable {
   type: 'string' | 'number' | 'boolean' | 'date' | 'array' | 'object';
   description?: string;           // Help text for the variable
   required?: boolean;             // Is this variable required?
-  default?: any;                  // Default value if not provided
+  default?: unknown;              // Default value if not provided (type-safe)
   validation?: string;            // Regex pattern for validation (string type only)
   options?: string[];             // For enum-like strings
   format?: string;                // Date format string (date type only)
@@ -46,7 +46,7 @@ export interface TemplateVariable {
 export interface TemplateExample {
   title: string;
   description?: string;
-  variables: Record<string, any>;
+  variables: Record<string, unknown>;
   output?: string;
 }
 
@@ -191,8 +191,12 @@ export class Template extends BaseElement implements IElement {
    * Render the template with provided variables
    * SECURITY FIX #1: Safe rendering without code execution
    * SECURITY FIX #3: All variables are validated and sanitized
+   * TYPE SAFETY: Strong typing for variables with runtime validation
    */
-  async render(variables: Record<string, any> = {}, includeDepth: number = 0): Promise<string> {
+  async render<T extends Record<string, unknown>>(
+    variables: T = {} as T, 
+    includeDepth: number = 0
+  ): Promise<string> {
     // SECURITY FIX #4: Prevent infinite include loops
     if (includeDepth > this.MAX_INCLUDE_DEPTH) {
       SecurityMonitor.logSecurityEvent({
@@ -252,9 +256,12 @@ export class Template extends BaseElement implements IElement {
   /**
    * Validate and sanitize variables according to their definitions
    * SECURITY FIX #3: Comprehensive validation of all input variables
+   * TYPE SAFETY: Improved type safety for variable validation
    */
-  private async validateAndSanitizeVariables(variables: Record<string, any>): Promise<Record<string, any>> {
-    const sanitized: Record<string, any> = {};
+  private async validateAndSanitizeVariables(
+    variables: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const sanitized: Record<string, unknown> = {};
     
     // Check required variables
     for (const varDef of this.metadata.variables || []) {
@@ -467,14 +474,16 @@ export class Template extends BaseElement implements IElement {
 
   /**
    * Resolve nested variable paths (e.g., "user.name")
+   * TYPE SAFETY: Improved type safety for variable resolution
    */
-  private resolveVariable(path: string, variables: Record<string, any>): any {
+  private resolveVariable(path: string, variables: Record<string, unknown>): unknown {
     const parts = path.split('.');
-    let value: any = variables;
+    let value: unknown = variables;
     
     for (const part of parts) {
-      if (value && typeof value === 'object' && part in value) {
-        value = value[part];
+      if (value && typeof value === 'object' && value !== null && part in value) {
+        // Type assertion with runtime check - safe because we verified the property exists
+        value = (value as Record<string, unknown>)[part];
       } else {
         return undefined;
       }
@@ -555,7 +564,7 @@ export class Template extends BaseElement implements IElement {
    */
   private async processIncludes(
     content: string, 
-    variables: Record<string, any>, 
+    variables: Record<string, unknown>, 
     includeDepth: number
   ): Promise<string> {
     // TODO: Implement actual template include processing
