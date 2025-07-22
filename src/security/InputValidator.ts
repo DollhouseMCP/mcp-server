@@ -7,6 +7,23 @@ import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
 import { RegexValidator } from './regexValidator.js';
 
+// Pre-compiled regex patterns for better performance
+// These patterns are used repeatedly and benefit from pre-compilation
+const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/g;
+const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
+const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
+const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
+const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
+const IPV4_REGEX = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
+const DECIMAL_IP_REGEX = /^\d{8,10}$/;
+const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
+const OCTAL_IP_REGEX = /^0[0-7]{8,11}$/;
+const FILENAME_DANGEROUS_REGEX = /[\/\\:*?"<>|]/g;
+const FILENAME_LEADING_DOTS_REGEX = /^\.+/;
+const PATH_NORMALIZE_REGEX = /^\/{1,100}|\/{1,100}$/g;
+const PATH_MULTIPLE_SLASHES_REGEX = /\/{1,100}/g;
+const URL_PLUS_DECODE_REGEX = /\+/g;
+
 /**
  * Enhanced input validation for MCP tools
  */
@@ -50,10 +67,10 @@ export class MCPInputValidator {
 
     // Sanitize but preserve spaces for search
     const sanitized = query
-      .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
-      .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-      .replace(/[;&|`$()!\\~*?{}]/g, '') // Remove shell metacharacters (expanded)
-      .replace(/[\u202E\uFEFF]/g, '') // Remove RTL override and zero-width chars
+      .replace(CONTROL_CHARS_REGEX, '') // Remove control characters
+      .replace(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
+      .replace(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
+      .replace(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
       .trim();
 
     if (!sanitized) {
@@ -80,14 +97,14 @@ export class MCPInputValidator {
     // Check each character to avoid ReDoS vulnerabilities
     for (let i = 0; i < path.length; i++) {
       const char = path[i];
-      if (!/[a-zA-Z0-9\/\-_.]/.test(char)) {
+      if (!COLLECTION_PATH_CHAR_REGEX.test(char)) {
         throw new Error(`Invalid character '${char}' in collection path at position ${i + 1}`);
       }
     }
 
     // Prevent path traversal in GitHub paths (comprehensive check)
     const pathLower = path.toLowerCase();
-    const encodedPath = decodeURIComponent(path.replace(/\+/g, ' ')); // Decode URL encoding
+    const encodedPath = decodeURIComponent(path.replace(URL_PLUS_DECODE_REGEX, ' ')); // Decode URL encoding
     
     // Check for various path traversal patterns
     const traversalPatterns = [
@@ -244,8 +261,7 @@ export class MCPInputValidator {
     }
 
     // Check for private IPv4 ranges
-    const ipv4Regex = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
-    const ipv4Match = hostname.match(ipv4Regex);
+    const ipv4Match = hostname.match(IPV4_REGEX);
     
     if (ipv4Match) {
       const [, a, b, c, d] = ipv4Match.map(Number);
@@ -290,7 +306,7 @@ export class MCPInputValidator {
    */
   private static isEncodedPrivateIP(hostname: string): boolean {
     // Check for decimal encoded IPs (e.g., 2130706433 = 127.0.0.1)
-    if (/^\d{8,10}$/.test(hostname)) {
+    if (DECIMAL_IP_REGEX.test(hostname)) {
       const num = parseInt(hostname, 10);
       if (num >= 0 && num <= 4294967295) { // Valid IPv4 range
         // Convert to IP format and check if private
@@ -300,7 +316,7 @@ export class MCPInputValidator {
     }
     
     // Check for hex encoded IPs (e.g., 0x7f000001 = 127.0.0.1)
-    if (/^0x[0-9a-f]{1,8}$/i.test(hostname)) {
+    if (HEX_IP_REGEX.test(hostname)) {
       const num = parseInt(hostname, 16);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
@@ -309,7 +325,7 @@ export class MCPInputValidator {
     }
     
     // Check for octal encoded IPs (e.g., 017700000001 = 127.0.0.1)
-    if (/^0[0-7]{8,11}$/.test(hostname)) {
+    if (OCTAL_IP_REGEX.test(hostname)) {
       const num = parseInt(hostname, 8);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
@@ -334,7 +350,7 @@ export function validateFilename(filename: string): string {
   }
   
   // Remove any path separators and dangerous characters
-  const sanitized = filename.replace(/[\/\\:*?"<>|]/g, '').replace(/^\.+/, '');
+  const sanitized = filename.replace(FILENAME_DANGEROUS_REGEX, '').replace(FILENAME_LEADING_DOTS_REGEX, '');
   
   if (!RegexValidator.validate(sanitized, VALIDATION_PATTERNS.SAFE_FILENAME, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
     throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
@@ -358,7 +374,7 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
-  const normalized = inputPath.replace(/^\/{1,100}|\/{1,100}$/g, '').replace(/\/{1,100}/g, '/');
+  const normalized = inputPath.replace(PATH_NORMALIZE_REGEX, '').replace(PATH_MULTIPLE_SLASHES_REGEX, '/');
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
     throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
@@ -508,10 +524,10 @@ export function sanitizeInput(input: string, maxLength: number = 1000): string {
   
   // Remove potentially dangerous characters and limit length
   return input
-    .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
-    .replace(/[<>'"&]/g, '') // Remove HTML-dangerous characters
-    .replace(/[;&|`$()!\\~*?{}]/g, '') // Remove shell metacharacters (expanded)
-    .replace(/[\u202E\uFEFF]/g, '') // Remove RTL override and zero-width chars
+    .replace(CONTROL_CHARS_REGEX, '') // Remove control characters
+    .replace(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
+    .replace(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
+    .replace(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
     .substring(0, maxLength)
     .trim();
 }
