@@ -14,6 +14,7 @@ const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
 const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
 const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
 const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
+const VALID_COLLECTION_PATH_REGEX = /^[a-zA-Z0-9\/\-_.]*$/;
 const IPV4_REGEX = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
 const DECIMAL_IP_REGEX = /^\d{8,10}$/;
 const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
@@ -92,14 +93,18 @@ export class MCPInputValidator {
       throw new Error('Collection path too long (max 500 characters)');
     }
 
-    // GitHub API paths should be safe filename patterns (efficient validation)
-    
-    // Check each character to avoid ReDoS vulnerabilities
-    for (let i = 0; i < path.length; i++) {
-      const char = path[i];
-      if (!COLLECTION_PATH_CHAR_REGEX.test(char)) {
-        throw new Error(`Invalid character '${char}' in collection path at position ${i + 1}`);
+    // GitHub API paths should be safe filename patterns
+    // Use single regex test for better performance (avoids O(n) character-by-character check)
+    if (!VALID_COLLECTION_PATH_REGEX.test(path)) {
+      // Only do character-by-character check if validation fails, to provide detailed error message
+      for (let i = 0; i < path.length; i++) {
+        const char = path[i];
+        if (!COLLECTION_PATH_CHAR_REGEX.test(char)) {
+          throw new Error(`Invalid character '${char}' in collection path at position ${i + 1}`);
+        }
       }
+      // Fallback error if we somehow don't find the invalid character
+      throw new Error('Invalid characters in collection path');
     }
 
     // Prevent path traversal in GitHub paths (comprehensive check)
