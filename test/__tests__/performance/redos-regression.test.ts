@@ -187,33 +187,32 @@ describe('ReDoS Performance Regression Tests', () => {
   });
 
   describe('PersonaImporter - base64 validation', () => {
-    it('should reject empty strings efficiently', () => {
-      const importer = new PersonaImporter();
+    it('should reject empty strings efficiently', async () => {
+      const importer = new PersonaImporter('/tmp/test', 'test-user');
       
-      const duration = measureTime(() => {
-        // Test the isBase64 method indirectly through import
-        try {
-          importer.importFromBase64('');
-        } catch (e) {
-          // Expected to fail
-        }
-      });
+      const startTime = performance.now();
+      try {
+        await importer.importPersona('', new Map(), false);
+      } catch (e) {
+        // Expected to fail
+      }
+      const duration = performance.now() - startTime;
       
       expect(duration).toBeLessThan(MAX_EXECUTION_TIME);
     });
 
-    it('should handle near-valid base64 patterns efficiently', () => {
-      const importer = new PersonaImporter();
+    it('should handle near-valid base64 patterns efficiently', async () => {
+      const importer = new PersonaImporter('/tmp/test', 'test-user');
       // Almost valid but not quite - missing padding
       const pathological = 'A'.repeat(1000);
       
-      const duration = measureTime(() => {
-        try {
-          importer.importFromBase64(pathological);
-        } catch (e) {
-          // Expected to fail - not valid base64
-        }
-      });
+      const startTime = performance.now();
+      try {
+        await importer.importPersona(pathological, new Map(), false);
+      } catch (e) {
+        // Expected to fail - not valid base64
+      }
+      const duration = performance.now() - startTime;
       
       expect(duration).toBeLessThan(MAX_EXECUTION_TIME);
     });
