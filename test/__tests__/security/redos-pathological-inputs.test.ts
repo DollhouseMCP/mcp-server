@@ -24,7 +24,8 @@ describe('ReDoS Pathological Input Tests', () => {
       expect(() => {
         const result = generateUniqueId(pathological);
         // Verify the result is properly sanitized
-        expect(result).toMatch(/^a-b_\d{8}-\d{6}_/);
+        // After processing and limiting to 100 chars, we expect just 'a'
+        expect(result).toMatch(/^a_\d{8}-\d{6}_/);
       }).not.toThrow();
     });
 

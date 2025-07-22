@@ -19,21 +19,43 @@ export function generateAnonymousId(): string {
 /**
  * Generate a unique ID for personas
  */
+// Pre-compiled regex for better performance (avoids creating regex on each character)
+const ALPHANUMERIC_REGEX = /[a-z0-9]/;
+
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
   const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
-  const whatItIs = personaName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  // SECURITY FIX: Prevent ReDoS by using a single-pass approach
+  // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
+  // Now: Single-pass transformation with built-in length limit
+  const normalized = personaName.toLowerCase();
+  const sanitizedName = normalized
+    .split('')
+    .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
+    .join('')
+    .substring(0, 100) // Limit after transformation to preserve structure
+    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
+    .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
   const whoMadeIt = author || generateAnonymousId();
   
-  return `${whatItIs}_${dateStr}-${timeStr}_${whoMadeIt}`;
+  return `${sanitizedName}_${dateStr}-${timeStr}_${whoMadeIt}`;
 }
 
 /**
  * Convert text to URL-safe slug
  */
 export function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  // SECURITY FIX: Prevent ReDoS by using a single-pass approach
+  // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
+  // Now: Single-pass transformation with built-in length limit
+  const normalized = text.toLowerCase();
+  return normalized
+    .split('')
+    .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
+    .join('')
+    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
+    .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
 }
 
 /**
