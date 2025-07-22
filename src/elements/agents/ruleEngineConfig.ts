@@ -5,6 +5,8 @@
  * without modifying the core Agent implementation.
  */
 
+import { SecurityMonitor } from '../../security/securityMonitor.js';
+
 export interface RuleEngineConfig {
   // Rule-based decision thresholds
   ruleBased: {
@@ -154,6 +156,14 @@ export const DEFAULT_RULE_ENGINE_CONFIG: RuleEngineConfig = {
  * Validate rule engine configuration
  */
 export function validateRuleEngineConfig(config: Partial<RuleEngineConfig>): RuleEngineConfig {
+  // SECURITY FIX: Add audit logging for configuration changes
+  SecurityMonitor.logSecurityEvent({
+    type: 'RULE_ENGINE_CONFIG_UPDATE',
+    severity: 'LOW',
+    source: 'validateRuleEngineConfig',
+    details: 'Rule engine configuration update attempted'
+  });
+
   // Deep merge with defaults
   const merged = JSON.parse(JSON.stringify(DEFAULT_RULE_ENGINE_CONFIG)) as RuleEngineConfig;
   
@@ -185,9 +195,23 @@ export function validateRuleEngineConfig(config: Partial<RuleEngineConfig>): Rul
   
   // Validate thresholds are in correct order
   if (merged.programmatic.actionThresholds.executeImmediately <= merged.programmatic.actionThresholds.proceed) {
+    // SECURITY FIX: Log validation failures for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_VALIDATION_ERROR',
+      severity: 'MEDIUM',
+      source: 'validateRuleEngineConfig',
+      details: 'Invalid threshold configuration attempted'
+    });
     throw new Error('executeImmediately threshold must be higher than proceed threshold');
   }
   if (merged.programmatic.actionThresholds.proceed <= merged.programmatic.actionThresholds.schedule) {
+    // SECURITY FIX: Log validation failures for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_VALIDATION_ERROR',
+      severity: 'MEDIUM',
+      source: 'validateRuleEngineConfig',
+      details: 'Invalid threshold configuration attempted'
+    });
     throw new Error('proceed threshold must be higher than schedule threshold');
   }
   

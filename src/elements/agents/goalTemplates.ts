@@ -7,6 +7,7 @@
  */
 
 import { GoalPriority, GoalStatus, EisenhowerQuadrant } from './types.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export interface GoalTemplate {
   id: string;
@@ -216,6 +217,14 @@ export function applyGoalTemplate(
   templateId: string,
   customFields: Record<string, any>
 ): Partial<any> {  // Returns partial AgentGoal
+  // SECURITY FIX: Add audit logging for goal template usage
+  SecurityMonitor.logSecurityEvent({
+    type: 'GOAL_TEMPLATE_APPLIED',
+    severity: 'LOW',
+    source: 'applyGoalTemplate',
+    details: `Goal template '${templateId}' applied`
+  });
+
   const template = GOAL_TEMPLATES[templateId];
   if (!template) {
     throw new Error(`Goal template '${templateId}' not found`);
@@ -303,6 +312,14 @@ export function validateGoalAgainstTemplate(
   if (!templateId || !GOAL_TEMPLATES[templateId]) {
     return { valid: true, errors: [] };
   }
+
+  // SECURITY FIX: Add audit logging for template validation
+  SecurityMonitor.logSecurityEvent({
+    type: 'GOAL_TEMPLATE_VALIDATION',
+    severity: 'LOW',
+    source: 'validateGoalAgainstTemplate',
+    details: `Validating goal against template '${templateId}'`
+  });
 
   const template = GOAL_TEMPLATES[templateId];
   const errors: string[] = [];

@@ -55,7 +55,7 @@ export class Agent extends BaseElement implements IElement {
       decisionFramework: metadata.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK,
       riskTolerance: metadata.riskTolerance || AGENT_DEFAULTS.RISK_TOLERANCE,
       learningEnabled: metadata.learningEnabled ?? AGENT_DEFAULTS.LEARNING_ENABLED,
-      maxConcurrentGoals: metadata.maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS
+      maxConcurrentGoals: metadata.maxConcurrentGoals ?? AGENT_DEFAULTS.MAX_CONCURRENT_GOALS
     };
 
     // MEDIUM PRIORITY IMPROVEMENT: Validate decision framework configuration
