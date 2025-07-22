@@ -29,10 +29,21 @@ import {
   DECISION_FRAMEWORKS,
   RISK_TOLERANCE_LEVELS
 } from './constants.js';
+import { 
+  RuleEngineConfig, 
+  DEFAULT_RULE_ENGINE_CONFIG, 
+  validateRuleEngineConfig 
+} from './ruleEngineConfig.js';
+import { 
+  applyGoalTemplate, 
+  recommendGoalTemplate, 
+  validateGoalAgainstTemplate 
+} from './goalTemplates.js';
 
 export class Agent extends BaseElement implements IElement {
   private state: AgentState;
   private isDirtyState: boolean = false;
+  private ruleEngineConfig: RuleEngineConfig;
 
   constructor(metadata: Partial<AgentMetadata>) {
     // Sanitize all inputs
@@ -46,6 +57,29 @@ export class Agent extends BaseElement implements IElement {
       learningEnabled: metadata.learningEnabled ?? AGENT_DEFAULTS.LEARNING_ENABLED,
       maxConcurrentGoals: metadata.maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS
     };
+
+    // MEDIUM PRIORITY IMPROVEMENT: Validate decision framework configuration
+    // Ensures only supported frameworks are used
+    if (sanitizedMetadata.decisionFramework && 
+        !DECISION_FRAMEWORKS.includes(sanitizedMetadata.decisionFramework)) {
+      throw new Error(`Invalid decision framework: ${sanitizedMetadata.decisionFramework}. ` +
+        `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`);
+    }
+
+    // Validate risk tolerance level
+    if (sanitizedMetadata.riskTolerance && 
+        !RISK_TOLERANCE_LEVELS.includes(sanitizedMetadata.riskTolerance)) {
+      throw new Error(`Invalid risk tolerance: ${sanitizedMetadata.riskTolerance}. ` +
+        `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`);
+    }
+
+    // Validate max concurrent goals
+    if (sanitizedMetadata.maxConcurrentGoals !== undefined) {
+      const maxGoals = sanitizedMetadata.maxConcurrentGoals;
+      if (!Number.isInteger(maxGoals) || maxGoals < 1 || maxGoals > AGENT_LIMITS.MAX_GOALS) {
+        throw new Error(`maxConcurrentGoals must be between 1 and ${AGENT_LIMITS.MAX_GOALS}`);
+      }
+    }
 
     super(ElementType.AGENT, sanitizedMetadata);
 
@@ -63,8 +97,14 @@ export class Agent extends BaseElement implements IElement {
       decisionFramework: sanitizedMetadata.decisionFramework,
       riskTolerance: sanitizedMetadata.riskTolerance,
       learningEnabled: sanitizedMetadata.learningEnabled,
-      specializations: sanitizedMetadata.specializations || []
+      specializations: sanitizedMetadata.specializations || [],
+      ruleEngineConfig: metadata.ruleEngineConfig
     };
+
+    // Initialize rule engine configuration (with validation)
+    this.ruleEngineConfig = validateRuleEngineConfig(
+      this.extensions.ruleEngineConfig || {}
+    );
   }
 
   /**
@@ -121,6 +161,14 @@ export class Agent extends BaseElement implements IElement {
       notes: goal.notes ? sanitizeInput(goal.notes, 500) : undefined
     };
 
+    // MEDIUM PRIORITY IMPROVEMENT: Detect dependency cycles before adding goal
+    if (newGoal.dependencies && newGoal.dependencies.length > 0) {
+      const cycleCheck = this.detectDependencyCycle(newGoal.id, newGoal.dependencies);
+      if (cycleCheck.hasCycle) {
+        throw new Error(`Dependency cycle detected: ${cycleCheck.path.join(' → ')}`);
+      }
+    }
+
     this.state.goals.push(newGoal);
     this.isDirtyState = true;
     this.markDirty();
@@ -134,6 +182,14 @@ export class Agent extends BaseElement implements IElement {
    * Make a decision for a goal
    */
   public async makeDecision(goalId: string, context?: Record<string, any>): Promise<AgentDecision> {
+    // MEDIUM PRIORITY IMPROVEMENT: Track performance metrics for decision making
+    const startTime = Date.now();
+    const performanceMetrics: {
+      decisionTimeMs?: number;
+      frameworkTimeMs?: number;
+      riskAssessmentTimeMs?: number;
+    } = {};
+
     const goal = this.state.goals.find(g => g.id === goalId);
     if (!goal) {
       throw new Error(`Goal ${goalId} not found`);
@@ -156,11 +212,18 @@ export class Agent extends BaseElement implements IElement {
       previousDecisions: this.state.decisions.filter(d => d.goalId === goalId)
     };
 
-    // Make decision based on framework
+    // Make decision based on framework (with timing)
+    const frameworkStart = Date.now();
     const decision = await this.executeDecisionFramework(goal, decisionContext);
+    performanceMetrics.frameworkTimeMs = Date.now() - frameworkStart;
 
-    // Risk assessment
+    // Risk assessment (with timing)
+    const riskStart = Date.now();
     const riskAssessment = this.assessRisk(decision, goal, decisionContext);
+    performanceMetrics.riskAssessmentTimeMs = Date.now() - riskStart;
+
+    // Calculate total decision time
+    performanceMetrics.decisionTimeMs = Date.now() - startTime;
 
     // Create decision record
     const decisionRecord: AgentDecision = {
@@ -171,7 +234,8 @@ export class Agent extends BaseElement implements IElement {
       reasoning: decision.reasoning,
       framework: this.extensions?.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK,
       confidence: decision.confidence,
-      riskAssessment
+      riskAssessment,
+      performanceMetrics  // Add performance tracking
     };
 
     // Add to history with limit
@@ -253,10 +317,11 @@ export class Agent extends BaseElement implements IElement {
     }> = [
       // High priority + high urgency = immediate action
       {
-        condition: (g) => g.priority === 'critical' && g.urgency > 8,
-        action: 'execute_immediately',
+        condition: (g) => g.priority === this.ruleEngineConfig.ruleBased.priority.critical && 
+                           g.urgency > this.ruleEngineConfig.ruleBased.urgencyThresholds.immediate,
+        action: this.ruleEngineConfig.actions.executeImmediately,
         reasoning: 'Critical priority with high urgency requires immediate action',
-        confidence: 0.95
+        confidence: this.ruleEngineConfig.ruleBased.confidence.critical
       },
       // Blocked by dependencies
       {
@@ -268,16 +333,16 @@ export class Agent extends BaseElement implements IElement {
           });
           return blockedDeps.length > 0;
         },
-        action: 'wait_for_dependencies',
+        action: this.ruleEngineConfig.actions.waitForDependencies,
         reasoning: 'Goal has incomplete dependencies',
-        confidence: 0.9
+        confidence: this.ruleEngineConfig.ruleBased.confidence.blocked
       },
       // Risk assessment
       {
         condition: (g) => g.riskLevel === 'high' && this.extensions?.riskTolerance === 'conservative',
-        action: 'request_approval',
+        action: this.ruleEngineConfig.actions.requestApproval,
         reasoning: 'High risk goal requires approval in conservative mode',
-        confidence: 0.85
+        confidence: this.ruleEngineConfig.ruleBased.confidence.riskApproval
       },
       // Resource availability
       {
@@ -286,16 +351,16 @@ export class Agent extends BaseElement implements IElement {
           const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
           return activeGoals >= maxConcurrent;
         },
-        action: 'queue_for_later',
+        action: this.ruleEngineConfig.actions.queueForLater,
         reasoning: 'Maximum concurrent goals reached',
-        confidence: 0.8
+        confidence: this.ruleEngineConfig.ruleBased.confidence.resourceLimit
       },
       // Default action
       {
         condition: () => true,
-        action: 'proceed_with_goal',
+        action: this.ruleEngineConfig.actions.proceedWithGoal,
         reasoning: 'No blocking conditions found',
-        confidence: 0.7
+        confidence: this.ruleEngineConfig.ruleBased.confidence.default
       }
     ];
 
@@ -312,7 +377,7 @@ export class Agent extends BaseElement implements IElement {
 
     // Fallback (should not reach here)
     return {
-      action: 'review_manually',
+      action: this.ruleEngineConfig.actions.reviewManually,
       reasoning: 'No applicable rules found',
       confidence: 0.5
     };
@@ -331,45 +396,45 @@ export class Agent extends BaseElement implements IElement {
 
     // Factor 1: Eisenhower matrix
     if (goal.eisenhowerQuadrant === 'do_first') {
-      score += 30;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.doFirst;
       factors.push('High importance and urgency (Do First quadrant)');
     } else if (goal.eisenhowerQuadrant === 'schedule') {
-      score += 20;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.schedule;
       factors.push('High importance, low urgency (Schedule quadrant)');
     } else if (goal.eisenhowerQuadrant === 'delegate') {
-      score += 10;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.delegate;
       factors.push('Low importance, high urgency (Delegate quadrant)');
     }
 
     // Factor 2: Risk level
     if (goal.riskLevel === 'low') {
-      score += 20;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.risk.low;
       factors.push('Low risk');
     } else if (goal.riskLevel === 'medium') {
-      score += 10;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.risk.medium;
       factors.push('Medium risk');
     } else {
-      score -= 10;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.risk.high;
       factors.push('High risk penalty');
     }
 
     // Factor 3: Dependencies
     if (!goal.dependencies || goal.dependencies.length === 0) {
-      score += 15;
+      score += this.ruleEngineConfig.programmatic.scoreWeights.noDependencies;
       factors.push('No dependencies');
     }
 
     // Factor 4: Estimated effort
-    if (goal.estimatedEffort && goal.estimatedEffort <= 2) {
-      score += 15;
-      factors.push('Quick win (≤2 hours)');
+    if (goal.estimatedEffort && goal.estimatedEffort <= this.ruleEngineConfig.programmatic.quickWinHours) {
+      score += this.ruleEngineConfig.programmatic.scoreWeights.quickWin;
+      factors.push(`Quick win (≤${this.ruleEngineConfig.programmatic.quickWinHours} hours)`);
     }
 
     // Factor 5: Previous success rate
     const previousDecisions = this.state.decisions.filter(d => d.outcome === 'success');
     const successRate = previousDecisions.length / Math.max(this.state.decisions.length, 1);
-    if (successRate > 0.8) {
-      score += 10;
+    if (successRate > this.ruleEngineConfig.programmatic.successRateThreshold) {
+      score += this.ruleEngineConfig.programmatic.scoreWeights.successBonus;
       factors.push(`High success rate (${(successRate * 100).toFixed(0)}%)`);
     }
 
@@ -377,18 +442,18 @@ export class Agent extends BaseElement implements IElement {
     let action: string;
     let confidence: number;
 
-    if (score >= 70) {
-      action = 'execute_immediately';
-      confidence = 0.9;
-    } else if (score >= 50) {
-      action = 'proceed_with_goal';
-      confidence = 0.8;
-    } else if (score >= 30) {
-      action = 'schedule_for_later';
-      confidence = 0.7;
+    if (score >= this.ruleEngineConfig.programmatic.actionThresholds.executeImmediately) {
+      action = this.ruleEngineConfig.actions.executeImmediately;
+      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.executeImmediately;
+    } else if (score >= this.ruleEngineConfig.programmatic.actionThresholds.proceed) {
+      action = this.ruleEngineConfig.actions.proceedWithGoal;
+      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.proceed;
+    } else if (score >= this.ruleEngineConfig.programmatic.actionThresholds.schedule) {
+      action = this.ruleEngineConfig.actions.scheduleForLater;
+      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.schedule;
     } else {
-      action = 'review_and_revise';
-      confidence = 0.6;
+      action = this.ruleEngineConfig.actions.reviewAndRevise;
+      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.review;
     }
 
     return {
@@ -571,6 +636,66 @@ export class Agent extends BaseElement implements IElement {
   }
 
   /**
+   * Detect dependency cycles in goal dependencies
+   * MEDIUM PRIORITY IMPROVEMENT: Prevents circular dependencies between goals
+   */
+  private detectDependencyCycle(
+    newGoalId: string, 
+    dependencies: string[]
+  ): { hasCycle: boolean; path: string[] } {
+    // Build dependency graph including the new goal
+    const visited = new Set<string>();
+    const recursionStack = new Set<string>();
+    const path: string[] = [];
+
+    // Helper function to perform DFS
+    const hasCycleDFS = (goalId: string): boolean => {
+      visited.add(goalId);
+      recursionStack.add(goalId);
+      path.push(goalId);
+
+      // Get dependencies for current goal
+      let deps: string[] = [];
+      if (goalId === newGoalId) {
+        // For the new goal being added, use provided dependencies
+        deps = dependencies;
+      } else {
+        // For existing goals, get from state
+        const goal = this.state.goals.find(g => g.id === goalId);
+        deps = goal?.dependencies || [];
+      }
+
+      // Check each dependency
+      for (const depId of deps) {
+        if (!visited.has(depId)) {
+          if (hasCycleDFS(depId)) {
+            return true;
+          }
+        } else if (recursionStack.has(depId)) {
+          // Found a cycle - add the repeated node to show the cycle
+          path.push(depId);
+          return true;
+        }
+      }
+
+      recursionStack.delete(goalId);
+      // Only pop from path if we're not returning a cycle
+      if (!deps.some(depId => recursionStack.has(depId))) {
+        path.pop();
+      }
+      return false;
+    };
+
+    // Check if adding this goal would create a cycle
+    const hasCycle = hasCycleDFS(newGoalId);
+
+    return {
+      hasCycle,
+      path: hasCycle ? path : []
+    };
+  }
+
+  /**
    * Get goals by status
    */
   public getGoalsByStatus(status: AgentGoal['status']): AgentGoal[] {
@@ -586,6 +711,7 @@ export class Agent extends BaseElement implements IElement {
 
   /**
    * Calculate agent performance metrics
+   * MEDIUM PRIORITY IMPROVEMENT: Enhanced to include decision timing metrics
    */
   public getPerformanceMetrics(): {
     successRate: number;
@@ -593,6 +719,9 @@ export class Agent extends BaseElement implements IElement {
     goalsCompleted: number;
     goalsInProgress: number;
     decisionAccuracy: number;
+    averageDecisionTimeMs?: number;
+    averageFrameworkTimeMs?: number;
+    averageRiskAssessmentTimeMs?: number;
   } {
     const completedGoals = this.state.goals.filter(g => g.status === 'completed');
     const failedGoals = this.state.goals.filter(g => g.status === 'failed');
@@ -619,12 +748,37 @@ export class Agent extends BaseElement implements IElement {
       ? successfulDecisions.length / decisionsWithOutcome.length
       : 0;
 
+    // Calculate average decision timing metrics
+    const decisionsWithMetrics = this.state.decisions.filter(d => d.performanceMetrics);
+    let avgDecisionTime = 0;
+    let avgFrameworkTime = 0;
+    let avgRiskTime = 0;
+    
+    if (decisionsWithMetrics.length > 0) {
+      const totalDecisionTime = decisionsWithMetrics.reduce(
+        (sum, d) => sum + (d.performanceMetrics?.decisionTimeMs || 0), 0
+      );
+      const totalFrameworkTime = decisionsWithMetrics.reduce(
+        (sum, d) => sum + (d.performanceMetrics?.frameworkTimeMs || 0), 0
+      );
+      const totalRiskTime = decisionsWithMetrics.reduce(
+        (sum, d) => sum + (d.performanceMetrics?.riskAssessmentTimeMs || 0), 0
+      );
+      
+      avgDecisionTime = totalDecisionTime / decisionsWithMetrics.length;
+      avgFrameworkTime = totalFrameworkTime / decisionsWithMetrics.length;
+      avgRiskTime = totalRiskTime / decisionsWithMetrics.length;
+    }
+
     return {
       successRate,
       averageCompletionTime,
       goalsCompleted: completedGoals.length,
       goalsInProgress: inProgressGoals.length,
-      decisionAccuracy
+      decisionAccuracy,
+      averageDecisionTimeMs: decisionsWithMetrics.length > 0 ? avgDecisionTime : undefined,
+      averageFrameworkTimeMs: decisionsWithMetrics.length > 0 ? avgFrameworkTime : undefined,
+      averageRiskAssessmentTimeMs: decisionsWithMetrics.length > 0 ? avgRiskTime : undefined
     };
   }
 
@@ -806,5 +960,66 @@ export class Agent extends BaseElement implements IElement {
    */
   public markStatePersisted(): void {
     this.isDirtyState = false;
+  }
+
+  /**
+   * Create a goal from a template
+   * LOW PRIORITY IMPROVEMENT: Goal template system for common patterns
+   */
+  public addGoalFromTemplate(
+    templateId: string, 
+    customFields: Record<string, any>
+  ): AgentGoal {
+    // Apply template to get goal data
+    const goalData = applyGoalTemplate(templateId, customFields);
+    
+    // Create goal using the template data
+    return this.addGoal(goalData);
+  }
+
+  /**
+   * Get template recommendations based on goal description
+   */
+  public getGoalTemplateRecommendations(description: string): string[] {
+    return recommendGoalTemplate(description);
+  }
+
+  /**
+   * Validate a goal against its template
+   */
+  public validateGoalTemplate(goalId: string): { valid: boolean; errors: string[] } {
+    const goal = this.state.goals.find(g => g.id === goalId);
+    if (!goal) {
+      return { valid: false, errors: ['Goal not found'] };
+    }
+
+    // If goal was created from template, validate against it
+    const templateId = (goal as any).templateId;
+    return validateGoalAgainstTemplate(goal, templateId);
+  }
+
+  /**
+   * Update rule engine configuration
+   */
+  public updateRuleEngineConfig(config: Partial<RuleEngineConfig>): void {
+    this.ruleEngineConfig = validateRuleEngineConfig({
+      ...this.ruleEngineConfig,
+      ...config
+    });
+    
+    // Update extensions
+    this.extensions = {
+      ...this.extensions,
+      ruleEngineConfig: this.ruleEngineConfig
+    };
+    
+    this.markDirty();
+  }
+
+  /**
+   * Get current rule engine configuration
+   */
+  public getRuleEngineConfig(): Readonly<RuleEngineConfig> {
+    return { ...this.ruleEngineConfig };
   }
 }

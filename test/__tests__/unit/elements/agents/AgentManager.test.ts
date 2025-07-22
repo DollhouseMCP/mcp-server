@@ -37,6 +37,13 @@ describe('AgentManager', () => {
     (FileLockManager.atomicWriteFile as jest.Mock) = jest.fn().mockResolvedValue(undefined);
     (FileLockManager.atomicReadFile as jest.Mock) = jest.fn();
     (SecurityMonitor.logSecurityEvent as jest.Mock) = jest.fn();
+    
+    // Mock fs.open for atomic file creation
+    const mockFileHandle = {
+      writeFile: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn().mockResolvedValue(undefined)
+    };
+    jest.spyOn(fs, 'open').mockResolvedValue(mockFileHandle as any);
   });
 
   afterEach(async () => {
@@ -72,7 +79,10 @@ describe('AgentManager', () => {
       expect(result.success).toBe(true);
       expect(result.message).toContain('test-agent');
       expect(result.element).toBeInstanceOf(Agent);
-      expect(FileLockManager.atomicWriteFile).toHaveBeenCalled();
+      expect(fs.open).toHaveBeenCalledWith(
+        expect.stringContaining('test-agent.md'),
+        'wx'
+      );
     });
 
     it('should reject invalid agent names', async () => {
@@ -91,8 +101,8 @@ describe('AgentManager', () => {
       const firstResult = await agentManager.create('duplicate', 'First', 'Content');
       expect(firstResult.success).toBe(true);
       
-      // Mock fs.access to indicate the file exists
-      jest.spyOn(fs, 'access').mockResolvedValueOnce();
+      // Mock fs.open to throw EEXIST error for duplicate
+      jest.spyOn(fs, 'open').mockRejectedValueOnce({ code: 'EEXIST' });
 
       // Try to create duplicate
       const result = await agentManager.create('duplicate', 'Second', 'Content');

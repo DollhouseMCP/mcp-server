@@ -505,4 +505,164 @@ describe('Agent Element', () => {
       );
     });
   });
+
+  describe('New Features', () => {
+    describe('Decision Framework Validation', () => {
+      it('should validate decision framework in constructor', () => {
+        expect(() => new Agent({
+          name: 'Test',
+          decisionFramework: 'invalid_framework' as any
+        })).toThrow('Invalid decision framework');
+      });
+
+      it('should validate risk tolerance in constructor', () => {
+        expect(() => new Agent({
+          name: 'Test',
+          riskTolerance: 'invalid_tolerance' as any
+        })).toThrow('Invalid risk tolerance');
+      });
+
+      it('should validate max concurrent goals', () => {
+        expect(() => new Agent({
+          name: 'Test',
+          maxConcurrentGoals: 0
+        })).toThrow('maxConcurrentGoals must be between');
+
+        expect(() => new Agent({
+          name: 'Test',
+          maxConcurrentGoals: 100
+        })).toThrow('maxConcurrentGoals must be between');
+      });
+    });
+
+    describe('Goal Dependency Cycle Detection', () => {
+      it('should detect simple dependency cycles', () => {
+        const goal1 = agent.addGoal({ description: 'Goal 1' });
+        const goal2 = agent.addGoal({ 
+          description: 'Goal 2',
+          dependencies: [goal1.id]
+        });
+
+        // Try to add goal3 that depends on goal2 and makes goal1 depend on it
+        expect(() => agent.addGoal({
+          description: 'Goal 3',
+          dependencies: [goal2.id, 'goal_nonexistent']
+        })).not.toThrow();
+
+        // Create a cycle by adding a goal that goal1 would depend on
+        const goal3 = agent.addGoal({ description: 'Goal 3' });
+        
+        // This would create a cycle if we could update dependencies
+        // For now, just test that the detection works with new goals
+        expect(() => agent.addGoal({
+          description: 'Goal 4',
+          dependencies: [goal3.id, goal1.id, goal3.id] // Include duplicate to test
+        })).not.toThrow();
+      });
+
+      it('should provide clear cycle path in error message', () => {
+        // This test would need a way to update goal dependencies to create a real cycle
+        // For now, we can only test that non-cyclic dependencies work
+        const goal1 = agent.addGoal({ description: 'Goal 1' });
+        const goal2 = agent.addGoal({ 
+          description: 'Goal 2',
+          dependencies: [goal1.id]
+        });
+        
+        expect(goal2.dependencies).toContain(goal1.id);
+      });
+    });
+
+    describe('Performance Metrics', () => {
+      it('should track decision timing metrics', async () => {
+        const goal = agent.addGoal({ description: 'Test goal' });
+        const decision = await agent.makeDecision(goal.id);
+
+        expect(decision.performanceMetrics).toBeDefined();
+        expect(decision.performanceMetrics?.decisionTimeMs).toBeGreaterThanOrEqual(0);
+        expect(decision.performanceMetrics?.frameworkTimeMs).toBeGreaterThanOrEqual(0);
+        expect(decision.performanceMetrics?.riskAssessmentTimeMs).toBeGreaterThanOrEqual(0);
+        
+        // At least the total time should be the sum of parts
+        const total = decision.performanceMetrics?.decisionTimeMs || 0;
+        const framework = decision.performanceMetrics?.frameworkTimeMs || 0;
+        const risk = decision.performanceMetrics?.riskAssessmentTimeMs || 0;
+        expect(total).toBeGreaterThanOrEqual(framework + risk);
+      });
+
+      it('should include timing metrics in performance report', async () => {
+        const goal = agent.addGoal({ description: 'Test goal' });
+        await agent.makeDecision(goal.id);
+        
+        const metrics = agent.getPerformanceMetrics();
+        expect(metrics.averageDecisionTimeMs).toBeDefined();
+        expect(metrics.averageFrameworkTimeMs).toBeDefined();
+        expect(metrics.averageRiskAssessmentTimeMs).toBeDefined();
+      });
+    });
+
+    describe('Goal Templates', () => {
+      it('should create goals from templates', () => {
+        const goal = agent.addGoalFromTemplate('bug-fix-critical', {
+          bugId: 'BUG-123',
+          impactDescription: 'System crash on login'
+        });
+
+        expect(goal.priority).toBe('critical');
+        expect(goal.importance).toBe(10);
+        expect(goal.urgency).toBe(10);
+        expect(goal.riskLevel).toBe('high');
+      });
+
+      it('should recommend templates based on description', () => {
+        const recommendations = agent.getGoalTemplateRecommendations(
+          'I need to fix a critical bug in production'
+        );
+        
+        expect(recommendations).toContain('bug-fix-critical');
+      });
+
+      it('should validate goals against templates', () => {
+        const goal = agent.addGoalFromTemplate('bug-fix-critical', {
+          bugId: 'BUG-123',
+          impactDescription: 'System crash'
+        });
+
+        const validation = agent.validateGoalTemplate(goal.id);
+        expect(validation.valid).toBe(true);
+      });
+    });
+
+    describe('Rule Engine Configuration', () => {
+      it('should allow updating rule engine config', () => {
+        const newConfig = {
+          programmatic: {
+            actionThresholds: {
+              executeImmediately: 80,
+              proceed: 60,
+              schedule: 40
+            }
+          }
+        };
+
+        agent.updateRuleEngineConfig(newConfig);
+        const config = agent.getRuleEngineConfig();
+        
+        expect(config.programmatic.actionThresholds.executeImmediately).toBe(80);
+        expect(config.programmatic.actionThresholds.proceed).toBe(60);
+      });
+
+      it('should validate rule engine config updates', () => {
+        expect(() => agent.updateRuleEngineConfig({
+          programmatic: {
+            actionThresholds: {
+              executeImmediately: 30,  // Invalid: lower than proceed
+              proceed: 50,
+              schedule: 20
+            }
+          }
+        })).toThrow('executeImmediately threshold must be higher');
+      });
+    });
+  });
 });

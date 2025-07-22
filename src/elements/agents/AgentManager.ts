@@ -92,16 +92,6 @@ export class AgentManager implements IElementManager<Agent> {
       // Check if agent already exists
       const filename = this.getFilename(sanitizedName);
       const filepath = path.join(this.agentsPath, filename);
-      
-      try {
-        await fs.access(filepath);
-        return {
-          success: false,
-          message: `Agent '${sanitizedName}' already exists`
-        };
-      } catch {
-        // File doesn't exist, we can create it
-      }
 
       // Create agent instance
       const agent = new Agent({
@@ -116,8 +106,22 @@ export class AgentManager implements IElementManager<Agent> {
       // Prepare file content
       const fileContent = this.serializeToFile(agent, sanitizedContent);
 
-      // Write file atomically
-      await FileLockManager.atomicWriteFile(filepath, fileContent, { encoding: 'utf-8' });
+      // SECURITY FIX: Use atomic file creation to prevent race conditions
+      // Previously: Used access() check followed by write, which could race
+      // Now: Use exclusive file creation that fails atomically if file exists
+      try {
+        const fd = await fs.open(filepath, 'wx'); // 'wx' = exclusive write, fails if exists
+        await fd.writeFile(fileContent, 'utf-8');
+        await fd.close();
+      } catch (error: any) {
+        if (error.code === 'EEXIST') {
+          return {
+            success: false,
+            message: `Agent '${sanitizedName}' already exists`
+          };
+        }
+        throw error;
+      }
 
       // Log security event
       SecurityMonitor.logSecurityEvent({

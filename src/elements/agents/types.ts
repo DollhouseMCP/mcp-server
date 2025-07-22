@@ -13,6 +13,17 @@ import {
   RiskLevel
 } from './constants.js';
 
+// Re-export types from constants for convenience
+export { 
+  DecisionFramework, 
+  RiskTolerance, 
+  GoalPriority, 
+  GoalStatus, 
+  EisenhowerQuadrant,
+  DecisionOutcome,
+  RiskLevel
+} from './constants.js';
+
 /**
  * Agent goal structure
  */
@@ -52,6 +63,11 @@ export interface AgentDecision {
   };
   outcome?: DecisionOutcome;
   impact?: string;
+  performanceMetrics?: {
+    decisionTimeMs?: number;
+    frameworkTimeMs?: number;
+    riskAssessmentTimeMs?: number;
+  };
 }
 
 /**
@@ -76,6 +92,7 @@ export interface AgentMetadata extends IElementMetadata {
   riskTolerance?: RiskTolerance;
   learningEnabled?: boolean;
   maxConcurrentGoals?: number;
+  ruleEngineConfig?: any; // Partial<RuleEngineConfig> - using any to avoid circular dependency
 }
 
 /**
