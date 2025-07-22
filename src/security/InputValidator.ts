@@ -288,8 +288,9 @@ export class MCPInputValidator {
     }
     
     // fe80::/10 - Link-Local Addresses
-    if (ipv6Lower.startsWith('fe8') || ipv6Lower.startsWith('fe9') || 
-        ipv6Lower.startsWith('fea') || ipv6Lower.startsWith('feb')) {
+    // IPv6 link-local addresses are fe80::/10, meaning the valid range is fe80 through febf
+    const fe80Range = parseInt(ipv6Lower.substring(0, 4), 16);
+    if (fe80Range >= 0xfe80 && fe80Range <= 0xfebf) {
       return true;
     }
     
