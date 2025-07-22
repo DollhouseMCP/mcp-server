@@ -19,6 +19,9 @@ export function generateAnonymousId(): string {
 /**
  * Generate a unique ID for personas
  */
+// Pre-compiled regex for better performance (avoids creating regex on each character)
+const ALPHANUMERIC_REGEX = /[a-z0-9]/;
+
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
@@ -27,15 +30,15 @@ export function generateUniqueId(personaName: string, author?: string): string {
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
   const normalized = personaName.toLowerCase().substring(0, 100); // Limit input length
-  const whatItIs = normalized
+  const sanitizedName = normalized
     .split('')
-    .map(char => /[a-z0-9]/.test(char) ? char : '-')
+    .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
     .join('')
     .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
     .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
   const whoMadeIt = author || generateAnonymousId();
   
-  return `${whatItIs}_${dateStr}-${timeStr}_${whoMadeIt}`;
+  return `${sanitizedName}_${dateStr}-${timeStr}_${whoMadeIt}`;
 }
 
 /**
@@ -48,7 +51,7 @@ export function slugify(text: string): string {
   const normalized = text.toLowerCase().substring(0, 100); // Limit input length
   return normalized
     .split('')
-    .map(char => /[a-z0-9]/.test(char) ? char : '-')
+    .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
     .join('')
     .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
     .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
