@@ -441,11 +441,12 @@ This is the agent content.`;
 
       await agentManager.saveAgentState('test-agent', state as any);
 
-      expect(FileLockManager.atomicWriteFile).toHaveBeenCalledWith(
-        expect.stringContaining('.state/test-agent.state.yaml'),
-        expect.stringContaining('test: value'),
-        expect.any(Object)
-      );
+      // Check that the path contains the expected components (cross-platform)
+      const firstCallArgs = (FileLockManager.atomicWriteFile as jest.Mock).mock.calls[0];
+      const filePath = firstCallArgs[0];
+      expect(filePath).toMatch(/[/\\]\.state[/\\]test-agent\.state\.yaml$/);
+      expect(firstCallArgs[1]).toContain('test: value');
+      expect(firstCallArgs[2]).toEqual(expect.any(Object));
     });
 
     it('should reject oversized state', async () => {
