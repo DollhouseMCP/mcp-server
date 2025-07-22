@@ -92,7 +92,9 @@ describe('MCP Tools Security Tests', () => {
           expect(responseText).toMatch(/Name contains prohibited content|security|validation error|already exists/i);
         } else {
           // The persona was created with a sanitized name
-          const nameMatch = responseText.match(/🎭 \*\*([^*]+)\*\*/);
+          // Updated regex to match new format: "🎭 **${name}** by ${author}"
+          // More specific regex ensures author field is present and non-empty
+          const nameMatch = responseText.match(/🎭 \*\*([^*]+)\*\* by .+/);
           expect(nameMatch).toBeTruthy();
           const createdName = nameMatch?.[1] || '';
           
@@ -128,7 +130,8 @@ describe('MCP Tools Security Tests', () => {
           // The persona was updated with a sanitized name
           // Extract the actual persona name from the output
           // Updated regex to match new format: "🎭 **${name}** by ${author}"
-          const nameMatch = responseText.match(/🎭 \*\*([^*]+)\*\* by/);
+          // More specific regex ensures author field is present and non-empty
+          const nameMatch = responseText.match(/🎭 \*\*([^*]+)\*\* by .+/);
           if (nameMatch) {
             const updatedName = nameMatch[1];
             // The updated name should NOT contain the dangerous characters
