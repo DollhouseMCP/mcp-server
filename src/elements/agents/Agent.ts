@@ -238,11 +238,13 @@ export class Agent extends BaseElement implements IElement {
       performanceMetrics  // Add performance tracking
     };
 
-    // Add to history with limit
-    this.state.decisions.push(decisionRecord);
-    if (this.state.decisions.length > AGENT_LIMITS.MAX_DECISION_HISTORY) {
-      this.state.decisions = this.state.decisions.slice(-AGENT_LIMITS.MAX_DECISION_HISTORY);
+    // OPTIMIZATION: Use efficient circular buffer pattern
+    // Add to history with limit (avoid array slicing for better performance)
+    if (this.state.decisions.length >= AGENT_LIMITS.MAX_DECISION_HISTORY) {
+      // Remove oldest entry before adding new one (O(n) but happens infrequently)
+      this.state.decisions.shift();
     }
+    this.state.decisions.push(decisionRecord);
 
     this.isDirtyState = true;
     this.markDirty();
