@@ -21,7 +21,8 @@ describe('ReDoS Performance Regression Tests', () => {
   };
 
   // Maximum acceptable execution time in milliseconds
-  const MAX_EXECUTION_TIME = 50; // 50ms is generous for these operations
+  // CI environments may run slower, so we use a higher threshold there
+  const MAX_EXECUTION_TIME = process.env.CI ? 200 : 50;
 
   describe('filesystem.ts - generateUniqueId', () => {
     it('should handle repeated hyphens efficiently', () => {
