@@ -635,8 +635,10 @@ describe('Agent Element', () => {
 
     describe('Rule Engine Configuration', () => {
       it('should allow updating rule engine config', () => {
+        const currentConfig = agent.getRuleEngineConfig();
         const newConfig = {
           programmatic: {
+            ...currentConfig.programmatic,
             actionThresholds: {
               executeImmediately: 80,
               proceed: 60,
@@ -653,8 +655,10 @@ describe('Agent Element', () => {
       });
 
       it('should validate rule engine config updates', () => {
+        const currentConfig = agent.getRuleEngineConfig();
         expect(() => agent.updateRuleEngineConfig({
           programmatic: {
+            ...currentConfig.programmatic,
             actionThresholds: {
               executeImmediately: 30,  // Invalid: lower than proceed
               proceed: 50,

@@ -205,7 +205,11 @@ ${r.error ? `- Error: ${r.error}` : ''}
       
       try {
         // Trigger an error that might expose the token
-        await this.server.browseMarketplace('../../../invalid');
+        // Use the collectionBrowser directly to test token exposure
+        const collectionBrowser = (this.server as any).collectionBrowser;
+        if (collectionBrowser) {
+          await collectionBrowser.browse('library', '../../../invalid');
+        }
       } catch (err) {
         // Check error doesn't contain token
         const errorMessage = err instanceof Error ? err.message : String(err);

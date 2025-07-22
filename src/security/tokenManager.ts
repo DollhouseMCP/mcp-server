@@ -303,7 +303,7 @@ export class TokenManager {
    * with existing token validations. This is an internal scope name and does not
    * affect user-facing functionality. (PR #280)
    */
-  static getRequiredScopes(operation: 'read' | 'write' | 'marketplace' | 'gist'): TokenScopes {
+  static getRequiredScopes(operation: 'read' | 'write' | 'marketplace' | 'collection' | 'gist'): TokenScopes {
     switch (operation) {
       case 'read':
         return {
@@ -318,6 +318,7 @@ export class TokenManager {
         };
       
       case 'marketplace': // Internal scope name kept for compatibility (PR #280)
+      case 'collection': // New preferred name
         return {
           required: ['repo'],
           optional: ['user:email']
@@ -343,7 +344,7 @@ export class TokenManager {
    * This is called internally when accessing collection features. (PR #280)
    */
   static async ensureTokenPermissions(
-    operation: 'read' | 'write' | 'marketplace' | 'gist'
+    operation: 'read' | 'write' | 'marketplace' | 'collection' | 'gist'
   ): Promise<TokenValidationResult> {
     const token = this.getGitHubToken();
     

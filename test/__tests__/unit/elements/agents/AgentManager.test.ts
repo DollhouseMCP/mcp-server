@@ -13,7 +13,7 @@ import { FileLockManager } from '../../../../../src/security/fileLockManager.js'
 import { SecurityMonitor } from '../../../../../src/security/securityMonitor.js';
 import * as os from 'os';
 
-// Mock dependencies
+// Mock the security modules
 jest.mock('../../../../../src/security/fileLockManager.js');
 jest.mock('../../../../../src/security/securityMonitor.js');
 jest.mock('../../../../../src/utils/logger.js');
@@ -34,14 +34,20 @@ describe('AgentManager', () => {
 
     // Set up mocks
     jest.clearAllMocks();
-    (FileLockManager.atomicWriteFile as jest.Mock) = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager.atomicReadFile as jest.Mock) = jest.fn();
-    (SecurityMonitor.logSecurityEvent as jest.Mock) = jest.fn();
+    
+    // Ensure mocks are properly typed
+    const mockAtomicWrite = FileLockManager.atomicWriteFile as jest.MockedFunction<typeof FileLockManager.atomicWriteFile>;
+    const mockAtomicRead = FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>;
+    const mockLogEvent = SecurityMonitor.logSecurityEvent as jest.MockedFunction<typeof SecurityMonitor.logSecurityEvent>;
+    
+    mockAtomicWrite.mockResolvedValue(undefined);
+    mockAtomicRead.mockResolvedValue('');
+    mockLogEvent.mockImplementation(() => {});
     
     // Mock fs.open for atomic file creation
     const mockFileHandle = {
-      writeFile: jest.fn().mockResolvedValue(undefined),
-      close: jest.fn().mockResolvedValue(undefined)
+      writeFile: jest.fn(() => Promise.resolve()),
+      close: jest.fn(() => Promise.resolve())
     };
     jest.spyOn(fs, 'open').mockResolvedValue(mockFileHandle as any);
   });
@@ -126,7 +132,8 @@ describe('AgentManager', () => {
 
   describe('Read', () => {
     beforeEach(async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      const mockRead = FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>;
+      mockRead.mockResolvedValue(`---
 name: test-agent
 type: agents
 version: 1.0.0
@@ -150,14 +157,14 @@ Agent instructions here`);
     });
 
     it('should return null for non-existent agent', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue({ code: 'ENOENT' });
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockRejectedValue({ code: 'ENOENT' });
 
       const agent = await agentManager.read('non-existent');
       expect(agent).toBeNull();
     });
 
     it('should reject oversized files', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue('x'.repeat(200 * 1024)); // 200KB
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockResolvedValue('x'.repeat(200 * 1024)); // 200KB
 
       await expect(agentManager.read('huge-agent'))
         .rejects.toThrow('exceeds maximum size');
@@ -165,7 +172,7 @@ Agent instructions here`);
 
     it('should load agent state if available', async () => {
       // Mock both agent file and state file
-      (FileLockManager.atomicReadFile as jest.Mock)
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>)
         .mockImplementation(async (path: string) => {
           if (path.includes('.state.yaml')) {
             // Return state file content in YAML frontmatter format
@@ -201,7 +208,7 @@ Content`;
 
   describe('Update', () => {
     it('should update agent metadata', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockResolvedValue(`---
 name: test-agent
 description: Old description
 ---
@@ -221,7 +228,7 @@ Content`);
     });
 
     it('should return false for non-existent agent', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue({ code: 'ENOENT' });
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockRejectedValue({ code: 'ENOENT' });
 
       const success = await agentManager.update('non-existent', {
         description: 'New'
@@ -236,7 +243,7 @@ Content`);
       agent.addGoal({ description: 'New goal' }); // This makes state dirty
       
       // Mock the read to return our agent
-      (FileLockManager.atomicReadFile as jest.Mock).mockImplementation(async () => {
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockImplementation(async () => {
         return `---
 name: test-agent
 ---
@@ -301,7 +308,7 @@ Content`;
         '.state' // Should be ignored
       ] as any);
 
-      (FileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (path) => {
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockImplementation(async (path) => {
         if (path.includes('agent1')) {
           return `---
 name: agent1
@@ -324,7 +331,7 @@ Content`;
 
     it('should handle read errors gracefully', async () => {
       const mockReaddir = jest.spyOn(fs, 'readdir').mockResolvedValue(['bad.md'] as any);
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue(new Error('Read error'));
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockRejectedValue(new Error('Read error'));
 
       const agents = await agentManager.list();
       expect(agents).toHaveLength(0);
@@ -442,7 +449,7 @@ This is the agent content.`;
       await agentManager.saveAgentState('test-agent', state as any);
 
       // Check that the path contains the expected components (cross-platform)
-      const firstCallArgs = (FileLockManager.atomicWriteFile as jest.Mock).mock.calls[0];
+      const firstCallArgs = (FileLockManager.atomicWriteFile as jest.MockedFunction<typeof FileLockManager.atomicWriteFile>).mock.calls[0];
       const filePath = firstCallArgs[0];
       expect(filePath).toMatch(/[/\\]\.state[/\\]test-agent\.state\.yaml$/);
       expect(firstCallArgs[1]).toContain('test: value');
@@ -464,7 +471,7 @@ This is the agent content.`;
 
     it('should cache loaded state', async () => {
       let callCount = 0;
-      (FileLockManager.atomicReadFile as jest.Mock)
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>)
         .mockImplementation(async (path: string) => {
           callCount++;
           if (path.includes('.state.yaml')) {
@@ -496,14 +503,14 @@ Content`;
 
   describe('Error Handling', () => {
     it('should handle file parse errors', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue('Invalid YAML content');
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockResolvedValue('Invalid YAML content');
 
       await expect(agentManager.read('bad-agent'))
         .rejects.toThrow('Invalid agent file format');
     });
 
     it('should validate element type in files', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      (FileLockManager.atomicReadFile as jest.MockedFunction<typeof FileLockManager.atomicReadFile>).mockResolvedValue(`---
 name: wrong-type
 type: persona
 ---

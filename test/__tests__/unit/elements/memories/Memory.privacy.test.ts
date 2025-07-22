@@ -182,7 +182,7 @@ describe('Memory Privacy Levels', () => {
   
   describe('Privacy and Security Event Logging', () => {
     it('should log when sensitive memories are deleted', async () => {
-      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
       
       await sensitiveMemory.addEntry('Sensitive data');
       const entries = await sensitiveMemory.search({});

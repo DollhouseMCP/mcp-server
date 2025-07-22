@@ -296,7 +296,7 @@ describe('Memory Concurrent Access', () => {
               promises.push(loadMemory.enforceRetentionPolicy());
               break;
             case 3:
-              promises.push(loadMemory.getStats());
+              promises.push(Promise.resolve(loadMemory.getStats()));
               break;
           }
         }

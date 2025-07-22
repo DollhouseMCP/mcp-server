@@ -308,7 +308,8 @@ describe('Memory Element', () => {
       const result = invalidMemory.validate();
       
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.field === 'retentionDays')).toBe(true);
+      expect(result.errors).toBeDefined();
+      expect(result.errors!.some(e => e.field === 'retentionDays')).toBe(true);
     });
     
     it('should validate max entries', () => {
@@ -340,7 +341,8 @@ describe('Memory Element', () => {
       
       if (stats.totalSize > 1024 * 1024) {
         expect(result.valid).toBe(false);
-        expect(result.errors.some(e => e.field === 'memory')).toBe(true);
+        expect(result.errors).toBeDefined();
+        expect(result.errors!.some(e => e.field === 'memory')).toBe(true);
       }
     });
   });
