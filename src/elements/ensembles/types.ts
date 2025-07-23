@@ -9,11 +9,13 @@ import { IElement, IElementMetadata } from '../../types/elements/index.js';
 
 /**
  * Activation strategy determines how elements within an ensemble are activated
+ * 
+ * Note: All strategies activate elements to work as a unified entity.
+ * Elements are layered/combined rather than acting as separate entities.
  */
 export type ActivationStrategy = 
-  | 'all'          // Activate all elements simultaneously (currently same as 'parallel')
-  | 'sequential'   // Activate elements one by one in order
-  | 'parallel'     // Activate elements in parallel (currently same as 'all' - see Issue #360)
+  | 'all'          // Activate all elements simultaneously as one unit
+  | 'sequential'   // Activate elements one by one in dependency order
   | 'lazy'         // Activate elements only when needed
   | 'conditional'  // Activate based on rules/conditions
   | 'priority';    // Activate in priority order

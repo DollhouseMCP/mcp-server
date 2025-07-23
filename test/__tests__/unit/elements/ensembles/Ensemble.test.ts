@@ -260,17 +260,17 @@ describe('Ensemble', () => {
       expect(result?.success).toBe(true);
     });
 
-    it('should activate ensemble in parallel', async () => {
-      const parallelEnsemble = new Ensemble({
-        name: 'Parallel Test',
-        activationStrategy: 'parallel'
+    it('should activate all elements simultaneously', async () => {
+      const allEnsemble = new Ensemble({
+        name: 'All Test',
+        activationStrategy: 'all'
       });
-      parallelEnsemble.addElement('element1', 'persona', 'primary');
-      parallelEnsemble.addElement('element2', 'skill', 'support');
+      allEnsemble.addElement('element1', 'persona', 'primary');
+      allEnsemble.addElement('element2', 'skill', 'support');
       
-      await parallelEnsemble.activate();
+      await allEnsemble.activate();
       
-      const result = parallelEnsemble.getLastActivationResult();
+      const result = allEnsemble.getLastActivationResult();
       expect(result?.activatedElements.length).toBe(2);
     });
 
@@ -486,22 +486,8 @@ describe('Ensemble', () => {
       }
     });
 
-    it.skip('should detect circular dependencies in validation', () => {
-      // Skip this test - it's trying to directly modify internal state which is not possible
-      // The circular dependency detection is tested in the addElement tests
-      const ensemble = new Ensemble({ name: 'Test' });
-      
-      // This approach doesn't work because getElements() returns a copy
-      const elements = ensemble.getElements() as any;
-      elements.set('A', { elementId: 'A', elementType: 'persona', role: 'primary', dependencies: ['B'] });
-      elements.set('B', { elementId: 'B', elementType: 'skill', role: 'support', dependencies: ['A'] });
-      
-      const result = ensemble.validate();
-      
-      expect(result.valid).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0].message).toContain('Circular dependency');
-    });
+    // Note: Circular dependency detection is thoroughly tested in the addElement tests above
+    // No need for an additional validation test since validation uses the same detection logic
 
     it('should detect orphaned dependencies', () => {
       const ensemble = new Ensemble({ name: 'Test' });

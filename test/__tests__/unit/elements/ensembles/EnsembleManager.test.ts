@@ -110,7 +110,7 @@ describe('EnsembleManager', () => {
       const ensemble = new Ensemble({ 
         name: 'Markdown Ensemble',
         description: 'Test markdown',
-        activationStrategy: 'parallel'
+        activationStrategy: 'all'
       });
 
       // Test that save completes without error
@@ -219,7 +219,7 @@ describe('EnsembleManager', () => {
     it('should export ensemble to JSON', async () => {
       const ensemble = new Ensemble({ 
         name: 'Export Test',
-        activationStrategy: 'parallel'
+        activationStrategy: 'all'
       });
       ensemble.addElement('elem1', 'persona', 'primary');
 

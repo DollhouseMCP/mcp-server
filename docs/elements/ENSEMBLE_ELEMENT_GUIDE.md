@@ -2,15 +2,22 @@
 
 ## Overview
 
-The Ensemble element is the orchestrator of the DollhouseMCP element system. It allows you to combine multiple elements (personas, skills, templates, agents, memories) into cohesive units that work together synergistically.
+The Ensemble element is the orchestrator of the DollhouseMCP element system. It allows you to combine multiple elements (personas, skills, templates, agents, memories) into a single, unified entity that works as one cohesive unit.
 
-Think of an Ensemble as a team where each member (element) has a specific role and they coordinate to achieve complex tasks that no single element could handle alone.
+Think of an Ensemble as layers of capabilities combined into one AI assistant. When activated, all elements work together as a single entity - not as separate personalities interacting, but as one unified assistant with the combined abilities of all its elements.
+
+## Key Concept: Unified Entity
+
+**Important**: Ensembles create a single AI entity with combined capabilities. Elements are layered together, not acting as separate characters. For example:
+- A "Full-Stack Developer" ensemble combines backend + frontend + testing capabilities into ONE developer
+- A "Content Creator" ensemble merges writing + SEO + editing skills into ONE content professional
+- Multiple personas in an ensemble don't "talk to each other" - they merge into one unified personality
 
 ## Key Features
 
 ### 1. **Multiple Activation Strategies**
+- **All**: All elements activate simultaneously as one unit
 - **Sequential**: Elements activate one by one in dependency order
-- **Parallel**: All elements activate simultaneously 
 - **Priority**: Elements activate in priority order (highest first)
 - **Conditional**: Elements activate based on conditions
 - **Lazy**: Elements activate only when needed
@@ -152,7 +159,7 @@ fullStackDev.addElement('deployment-scripts', 'template', 'support');
 ```typescript
 const contentTeam = new Ensemble({
   name: 'Content Creation Team',
-  activationStrategy: 'parallel',
+  activationStrategy: 'all',
   conflictResolution: 'priority'
 });
 

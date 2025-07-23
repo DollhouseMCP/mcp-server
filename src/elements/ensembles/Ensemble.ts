@@ -267,14 +267,10 @@ export class Ensemble extends BaseElement implements IElement {
         case 'sequential':
           await this.activateSequential(activationOrder, result, metadata.maxActivationTime!);
           break;
-        case 'parallel':
         case 'all':
-          // NOTE: 'parallel' and 'all' are currently aliases for the same behavior.
-          // Both activate all elements concurrently using Promise.all()
-          // This was identified in PR #359 review - consider differentiating in future
-          // or removing one of them to avoid confusion.
-          // See Issue #360 for discussion
-          await this.activateParallel(activationOrder, result, metadata.maxActivationTime!);
+          // Activate all elements simultaneously as one unified entity
+          // Elements are layered/combined rather than acting separately
+          await this.activateAll(activationOrder, result, metadata.maxActivationTime!);
           break;
         case 'priority':
           await this.activatePriority(activationOrder, result, metadata.maxActivationTime!);
@@ -612,9 +608,9 @@ export class Ensemble extends BaseElement implements IElement {
   }
 
   /**
-   * Activate elements in parallel
+   * Activate all elements simultaneously as one unified entity
    */
-  private async activateParallel(
+  private async activateAll(
     order: string[], 
     result: EnsembleActivationResult,
     maxTime: number

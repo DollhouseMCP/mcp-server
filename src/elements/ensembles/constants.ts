@@ -36,7 +36,6 @@ export const ENSEMBLE_DEFAULTS = {
 export const ACTIVATION_STRATEGIES = [
   'all',
   'sequential',
-  'parallel',
   'lazy',
   'conditional',
   'priority'
