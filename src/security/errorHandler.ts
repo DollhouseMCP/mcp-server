@@ -17,6 +17,20 @@ export interface SanitizedError {
 }
 
 export class SecureErrorHandler {
+  // Pre-compiled regex patterns for better performance
+  private static readonly SANITIZATION_PATTERNS = {
+    UNIX_PATHS: /\/(?:Users|home|var|etc|opt|usr)\/[^\s]+/gi,
+    WINDOWS_PATHS: /[A-Z]:\\[^\s]+/gi,
+    UNC_PATHS: /\\\\[^\s]+/gi,
+    FILE_URLS: /file:\/\/\/?[^\s]+/gi,
+    IP_ADDRESSES: /\b(?:(?:\d{1,3}\.){3}\d{1,3}|(?:0\d{1,2}\.){3}0\d{1,2})\b/g,
+    PORTS: /:\d{4,5}\b/g,
+    HOME_DIRS: /~\/[^\s]+/g,
+    USER_PATHS: /\/(?:Users|home)\/[^\/\s]+/gi,
+    TEMP_PATHS: /\/(?:tmp|var\/folders)\/[^\s]+/gi,
+    ENV_VARS: /\$[A-Z_][A-Z0-9_]*/g,
+  };
+  
   private static readonly ERROR_MAP: Record<string, string> = {
     // File system errors
     'ENOENT': 'Resource not found',
@@ -48,6 +62,16 @@ export class SecureErrorHandler {
    * Sanitize an error for safe display to users
    */
   static sanitizeError(error: any, requestId?: string): SanitizedError {
+    // Input validation
+    if (error === null || error === undefined) {
+      return {
+        message: process.env.NODE_ENV === 'production' 
+          ? 'An error occurred processing your request.'
+          : 'An unknown error occurred',
+        code: 'UNKNOWN_ERROR',
+        requestId
+      };
+    }
     // Log the full error securely for debugging
     logger.error('Error occurred:', {
       error: error,
@@ -105,33 +129,36 @@ export class SecureErrorHandler {
   private static sanitizeErrorMessage(message: string): string {
     if (!message) return 'Unknown error';
 
-    // Remove absolute file paths (both Unix and Windows)
-    let sanitized = message
-      .replace(/\/(?:Users|home|var|etc|opt|usr)\/[^\s]+/gi, '[PATH]')
-      .replace(/[A-Z]:\\[^\s]+/gi, '[PATH]')
-      .replace(/\\\\[^\s]+/gi, '[PATH]');
+    // Use pre-compiled patterns for better performance
+    // Apply more specific patterns first to avoid conflicts
+    let sanitized = message;
+    
+    // Remove temp directory paths BEFORE general paths
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.TEMP_PATHS, '[TEMP]');
+    
+    // Remove other specific paths
+    sanitized = sanitized
+      .replace(this.SANITIZATION_PATTERNS.UNIX_PATHS, '[PATH]')
+      .replace(this.SANITIZATION_PATTERNS.WINDOWS_PATHS, '[PATH]')
+      .replace(this.SANITIZATION_PATTERNS.UNC_PATHS, '[PATH]');
 
-    // Remove file URLs
-    sanitized = sanitized.replace(/file:\/\/[^\s]+/gi, '[FILE]');
+    // Remove file URLs (including Windows file:///c:/ format)
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.FILE_URLS, '[FILE]');
 
-    // Remove potential IP addresses
-    sanitized = sanitized.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[IP]');
+    // Remove potential IP addresses (including zero-padded)
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.IP_ADDRESSES, '[IP]');
 
     // Remove potential ports
-    sanitized = sanitized.replace(/:\d{4,5}\b/g, ':[PORT]');
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.PORTS, ':[PORT]');
 
     // Remove home directory references
-    sanitized = sanitized.replace(/~\/[^\s]+/g, '[HOME]/...');
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.HOME_DIRS, '[HOME]/...');
 
     // Remove potential usernames from paths
-    sanitized = sanitized.replace(/\/(?:Users|home)\/[^\/\s]+/gi, '/[USER]');
-
-    // Remove temp directory paths
-    sanitized = sanitized.replace(/\/tmp\/[^\s]+/gi, '[TEMP]');
-    sanitized = sanitized.replace(/\/var\/folders\/[^\s]+/gi, '[TEMP]');
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.USER_PATHS, '/[USER]');
 
     // Remove potential environment variables
-    sanitized = sanitized.replace(/\$[A-Z_][A-Z0-9_]*/g, '[ENV]');
+    sanitized = sanitized.replace(this.SANITIZATION_PATTERNS.ENV_VARS, '[ENV]');
 
     // Limit message length to prevent verbose error dumps
     if (sanitized.length > 500) {

@@ -53,7 +53,7 @@ export class PathValidator {
       );
       if (!isAllowed) {
         // SECURITY FIX #206: Don't expose user paths in error messages
-        logger.error(`Path access denied: ${userPath}`);
+        logger.error('Path access denied', { path: userPath });
         throw new Error('Path access denied');
       }
     } else {
@@ -64,7 +64,7 @@ export class PathValidator {
       
       if (!isAllowed) {
         // SECURITY FIX #206: Don't expose user paths in error messages
-        logger.error(`Path access denied: ${userPath}`);
+        logger.error('Path access denied', { path: userPath });
         throw new Error('Path access denied');
       }
     }

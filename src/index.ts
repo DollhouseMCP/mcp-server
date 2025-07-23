@@ -460,7 +460,7 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error browsing collection: ${sanitized.message}`,
+            text: `${this.getPersonaIndicator()}❌ Collection browsing failed: ${sanitized.message}`,
           },
         ],
       };

@@ -141,7 +141,31 @@ describe('SecureErrorHandler', () => {
       
       const error2 = new Error('Cannot access /var/folders/y6/nj790rtn62l/T/test');
       const result2 = SecureErrorHandler.sanitizeError(error2);
-      expect(result2.message).toBe('Cannot access [PATH]');
+      expect(result2.message).toBe('Cannot access [TEMP]');
+    });
+
+    it('should sanitize UNC paths', () => {
+      process.env.NODE_ENV = 'development';
+      
+      const error = new Error('Cannot access \\\\server\\share\\secret.txt');
+      const result = SecureErrorHandler.sanitizeError(error);
+      expect(result.message).toBe('Cannot access [PATH]');
+    });
+
+    it('should sanitize zero-padded IP addresses', () => {
+      process.env.NODE_ENV = 'development';
+      
+      const error = new Error('Connection failed to 192.168.001.100');
+      const result = SecureErrorHandler.sanitizeError(error);
+      expect(result.message).toBe('Connection failed to [IP]');
+    });
+
+    it('should sanitize Windows file URLs', () => {
+      process.env.NODE_ENV = 'development';
+      
+      const error = new Error('Cannot load file:///c:/Users/admin/secret.txt');
+      const result = SecureErrorHandler.sanitizeError(error);
+      expect(result.message).toBe('Cannot load [FILE]');
     });
 
     it('should handle validation errors specially', () => {
