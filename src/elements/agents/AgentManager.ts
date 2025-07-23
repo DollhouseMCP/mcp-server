@@ -340,8 +340,8 @@ export class AgentManager implements IElementManager<Agent> {
       }
       return agents;
     } catch (error) {
-      // Handle missing directory gracefully
-      if ((error as any).code === 'ENOENT') {
+      // Handle missing directory gracefully with type-safe check
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         logger.debug('Agents directory does not exist yet, returning empty array');
         return [];
       }

@@ -186,8 +186,8 @@ export class TemplateManager implements IElementManager<Template> {
       // Filter out failed loads
       return templates.filter((t): t is Template => t !== null);
     } catch (error) {
-      // Handle missing directory gracefully
-      if ((error as any).code === 'ENOENT') {
+      // Handle missing directory gracefully with type-safe check
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         logger.debug('Templates directory does not exist yet, returning empty array');
         return [];
       }
