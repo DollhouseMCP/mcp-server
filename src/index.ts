@@ -562,7 +562,7 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error installing persona: ${sanitized.message}`,
+            text: `${this.getPersonaIndicator()}❌ Error installing AI customization element: ${sanitized.message}`,
           },
         ],
       };

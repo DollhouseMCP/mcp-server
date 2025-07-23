@@ -53,7 +53,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
           properties: {
             path: {
               type: "string",
-              description: "The collection path to the content. For personas, this will be like 'library/personas/creative/storyteller_20250701_alice.md'. The path indicates the content type (personas, skills, etc.) and category.",
+              description: "The collection path to the AI customization element. Format: 'library/[type]/[category]/[element].md' where type is personas, skills, templates, agents, memories, or ensembles. Example: 'library/skills/coding/code-review.md'.",
             },
           },
           required: ["path"],
@@ -64,13 +64,13 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     {
       tool: {
         name: "install_content",
-        description: "Install content from the collection to your local collection. Use this when users ask to 'download a persona', 'install the explain like I'm five persona', or 'get a persona'. Personas are behavioral profiles stored as content in the collection.",
+        description: "Install AI customization elements from the collection to your local portfolio. Use this when users ask to download/install any element type (personas, skills, templates, agents, memories, or ensembles). Examples: 'install the creative writer persona', 'get the code review skill', 'download the meeting notes template'.",
         inputSchema: {
           type: "object",
           properties: {
             path: {
               type: "string",
-              description: "The collection path to the content. For personas, this will be like 'library/personas/creative/storyteller_20250701_alice.md'. The path indicates the content type (personas, skills, etc.) and category.",
+              description: "The collection path to the AI customization element. Format: 'library/[type]/[category]/[element].md' where type is personas, skills, templates, agents, memories, or ensembles. Example: 'library/skills/coding/code-review.md'.",
             },
           },
           required: ["path"],
