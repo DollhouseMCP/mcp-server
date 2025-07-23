@@ -10,6 +10,7 @@ import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
+import { SecureErrorHandler } from './security/errorHandler.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
@@ -454,11 +455,12 @@ export class DollhouseMCPServer implements IToolHandler {
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error browsing collection: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error browsing collection: ${sanitized.message}`,
           },
         ],
       };
@@ -482,11 +484,12 @@ export class DollhouseMCPServer implements IToolHandler {
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${sanitized.message}`,
           },
         ],
       };
@@ -507,11 +510,12 @@ export class DollhouseMCPServer implements IToolHandler {
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error fetching content: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error fetching content: ${sanitized.message}`,
           },
         ],
       };
@@ -552,11 +556,12 @@ export class DollhouseMCPServer implements IToolHandler {
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error installing persona: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error installing persona: ${sanitized.message}`,
           },
         ],
       };
@@ -623,11 +628,12 @@ export class DollhouseMCPServer implements IToolHandler {
         };
       }
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error validating persona: ${error}`,
+            text: `${this.getPersonaIndicator()}❌ Error validating persona: ${sanitized.message}`,
           },
         ],
       };
@@ -695,12 +701,13 @@ export class DollhouseMCPServer implements IToolHandler {
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
             text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
-              `${error}\n\n` +
+              `${sanitized.message}\n\n` +
               `Please provide a valid username (alphanumeric characters, hyphens, underscores, dots only).`,
           },
         ],
@@ -944,24 +951,26 @@ ${sanitizedInstructions}
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
             text: `${this.getPersonaIndicator()}❌ **Error Creating Persona**\n\n` +
-              `Failed to write persona file: ${error}\n\n` +
+              `Failed to write persona file: ${sanitized.message}\n\n` +
               `Please check permissions and try again.`,
           },
         ],
       };
     }
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
             text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
-              `${error}\n\n` +
+              `${sanitized.message}\n\n` +
               `Please fix the issue and try again.`,
           },
         ],
@@ -1172,12 +1181,13 @@ ${sanitizedInstructions}
         ],
       };
     } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
       return {
         content: [
           {
             type: "text",
             text: `${this.getPersonaIndicator()}❌ **Error Updating Persona**\n\n` +
-              `Failed to update persona: ${error}\n\n` +
+              `Failed to update persona: ${sanitized.message}\n\n` +
               `Please check file permissions and try again.`,
           },
         ],
