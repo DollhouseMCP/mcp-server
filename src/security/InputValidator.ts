@@ -380,7 +380,9 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
-  const normalized = inputPath.replace(PATH_NORMALIZE_REGEX, '').replace(PATH_MULTIPLE_SLASHES_REGEX, '/');
+  // WINDOWS FIX: Convert backslashes to forward slashes for cross-platform compatibility
+  let normalized = inputPath.replace(/\\/g, '/');
+  normalized = normalized.replace(PATH_NORMALIZE_REGEX, '').replace(PATH_MULTIPLE_SLASHES_REGEX, '/');
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
     throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');

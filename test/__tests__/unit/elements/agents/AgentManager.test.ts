@@ -8,8 +8,19 @@ import * as path from 'path';
 import * as os from 'os';
 
 // Mock the security modules before importing anything that uses them
-jest.mock('../../../../../src/security/fileLockManager.js');
-jest.mock('../../../../../src/security/securityMonitor.js');
+// WINDOWS FIX: More explicit mock declarations to prevent TypeScript inference issues
+jest.mock('../../../../../src/security/fileLockManager.js', () => ({
+  FileLockManager: {
+    atomicWriteFile: jest.fn(),
+    atomicReadFile: jest.fn(),
+    withLock: jest.fn()
+  }
+}));
+jest.mock('../../../../../src/security/securityMonitor.js', () => ({
+  SecurityMonitor: {
+    logSecurityEvent: jest.fn()
+  }
+}));
 jest.mock('../../../../../src/utils/logger.js');
 
 // Import after mocking
@@ -38,10 +49,11 @@ describe('AgentManager', () => {
     jest.clearAllMocks();
     
     // Set default mock implementations by assigning functions directly
-    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
-    (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
-    (SecurityMonitor as any).logSecurityEvent = jest.fn();
+    // WINDOWS FIX: Use explicit jest.Mock types to prevent TypeScript never type inference
+    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined) as jest.Mock;
+    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('') as jest.Mock;
+    (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation()) as jest.Mock;
+    (SecurityMonitor as any).logSecurityEvent = jest.fn() as jest.Mock;
     
     // Mock fs.open for atomic file creation
     const mockFileHandle = {
@@ -170,6 +182,7 @@ Agent instructions here`);
 
     it('should load agent state if available', async () => {
       // Mock both agent file and state file
+      // WINDOWS FIX: Cast to jest.Mock to fix parameter type inference
       (FileLockManager.atomicReadFile as jest.Mock)
         .mockImplementation(async (path: string) => {
           if (path.includes('.state.yaml')) {
@@ -469,6 +482,7 @@ This is the agent content.`;
 
     it('should cache loaded state', async () => {
       let callCount = 0;
+      // WINDOWS FIX: Cast to jest.Mock to fix parameter type inference
       (FileLockManager.atomicReadFile as jest.Mock)
         .mockImplementation(async (path: string) => {
           callCount++;

@@ -178,7 +178,7 @@ describe('EnsembleManager', () => {
         ]
       });
 
-      const imported = await manager.importElement(jsonData, 'imported.yaml');
+      const imported = await manager.importElement(jsonData, 'json');
       
       expect(imported.metadata.name).toBe('Imported Ensemble');
       expect(imported.getElements().size).toBe(2);
@@ -187,14 +187,14 @@ describe('EnsembleManager', () => {
     });
 
     it('should reject invalid JSON', async () => {
-      await expect(manager.importElement('not json', 'bad.yaml'))
+      await expect(manager.importElement('not json', 'json'))
         .rejects.toThrow('Invalid JSON format');
     });
 
     it('should validate required fields', async () => {
       const jsonData = JSON.stringify({ invalid: 'data' });
       
-      await expect(manager.importElement(jsonData, 'bad.yaml'))
+      await expect(manager.importElement(jsonData, 'json'))
         .rejects.toThrow('Missing or invalid metadata');
     });
 
@@ -208,7 +208,7 @@ describe('EnsembleManager', () => {
         ]
       });
 
-      const imported = await manager.importElement(jsonData, 'test.yaml');
+      const imported = await manager.importElement(jsonData, 'json');
       
       // Should only import valid elements
       expect(imported.getElements().size).toBe(2);

@@ -3,7 +3,7 @@
  * Tests all functionality including security measures
  */
 
-import { jest } from '@jest/globals';
+import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 
 // Mock SecurityMonitor first
 jest.mock('../../../../../src/security/securityMonitor.js', () => ({
@@ -496,7 +496,9 @@ describe('Ensemble', () => {
       const result = ensemble.validate();
       
       expect(result.valid).toBe(false);
-      expect(result.errors[0].message).toContain("Dependency 'nonexistent' not found");
+      // WINDOWS FIX: Check if errors array exists before accessing
+      expect(result.errors).toBeDefined();
+      expect(result.errors![0].message).toContain("Dependency 'nonexistent' not found");
     });
   });
 
