@@ -374,7 +374,11 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   }
   
   // If baseDir is provided and inputPath is absolute, reject it
-  if (baseDir && path.isAbsolute(inputPath)) {
+  // Check both Unix-style and Windows-style absolute paths for cross-platform security
+  const isUnixAbsolute = path.isAbsolute(inputPath);
+  const isWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(inputPath);
+  
+  if (baseDir && (isUnixAbsolute || isWindowsAbsolute)) {
     throw new Error('Absolute paths not allowed when base directory is specified');
   }
   
