@@ -36,10 +36,7 @@ const config = {
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
-  resolver: 'ts-jest-resolver',
-  moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1'
-  }
+  resolver: 'ts-jest-resolver'
 };
 
 module.exports = config;
