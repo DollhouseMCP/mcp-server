@@ -205,7 +205,7 @@ export class EnsembleManager implements IElementManager<Ensemble> {
           // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection
           // Previously: Used unsafe YAML parsing without validation
           // Now: Uses SecureYamlParser which validates content
-          const parsed = await SecureYamlParser.parse(match[1], {
+          const parsed = SecureYamlParser.parse(match[1], {
             maxYamlSize: 64 * 1024, // 64KB limit
             validateContent: true
           });
@@ -219,19 +219,33 @@ export class EnsembleManager implements IElementManager<Ensemble> {
           });
 
           return {
-            metadata: parsed as unknown as EnsembleMetadata,
+            metadata: parsed.data as unknown as EnsembleMetadata,
             content: match[2].trim()
           };
         }
       }
 
-      // Try pure YAML
-      const parsed = await SecureYamlParser.parse(content, {
-        maxYamlSize: 64 * 1024,
+      // SECURITY FIX: For plain YAML files, use SecureYamlParser not direct yaml.load
+      // Previously: Used yaml.load() which doesn't validate YAML bombs or size limits
+      // Now: Uses SecureYamlParser for consistent security validation
+      
+      // Create a frontmatter-like format for SecureYamlParser
+      const frontmatterFormat = `---\n${content}\n---\n`;
+      
+      const parsed = SecureYamlParser.parse(frontmatterFormat, {
+        maxYamlSize: 64 * 1024, // 64KB limit
         validateContent: true
       });
 
-      return parsed;
+      // Log security event
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_PARSE_SUCCESS',
+        severity: 'LOW',
+        source: 'EnsembleManager.parseEnsembleFile',
+        details: 'Plain YAML content safely parsed'
+      });
+
+      return parsed.data;
 
     } catch (error) {
       logger.error('Failed to parse ensemble file:', error);
