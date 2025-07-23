@@ -1,0 +1,17 @@
+---
+metadata:
+  name: "Test"
+  description: ""
+  version: "1.0.0"
+  created: "2025-07-23T13:21:19.852Z"
+  modified: "2025-07-23T13:21:19.852Z"
+  tags: []
+  dependencies: []
+  custom: {}
+  activationStrategy: "sequential"
+  conflictResolution: "last-write"
+elements: []
+extensions:
+  activationStrategy: "sequential"
+  conflictResolution: "last-write"
+---

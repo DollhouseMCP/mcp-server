@@ -1,0 +1,25 @@
+---
+metadata:
+  name: "Test Ensemble"
+  description: "A test ensemble"
+  version: "1.0.0"
+  created: "2025-07-23T13:11:14.431Z"
+  modified: "2025-07-23T13:11:14.431Z"
+  tags: []
+  dependencies: []
+  custom: {}
+  activationStrategy: "sequential"
+  conflictResolution: "last-write"
+elements:
+  - elementId: "persona1"
+    elementType: "persona"
+    role: "primary"
+  - elementId: "skill1"
+    elementType: "skill"
+    role: "support"
+    dependencies:
+      - "persona1"
+extensions:
+  activationStrategy: "sequential"
+  conflictResolution: "last-write"
+---

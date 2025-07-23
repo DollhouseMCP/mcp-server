@@ -374,13 +374,29 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   }
   
   // If baseDir is provided and inputPath is absolute, reject it
-  if (baseDir && path.isAbsolute(inputPath)) {
+  // Check both Unix-style and Windows-style absolute paths for cross-platform security
+  const isUnixAbsolute = path.isAbsolute(inputPath);
+  const isWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(inputPath);
+  
+  if (baseDir && (isUnixAbsolute || isWindowsAbsolute)) {
     throw new Error('Absolute paths not allowed when base directory is specified');
   }
   
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
-  const normalized = inputPath.replace(PATH_NORMALIZE_REGEX, '').replace(PATH_MULTIPLE_SLASHES_REGEX, '/');
+  // WINDOWS FIX: Convert backslashes to forward slashes for cross-platform compatibility
+  let normalized = inputPath.replace(/\\/g, '/');
+  
+  // FIX: Preserve leading slash for absolute paths
+  const isAbsolute = normalized.startsWith('/') || isWindowsAbsolute;
+  
+  // Remove trailing slashes and normalize multiple slashes
+  normalized = normalized.replace(/\/{1,100}$/g, '').replace(/\/{2,100}/g, '/');
+  
+  // Preserve the leading slash if it was an absolute path
+  if (isAbsolute && !normalized.startsWith('/') && !isWindowsAbsolute) {
+    normalized = '/' + normalized;
+  }
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
     throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
