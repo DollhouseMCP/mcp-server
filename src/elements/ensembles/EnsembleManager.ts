@@ -225,27 +225,46 @@ export class EnsembleManager implements IElementManager<Ensemble> {
         }
       }
 
-      // SECURITY FIX: For plain YAML files, use SecureYamlParser not direct yaml.load
+      // SECURITY FIX: For plain YAML files, check if content already has frontmatter
       // Previously: Used yaml.load() which doesn't validate YAML bombs or size limits
       // Now: Uses SecureYamlParser for consistent security validation
       
-      // Create a frontmatter-like format for SecureYamlParser
-      const frontmatterFormat = `---\n${content}\n---\n`;
-      
-      const parsed = SecureYamlParser.parse(frontmatterFormat, {
-        maxYamlSize: 64 * 1024, // 64KB limit
-        validateContent: true
-      });
+      // Check if content already has frontmatter markers
+      if (content.trim().startsWith('---')) {
+        // Content already has frontmatter, parse directly  
+        const parsed = SecureYamlParser.parse(content, {
+          maxYamlSize: 64 * 1024, // 64KB limit
+          validateContent: true
+        });
 
-      // Log security event
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_PARSE_SUCCESS',
-        severity: 'LOW',
-        source: 'EnsembleManager.parseEnsembleFile',
-        details: 'Plain YAML content safely parsed'
-      });
+        // Log security event
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_PARSE_SUCCESS',
+          severity: 'LOW',
+          source: 'EnsembleManager.parseEnsembleFile',
+          details: 'YAML frontmatter content safely parsed'
+        });
 
-      return parsed.data;
+        return parsed.data;
+      } else {
+        // Plain YAML without frontmatter - create frontmatter format
+        const frontmatterFormat = `---\n${content}\n---\n`;
+        
+        const parsed = SecureYamlParser.parse(frontmatterFormat, {
+          maxYamlSize: 64 * 1024, // 64KB limit
+          validateContent: true
+        });
+
+        // Log security event
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_PARSE_SUCCESS',
+          severity: 'LOW',
+          source: 'EnsembleManager.parseEnsembleFile',
+          details: 'Plain YAML content safely parsed'
+        });
+
+        return parsed.data;
+      }
 
     } catch (error) {
       logger.error('Failed to parse ensemble file:', error);
