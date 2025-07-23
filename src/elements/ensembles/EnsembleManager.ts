@@ -226,7 +226,7 @@ export class EnsembleManager implements IElementManager<Ensemble> {
       }
 
       // SECURITY FIX: For plain YAML files, check if content already has frontmatter
-      // Previously: Used yaml.load() which doesn't validate YAML bombs or size limits
+      // Previously: Used direct YAML parsing without security validation
       // Now: Uses SecureYamlParser for consistent security validation
       
       // Check if content already has frontmatter markers
