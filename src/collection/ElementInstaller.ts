@@ -1,12 +1,12 @@
 /**
- * Install content from collection
+ * Install AI customization elements from collection
+ * Supports all element types: personas, skills, templates, agents, memories, ensembles
  */
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import matter from 'gray-matter';
 import { GitHubClient } from './GitHubClient.js';
-import { PersonaMetadata } from '../types/persona.js';
+import { IElementMetadata } from '../types/elements/IElement.js';
 import { validatePath, validateFilename, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
@@ -14,29 +14,39 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 
-export class PersonaInstaller {
+export class ElementInstaller {
   private githubClient: GitHubClient;
-  private personasDir: string;
   private portfolioManager: PortfolioManager;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
-  constructor(githubClient: GitHubClient, personasDir?: string) {
+  constructor(githubClient: GitHubClient) {
     this.githubClient = githubClient;
     this.portfolioManager = PortfolioManager.getInstance();
-    this.personasDir = personasDir || this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
   
   /**
-   * Install content from the collection
+   * Install AI customization element from the collection
+   * Automatically detects element type from path structure
    */
   async installContent(inputPath: string): Promise<{ 
     success: boolean; 
     message: string;
-    metadata?: PersonaMetadata;
+    metadata?: IElementMetadata;
+    elementType?: ElementType;
     filename?: string;
   }> {
     // Validate and sanitize the input path
     const sanitizedPath = validatePath(inputPath);
+    
+    // Detect element type from path structure
+    // Expected format: library/[element-type]/[category]/[element].md
+    const pathParts = sanitizedPath.split('/');
+    if (pathParts.length < 3 || pathParts[0] !== 'library') {
+      throw new Error('Invalid collection path format. Expected: library/[element-type]/[category]/[element].md');
+    }
+    
+    const elementTypeStr = pathParts[1];
+    const elementType = this.getElementTypeFromString(elementTypeStr);
     
     // Ensure the path ends with .md
     if (!sanitizedPath.endsWith('.md')) {
@@ -75,7 +85,7 @@ export class PersonaInstaller {
       throw error;
     }
     
-    const metadata = parsed.data as PersonaMetadata;
+    const metadata = parsed.data as IElementMetadata;
     
     // Additional metadata validation for injection attacks
     const metadataValidation = ContentValidator.validateMetadata(metadata);
@@ -89,16 +99,19 @@ export class PersonaInstaller {
     }
     
     // Generate and validate local filename
-    const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-persona.md';
+    const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-element.md';
     const filename = validateFilename(originalFilename);
-    const localPath = path.join(this.personasDir, filename);
+    
+    // Get appropriate directory for element type
+    const elementDir = this.portfolioManager.getElementDir(elementType);
+    const localPath = path.join(elementDir, filename);
     
     // Check if file already exists
     try {
       await fs.access(localPath);
       return {
         success: false,
-        message: `Content already exists: ${filename}\n\nUse \`reload_personas\` to refresh if you've updated it manually.`
+        message: `AI customization element already exists: ${filename}\n\nThe element has already been installed.`
       };
     } catch {
       // File doesn't exist, proceed with installation
@@ -109,20 +122,54 @@ export class PersonaInstaller {
     
     return {
       success: true,
-      message: `Content installed successfully!`,
+      message: `AI customization element installed successfully!`,
       metadata,
-      filename
+      filename,
+      elementType
     };
+  }
+  
+  /**
+   * Get ElementType from string
+   */
+  private getElementTypeFromString(typeStr: string): ElementType {
+    const typeMap: Record<string, ElementType> = {
+      'personas': ElementType.PERSONA,
+      'skills': ElementType.SKILL,
+      'templates': ElementType.TEMPLATE,
+      'agents': ElementType.AGENT,
+      'memories': ElementType.MEMORY,
+      'ensembles': ElementType.ENSEMBLE
+    };
+    
+    const elementType = typeMap[typeStr];
+    if (!elementType) {
+      throw new Error(`Unknown element type: ${typeStr}. Valid types: ${Object.keys(typeMap).join(', ')}`);
+    }
+    
+    return elementType;
   }
   
   /**
    * Format installation success message
    */
-  formatInstallSuccess(metadata: PersonaMetadata, filename: string, totalPersonas: number, personaIndicator: string = ''): string {
-    return `${personaIndicator}✅ **Content Installed Successfully!**\n\n` +
-      `🎭 **${metadata.name}** by ${metadata.author}\n` +
-      `📁 Saved as: ${filename}\n` +
-      `📊 Total personas: ${totalPersonas}\n\n` +
-      `🎯 **Ready to use:** \`activate_persona "${metadata.name}"\``;
+  formatInstallSuccess(metadata: IElementMetadata, filename: string, elementType: ElementType): string {
+    const typeEmojis: Record<ElementType, string> = {
+      [ElementType.PERSONA]: '🎭',
+      [ElementType.SKILL]: '🎯',
+      [ElementType.TEMPLATE]: '📄',
+      [ElementType.AGENT]: '🤖',
+      [ElementType.MEMORY]: '🧠',
+      [ElementType.ENSEMBLE]: '🎼'
+    };
+    
+    const emoji = typeEmojis[elementType] || '📦';
+    const typeName = elementType.charAt(0).toUpperCase() + elementType.slice(1);
+    
+    return `✅ **AI Customization Element Installed Successfully!**\n\n` +
+      `${emoji} **${metadata.name}** ${metadata.author ? `by ${metadata.author}` : ''}\n` +
+      `📁 Type: ${typeName}\n` +
+      `📄 Saved as: ${filename}\n\n` +
+      `🚀 **Ready to use!**`;
   }
 }
