@@ -75,6 +75,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
+    "data/personas/**/*.md",
     "!dist/__tests__/**",
     "!dist/**/*.test.*",
     "README.md",
