@@ -23,7 +23,7 @@ import { YamlValidator } from './security/yamlValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
-import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaInstaller, PersonaSubmitter } from './collection/index.js';
+import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { logger } from './utils/logger.js';
@@ -48,7 +48,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
   private personaDetails: PersonaDetails;
-  private personaInstaller: PersonaInstaller;
+  private elementInstaller: ElementInstaller;
   private personaSubmitter: PersonaSubmitter;
   private updateManager: UpdateManager;
   private serverSetup: ServerSetup;
@@ -98,7 +98,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.collectionBrowser = new CollectionBrowser(this.githubClient);
     this.collectionSearch = new CollectionSearch(this.githubClient);
     this.personaDetails = new PersonaDetails(this.githubClient);
-    this.personaInstaller = new PersonaInstaller(this.githubClient);
+    this.elementInstaller = new ElementInstaller(this.githubClient);
     this.personaSubmitter = new PersonaSubmitter();
     
     // Initialize update manager
@@ -524,27 +524,28 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async installContent(inputPath: string) {
     try {
-      const result = await this.personaInstaller.installContent(inputPath);
+      const result = await this.elementInstaller.installContent(inputPath);
       
       if (!result.success) {
         return {
           content: [
             {
               type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ ${result.message}`,
+              text: `⚠️ ${result.message}`,
             },
           ],
         };
       }
       
-      // Reload personas to include the new one
-      await this.loadPersonas();
+      // If it's a persona, reload personas
+      if (result.elementType === ElementType.PERSONA) {
+        await this.loadPersonas();
+      }
       
-      const text = this.personaInstaller.formatInstallSuccess(
+      const text = this.elementInstaller.formatInstallSuccess(
         result.metadata!, 
-        result.filename!, 
-        this.personas.size, 
-        this.getPersonaIndicator()
+        result.filename!,
+        result.elementType!
       );
       
       return {
@@ -561,7 +562,7 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error installing persona: ${sanitized.message}`,
+            text: `${this.getPersonaIndicator()}❌ Error installing AI customization element: ${sanitized.message}`,
           },
         ],
       };
