@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
+import { SecureErrorHandler } from './errorHandler.js';
 
 export class PathValidator {
   private static ALLOWED_DIRECTORIES: string[] = [];
@@ -51,7 +52,9 @@ export class PathValidator {
         resolvedPath === allowedDir
       );
       if (!isAllowed) {
-        throw new Error(`Path access denied: ${userPath}`);
+        // SECURITY FIX #206: Don't expose user paths in error messages
+        logger.error('Path access denied', { path: userPath });
+        throw new Error('Path access denied');
       }
     } else {
       const isAllowed = this.ALLOWED_DIRECTORIES.some(allowedDir => 
@@ -60,7 +63,9 @@ export class PathValidator {
       );
       
       if (!isAllowed) {
-        throw new Error(`Path access denied: ${userPath}`);
+        // SECURITY FIX #206: Don't expose user paths in error messages
+        logger.error('Path access denied', { path: userPath });
+        throw new Error('Path access denied');
       }
     }
     

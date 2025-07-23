@@ -706,7 +706,9 @@ export class AgentManager implements IElementManager<Agent> {
   public async load(targetPath: string): Promise<Agent> {
     const agent = await this.read(targetPath.replace(AGENT_FILE_EXTENSION, ''));
     if (!agent) {
-      throw new Error(`Agent not found at path: ${targetPath}`);
+      // SECURITY FIX #206: Don't expose file paths in error messages
+      logger.error('Agent not found', { path: targetPath });
+      throw new Error('Agent not found');
     }
     return agent;
   }
