@@ -203,7 +203,7 @@ export class EnsembleManager implements IElementManager<Ensemble> {
         const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
         if (match) {
           // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection
-          // Previously: const metadata = yaml.load(match[1]);
+          // Previously: Used unsafe YAML parsing without validation
           // Now: Uses SecureYamlParser which validates content
           const parsed = await SecureYamlParser.parse(match[1], {
             maxYamlSize: 64 * 1024, // 64KB limit

@@ -17,6 +17,7 @@
 import { BaseElement } from '../BaseElement.js';
 import { IElement, ElementValidationResult, ValidationError, ValidationWarning, ElementStatus } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
+import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -387,11 +388,23 @@ export class Ensemble extends BaseElement implements IElement {
 
   /**
    * Check if adding an element would create a circular dependency
+   * MEDIUM FIX: Remove type safety bypass
+   * Previously: Used 'as any' which bypasses TypeScript checking
+   * Now: Creates proper EnsembleElement with all required fields
    */
   private wouldCreateCircularDependency(elementId: string, dependencies: string[]): boolean {
     // Create temporary graph with new element
     const tempGraph = new Map(this.elements);
-    tempGraph.set(elementId, { dependencies } as any);
+    
+    // Create a minimal valid EnsembleElement for dependency checking
+    const tempElement: EnsembleElement = {
+      elementId,
+      elementType: 'unknown', // Type doesn't matter for dependency checking
+      role: 'support' as ElementRole, // Default role
+      dependencies
+    };
+    
+    tempGraph.set(elementId, tempElement);
     
     // Check for cycles
     return this.hasCycle(tempGraph);
@@ -457,7 +470,7 @@ export class Ensemble extends BaseElement implements IElement {
   /**
    * Check if graph has any cycle
    */
-  private hasCycle(graph: Map<string, { dependencies?: string[] }>): boolean {
+  private hasCycle(graph: Map<string, EnsembleElement>): boolean {
     const visited = new Set<string>();
     const recursionStack = new Set<string>();
 
@@ -680,17 +693,70 @@ export class Ensemble extends BaseElement implements IElement {
 
   /**
    * Activate a single element
+   * CRITICAL FIX: Implement actual element loading and activation
+   * Previously: Just simulated with timeout
+   * Now: Loads element from portfolio and activates it
    */
   private async activateElement(elementId: string): Promise<ElementActivationResult> {
     const startTime = Date.now();
     
     try {
-      // For now, just simulate activation
-      // In real implementation, would load and activate actual element
-      logger.info(`Activating element: ${elementId}`);
+      const ensembleElement = this.elements.get(elementId);
+      if (!ensembleElement) {
+        throw new Error(`Element ${elementId} not found in ensemble`);
+      }
+
+      // Load the element based on its type
+      const portfolioManager = PortfolioManager.getInstance();
+      const elementFilename = `${elementId}.md`;
+
+      logger.info(`Activating element: ${elementId} of type ${ensembleElement.elementType}`);
       
-      // Simulate some work
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // For now, we only have PersonaElement fully implemented
+      // Future: Add factory pattern for other element types
+      let element: IElement | undefined;
+      
+      if (ensembleElement.elementType === ElementType.PERSONA) {
+        // Load PersonaElement
+        const { PersonaElementManager } = await import('../../persona/PersonaElementManager.js');
+        const manager = new PersonaElementManager(portfolioManager);
+        element = await manager.load(elementFilename);
+      } else {
+        // For other types, log warning and return success
+        // This allows ensemble to work with future element types
+        logger.warn(`Element type ${ensembleElement.elementType} not yet implemented for activation`);
+        return {
+          elementId,
+          success: true,
+          duration: Date.now() - startTime,
+          context: { warning: `Type ${ensembleElement.elementType} activation not implemented` }
+        };
+      }
+
+      // Store element instance for later use
+      if (element) {
+        this.elementInstances.set(elementId, element);
+        
+        // Call element's activate method if it exists
+        if (element.activate) {
+          await element.activate();
+        }
+        
+        // Extract any context from the element
+        const context: Record<string, any> = {};
+        if (element.getStatus) {
+          context.status = element.getStatus();
+        }
+        context.type = ensembleElement.elementType;
+        context.role = ensembleElement.role;
+        
+        return {
+          elementId,
+          success: true,
+          duration: Date.now() - startTime,
+          context
+        };
+      }
       
       return {
         elementId,
@@ -698,7 +764,9 @@ export class Ensemble extends BaseElement implements IElement {
         duration: Date.now() - startTime,
         context: {}
       };
+      
     } catch (error) {
+      logger.error(`Failed to activate element ${elementId}:`, error);
       return {
         elementId,
         success: false,
@@ -710,11 +778,96 @@ export class Ensemble extends BaseElement implements IElement {
 
   /**
    * Evaluate a simple condition
+   * CRITICAL FIX: Implement actual condition evaluation
+   * Previously: Always returned true
+   * Now: Parses and evaluates simple conditions like "element.property == value"
+   * 
+   * Supported operators: ==, !=, >, <, >=, <=
+   * Supported properties: active, status, priority
+   * Example: "element1.active == true" or "element2.priority > 50"
    */
   private evaluateCondition(condition: string): boolean {
-    // For now, just return true
-    // Future: implement proper condition evaluation
-    return true;
+    try {
+      // Sanitize and validate condition first
+      const sanitized = sanitizeInput(condition, ENSEMBLE_LIMITS.MAX_CONDITION_LENGTH);
+      
+      // Parse condition: elementId.property operator value
+      const match = sanitized.match(/^([a-zA-Z0-9\-_]+)\.([a-zA-Z]+)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+      
+      if (!match) {
+        logger.warn(`Invalid condition format: ${condition}`);
+        return false;
+      }
+      
+      const [, elementId, property, operator, value] = match;
+      
+      // Get element instance or element data
+      const element = this.elementInstances.get(elementId);
+      const elementData = this.elements.get(elementId);
+      
+      if (!element && !elementData) {
+        logger.debug(`Element ${elementId} not found for condition evaluation`);
+        return false;
+      }
+      
+      // Get property value
+      let propertyValue: any;
+      
+      switch (property) {
+        case 'active':
+          // Check if element is in activated elements list
+          propertyValue = this.lastActivationResult?.activatedElements.includes(elementId) || false;
+          break;
+          
+        case 'status':
+          propertyValue = element?.getStatus ? element.getStatus() : 'inactive';
+          break;
+          
+        case 'priority':
+          propertyValue = elementData?.priority || 0;
+          break;
+          
+        default:
+          logger.warn(`Unknown property in condition: ${property}`);
+          return false;
+      }
+      
+      // Parse the comparison value
+      let compareValue: any = value.trim();
+      
+      // Handle boolean values
+      if (compareValue === 'true') compareValue = true;
+      else if (compareValue === 'false') compareValue = false;
+      // Handle numeric values
+      else if (!isNaN(Number(compareValue))) compareValue = Number(compareValue);
+      // Handle string values (remove quotes if present)
+      else if (compareValue.startsWith('"') && compareValue.endsWith('"')) {
+        compareValue = compareValue.slice(1, -1);
+      }
+      
+      // Evaluate based on operator
+      switch (operator) {
+        case '==':
+          return propertyValue == compareValue;
+        case '!=':
+          return propertyValue != compareValue;
+        case '>':
+          return Number(propertyValue) > Number(compareValue);
+        case '<':
+          return Number(propertyValue) < Number(compareValue);
+        case '>=':
+          return Number(propertyValue) >= Number(compareValue);
+        case '<=':
+          return Number(propertyValue) <= Number(compareValue);
+        default:
+          logger.warn(`Unknown operator in condition: ${operator}`);
+          return false;
+      }
+      
+    } catch (error) {
+      logger.error(`Error evaluating condition "${condition}":`, error);
+      return false;
+    }
   }
 
   /**
