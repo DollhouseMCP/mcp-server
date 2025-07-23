@@ -20,7 +20,7 @@ export const SECURITY_LIMITS = {
 // Input validation patterns
 export const VALIDATION_PATTERNS = {
   SAFE_FILENAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,250}[a-zA-Z0-9]$/,
-  SAFE_PATH: /^[a-zA-Z0-9\/\-_.]{1,500}$/,
+  SAFE_PATH: /^[a-zA-Z0-9:\/\\\-_.]{1,500}$/,
   SAFE_USERNAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,30}[a-zA-Z0-9]$/,
   SAFE_CATEGORY: /^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$/,
   SAFE_EMAIL: /^[^\s@]{1,64}@[^\s@]{1,253}\.[^\s@]{1,63}$/  // RFC 5321 compliant limits
