@@ -45,7 +45,9 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       
       // Validate path security
       if (!this.validatePath(fullPath)) {
-        throw new Error(`Invalid or unsafe path: ${filePath}`);
+        // SECURITY FIX #206: Don't expose user paths in error messages
+        logger.error(`Invalid or unsafe path: ${filePath}`);
+        throw new Error('Invalid or unsafe path');
       }
 
       // CRITICAL FIX: Use atomic file read to prevent race conditions
@@ -81,7 +83,9 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       
       // Validate path security
       if (!this.validatePath(fullPath)) {
-        throw new Error(`Invalid or unsafe path: ${filePath}`);
+        // SECURITY FIX #206: Don't expose user paths in error messages
+        logger.error(`Invalid or unsafe path: ${filePath}`);
+        throw new Error('Invalid or unsafe path');
       }
 
       // Serialize the persona
@@ -114,7 +118,9 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       
       // Validate path security
       if (!this.validatePath(fullPath)) {
-        throw new Error(`Invalid or unsafe path: ${filePath}`);
+        // SECURITY FIX #206: Don't expose user paths in error messages
+        logger.error(`Invalid or unsafe path: ${filePath}`);
+        throw new Error('Invalid or unsafe path');
       }
 
       await fs.unlink(fullPath);

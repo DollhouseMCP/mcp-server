@@ -1504,7 +1504,7 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error configuring indicator: ${error instanceof Error ? error.message : String(error)}`
+            text: `${this.getPersonaIndicator()}❌ Error configuring indicator: ${SecureErrorHandler.sanitizeError(error).message}`
           }
         ]
       };
@@ -1608,7 +1608,7 @@ Placeholders for custom format:
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Export failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `${this.getPersonaIndicator()}❌ Export failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -1634,7 +1634,7 @@ Placeholders for custom format:
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Export failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `${this.getPersonaIndicator()}❌ Export failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -1669,7 +1669,7 @@ Placeholders for custom format:
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Import failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `${this.getPersonaIndicator()}❌ Import failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -1711,7 +1711,7 @@ Placeholders for custom format:
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Share failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `${this.getPersonaIndicator()}❌ Share failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -1765,7 +1765,7 @@ Placeholders for custom format:
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Import from URL failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `${this.getPersonaIndicator()}❌ Import from URL failed: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }

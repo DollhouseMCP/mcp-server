@@ -45,11 +45,11 @@ export class PersonaLoader {
             logger.debug(`Loaded persona: ${persona.metadata.name} (${persona.unique_id})`);
           }
         } catch (error) {
-          logger.error(`Error loading persona ${file}: ${error}`);
+          logger.error(`Error loading persona ${file}:`, error);
         }
       }
     } catch (error) {
-      logger.error(`Error reading personas directory: ${error}`);
+      logger.error(`Error reading personas directory:`, error);
     }
     
     return personas;
@@ -102,7 +102,7 @@ export class PersonaLoader {
       
       return persona;
     } catch (error) {
-      logger.error(`Error loading persona ${filename}: ${error}`);
+      logger.error(`Error loading persona ${filename}:`, error);
       return null;
     }
   }
