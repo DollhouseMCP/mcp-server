@@ -172,6 +172,11 @@ export class EnsembleManager implements IElementManager<Ensemble> {
       return ensembles;
 
     } catch (error) {
+      // Handle missing directory gracefully with type-safe check
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        logger.debug('Ensembles directory does not exist yet, returning empty array');
+        return [];
+      }
       logger.error('Failed to list ensembles:', error);
       return [];
     }
