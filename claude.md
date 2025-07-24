@@ -59,7 +59,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ### Completed (Phase 1 - Foundation):
 ✅ **Fresh Repository Setup** - Clean DollhouseMCP repository with AGPL-3.0 license  
 ✅ **Complete Rebranding** - All references updated from persona-mcp-server to DollhouseMCP  
-✅ **Advanced Unique ID System** - Format: `what-it-is_YYYYMMDD-HHMMSS_who-made-it`  
+✅ **Advanced Unique ID System** - Format: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}`  
 ✅ **Enhanced Metadata Schema** - Categories, pricing, AI generation flags, age ratings  
 ✅ **Anonymous User Support** - Auto-generated IDs like `anon-clever-fox-x7k2`  
 ✅ **Backwards Compatibility** - Existing personas automatically get unique IDs  
@@ -337,12 +337,12 @@ interface PersonaMetadata {
 ```
 
 ### Unique ID System
-**Format**: `what-it-is_YYYYMMDD-HHMMSS_who-made-it`
+**Format**: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}`
 
 **Examples**:
-- `creative-writer_20250701-150000_dollhousemcp`
-- `debug-detective_20250701-154234_mick`
-- `custom-persona_20250701-160000_anon-clever-fox-x7k2`
+- `persona_creative-writer_dollhousemcp_20250701-150000`
+- `persona_debug-detective_mick_20250701-154234`
+- `persona_custom-persona_anon-clever-fox-x7k2_20250701-160000`
 
 **Benefits**:
 - Alphabetical sorting shows type first, then chronological
