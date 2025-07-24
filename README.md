@@ -59,7 +59,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 | 🎭 **23 MCP Tools** | Complete persona lifecycle management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
-| 🆔 **Unique ID System** | Advanced ID generation: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` |
+| 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
 | 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |

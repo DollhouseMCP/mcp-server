@@ -16,7 +16,7 @@ DollhouseMCP is a comprehensive Model Context Protocol (MCP) server that provide
 ### ✅ Phase 1: Foundation (Complete)
 - **Fresh Repository Setup**: Clean AGPL-3.0 licensed codebase
 - **Complete Rebranding**: From persona-mcp-server to DollhouseMCP
-- **Unique ID System**: `what-it-is_YYYYMMDD-HHMMSS_who-made-it` format
+- **Unique ID System**: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` format
 - **Enhanced Metadata Schema**: Categories, pricing, AI flags, age ratings
 - **Anonymous User Support**: Auto-generated contributor IDs
 - **Backwards Compatibility**: Automatic ID generation for existing personas
