@@ -14,11 +14,11 @@ export class CollectionBrowser {
   }
   
   /**
-   * Browse collection content by section and category
+   * Browse collection content by section and type
    * @param section - Top level section: library, showcase, or catalog
-   * @param category - Optional category within the section
+   * @param type - Optional content type within the library section (personas, skills, etc.)
    */
-  async browseCollection(section?: string, category?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
+  async browseCollection(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
     let url = this.baseUrl;
     
     // If no section provided, show top-level sections
@@ -37,17 +37,8 @@ export class CollectionBrowser {
     }
     
     // Browse within a section
-    if (category && section === 'library') {
-      // Check if this looks like a category-based path (e.g., "personas/creative")
-      const contentTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles'];
-      const pathParts = category.split('/');
-      if (contentTypes.includes(pathParts[0]) && pathParts.length > 1) {
-        logger.warn(`Deprecated category-based path detected: library/${category}. Categories are being phased out in favor of flat directory structure.`);
-      }
-    }
-    
-    url = category 
-      ? `${this.baseUrl}/${section}/${category}` 
+    url = type 
+      ? `${this.baseUrl}/${section}/${type}` 
       : `${this.baseUrl}/${section}`;
     
     const data = await this.githubClient.fetchFromGitHub(url);
@@ -57,17 +48,17 @@ export class CollectionBrowser {
     }
     
     // In the library section, we have content type directories
-    if (section === 'library' && !category) {
+    if (section === 'library' && !type) {
       const contentTypes = data.filter((item: any) => 
-        item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles'].includes(item.name)
+        item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
       );
       return { items: [], categories: contentTypes };
     }
     
     // For library content types, show files directly (flat structure)
     const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-    // No more category subdirectories in library content types
-    const categories = section === 'library' && category ? [] : data.filter((item: any) => item.type === 'dir');
+    // For non-library sections, they might still have subdirectories
+    const categories = section === 'library' ? [] : data.filter((item: any) => item.type === 'dir');
     
     return { items, categories };
   }
@@ -75,7 +66,7 @@ export class CollectionBrowser {
   /**
    * Format collection browse results
    */
-  formatBrowseResults(items: any[], categories: any[], section?: string, category?: string, personaIndicator: string = ''): string {
+  formatBrowseResults(items: any[], categories: any[], section?: string, type?: string, personaIndicator: string = ''): string {
     const textParts = [`${personaIndicator}🏪 **DollhouseMCP Collection**\n\n`];
     
     // Show top-level sections if no section specified
@@ -102,7 +93,7 @@ export class CollectionBrowser {
     }
     
     // Show content types within library section
-    if (section === 'library' && !category && categories.length > 0) {
+    if (section === 'library' && !type && categories.length > 0) {
       textParts.push(`**📖 Library Content Types (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
         const typeIcons: { [key: string]: string } = {
@@ -112,7 +103,8 @@ export class CollectionBrowser {
           'prompts': '💬',
           'templates': '📄',
           'tools': '🔧',
-          'ensembles': '🎼'
+          'ensembles': '🎼',
+          'memories': '🧠'
         };
         const icon = typeIcons[cat.name] || '📁';
         textParts.push(`   ${icon} **${cat.name}** - Browse: \`browse_collection "library" "${cat.name}"\`\n`);
@@ -120,16 +112,16 @@ export class CollectionBrowser {
       textParts.push('\n');
     } else if (categories.length > 0) {
       // Only show category navigation for non-library sections (showcase, catalog)
-      textParts.push(`**📁 Categories in ${section}${category ? `/${category}` : ''} (${categories.length}):**\n`);
+      textParts.push(`**📁 Subdirectories in ${section}${type ? `/${type}` : ''} (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
-        const browsePath = category ? `"${section}" "${category}/${cat.name}"` : `"${section}" "${cat.name}"`;
+        const browsePath = type ? `"${section}" "${type}/${cat.name}"` : `"${section}" "${cat.name}"`;
         textParts.push(`   📂 **${cat.name}** - Browse: \`browse_collection ${browsePath}\`\n`);
       });
       textParts.push('\n');
     }
     
     if (items.length > 0) {
-      const contentType = category?.split('/').pop() || 'content';
+      const contentType = type || 'content';
       const contentIcons: { [key: string]: string } = {
         'personas': '🎭',
         'skills': '🛠️',
@@ -137,13 +129,14 @@ export class CollectionBrowser {
         'prompts': '💬',
         'templates': '📄',
         'tools': '🔧',
-        'ensembles': '🎼'
+        'ensembles': '🎼',
+        'memories': '🧠'
       };
       const icon = contentIcons[contentType] || '📄';
       
-      textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${category ? `/${category}` : ''} (${items.length}):**\n`);
+      textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${type ? `/${type}` : ''} (${items.length}):**\n`);
       items.forEach((item: any) => {
-        const fullPath = section + (category ? `/${category}` : '') + `/${item.name}`;
+        const fullPath = section + (type ? `/${type}` : '') + `/${item.name}`;
         textParts.push(
           `   ▫️ **${item.name.replace('.md', '')}**\n`,
           `      📥 Install: \`install_content "${fullPath}"\`\n`,

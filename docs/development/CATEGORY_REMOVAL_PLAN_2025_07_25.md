@@ -1,26 +1,67 @@
 # Comprehensive Plan: Category Removal & Versioning System
 **Date**: July 25, 2025  
-**Status**: Ready for Implementation  
-**Context**: Low (~5%) - Save this document for next session
+**Status**: Phase 1 & 2 COMPLETE ✅, Phase 3 Next  
+**Last Updated**: July 25, 2025 - 9:00 PM
 
-## Session Progress Update
+## 📊 Current State Summary
 
-### Completed This Session ✅
-1. **Documentation Archiving (PR #386 - MERGED)**
-   - Archived 226 old documentation files to `docs/archive/2025/07/`
-   - Created smart archiving script that parses dates from filenames
-   - Created never-archive list to protect essential files  
-   - Fixed all broken references to archived files
-   - Reduced docs/development from 313 to 86 files (73% reduction)
-   - Removed suspicious directory `docs/security/Users/mick/Downloads/`
+### Overall Progress: ~90% Complete
+- ✅ **Phase 1**: Validation changes - COMPLETE
+- ✅ **Phase 2**: Content migration - COMPLETE (5/5 PRs merged!)
+- 📋 **Phase 3**: MCP tool updates - NOT STARTED
+- 📋 **Phase 4**: Git history tools - FUTURE
 
-2. **Follow-up Issues Created**
-   - Issue #387: Implement GitHub Actions workflow for automated archiving
-   - Issue #388: Documentation maintenance (broken references, monitoring)
+### Immediate Next Steps:
+1. ✅ ~~Work on **PR #82** (Agents/Memories)~~ - MERGED!
+2. ✅ ~~Work on **PR #83** (Ensembles)~~ - MERGED!
+3. Clean up remaining category subdirectories
+4. Update MCP tools in main DollhouseMCP repo
 
-### Still To Do
-- All phases below remain to be implemented
-- Branch `feature/category-removal-validation` has stashed changes
+---
+
+## Detailed Progress Update
+
+### ✅ Phase 1 COMPLETE (July 25, 2025)
+**Collection Repository (DollhouseMCP-Collection)**:
+- **PR #92 MERGED**: Made category optional in content validator
+- Category field is now `.optional()` in BaseMetadataSchema
+- Test setup updated to use flat directory structure
+- Backward compatibility maintained
+
+### ✅ Phase 2 COMPLETE
+**PR Status for Content Migration**:
+- ✅ **PR #73**: Main 26 elements - MERGED with flat structure
+- ✅ **PR #80**: Skills (11 files) - MERGED with flat structure  
+- ✅ **PR #81**: Templates (9 files) - MERGED with flat structure
+- ✅ **PR #82**: Agents/Memories (7 files) - MERGED (July 25, 2025)
+- ✅ **PR #83**: Ensembles (6 files) - MERGED (July 25, 2025)
+
+**✅ All Issues Resolved**:
+- PR #101 merged - moved all remaining files to flat structure
+- Removed 12 files from subdirectories (2,454 lines of duplicates)
+- All 38 library files now in flat structure
+- No subdirectories remain
+
+### Session Accomplishments
+1. **Documentation Archiving** (Earlier today)
+   - PR #386 merged - archived 226 old docs
+
+2. **Repository Cleanup** (Earlier session)
+   - Removed duplicate `/collection/` directory
+   - Removed duplicate `/dollhouse-collection/` directory
+   - Single source: `DollhouseMCP-Collection/`
+
+3. **PR #83 Completion** (Evening session)
+   - Applied flat structure to all 6 ensemble files
+   - Updated metadata (created_date, lowercase author)
+   - Resolved merge conflicts
+   - Created Issue #100 for context monitoring research
+
+4. **PR #101 Cleanup** (Final session)
+   - Moved all remaining 12 files to flat structure
+   - Deleted all category subdirectories
+   - Removed 2,454 lines of duplicate content
+   - Phase 2 COMPLETE!
 
 ## Overview
 Transform the DollhouseMCP ecosystem to use a flat directory structure with Git-based versioning, removing category folders while maintaining organization through tags and implementing fork-based variant management.
@@ -83,35 +124,36 @@ Examples:
 
 ---
 
-## Phase 2: Update Existing PRs (1.5 hours)
+## Phase 2: Update Existing PRs ✅ PARTIALLY COMPLETE
 
-### PRs to Update:
-- **PR #73**: Main PR with all 26 elements
-- **PR #80**: Skills (7 files) - Part 2/5
-- **PR #81**: Templates (9 files) - Part 3/5  
-- **PR #82**: Agents/Memories (7 files) - Part 4/5
-- **PR #83**: Ensembles (4 files) - Part 5/5
+### Completed PRs:
+- ✅ **PR #73**: Main PR with all 26 elements - MERGED
+- ✅ **PR #80**: Skills (11 files) - MERGED  
+- ✅ **PR #81**: Templates (9 files) - MERGED
 
-### For Each PR:
-1. **Move files**:
-   ```bash
-   # Example for templates
-   git mv library/templates/business/*.md library/templates/
-   git mv library/templates/professional/*.md library/templates/
-   ```
+### PRs Still Needing Updates:
+- 📋 **PR #82**: Agents/Memories - OPEN (Priority: HIGH)
+- 📋 **PR #83**: Ensembles - OPEN
 
-2. **Resolve naming conflicts**:
-   - `business/report.md` → `report-business_{author}.md`
-   - `professional/report.md` → `report-executive_{author}.md`
+### Known Issues to Fix in PR #82:
+1. **Metadata fixes needed**:
+   - Change `created:` to `created_date:`
+   - Change `author: DollhouseMCP` to `author: dollhousemcp`
+   - Ensure all unique_ids are lowercase
 
-3. **Update unique IDs** to include type prefix:
-   - Current: `project-proposal_20250715-100300_dollhousemcp`
-   - New: `template_project-proposal_dollhousemcp_20250715-100300`
+2. **Directory structure**:
+   - Move files from category subdirectories to flat structure
+   - Remove empty category directories
 
-4. **Remove empty directories**:
-   ```bash
-   find library -type d -empty -delete
-   ```
+3. **Validation requirements**:
+   - Agents must have `capabilities` array
+   - All must pass content validation
+
+### Migration Script Available:
+```bash
+# Script exists at: scripts/move-to-flat-structure.sh
+# But needs to be run carefully on open PRs
+```
 
 ---
 
@@ -177,42 +219,52 @@ forked_from:
 
 ## Implementation Timeline
 
-### Today (Half Day):
-1. **Hour 1**: Phase 1 - Update validators
-2. **Hour 2**: Phase 2 - Update PRs  
-3. **Hour 3+**: 
-   - Phase 3 - Quick MCP updates
-   - Continue Part 3 Templates work
+### ✅ Completed (July 25, 2025):
+1. **Phase 1**: Validators updated (PR #92 merged)
+2. **Phase 2**: ALL content migrated to flat structure ✅
+   - PR #73: Main 26 elements
+   - PR #80: Skills (11 files)
+   - PR #81: Templates (9 files)
+   - PR #82: Agents/Memories (7 files)
+   - PR #83: Ensembles (6 files)
+   - PR #101: Cleanup remaining 12 files
+3. **Repository Structure**: 
+   - Removed duplicate repository copies
+   - All 38 library files in flat structure
+   - Zero subdirectories remaining
+4. **Issue #100**: Created research issue for context monitoring
 
-### Tomorrow:
-- Test and merge updated PRs
-- Handle any validation issues
-- Begin Phase 4 planning
+### 🔄 Current Priority (Phase 3):
+1. **MCP Tools Update**: Remove category parameters from DollhouseMCP
+2. **Testing**: Verify all integrations work with flat structure
+3. **Documentation**: Update guides removing category references
 
-### Next Week:
-- Implement Git history browsing tools
-- Full integration testing
+### 📋 Still To Do:
+- **Immediate**: Phase 3 - Update MCP tools (remove category parameter)
+- **Future**: Phase 4 - Git history browsing tools
+- **Documentation**: Update any remaining docs referencing categories
 
 ---
 
 ## Commands for Next Session
 
+### 1. Clean Up Remaining Category Subdirectories (PRIORITY)
+
 ```bash
-# Start on collection repo
-cd /Users/mick/Developer/MCP-Servers/DollhouseMCP-Collection
-git checkout main
-git pull
+# From the DollhouseMCP-Collection root
+# Check what's still in category subdirectories
+find library -type f -path "*/personas/*/*" -o -path "*/skills/*/*" | sort
 
-# Check PR statuses
-gh pr list --state open
+# Option 1: Run the migration script
+bash scripts/move-to-flat-structure.sh
 
-# Start with validation updates
-code src/validators/content-validator.ts
+# Option 2: Manual move for specific directories
+mv library/personas/professional/*.md library/personas/
+mv library/personas/educational/*.md library/personas/
+rmdir library/personas/professional library/personas/educational
 
-# For updating PRs (example)
-gh pr checkout 81
-git mv library/templates/business/*.md library/templates/
-git mv library/templates/professional/*.md library/templates/
+# Remove any empty directories
+find library -type d -empty -delete
 ```
 
 ---
@@ -238,4 +290,30 @@ git mv library/templates/professional/*.md library/templates/
 
 ---
 
-*Session ended at low context (~5%). This document contains everything needed to implement the plan.*
+## Session Summary (July 25, 5:30 PM)
+
+### Major Accomplishments This Session:
+1. **Cleaned up duplicate repositories** - Removed `/collection/` and `/dollhouse-collection/` duplicates
+2. **Updated category removal plan** - Documented current state accurately
+3. **Fixed PR #82** - Applied flat structure to agents/memories
+4. **Added memory type support** - Fixed schema blocker identified by Claude review
+5. **Merged PR #82** - Successfully merged with all fixes
+
+### Key Discovery:
+Memory type was partially implemented (validator had it, but TypeScript types and collection.json were missing it). This has been fully corrected.
+
+### Current State:
+- **Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP-Collection`
+- **Branch**: Should switch back to main branch
+- **Progress**: 90% complete - Phase 2 DONE! All 5 PRs merged
+- **Next**: Clean up remaining files and start Phase 3
+
+### For Next Session:
+1. Clean up remaining category subdirectories in existing files
+2. Begin Phase 3: Update MCP tools in main DollhouseMCP repo
+3. Test all integrations with flat structure
+4. Update documentation to remove category references
+
+---
+
+*This document contains everything needed to continue the category removal implementation. Point here when starting the next session!*

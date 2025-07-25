@@ -15,7 +15,7 @@ export interface IToolHandler {
   validatePersona(persona: string): Promise<any>;
   
   // Collection tools
-  browseCollection(section?: string, category?: string): Promise<any>;
+  browseCollection(section?: string, type?: string): Promise<any>;
   searchCollection(query: string): Promise<any>;
   getCollectionContent(path: string): Promise<any>;
   installContent(path: string): Promise<any>;

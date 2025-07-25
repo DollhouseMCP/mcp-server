@@ -426,13 +426,13 @@ export class DollhouseMCPServer implements IToolHandler {
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
-  async browseCollection(section?: string, category?: string) {
+  async browseCollection(section?: string, type?: string) {
     try {
-      // Enhanced input validation for section and category
+      // Enhanced input validation for section and type
       const validatedSection = section ? validateCategory(section) : undefined;
-      const validatedCategory = category ? validateCategory(category) : undefined;
+      const validatedType = type ? validateCategory(type) : undefined;
       
-      const result = await this.collectionBrowser.browseCollection(validatedSection, validatedCategory);
+      const result = await this.collectionBrowser.browseCollection(validatedSection, validatedType);
       
       // Handle sections view
       const items = result.items;
@@ -442,7 +442,7 @@ export class DollhouseMCPServer implements IToolHandler {
         items, 
         categories, 
         validatedSection, 
-        validatedCategory, 
+        validatedType, 
         this.getPersonaIndicator()
       );
       
