@@ -31,7 +31,7 @@ cd /Users/mick/Developer/MCP-Servers/DollhouseMCP
 cat docs/development/QUICK_START_NPM_v1.2.1.md
 
 # Full checklist
-cat docs/development/NPM_RELEASE_CHECKLIST_v1.2.1.md
+cat docs/archive/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md
 ```
 
 ## Key Changes Since v1.2.0

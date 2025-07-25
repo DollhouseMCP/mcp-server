@@ -2,8 +2,9 @@
 
 This directory contains historical documentation files that have been archived to reduce clutter in the active development directory while preserving important project history.
 
-## Archive Date
-**July 25, 2025** - Initial archiving of files older than 7 days
+## Archive Dates
+- **July 25, 2025** - Initial archiving of session files with dates in filenames
+- **July 25, 2025 (Second Pass)** - Comprehensive archiving based on file metadata (132 additional files)
 
 ## Archiving Criteria
 Files were moved here based on:
@@ -53,6 +54,38 @@ Planning and reference documents:
 - `DOCKER_*.md` - Docker implementation documentation
 - `SESSION_PROGRESS.md`
 - `WORKFLOW_ARCHITECTURE_SUCCESS_SUMMARY.md`
+
+### Additional Archived Files (Second Pass)
+Based on file metadata analysis, 132 additional files were archived:
+
+#### CI/CD Documentation
+- `CI_*.md` - CI/CD fixes, issues, and reference documentation
+- `JEST_CI_MODULE_RESOLUTION_ISSUE.md` - Jest configuration issues
+
+#### Security Documentation
+- `SECURITY_*.md` - Security audit reports, implementation plans, fixes
+- `REDOS_*.md` - ReDoS vulnerability fixes
+- `SEC_004_005_IMPLEMENTATION_PLAN.md` - Security implementation details
+
+#### PR Documentation
+- `PR_*.md` - Pull request reviews, fixes, and status updates
+- `PR46_*.md`, `PR80_*.md`, `PR189_*.md`, etc. - Specific PR documentation
+
+#### Feature Implementation
+- `EXPORT_IMPORT_*.md` - Export/import feature documentation
+- `FILE_LOCKING_*.md` - File locking implementation
+- `RATE_LIMITING_IMPLEMENTATION_COMPLETE.md` - Rate limiting feature
+- `UNICODE_IMPLEMENTATION_COMPLETE_2025_07_12.md` - Unicode handling
+
+#### Migration and Setup
+- `MIGRATION_*.md` - Migration guides and lessons learned
+- `NPM_*.md` - NPM publishing documentation
+- `ORGANIZATION_MIGRATION_*.md` - Organization migration documentation
+
+#### Testing Documentation
+- `TEST_PATTERNS_REFERENCE.md` - Testing patterns and guidelines
+- `INTEGRATION_TEST_*.md` - Integration testing documentation
+- `ENHANCED_TESTING_SESSION_SUMMARY.md` - Testing session notes
 
 ## How to Access
 These files remain in the git history and can be accessed:
