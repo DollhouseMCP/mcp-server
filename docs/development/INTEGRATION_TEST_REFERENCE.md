@@ -174,7 +174,7 @@ new file:   __tests__/integration/helpers/test-fixtures.ts
 new file:   __tests__/integration/helpers/file-utils.ts
 new file:   __tests__/integration/persona-lifecycle.test.ts
 new file:   docs/development/INTEGRATION_TEST_PLAN.md
-new file:   docs/development/SESSION_SUMMARY_2025_07_05_INTEGRATION_TESTS.md
+new file:   docs/archive/2025/07/SESSION_SUMMARY_2025_07_05_INTEGRATION_TESTS.md
 ```
 
 ## Review Scores

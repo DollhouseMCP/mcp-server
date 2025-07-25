@@ -43,7 +43,7 @@ git push
 
 ## 📚 Key Documentation to Review
 
-1. `docs/development/SESSION_SUMMARY_2025_07_08.md` - Full session recap
+1. `docs/archive/2025/07/SESSION_SUMMARY_2025_07_08.md` - Full session recap
 2. `docs/development/PRIORITY_TASKS_2025_07_08.md` - Detailed task list
 3. `docs/development/SECURITY_IMPLEMENTATION_2025_07_08.md` - Security changes made
 

@@ -116,7 +116,7 @@ gh release create v1.2.X --title "..." --notes "..."
 - MCP protocol no longer broken
 
 ## 🔗 Reference Documents
-- `docs/development/SESSION_SUMMARY_JULY_10_2025_EVENING.md`
+- `docs/archive/2025/07/SESSION_SUMMARY_JULY_10_2025_EVENING.md`
 - `docs/JSON_MERGE_GUIDE.md`
 - `docs/development/PR_189_TEST_FAILURE_ANALYSIS.md`
 

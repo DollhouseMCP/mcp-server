@@ -79,7 +79,7 @@ Container → Docker Security → Hardened Runtime
 - `/docs/development/SECURITY_SESSION_2025_07_09_PART3.md`
 - `/docs/development/COMPLETE_SECURITY_IMPLEMENTATION_2025_07_09.md`
 - `/docs/development/NEXT_STEPS_PRIORITY_2025_07_09.md`
-- `/docs/development/QUICK_REFERENCE_SECURITY_2025_07_09.md`
+- `docs/archive/2025/07/QUICK_REFERENCE_SECURITY_2025_07_09.md`
 
 ## ⚠️ Important Reminders
 
