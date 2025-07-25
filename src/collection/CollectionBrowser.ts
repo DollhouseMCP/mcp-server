@@ -3,6 +3,7 @@
  */
 
 import { GitHubClient } from './GitHubClient.js';
+import { logger } from '../utils/logger.js';
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
@@ -36,6 +37,15 @@ export class CollectionBrowser {
     }
     
     // Browse within a section
+    if (category && section === 'library') {
+      // Check if this looks like a category-based path (e.g., "personas/creative")
+      const contentTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles'];
+      const pathParts = category.split('/');
+      if (contentTypes.includes(pathParts[0]) && pathParts.length > 1) {
+        logger.warn(`Deprecated category-based path detected: library/${category}. Categories are being phased out in favor of flat directory structure.`);
+      }
+    }
+    
     url = category 
       ? `${this.baseUrl}/${section}/${category}` 
       : `${this.baseUrl}/${section}`;
@@ -54,8 +64,10 @@ export class CollectionBrowser {
       return { items: [], categories: contentTypes };
     }
     
+    // For library content types, show files directly (flat structure)
     const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-    const categories = data.filter((item: any) => item.type === 'dir');
+    // No more category subdirectories in library content types
+    const categories = section === 'library' && category ? [] : data.filter((item: any) => item.type === 'dir');
     
     return { items, categories };
   }
@@ -107,6 +119,7 @@ export class CollectionBrowser {
       });
       textParts.push('\n');
     } else if (categories.length > 0) {
+      // Only show category navigation for non-library sections (showcase, catalog)
       textParts.push(`**📁 Categories in ${section}${category ? `/${category}` : ''} (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
         const browsePath = category ? `"${section}" "${category}/${cat.name}"` : `"${section}" "${cat.name}"`;

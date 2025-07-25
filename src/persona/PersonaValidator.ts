@@ -16,6 +16,9 @@ export class PersonaValidator {
   
   /**
    * Validate a persona's metadata and content
+   * 
+   * Note: Category validation has been changed from error to warning
+   * to support the transition to a flat directory structure.
    */
   validatePersona(persona: Persona): PersonaValidationResult {
     const issues: string[] = [];
@@ -33,9 +36,9 @@ export class PersonaValidator {
       issues.push("Persona content is too short (minimum 50 characters)");
     }
     
-    // Category validation
+    // Category validation (optional)
     if (metadata.category && !VALID_CATEGORIES.includes(metadata.category)) {
-      issues.push(`Invalid category '${metadata.category}'. Must be one of: ${VALID_CATEGORIES.join(', ')}`);
+      warnings.push(`Invalid category '${metadata.category}'. Valid categories are: ${VALID_CATEGORIES.join(', ')}`);
     }
     
     // Age rating validation
@@ -79,6 +82,9 @@ export class PersonaValidator {
   
   /**
    * Validate persona metadata only
+   * 
+   * Note: Category validation has been changed from error to warning
+   * to support the transition to a flat directory structure.
    */
   validateMetadata(metadata: PersonaMetadata): PersonaValidationResult {
     const issues: string[] = [];
@@ -92,7 +98,7 @@ export class PersonaValidator {
     }
     
     if (metadata.category && !VALID_CATEGORIES.includes(metadata.category)) {
-      issues.push(`Invalid category '${metadata.category}'`);
+      warnings.push(`Invalid category '${metadata.category}'. Valid categories are: ${VALID_CATEGORIES.join(', ')}`);
     }
     
     return {
@@ -178,9 +184,7 @@ export class PersonaValidator {
       suggestions.push("Add a version number for tracking updates");
     }
     
-    if (!metadata.category || metadata.category === 'general') {
-      suggestions.push("Choose a specific category for better organization");
-    }
+    // Category is now optional - removed suggestion
     
     return suggestions;
   }
