@@ -3,6 +3,7 @@
  */
 
 import { GitHubClient } from './GitHubClient.js';
+import { logger } from '../utils/logger.js';
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
@@ -36,6 +37,15 @@ export class CollectionBrowser {
     }
     
     // Browse within a section
+    if (category && section === 'library') {
+      // Check if this looks like a category-based path (e.g., "personas/creative")
+      const contentTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles'];
+      const pathParts = category.split('/');
+      if (contentTypes.includes(pathParts[0]) && pathParts.length > 1) {
+        logger.warn(`Deprecated category-based path detected: library/${category}. Categories are being phased out in favor of flat directory structure.`);
+      }
+    }
+    
     url = category 
       ? `${this.baseUrl}/${section}/${category}` 
       : `${this.baseUrl}/${section}`;

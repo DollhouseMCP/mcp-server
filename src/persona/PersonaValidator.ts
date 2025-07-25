@@ -16,6 +16,9 @@ export class PersonaValidator {
   
   /**
    * Validate a persona's metadata and content
+   * 
+   * Note: Category validation has been changed from error to warning
+   * to support the transition to a flat directory structure.
    */
   validatePersona(persona: Persona): PersonaValidationResult {
     const issues: string[] = [];
@@ -79,6 +82,9 @@ export class PersonaValidator {
   
   /**
    * Validate persona metadata only
+   * 
+   * Note: Category validation has been changed from error to warning
+   * to support the transition to a flat directory structure.
    */
   validateMetadata(metadata: PersonaMetadata): PersonaValidationResult {
     const issues: string[] = [];
@@ -92,7 +98,7 @@ export class PersonaValidator {
     }
     
     if (metadata.category && !VALID_CATEGORIES.includes(metadata.category)) {
-      warnings.push(`Invalid category '${metadata.category}'`);
+      warnings.push(`Invalid category '${metadata.category}'. Valid categories are: ${VALID_CATEGORIES.join(', ')}`);
     }
     
     return {
