@@ -54,8 +54,10 @@ export class CollectionBrowser {
       return { items: [], categories: contentTypes };
     }
     
+    // For library content types, show files directly (flat structure)
     const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-    const categories = data.filter((item: any) => item.type === 'dir');
+    // No more category subdirectories in library content types
+    const categories = section === 'library' && category ? [] : data.filter((item: any) => item.type === 'dir');
     
     return { items, categories };
   }
@@ -107,6 +109,7 @@ export class CollectionBrowser {
       });
       textParts.push('\n');
     } else if (categories.length > 0) {
+      // Only show category navigation for non-library sections (showcase, catalog)
       textParts.push(`**📁 Categories in ${section}${category ? `/${category}` : ''} (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
         const browsePath = category ? `"${section}" "${category}/${cat.name}"` : `"${section}" "${cat.name}"`;
