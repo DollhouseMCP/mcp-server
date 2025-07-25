@@ -253,4 +253,12 @@ git mv library/templates/professional/*.md library/templates/
 - Move files and resolve naming conflicts
 - Update unique IDs to include type prefix
 
+**Important Notes for Next Session**:
+- We were in the Collection repo working on PR #73 when context ran low
+- PR #73 has merge conflicts that need resolution first
+- Need to sync with main branch (which now has PR #92 merged)
+- Remember to handle naming conflicts for files like:
+  - business/report.md vs professional/report.md
+  - Multiple project-brief.md files across categories
+
 *Session ended at low context (~10%). This document contains everything needed to continue with Phase 2.*
