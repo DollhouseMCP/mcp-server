@@ -72,11 +72,39 @@ Run the provided script to automatically fix references:
 - Active work tracking files
 - Security policies and procedures
 
+## Archiving Scripts
+
+### Smart Archive Script (Recommended)
+The smart archive script parses dates from filenames and respects a never-archive list:
+```bash
+./scripts/smart-archive-docs.sh
+```
+
+Features:
+- Parses dates from filenames (YYYY_MM_DD, JULY_DD, etc.)
+- Respects never-archive list (`scripts/never-archive-list.txt`)
+- Only archives files with dates older than 7 days
+- Automatically fixes references after archiving
+
+### Basic Archive Script
+Archives files based on modification time:
+```bash
+./scripts/archive-old-docs.sh
+```
+
+## Never-Archive List
+Certain files should always remain in `docs/development` for easy access. These are defined in `scripts/never-archive-list.txt`:
+- Core documentation (README.md, ARCHIVING_GUIDELINES.md)
+- Current release planning files
+- Security procedures and templates
+- Essential reference guides
+- Active feature work
+
 ## Archiving Process
 
 1. **Monthly Review**: First week of each month
-2. **Run Archive Script**: `./scripts/archive-old-docs.sh`
-3. **Manual Process** (if script unavailable):
+2. **Run Smart Archive Script**: `./scripts/smart-archive-docs.sh`
+3. **Manual Process** (if scripts unavailable):
    ```bash
    # Example: Archive files older than 7 days
    YEAR=$(date +%Y)

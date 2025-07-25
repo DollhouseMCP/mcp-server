@@ -3,8 +3,9 @@
 This directory contains historical documentation files that have been archived to reduce clutter in the active development directory while preserving important project history.
 
 ## Archive Dates
-- **July 25, 2025** - Initial archiving of session files with dates in filenames
-- **July 25, 2025 (Second Pass)** - Comprehensive archiving based on file metadata (132 additional files)
+- **July 25, 2025** - Initial archiving of session files with dates in filenames (72 files)
+- **July 25, 2025 (Second Pass)** - Comprehensive archiving based on file metadata (132 files)
+- **July 25, 2025 (Third Pass)** - Smart archiving based on parsed dates from filenames (21 files)
 
 ## Archiving Criteria
 Files were moved here based on:
@@ -86,6 +87,48 @@ Based on file metadata analysis, 132 additional files were archived:
 - `TEST_PATTERNS_REFERENCE.md` - Testing patterns and guidelines
 - `INTEGRATION_TEST_*.md` - Integration testing documentation
 - `ENHANCED_TESTING_SESSION_SUMMARY.md` - Testing session notes
+
+### Smart Archiving Results (Third Pass)
+Files archived based on dates parsed from filenames:
+
+#### Development Planning and Tracking
+- `ACTIVE_WORK_2025_07_09.md` - Active work as of July 9
+- `TODO_TRACKER_2025_07_09.md` - TODO tracking from July 9
+- `NEXT_ITERATION_CONTEXT_2025_07_07.md` - Context for next iteration (July 7)
+- `NEXT_STEPS_PRIORITY_2025_07_09.md` - Priority next steps from July 9
+
+#### Project Status
+- `ISSUES_CLOSED_2025_07_08.md` - Issues closed on July 8
+- `PR_STATUS_2025_07_08.md` - PR status from July 8
+- `PRIORITY_TASKS_2025_07_08.md` - Priority tasks from July 8
+- `TEST_MIGRATION_PROGRESS_2025_07_13.md` - Test migration progress
+
+#### Security Documentation (July 8-12)
+- `SECURITY_IMPLEMENTATION_2025_07_08.md` - Security implementation details
+- `SECURITY_SESSION_2025_07_09*.md` - Security session documentation
+- `SECURITY_HANDOFF_2025_07_09.md` - Security handoff notes
+- `SECURITY_AUDIT_VALIDATION_2025_07_09.md` - Security audit validation
+- `SECURITY_ARCHITECTURE_2025_07_10.md` - Security architecture
+- `SECURITY_ISSUES_TRACKER_2025_07_10.md` - Security issues tracking
+- `SECURITY_STATUS_JULY_10_2025.md` - Security status update
+- `SECURITY_ROADMAP_STATUS_2025_07_12.md` - Security roadmap status
+
+#### Context and Session Notes
+- `FINAL_CONTEXT_NOTES_2025_07_12_EVENING.md` - Final context from July 12
+- `IMMEDIATE_NEXT_STEPS_JULY_12.md` - Immediate next steps from July 12
+- `CLAUDE_REVIEW_INSIGHTS_2025_07_10.md` - Claude review insights
+- `COMPLETE_SECURITY_IMPLEMENTATION_2025_07_09.md` - Complete security implementation
+
+## Protected Files (Never Archive)
+Certain files are protected from archiving to ensure essential documentation remains readily accessible:
+- Core documentation (README.md, ARCHIVING_GUIDELINES.md, DEVELOPMENT_WORKFLOW.md)
+- Current release planning (V1.3.0 files)
+- Security procedures and templates
+- Essential reference guides (Element system, Portfolio implementation)
+- Current PR documentation
+- Active feature work (Agent, Ensemble, Template, Memory files)
+
+See `/scripts/never-archive-list.txt` for the complete list.
 
 ## How to Access
 These files remain in the git history and can be accessed:
