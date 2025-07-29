@@ -21,9 +21,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 **🌐 Repository**: https://github.com/DollhouseMCP/mcp-server  
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
-**📦 NPM Package**: https://www.npmjs.com/package/@mickdarling/dollhousemcp  
+**📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.2.4 (Current) | v1.2.5 (Next Release)
+**📦 Version**: v1.3.0 (Ready for NPM publish)
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -31,7 +31,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ```bash
 # Install globally
-npm install -g @mickdarling/dollhousemcp
+npm install -g @dollhousemcp/mcp-server
 
 # Add to Claude Desktop config (see path below for your OS)
 # macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
@@ -44,7 +44,7 @@ npm install -g @mickdarling/dollhousemcp
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["@mickdarling/dollhousemcp"]
+      "args": ["@dollhousemcp/mcp-server"]
     }
   }
 }
@@ -115,7 +115,7 @@ After installation, add DollhouseMCP to your Claude Desktop configuration:
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["@mickdarling/dollhousemcp"]
+      "args": ["@dollhousemcp/mcp-server"]
     }
   }
 }
@@ -174,7 +174,7 @@ Add DollhouseMCP to your Claude Desktop configuration:
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["@mickdarling/dollhousemcp"]
+      "args": ["@dollhousemcp/mcp-server"]
     }
   }
 }
