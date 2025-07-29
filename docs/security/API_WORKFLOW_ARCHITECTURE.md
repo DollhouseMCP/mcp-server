@@ -143,21 +143,21 @@ sequenceDiagram
     participant Cache
     participant PM as PersonaManager
 
-    User->>MCP: browse_marketplace(category)
+    User->>MCP: browse_collection(section, type)
     MCP->>RL: checkLimit(user, 'browse')
     RL-->>MCP: Allowed | RateLimited
     
     alt Rate Limit OK
-        MCP->>Cache: get(category)
+        MCP->>Cache: get(section + type)
         
         alt Cache Hit
             Cache-->>MCP: CachedData
         else Cache Miss
-            MCP->>MM: fetchCategory(category)
-            MM->>GH: GET /repos/.../contents/{category}
+            MCP->>MM: fetchContentType(section, type)
+            MM->>GH: GET /repos/.../contents/{section}/{type}
             GH-->>MM: FileList
-            MM->>Cache: set(category, data)
-            MM-->>MCP: PersonaList
+            MM->>Cache: set(section + type, data)
+            MM-->>MCP: ContentList
         end
         
         MCP-->>User: Available Personas

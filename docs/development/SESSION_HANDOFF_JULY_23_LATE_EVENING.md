@@ -55,7 +55,7 @@
 
 ### Breaking Changes in v1.3.0
 1. PersonaInstaller → ElementInstaller
-2. Collection paths now require element type: `library/[type]/[category]/[element].md`
+2. Collection paths now require element type: `library/[type]/[element].md` (flat structure)
 3. All elements must have unique_id field
 
 ### Repository Locations

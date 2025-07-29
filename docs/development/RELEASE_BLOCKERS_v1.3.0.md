@@ -27,7 +27,7 @@
    - API changed to support element types
    
 2. **Collection Path Structure**
-   - Now requires: `library/[element-type]/[category]/[element].md`
+   - Now requires: `library/[element-type]/[element].md` (flat structure, no categories)
    - Element type detection is automatic
 
 3. **Terminology Change**

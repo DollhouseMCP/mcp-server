@@ -208,10 +208,10 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`reload_personas`** - Refresh from filesystem
 
 ### GitHub Collection Integration
-- **`browse_collection`** - Browse personas by category
-- **`search_collection`** - Search across all collection personas
-- **`get_collection_persona`** - View detailed collection persona info
-- **`install_persona`** - One-click download and installation
+- **`browse_collection`** - Browse content by section and type (flat structure, no categories)
+- **`search_collection`** - Search across all collection content
+- **`get_collection_content`** - View detailed content info
+- **`install_element`** - One-click download and installation of any element type
 - **`submit_persona`** - Submit to collection via GitHub issue
 
 ### User Identity Management
@@ -238,10 +238,10 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 ### Collection Operations
 ```
-browse_collection                          # See all categories
-browse_collection "creative"               # Browse creative personas
+browse_collection(section="library", type="personas")  # Browse all personas
+browse_collection(section="library", type="skills")    # Browse skills
 search_collection "writing"                # Search for writing personas
-install_persona "creative/storyteller.md"  # Install from collection
+install_element "library/personas/storyteller.md"  # Install from collection
 ```
 
 ### Persona Creation & Management
@@ -758,7 +758,7 @@ DollhouseMCP includes an experimental GitHub-powered collection:
 **Important**: Tool names have changed in recent versions:
 - `browse_marketplace` → `browse_collection`
 - `search_marketplace` → `search_collection`
-- `get_marketplace_persona` → `get_collection_persona`
+- `get_marketplace_persona` → `get_collection_content`
 
 If you have scripts or workflows using the old tool names, please update them to use the new names.
 
@@ -973,10 +973,10 @@ interface DollhouseTool {
 
 #### Collection Integration
 ```typescript
-// browse_collection - { category?: string }
+// browse_collection - { section?: string, type?: string }
 // search_collection - { query: string }
-// get_collection_persona - { path: string }
-// install_persona - { path: string }
+// get_collection_content - { path: string }
+// install_element - { path: string, type?: string }
 // submit_persona - { persona: string }
 ```
 
@@ -1037,7 +1037,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - 🔄 **Renamed all "marketplace" tools to "collection"**:
   - `browse_marketplace` → `browse_collection`
   - `search_marketplace` → `search_collection`
-  - `get_marketplace_persona` → `get_collection_persona`
+  - `get_marketplace_persona` → `get_collection_content`
   - `install_persona` → `install_persona` (unchanged)
   - `submit_persona` → `submit_persona` (unchanged)
 - ✅ **Added backward compatibility aliases** (deprecated, will be removed in v2.0.0)
