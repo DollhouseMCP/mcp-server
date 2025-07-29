@@ -35,6 +35,16 @@ Thank you for your interest in contributing to DollhouseMCP! This guide will hel
 
 ## 🔧 Development Workflow
 
+### Branching Strategy
+
+We use a GitFlow-inspired branching model:
+
+- **`main`** - Production-ready code (protected)
+- **`develop`** - Integration branch for features
+- **`feature/*`** - Feature development branches
+- **`hotfix/*`** - Emergency fixes to main
+- **`release/*`** - Release preparation branches
+
 ### 1. Fork and Clone
 ```bash
 # Fork the repository on GitHub, then:
@@ -45,13 +55,27 @@ git remote add upstream https://github.com/DollhouseMCP/mcp-server.git
 
 ### 2. Create a Branch
 ```bash
-# Always branch from main
+# For features, branch from develop
+git checkout develop
+git pull upstream develop
+git checkout -b feature/your-feature-name
+
+# For bug fixes to develop
+git checkout -b fix/issue-description
+
+# For hotfixes to main (critical issues only)
 git checkout main
 git pull upstream main
-git checkout -b feature/your-feature-name
-# or
-git checkout -b fix/issue-description
+git checkout -b hotfix/critical-issue
 ```
+
+### Branch Naming Conventions
+- `feature/` - New features or enhancements
+- `fix/` - Bug fixes to develop branch
+- `hotfix/` - Emergency fixes to main branch
+- `docs/` - Documentation updates
+- `refactor/` - Code refactoring
+- `test/` - Test improvements
 
 ### 3. Set Up Development Environment
 ```bash

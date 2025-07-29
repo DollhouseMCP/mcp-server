@@ -53,7 +53,7 @@ If you have GitHub Actions, CI/CD pipelines, or other automation using these too
 
 ### Before (Old)
 ```javascript
-// Browse the marketplace
+// Browse the marketplace by category
 await mcp.call_tool("browse_marketplace", { category: "creative" });
 
 // Search for personas
@@ -65,14 +65,14 @@ await mcp.call_tool("get_marketplace_persona", { path: "creative/writer.md" });
 
 ### After (New)
 ```javascript
-// Browse the collection
-await mcp.call_tool("browse_collection", { category: "creative" });
+// Browse the collection by type (categories removed)
+await mcp.call_tool("browse_collection", { section: "library", type: "personas" });
 
 // Search for personas
 await mcp.call_tool("search_collection", { query: "writing assistant" });
 
 // Get persona details
-await mcp.call_tool("get_collection_persona", { path: "creative/writer.md" });
+await mcp.call_tool("get_collection_content", { path: "library/personas/creative-writer.md" });
 ```
 
 ## Repository Changes

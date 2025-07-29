@@ -56,9 +56,9 @@ DollhouseMCP is a comprehensive Model Context Protocol (MCP) server that provide
 6. `reload_personas` - Refresh from filesystem
 
 **GitHub Marketplace Integration (5):**
-7. `browse_marketplace` - Category-based browsing
-8. `search_marketplace` - Content-based search
-9. `get_marketplace_persona` - Detailed marketplace info
+7. `browse_collection` - Browse by section and type (no categories)
+8. `search_collection` - Content-based search
+9. `get_collection_content` - Detailed content info
 10. `install_persona` - One-click installation
 11. `submit_persona` - Automated GitHub issue creation
 
@@ -83,16 +83,15 @@ DollhouseMCP is a comprehensive Model Context Protocol (MCP) server that provide
 
 ### GitHub Repository Structure
 ```
-DollhouseMCP-Personas/
-├── README.md                    # Comprehensive marketplace documentation
+DollhouseMCP-Collection/
+├── README.md                    # Comprehensive collection documentation
 ├── submission-guidelines.md     # Contributor guidelines and standards
-├── marketplace.json            # Structured metadata and API endpoints
-└── personas/
-    ├── creative/              # 1 persona: creative-writer.md
-    ├── professional/          # 3 personas: business-consultant, debug-detective, technical-analyst
-    ├── educational/           # 1 persona: eli5-explainer.md
-    ├── gaming/               # (empty, ready for submissions)
-    └── personal/             # (empty, ready for submissions)
+├── collection.json             # Structured metadata and API endpoints
+└── library/
+    ├── personas/               # AI behavioral profiles (flat structure)
+    ├── skills/                 # Discrete capabilities
+    ├── templates/              # Reusable content structures
+    └── agents/                 # Goal-oriented autonomous elements
 ```
 
 ### Initial Persona Collection (5 personas)
@@ -129,9 +128,9 @@ validate_persona "Math Tutor"
 # Share with community
 submit_persona "Math Tutor"
 
-# Browse marketplace
-browse_marketplace "educational"
-install_persona "educational/study-buddy.md"
+# Browse collection
+browse_collection(section="library", type="personas")
+install_element "library/personas/study-buddy.md"
 ```
 
 ## 📊 Business Model & Legal Framework

@@ -34,7 +34,7 @@ node dist/index.js
 
 ## Breaking Changes ⚠️
 - `PersonaInstaller` replaced with `ElementInstaller`
-- Collection paths now require element type: `library/[type]/[category]/[element].md`
+- Collection paths now require element type: `library/[type]/[element].md` (flat structure)
 - Install tool now works with all element types
 
 ## New Features

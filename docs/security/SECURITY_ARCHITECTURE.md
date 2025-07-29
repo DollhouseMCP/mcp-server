@@ -295,7 +295,7 @@ function getUserTrustLevel(rep: UserReputation): TrustLevel {
 ## Monitoring and Metrics
 
 ### Key Security Metrics
-- Rejection rate by category
+- Rejection rate by content type
 - Time to detection
 - False positive rate
 - User reputation distribution

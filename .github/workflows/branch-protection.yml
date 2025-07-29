@@ -1,0 +1,136 @@
+name: Branch Protection Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  verify-source-branch:
+    name: Verify PR Source Branch
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check PR source
+        id: check-source
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const headRef = pr.head.ref;
+            const baseRef = pr.base.ref;
+            
+            console.log(`PR from ${headRef} to ${baseRef}`);
+            
+            // Allow PRs to main only from develop or hotfix branches
+            if (baseRef === 'main') {
+              const isFromDevelop = headRef === 'develop';
+              const isHotfix = headRef.startsWith('hotfix/');
+              const isRelease = headRef.startsWith('release/');
+              
+              if (!isFromDevelop && !isHotfix && !isRelease) {
+                core.setFailed(`PRs to main must come from develop, release/*, or hotfix/* branches. Current branch: ${headRef}`);
+                
+                // Add comment to PR
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `## ❌ Branch Protection Policy Violation
+                  
+                  PRs to \`main\` branch must originate from:
+                  - \`develop\` branch (for regular releases)
+                  - \`release/*\` branches (for release candidates)
+                  - \`hotfix/*\` branches (for emergency fixes)
+                  
+                  **Current branch**: \`${headRef}\`
+                  
+                  ### Recommended Actions:
+                  1. If this is a regular feature, merge to \`develop\` first
+                  2. If this is a hotfix, rename your branch to \`hotfix/description\`
+                  3. If this is a release, create from \`develop\` as \`release/version\`
+                  
+                  Please follow our [GitFlow branching strategy](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md#branching-strategy).`
+                });
+              } else {
+                console.log(`✅ Valid source branch: ${headRef}`);
+                
+                // Add approval comment
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `## ✅ Branch Protection Check Passed
+                  
+                  This PR correctly targets \`main\` from \`${headRef}\`.`
+                });
+              }
+            }
+
+      - name: Verify commits are signed
+        if: github.base_ref == 'main'
+        continue-on-error: true  # Don't block, just warn
+        shell: bash
+        run: |
+          # Check if commits are signed (optional but recommended)
+          echo "Checking commit signatures..."
+          git log --show-signature origin/${GITHUB_BASE_REF}..${GITHUB_SHA} || true
+
+      - name: Check for version bump
+        if: github.base_ref == 'main' && github.head_ref == 'develop'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            
+            try {
+              // Fetch the base branch with error handling
+              try {
+                execSync('git fetch origin main:main');
+              } catch (fetchError) {
+                console.log('Warning: Could not fetch main branch, might be a fork');
+                // Try alternative approach
+                try {
+                  execSync('git fetch origin main');
+                } catch (e) {
+                  console.log('Warning: Could not fetch main branch at all');
+                }
+              }
+              
+              // Check if package.json version was bumped
+              const currentVersion = require('./package.json').version;
+              const baseVersion = JSON.parse(
+                execSync('git show main:package.json').toString()
+              ).version;
+              
+              if (currentVersion === baseVersion) {
+                // Just warn, don't fail
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `### ⚠️ Version Check
+                  
+                  The version in \`package.json\` hasn't been updated (currently ${currentVersion}).
+                  
+                  If this is a release PR, please update the version number.`
+                });
+              } else {
+                console.log(`✅ Version bumped from ${baseVersion} to ${currentVersion}`);
+              }
+            } catch (error) {
+              console.error('Version check failed:', error);
+            }
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "### Branch Protection Summary"
+          echo "- PR from: ${{ github.head_ref }}"
+          echo "- PR to: ${{ github.base_ref }}"
+          echo "- Status: See checks above"
