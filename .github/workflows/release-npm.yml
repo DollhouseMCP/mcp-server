@@ -1,0 +1,107 @@
+name: Release to NPM
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.2.3
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Release to NPM
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for changelog generation
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
+          CI: true
+
+      - name: Verify version match
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) doesn't match package.json version ($PACKAGE_VERSION)"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Extract changelog for this version
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CHANGELOG=$(sed -n "/^## \[$TAG_VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d')
+          
+          # Save for release notes
+          echo "$CHANGELOG" > release-notes.md
+          
+          # Output for GitHub release
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Publish to NPM
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/
+            package.json
+            package-lock.json
+            README.md
+            LICENSE
+            CHANGELOG.md
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "✅ Successfully released version ${GITHUB_REF#refs/tags/} to NPM!"
+          echo "📦 View on NPM: https://www.npmjs.com/package/@dollhousemcp/mcp-server"
+          echo "🎉 View on GitHub: https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF#refs/tags/}"
+
+      - name: Trigger documentation update
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Trigger any documentation workflows if needed
+            console.log('Release completed successfully');
