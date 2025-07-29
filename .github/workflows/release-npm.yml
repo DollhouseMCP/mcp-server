@@ -40,6 +40,7 @@ jobs:
           CI: true
 
       - name: Verify version match
+        shell: bash
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -50,6 +51,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        shell: bash
         run: |
           # Extract changelog for this version
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
@@ -93,6 +95,7 @@ jobs:
 
       - name: Notify success
         if: success()
+        shell: bash
         run: |
           echo "✅ Successfully released version ${GITHUB_REF#refs/tags/} to NPM!"
           echo "📦 View on NPM: https://www.npmjs.com/package/@dollhousemcp/mcp-server"

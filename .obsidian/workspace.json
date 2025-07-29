@@ -1,24 +1,20 @@
 {
   "main": {
-    "id": "73f93455523f1d7d",
+    "id": "a6738ea728a18c26",
     "type": "split",
     "children": [
       {
-        "id": "05c6414dfc05f4d3",
+        "id": "671c53ee32e99367",
         "type": "tabs",
         "children": [
           {
-            "id": "d150a0cd99ad3552",
+            "id": "1e631163d600d5ca",
             "type": "leaf",
             "state": {
-              "type": "markdown",
-              "state": {
-                "file": "SEC-002-RESOLUTION.md",
-                "mode": "source",
-                "source": false
-              },
+              "type": "empty",
+              "state": {},
               "icon": "lucide-file",
-              "title": "SEC-002-RESOLUTION"
+              "title": "New tab"
             }
           }
         ]
@@ -27,15 +23,15 @@
     "direction": "vertical"
   },
   "left": {
-    "id": "770735c1a1dfdea3",
+    "id": "7d8d395cba18ead7",
     "type": "split",
     "children": [
       {
-        "id": "49616840b6986336",
+        "id": "a440bb0c7a57051e",
         "type": "tabs",
         "children": [
           {
-            "id": "5369d535ef9f132c",
+            "id": "879581ce510a5885",
             "type": "leaf",
             "state": {
               "type": "file-explorer",
@@ -48,7 +44,7 @@
             }
           },
           {
-            "id": "301bae9aee9bf372",
+            "id": "b3a1acf444b519a9",
             "type": "leaf",
             "state": {
               "type": "search",
@@ -65,7 +61,7 @@
             }
           },
           {
-            "id": "b305825f95cf1d70",
+            "id": "e022a8cfa8d96a41",
             "type": "leaf",
             "state": {
               "type": "bookmarks",
@@ -81,20 +77,19 @@
     "width": 300
   },
   "right": {
-    "id": "088b51ce01913de6",
+    "id": "775ce61cdc74b21c",
     "type": "split",
     "children": [
       {
-        "id": "7618cd9911ad5f16",
+        "id": "6cc535e9b1f57ca5",
         "type": "tabs",
         "children": [
           {
-            "id": "d8c560c0d907dea1",
+            "id": "cf06e6559f3ceb6d",
             "type": "leaf",
             "state": {
               "type": "backlink",
               "state": {
-                "file": "SEC-002-RESOLUTION.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,25 +99,24 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for SEC-002-RESOLUTION"
+              "title": "Backlinks"
             }
           },
           {
-            "id": "f10f974a41384486",
+            "id": "e108674883b1e5e4",
             "type": "leaf",
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "API_WORKFLOW_ARCHITECTURE.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links from API_WORKFLOW_ARCHITECTURE"
+              "title": "Outgoing links"
             }
           },
           {
-            "id": "ea5681c61cc022e8",
+            "id": "f8a2c5e47e58c0ac",
             "type": "leaf",
             "state": {
               "type": "tag",
@@ -137,25 +131,25 @@
             }
           },
           {
-            "id": "78b8607c281af4cf",
+            "id": "2aa84de8988b72ba",
             "type": "leaf",
             "state": {
               "type": "outline",
               "state": {
-                "file": "API_WORKFLOW_ARCHITECTURE.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of API_WORKFLOW_ARCHITECTURE"
+              "title": "Outline"
             }
           }
         ]
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 300,
+    "collapsed": true
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -167,22 +161,14 @@
       "command-palette:Open command palette": false
     }
   },
-  "active": "d150a0cd99ad3552",
+  "active": "1e631163d600d5ca",
   "lastOpenFiles": [
-    "SEC-001-IMPLEMENTATION.md",
-    "PERSONA_MARKETPLACE_ECOSYSTEM.md",
-    "CRITICAL_SECURITY_GAP_ANALYSIS.md",
-    "API_WORKFLOW_ARCHITECTURE.md",
-    "Users/mick/Downloads/dollhouse_platform_structure.md",
-    "Users/mick/Downloads",
-    "Users/mick",
-    "Users",
-    "Untitled.md",
-    "SECURITY_MEASURES.md",
-    "SECURITY_DOCUMENTATION_GUIDE.md",
-    "SECURITY_ARCHITECTURE.md",
-    "CLOUD_API_SECURITY_ARCHITECTURE.md",
-    "SEC-002-VERIFICATION-EVIDENCE.md",
-    "SEC-002-RESOLUTION.md"
+    "docs/development/REORGANIZATION_PROGRESS_2025_07_29.md",
+    "CONTRIBUTING.md.tmp.40337.1753804078928",
+    "INVESTOR_TECHNICAL_SUMMARY_JULY_2025.md",
+    "NEXT_STEPS_JULY_29_2025.md",
+    "docs/development/SESSION_NOTES_JULY_28_2025.md",
+    "INVESTOR_ENTERPRISE_GRADE_JULY_2025.md.tmp.75052.1753746397549",
+    "INVESTOR_ENTERPRISE_GRADE_JULY_2025.md"
   ]
 }
