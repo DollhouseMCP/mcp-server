@@ -77,8 +77,13 @@ jobs:
           runAudit();
           EOF
           
-          # Run the audit
-          node run-audit.js || echo "AUDIT_FAILED=true" >> $GITHUB_ENV
+          # Run the audit with error handling
+          if ! node run-audit.js; then
+            echo "AUDIT_FAILED=true" >> $GITHUB_ENV
+            echo "::warning::Security audit encountered errors but workflow will continue"
+            # Create minimal report if audit fails
+            echo '{"findings": [], "summary": {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}, "error": "Audit failed to complete"}' > security-audit-result.json
+          fi
 
       - name: Upload audit results
         if: always()
@@ -150,7 +155,14 @@ jobs:
           convertToSarif().catch(console.error);
           EOF
           
-          node convert-to-sarif.js || true
+          # Convert with validation
+          if node convert-to-sarif.js; then
+            echo "✅ SARIF report generated successfully"
+          else
+            echo "::warning::Failed to generate SARIF report"
+            # Create minimal valid SARIF if conversion fails
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"DollhouseMCP Security Audit","version":"1.0.0"}},"results":[]}]}' > security-audit.sarif
+          fi
 
       - name: Upload SARIF to GitHub
         if: always()

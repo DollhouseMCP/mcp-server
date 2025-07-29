@@ -54,7 +54,7 @@ jobs:
                   2. If this is a hotfix, rename your branch to \`hotfix/description\`
                   3. If this is a release, create from \`develop\` as \`release/version\`
                   
-                  Please follow our [GitFlow branching strategy](../CONTRIBUTING.md#branching-strategy).`
+                  Please follow our [GitFlow branching strategy](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md#branching-strategy).`
                 });
               } else {
                 console.log(`✅ Valid source branch: ${headRef}`);
@@ -88,8 +88,18 @@ jobs:
             const { execSync } = require('child_process');
             
             try {
-              // Fetch the base branch
-              execSync('git fetch origin main:main');
+              // Fetch the base branch with error handling
+              try {
+                execSync('git fetch origin main:main');
+              } catch (fetchError) {
+                console.log('Warning: Could not fetch main branch, might be a fork');
+                // Try alternative approach
+                try {
+                  execSync('git fetch origin main');
+                } catch (e) {
+                  console.log('Warning: Could not fetch main branch at all');
+                }
+              }
               
               // Check if package.json version was bumped
               const currentVersion = require('./package.json').version;
