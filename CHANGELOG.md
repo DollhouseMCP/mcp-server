@@ -5,6 +5,34 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2025-07-29
+
+### Fixed
+- **NPM Release Workflow**: Fixed CI environment tests failing during releases
+  - Added TEST_PERSONAS_DIR environment variable to release workflow
+  - Added test environment preparation step
+  - Ensures automated NPM publishing works correctly
+
+## [1.3.1] - 2025-07-29
+
+### Added
+- **GitFlow Workflows**: Complete GitHub Actions implementation for GitFlow
+  - Automated release creation from release branches
+  - PR title validation for GitFlow compliance
+  - Branch naming enforcement
+  - Protected branch configuration
+
+### Changed
+- **Documentation**: Updated all references to reflect flat element structure
+  - Removed category-based paths from examples
+  - Updated tool documentation for new parameters
+  - Fixed MCP tool names in documentation
+
+### Fixed
+- **Backward Compatibility**: Added deprecated aliases for old MCP tool names
+  - Old tools continue to work with deprecation warnings
+  - Smooth transition for existing users
+
 ## [1.2.2] - 2025-07-10
 
 ### Security
