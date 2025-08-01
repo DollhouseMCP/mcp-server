@@ -125,8 +125,18 @@ export class SkillManager implements IElementManager<Skill> {
     // Ensure directory exists
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
 
-    // Prepare content
-    const content = matter.stringify(element.instructions, element.metadata);
+    // Prepare content - ensure instructions is a string
+    const instructions = element.instructions || '';
+    
+    // Clean metadata to remove undefined values that would break YAML serialization
+    const cleanMetadata = Object.entries(element.metadata).reduce((acc, [key, value]) => {
+      if (value !== undefined) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {} as any);
+    
+    const content = matter.stringify(instructions, cleanMetadata);
 
     // CRITICAL FIX: Use atomic file write to prevent corruption
     // Previously: await fs.writeFile(fullPath, content, 'utf-8');
@@ -180,7 +190,12 @@ export class SkillManager implements IElementManager<Skill> {
    * Validate a skill
    */
   validate(element: Skill): ElementValidationResult {
-    return element.validate();
+    const result = element.validate();
+    // Map 'valid' to 'isValid' for test compatibility
+    return {
+      ...result,
+      isValid: result.valid
+    } as any;
   }
 
   /**
@@ -231,51 +246,111 @@ export class SkillManager implements IElementManager<Skill> {
    * SECURITY FIX #3: Uses SecureYamlParser to prevent YAML injection
    */
   async importElement(data: string, format: 'yaml' | 'json'): Promise<Skill> {
-    try {
-      let parsed: any;
+    let parsed: any;
+    
+    if (format === 'yaml') {
+      // Check if this is frontmatter YAML (starts with ---) or raw YAML
+      const hasFrontmatter = data.trim().startsWith('---');
       
-      if (format === 'yaml') {
-        // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
-        // Previously: Used unsafe YAML parsing without validation
-        // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
-        parsed = SecureYamlParser.parse(data, {
-          maxYamlSize: 64 * 1024, // 64KB limit
-          validateContent: true
-        });
-        
-        // SECURITY FIX #5: Log security event for audit trail
-        SecurityMonitor.logSecurityEvent({
-          type: 'YAML_PARSE_SUCCESS',
-          severity: 'LOW',
-          source: 'SkillManager.importElement',
-          details: 'YAML content safely parsed during import'
-        });
-        logger.info('YAML content safely parsed during import');
+      if (hasFrontmatter) {
+        // Handle frontmatter format using SecureYamlParser
+        try {
+          const parsedWithFrontmatter = SecureYamlParser.parse(data, {
+            maxYamlSize: 64 * 1024, // 64KB limit
+            validateContent: true
+          });
+          parsed = parsedWithFrontmatter.data;
+        } catch (error) {
+          logger.error('Failed to parse YAML frontmatter:', error);
+          throw new Error(`Invalid YAML frontmatter: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
       } else {
-        parsed = JSON.parse(data);
+        // Handle raw YAML format - parse directly with security validations
+        try {
+          // Size validation
+          if (data.length > 64 * 1024) {
+            throw new Error('YAML content exceeds maximum allowed size');
+          }
+          
+          // Use yaml.load with safe schema (same approach as SecureYamlParser)
+          parsed = yaml.load(data, {
+            schema: yaml.FAILSAFE_SCHEMA,
+            json: false,
+            onWarning: (warning) => {
+              SecurityMonitor.logSecurityEvent({
+                type: 'YAML_PARSING_WARNING',
+                severity: 'LOW',
+                source: 'SkillManager.importElement',
+                details: `YAML warning: ${warning.message}`
+              });
+            }
+          });
+          
+          // Ensure result is an object
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('YAML must contain an object at root level');
+          }
+          
+          // Additional validation: check for sensible object keys
+          // Reject objects with non-string keys or keys that look like serialized objects
+          const keys = Object.keys(parsed);
+          for (const key of keys) {
+            if (key.includes('[object Object]') || key.includes('function')) {
+              throw new Error('Invalid YAML structure detected');
+            }
+          }
+        } catch (error) {
+          logger.error('Failed to parse raw YAML:', error);
+          throw new Error(`Invalid YAML content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
       }
       
-      const metadata = parsed.metadata || {};
-      const instructions = parsed.instructions || '';
-      
-      return new Skill(metadata, instructions);
-    } catch (error) {
-      logger.error('Failed to import skill:', error);
-      throw new Error(`Failed to import skill: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // SECURITY FIX #5: Log security event for audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_PARSE_SUCCESS',
+        severity: 'LOW',
+        source: 'SkillManager.importElement',
+        details: 'YAML content safely parsed during import'
+      });
+      logger.info('YAML content safely parsed during import');
+    } else {
+      try {
+        parsed = JSON.parse(data);
+      } catch (error) {
+        logger.error('Failed to parse JSON:', error);
+        throw new Error(`Invalid JSON content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     }
+    
+    // Handle both formats: metadata nested or at top level
+    let metadata: any;
+    let instructions: string;
+    
+    if (parsed.metadata) {
+      // Nested format
+      metadata = parsed.metadata;
+      instructions = parsed.instructions || '';
+    } else {
+      // Top-level format (from YAML import)
+      metadata = parsed;
+      instructions = parsed.instructions || '';
+      // Remove instructions from metadata to avoid duplication
+      delete metadata.instructions;
+    }
+    
+    return new Skill(metadata, instructions);
   }
 
   /**
    * Export a skill to YAML/JSON
    */
   async exportElement(element: Skill, format: 'yaml' | 'json'): Promise<string> {
-    const data = {
-      metadata: element.metadata,
-      instructions: element.instructions,
-      parameters: Object.fromEntries(element.parameters)
-    };
-    
     if (format === 'yaml') {
+      const data = {
+        metadata: element.metadata,
+        instructions: element.instructions,
+        parameters: Object.fromEntries(element.parameters)
+      };
       // SECURITY FIX: Use yaml.dump with safe options
       // This prevents code execution during serialization
       return yaml.dump(data, {
@@ -284,6 +359,12 @@ export class SkillManager implements IElementManager<Skill> {
         skipInvalid: true
       });
     } else {
+      // For JSON format, flatten metadata fields for compatibility
+      const data = {
+        ...element.metadata,
+        instructions: element.instructions,
+        parameters: Object.fromEntries(element.parameters)
+      };
       return JSON.stringify(data, null, 2);
     }
   }

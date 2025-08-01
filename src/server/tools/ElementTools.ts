@@ -123,7 +123,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["type"],
         },
       },
-      handler: (args: any) => server.getActiveElements(args.type)
+      handler: (args: GetActiveElementsArgs) => server.getActiveElements(args.type)
     },
     {
       tool: {
