@@ -424,6 +424,124 @@ export class DollhouseMCPServer implements IToolHandler {
     };
   }
 
+  // ===== Element Methods (Generic for all element types) =====
+  
+  async listElements(type: string) {
+    // For now, redirect to persona methods for personas
+    if (type === 'personas') {
+      return this.listPersonas();
+    }
+    
+    // TODO: Implement for other element types
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Element type '${type}' support coming soon! Currently only 'personas' are available.`,
+        },
+      ],
+    };
+  }
+  
+  async activateElement(name: string, type: string) {
+    if (type === 'personas') {
+      return this.activatePersona(name);
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Activating '${type}' elements coming soon!`,
+        },
+      ],
+    };
+  }
+  
+  async getActiveElements(type: string) {
+    if (type === 'personas') {
+      return this.getActivePersona();
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 No active ${type} elements (support coming soon)`,
+        },
+      ],
+    };
+  }
+  
+  async deactivateElement(_name: string, type: string) {
+    if (type === 'personas') {
+      return this.deactivatePersona();
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Deactivating '${type}' elements coming soon!`,
+        },
+      ],
+    };
+  }
+  
+  async getElementDetails(name: string, type: string) {
+    if (type === 'personas') {
+      return this.getPersonaDetails(name);
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Element details for '${type}' coming soon!`,
+        },
+      ],
+    };
+  }
+  
+  async reloadElements(type: string) {
+    if (type === 'personas') {
+      return this.reloadPersonas();
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Reloading '${type}' elements coming soon!`,
+        },
+      ],
+    };
+  }
+  
+  // Element-specific methods
+  async renderTemplate(name: string, variables: Record<string, any>) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Template rendering coming soon! Would render '${name}' with ${Object.keys(variables).length} variables.`,
+        },
+      ],
+    };
+  }
+  
+  async executeAgent(name: string, goal: string) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `🔧 Agent execution coming soon! Would execute '${name}' with goal: ${goal}`,
+        },
+      ],
+    };
+  }
+  
+
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
   async browseCollection(section?: string, type?: string) {

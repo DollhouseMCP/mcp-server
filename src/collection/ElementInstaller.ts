@@ -137,9 +137,7 @@ export class ElementInstaller {
       'personas': ElementType.PERSONA,
       'skills': ElementType.SKILL,
       'templates': ElementType.TEMPLATE,
-      'agents': ElementType.AGENT,
-      'memories': ElementType.MEMORY,
-      'ensembles': ElementType.ENSEMBLE
+      'agents': ElementType.AGENT
     };
     
     const elementType = typeMap[typeStr];
@@ -158,9 +156,7 @@ export class ElementInstaller {
       [ElementType.PERSONA]: '🎭',
       [ElementType.SKILL]: '🎯',
       [ElementType.TEMPLATE]: '📄',
-      [ElementType.AGENT]: '🤖',
-      [ElementType.MEMORY]: '🧠',
-      [ElementType.ENSEMBLE]: '🎼'
+      [ElementType.AGENT]: '🤖'
     };
     
     const emoji = typeEmojis[elementType] || '📦';

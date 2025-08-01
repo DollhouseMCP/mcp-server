@@ -6,9 +6,7 @@ export enum ElementType {
   PERSONA = 'personas',
   SKILL = 'skills',
   TEMPLATE = 'templates',
-  ENSEMBLE = 'ensembles',
-  AGENT = 'agents',
-  MEMORY = 'memories'
+  AGENT = 'agents'
 }
 
 export interface PortfolioConfig {
