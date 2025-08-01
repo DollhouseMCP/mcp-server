@@ -48,6 +48,14 @@ export class SkillManager implements IElementManager<Skill> {
     // Now: Full validation prevents accessing files outside skills directory
     const sanitizedPath = sanitizeInput(filePath, 255);
     
+    // SECURITY FIX #5: Log security operation
+    SecurityMonitor.logSecurityEvent({
+      type: 'SKILL_LOAD_ATTEMPT',
+      severity: 'LOW',
+      source: 'SkillManager.load',
+      details: `Attempting to load skill from: ${sanitizedPath}`
+    });
+    
     // Security validation
     try {
       validatePath(sanitizedPath, this.skillsDir);
@@ -167,6 +175,14 @@ export class SkillManager implements IElementManager<Skill> {
    * Delete a skill
    */
   async delete(filePath: string): Promise<void> {
+    // SECURITY FIX #5: Log deletion attempt
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'MEDIUM',
+      source: 'SkillManager.delete',
+      details: `Attempting to delete skill: ${filePath}`
+    });
+    
     // Validate path
     const sanitizedPath = sanitizeInput(filePath, 255);
     try {
@@ -188,6 +204,14 @@ export class SkillManager implements IElementManager<Skill> {
 
     // Log deletion
     logger.info(`Skill deleted: ${filePath}`);
+    
+    // SECURITY FIX #5: Audit successful deletion
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'LOW',
+      source: 'SkillManager.delete',
+      details: `Skill successfully deleted: ${filePath}`
+    });
   }
 
   /**
@@ -200,15 +224,20 @@ export class SkillManager implements IElementManager<Skill> {
       
       if (format === 'yaml') {
         // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
-        // Previously: const yamlData = yaml.load(data);
+        // Previously: Used unsafe YAML parsing without validation
         // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
         parsed = SecureYamlParser.parse(data, {
           maxYamlSize: 64 * 1024, // 64KB limit
           validateContent: true
         });
         
-        // Log security event for audit trail
-        logger.info('YAML content safely parsed during import');
+        // SECURITY FIX #5: Log security event for audit trail
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_PARSE_SUCCESS',
+          severity: 'LOW',
+          source: 'SkillManager.importElement',
+          details: 'YAML content safely parsed during import'
+        });
       } else {
         parsed = JSON.parse(data);
       }
