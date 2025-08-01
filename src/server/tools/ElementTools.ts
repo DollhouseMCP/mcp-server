@@ -167,7 +167,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["name", "type"],
         },
       },
-      handler: (args: any) => server.getElementDetails(args.name, args.type)
+      handler: (args: GetElementDetailsArgs) => server.getElementDetails(args.name, args.type)
     },
     {
       tool: {
@@ -185,7 +185,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["type"],
         },
       },
-      handler: (args: ReloadElementsArgs) => server.reloadElements(args.type)
+      handler: (args: ReloadElementsArgs) => server.reloadElements(args.type!)
     },
     // Element-specific tools
     {
