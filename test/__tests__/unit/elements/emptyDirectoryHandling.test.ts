@@ -16,8 +16,6 @@ jest.mock('../../../../src/utils/logger.js');
 // Import managers after mocking
 import { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
 import { TemplateManager } from '../../../../src/elements/templates/TemplateManager.js';
-import { EnsembleManager } from '../../../../src/elements/ensembles/EnsembleManager.js';
-import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { logger } from '../../../../src/utils/logger.js';
@@ -110,58 +108,26 @@ describe('Empty Directory Handling', () => {
     });
   });
 
-  describe('EnsembleManager', () => {
-    it('should return empty array when ensembles directory does not exist', async () => {
-      const nonExistentDir = path.join(testDir, 'non-existent');
-      const manager = new EnsembleManager(nonExistentDir);
-      
-      // list() should return empty array
-      const ensembles = await manager.list();
-      expect(ensembles).toEqual([]);
-      
-      // Should log debug message
-      expect(logger.debug).toHaveBeenCalledWith(
-        'Ensembles directory does not exist yet, returning empty array'
-      );
-    });
-  });
+  // Memory and Ensemble managers have been removed from the codebase
 
-  describe('MemoryManager', () => {
-    it('should return empty array when memories directory does not exist', async () => {
-      const nonExistentDir = path.join(testDir, 'non-existent');
-      const manager = new MemoryManager(nonExistentDir);
-      
-      // list() should return empty array
-      const memories = await manager.list();
-      expect(memories).toEqual([]);
-      
-      // MemoryManager already handled ENOENT, shouldn't throw
-      expect(memories).toEqual([]);
-    });
-  });
-
-  describe('All Managers', () => {
+  describe('Remaining Managers', () => {
     it('should handle empty directories consistently', async () => {
       // Create empty directories
       const agentsDir = path.join(testDir, 'agents');
-      const ensemblesDir = path.join(testDir, 'ensembles');
-      const memoriesDir = path.join(testDir, 'memories');
+      const templatesDir = path.join(testDir, 'templates');
       
       await fs.mkdir(agentsDir);
-      await fs.mkdir(ensemblesDir);
-      await fs.mkdir(memoriesDir);
+      await fs.mkdir(templatesDir);
       
       // All managers should return empty arrays
       const agentManager = new AgentManager(testDir);
-      const ensembleManager = new EnsembleManager(ensemblesDir);
-      const memoryManager = new MemoryManager(memoriesDir);
+      const templateManager = new TemplateManager();
       
       // Initialize agent manager
       await agentManager.initialize();
       
       expect(await agentManager.list()).toEqual([]);
-      expect(await ensembleManager.list()).toEqual([]);
-      expect(await memoryManager.list()).toEqual([]);
+      expect(await templateManager.list()).toEqual([]);
     });
   });
 });
