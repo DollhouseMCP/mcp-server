@@ -48,6 +48,8 @@ describe('Empty Directory Handling', () => {
   afterEach(async () => {
     // Clean up test directory
     await fs.rm(testDir, { recursive: true, force: true });
+    // Reset all mocks
+    jest.restoreAllMocks();
   });
 
   describe('AgentManager', () => {
@@ -116,8 +118,17 @@ describe('Empty Directory Handling', () => {
       const agentsDir = path.join(testDir, 'agents');
       const templatesDir = path.join(testDir, 'templates');
       
-      await fs.mkdir(agentsDir);
-      await fs.mkdir(templatesDir);
+      await fs.mkdir(agentsDir, { recursive: true });
+      await fs.mkdir(templatesDir, { recursive: true });
+      
+      // Mock fs.readdir to return empty array for templates
+      const originalReaddir = fs.readdir;
+      jest.spyOn(fs, 'readdir').mockImplementation(async (dir) => {
+        if (dir.includes('templates')) {
+          return [];
+        }
+        return originalReaddir(dir);
+      });
       
       // All managers should return empty arrays
       const agentManager = new AgentManager(testDir);
@@ -128,6 +139,9 @@ describe('Empty Directory Handling', () => {
       
       expect(await agentManager.list()).toEqual([]);
       expect(await templateManager.list()).toEqual([]);
+      
+      // Restore original
+      fs.readdir = originalReaddir;
     });
   });
 });

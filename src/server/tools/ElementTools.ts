@@ -7,6 +7,64 @@ import { ToolDefinition } from './ToolRegistry.js';
 import { IToolHandler } from '../types.js';
 import { ElementType } from '../../portfolio/types.js';
 
+// Type-safe interfaces for all element tool arguments
+interface ListElementsArgs {
+  type: string;
+}
+
+interface ActivateElementArgs {
+  name: string;
+  type: string;
+}
+
+interface DeactivateElementArgs {
+  name: string;
+  type: string;
+}
+
+interface GetElementDetailsArgs {
+  name: string;
+  type: string;
+}
+
+interface GetActiveElementsArgs {
+  type?: string;
+}
+
+interface CreateElementArgs {
+  name: string;
+  description: string;
+  type: string;
+  instructions?: string;
+  metadata?: Record<string, any>;
+}
+
+interface EditElementArgs {
+  name: string;
+  type: string;
+  field: string;
+  value: any;
+}
+
+interface ValidateElementArgs {
+  name: string;
+  type: string;
+}
+
+interface RenderTemplateArgs {
+  name: string;
+  variables: Record<string, any>;
+}
+
+interface ReloadElementsArgs {
+  type?: string;
+}
+
+interface ExecuteAgentArgs {
+  name: string;
+  goal: string;
+}
+
 export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
     {
@@ -127,7 +185,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["type"],
         },
       },
-      handler: (args: any) => server.reloadElements(args.type)
+      handler: (args: ReloadElementsArgs) => server.reloadElements(args.type)
     },
     // Element-specific tools
     {
@@ -150,7 +208,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["name", "variables"],
         },
       },
-      handler: (args: any) => server.renderTemplate(args.name, args.variables)
+      handler: (args: RenderTemplateArgs) => server.renderTemplate(args.name, args.variables)
     },
     {
       tool: {
@@ -171,7 +229,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["name", "goal"],
         },
       },
-      handler: (args: any) => server.executeAgent(args.name, args.goal)
+      handler: (args: ExecuteAgentArgs) => server.executeAgent(args.name, args.goal)
     },
   ];
 }

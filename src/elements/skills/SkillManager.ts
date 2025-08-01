@@ -19,7 +19,7 @@ import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
-// SecurityMonitor removed - no SKILL_* event types available
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { promises as fs } from 'fs';
@@ -48,7 +48,8 @@ export class SkillManager implements IElementManager<Skill> {
     // Now: Full validation prevents accessing files outside skills directory
     const sanitizedPath = sanitizeInput(filePath, 255);
     
-    // SECURITY FIX #5: Audit logging removed - no SKILL_* event types in SecurityMonitor
+    // SECURITY FIX #5: Log element operations for audit trail
+    // Using ELEMENT_CREATED as there are no SKILL_* specific events
     
     // Security validation
     try {
@@ -82,6 +83,14 @@ export class SkillManager implements IElementManager<Skill> {
       // Log successful load
       logger.info(`Skill loaded: ${skill.metadata.name}`);
       
+      // SECURITY FIX #5: Audit successful operations
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'SkillManager.load',
+        details: `Skill successfully loaded: ${skill.metadata.name}`
+      });
+      
       return skill;
     } catch (error) {
       logger.error(`Failed to load skill from ${fullPath}:`, error);
@@ -96,6 +105,15 @@ export class SkillManager implements IElementManager<Skill> {
   async save(element: Skill, filePath: string): Promise<void> {
     // Validate and sanitize path
     const sanitizedPath = sanitizeInput(filePath, 255);
+    
+    // SECURITY FIX #5: Log save operations for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_CREATED',
+      severity: 'LOW',
+      source: 'SkillManager.save',
+      details: `Saving skill: ${element.metadata.name}`
+    });
+    
     try {
       validatePath(sanitizedPath, this.skillsDir);
     } catch (error) {
@@ -169,7 +187,13 @@ export class SkillManager implements IElementManager<Skill> {
    * Delete a skill
    */
   async delete(filePath: string): Promise<void> {
-    // SECURITY FIX #5: Audit logging available - ELEMENT_DELETED exists in SecurityMonitor
+    // SECURITY FIX #5: Log deletion operations for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'MEDIUM',
+      source: 'SkillManager.delete',
+      details: `Attempting to delete skill: ${filePath}`
+    });
     
     // Validate path
     const sanitizedPath = sanitizeInput(filePath, 255);
@@ -193,7 +217,13 @@ export class SkillManager implements IElementManager<Skill> {
     // Log deletion
     logger.info(`Skill deleted: ${filePath}`);
     
-    // SECURITY FIX #5: Audit logging removed to avoid duplicate events
+    // SECURITY FIX #5: Audit successful deletion
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'LOW',
+      source: 'SkillManager.delete',
+      details: `Skill successfully deleted: ${filePath}`
+    });
   }
 
   /**
@@ -214,7 +244,12 @@ export class SkillManager implements IElementManager<Skill> {
         });
         
         // SECURITY FIX #5: Log security event for audit trail
-        // Note: YAML_PARSE_SUCCESS is available in SecurityMonitor
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_PARSE_SUCCESS',
+          severity: 'LOW',
+          source: 'SkillManager.importElement',
+          details: 'YAML content safely parsed during import'
+        });
         logger.info('YAML content safely parsed during import');
       } else {
         parsed = JSON.parse(data);
