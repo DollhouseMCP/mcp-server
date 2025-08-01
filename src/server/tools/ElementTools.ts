@@ -83,7 +83,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["type"],
         },
       },
-      handler: (args: any) => server.listElements(args.type)
+      handler: (args: ListElementsArgs) => server.listElements(args.type)
     },
     {
       tool: {
@@ -105,7 +105,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["name", "type"],
         },
       },
-      handler: (args: any) => server.activateElement(args.name, args.type)
+      handler: (args: ActivateElementArgs) => server.activateElement(args.name, args.type)
     },
     {
       tool: {
@@ -145,7 +145,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["name", "type"],
         },
       },
-      handler: (args: any) => server.deactivateElement(args.name, args.type)
+      handler: (args: DeactivateElementArgs) => server.deactivateElement(args.name, args.type)
     },
     {
       tool: {
