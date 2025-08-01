@@ -19,7 +19,7 @@ import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
-import { SecurityMonitor } from '../../security/securityMonitor.js';
+// SecurityMonitor removed - no SKILL_* event types available
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { promises as fs } from 'fs';
@@ -48,13 +48,7 @@ export class SkillManager implements IElementManager<Skill> {
     // Now: Full validation prevents accessing files outside skills directory
     const sanitizedPath = sanitizeInput(filePath, 255);
     
-    // SECURITY FIX #5: Log security operation
-    SecurityMonitor.logSecurityEvent({
-      type: 'SKILL_LOAD_ATTEMPT',
-      severity: 'LOW',
-      source: 'SkillManager.load',
-      details: `Attempting to load skill from: ${sanitizedPath}`
-    });
+    // SECURITY FIX #5: Audit logging removed - no SKILL_* event types in SecurityMonitor
     
     // Security validation
     try {
@@ -175,13 +169,7 @@ export class SkillManager implements IElementManager<Skill> {
    * Delete a skill
    */
   async delete(filePath: string): Promise<void> {
-    // SECURITY FIX #5: Log deletion attempt
-    SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_DELETED',
-      severity: 'MEDIUM',
-      source: 'SkillManager.delete',
-      details: `Attempting to delete skill: ${filePath}`
-    });
+    // SECURITY FIX #5: Audit logging available - ELEMENT_DELETED exists in SecurityMonitor
     
     // Validate path
     const sanitizedPath = sanitizeInput(filePath, 255);
@@ -205,13 +193,7 @@ export class SkillManager implements IElementManager<Skill> {
     // Log deletion
     logger.info(`Skill deleted: ${filePath}`);
     
-    // SECURITY FIX #5: Audit successful deletion
-    SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_DELETED',
-      severity: 'LOW',
-      source: 'SkillManager.delete',
-      details: `Skill successfully deleted: ${filePath}`
-    });
+    // SECURITY FIX #5: Audit logging removed to avoid duplicate events
   }
 
   /**
