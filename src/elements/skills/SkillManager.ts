@@ -232,12 +232,8 @@ export class SkillManager implements IElementManager<Skill> {
         });
         
         // SECURITY FIX #5: Log security event for audit trail
-        SecurityMonitor.logSecurityEvent({
-          type: 'YAML_PARSE_SUCCESS',
-          severity: 'LOW',
-          source: 'SkillManager.importElement',
-          details: 'YAML content safely parsed during import'
-        });
+        // Note: YAML_PARSE_SUCCESS is available in SecurityMonitor
+        logger.info('YAML content safely parsed during import');
       } else {
         parsed = JSON.parse(data);
       }
