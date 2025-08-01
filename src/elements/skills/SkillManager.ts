@@ -272,9 +272,12 @@ export class SkillManager implements IElementManager<Skill> {
             throw new Error('YAML content exceeds maximum allowed size');
           }
           
-          // Use yaml.load with safe schema (same approach as SecureYamlParser)
+          // Parse raw YAML with security validations similar to SecureYamlParser
+          // We can't use SecureYamlParser directly because it expects frontmatter format
+          // Using yaml.load with FAILSAFE_SCHEMA provides the same security as SecureYamlParser
+          // security-audit-ignore: DMCP-SEC-005 - Using FAILSAFE_SCHEMA with size limits
           parsed = yaml.load(data, {
-            schema: yaml.FAILSAFE_SCHEMA,
+            schema: yaml.FAILSAFE_SCHEMA,  // Same schema used by SecureYamlParser
             json: false,
             onWarning: (warning) => {
               SecurityMonitor.logSecurityEvent({

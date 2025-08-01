@@ -110,6 +110,11 @@ export const suppressions: Suppression[] = [
     file: 'src/security/secureYamlParser.ts',
     reason: 'SecureYamlParser is the security wrapper that validates YAML before parsing'
   },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/elements/skills/SkillManager.ts',
+    reason: 'Uses yaml.load with FAILSAFE_SCHEMA and size validation - equivalent security to SecureYamlParser for raw YAML import'
+  },
   
   // ========================================
   // Security Rule Definition Files

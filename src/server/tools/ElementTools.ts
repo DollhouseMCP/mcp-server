@@ -28,7 +28,7 @@ interface GetElementDetailsArgs {
 }
 
 interface GetActiveElementsArgs {
-  type?: string;
+  type: string;
 }
 
 interface CreateElementArgs {
@@ -57,7 +57,7 @@ interface RenderTemplateArgs {
 }
 
 interface ReloadElementsArgs {
-  type?: string;
+  type: string;
 }
 
 interface ExecuteAgentArgs {
@@ -185,7 +185,7 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
           required: ["type"],
         },
       },
-      handler: (args: ReloadElementsArgs) => server.reloadElements(args.type!)
+      handler: (args: ReloadElementsArgs) => server.reloadElements(args.type)
     },
     // Element-specific tools
     {
