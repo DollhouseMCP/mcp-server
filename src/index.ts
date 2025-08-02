@@ -19,7 +19,6 @@ import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
@@ -43,7 +42,6 @@ export class DollhouseMCPServer implements IToolHandler {
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
-  private personaManager: PersonaManager;
   private githubClient: GitHubClient;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
@@ -99,7 +97,6 @@ export class DollhouseMCPServer implements IToolHandler {
     this.indicatorConfig = loadIndicatorConfig();
     
     // Initialize persona manager
-    this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
     
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
