@@ -193,8 +193,10 @@ Goals:
       
       expect(result.content[0].text).toContain('⚠️  This agents has associated data files:');
       expect(result.content[0].text).toContain('.state/agent-with-state-state.json');
-      expect(result.content[0].text).toContain('To delete these files as well, run:');
-      expect(result.content[0].text).toContain('delete_element "agent-with-state" "agents" true');
+      expect(result.content[0].text).toContain('Would you like to delete these data files as well?');
+      expect(result.content[0].text).toContain('To delete everything (element + data), say: "Yes, delete all data"');
+      expect(result.content[0].text).toContain('To keep the data files, say: "No, keep the data"');
+      expect(result.content[0].text).toContain('To cancel, say: "Cancel"');
     });
     
     it('should delete data files when deleteData is true', async () => {

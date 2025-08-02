@@ -1469,21 +1469,42 @@ export class DollhouseMCPServer implements IToolHandler {
         }
       }
       
-      // Future: Add checks for other element types' data files
-      // e.g., memories might have .storage/ files
+      // Memory-specific: Check for storage files
+      if (type === ElementType.MEMORY) {
+        const storageDir = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage');
+        const storageFile = path.join(storageDir, `${name}-memory.json`);
+        try {
+          const stat = await fs.stat(storageFile);
+          dataFiles.push(`- .storage/${name}-memory.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No storage file exists, which is fine
+        }
+      }
+      
+      // Ensemble-specific: Check for config files
+      if (type === ElementType.ENSEMBLE) {
+        const configDir = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs');
+        const configFile = path.join(configDir, `${name}-config.json`);
+        try {
+          const stat = await fs.stat(configFile);
+          dataFiles.push(`- .configs/${name}-config.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No config file exists, which is fine
+        }
+      }
       
       // If data files exist and deleteData is not specified, we need to inform the user
       if (dataFiles.length > 0 && deleteData === undefined) {
         return {
           content: [{
             type: "text",
-            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nTo delete these files as well, run:\ndelete_element "${name}" "${type}" true\n\nTo delete only the element file, run:\ndelete_element "${name}" "${type}" false`
+            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
           }]
         };
       }
       
       // Delete the main element file
-      const filename = `${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      const filename = `${slugify(name)}.md`;
       const filepath = path.join(this.portfolioManager.getElementDir(type as ElementType), filename);
       
       try {
@@ -1502,17 +1523,41 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Delete associated data files if requested
       if (deleteData && dataFiles.length > 0) {
+        const updatedDataFiles: string[] = [];
+        
         if (type === ElementType.AGENT) {
           const stateFile = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state', `${name}-state.json`);
           try {
             await fs.unlink(stateFile);
-            dataFiles = [`${dataFiles[0]} ✓ deleted`];
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
           } catch (error) {
             // Log but don't fail if state file deletion fails
             logger.warn(`Failed to delete agent state file: ${error}`);
-            dataFiles = [`${dataFiles[0]} ⚠️ deletion failed`];
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.MEMORY) {
+          const storageFile = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage', `${name}-memory.json`);
+          try {
+            await fs.unlink(storageFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if storage file deletion fails
+            logger.warn(`Failed to delete memory storage file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.ENSEMBLE) {
+          const configFile = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs', `${name}-config.json`);
+          try {
+            await fs.unlink(configFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if config file deletion fails
+            logger.warn(`Failed to delete ensemble config file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
           }
         }
+        
+        dataFiles = updatedDataFiles;
       }
       
       // Build success message
