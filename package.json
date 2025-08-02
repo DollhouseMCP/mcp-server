@@ -9,12 +9,14 @@
     "mcp-server": "dist/index.js"
   },
   "scripts": {
+    "prebuild": "node scripts/generate-version.js",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "setup": "npm install && npm run build",
+    "prepublishOnly": "BUILD_TYPE=npm npm run build",
     "update:check": "echo 'Use check_for_updates MCP tool for interactive update checking'",
     "update:pull": "git pull origin main && npm install && npm run build",
     "update:backup": "cp -r . .backup-$(date +%s)",

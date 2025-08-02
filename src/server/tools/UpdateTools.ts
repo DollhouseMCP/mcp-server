@@ -62,6 +62,27 @@ export function getUpdateTools(server: IToolHandler): Array<{ tool: ToolDefiniti
         },
       },
       handler: () => server.getServerStatus()
+    },
+    {
+      tool: {
+        name: "convert_to_git_installation",
+        description: "Convert from npm installation to git installation for more control over updates",
+        inputSchema: {
+          type: "object",
+          properties: {
+            targetDir: {
+              type: "string",
+              description: "Target directory for git installation (default: ~/.dollhouse/mcp-server-git)",
+            },
+            confirm: {
+              type: "boolean",
+              description: "Confirm the conversion (true to proceed, false for preview)",
+            },
+          },
+          required: ["confirm"],
+        },
+      },
+      handler: (args: any) => server.convertToGitInstallation(args.targetDir, args.confirm)
     }
   ];
 }

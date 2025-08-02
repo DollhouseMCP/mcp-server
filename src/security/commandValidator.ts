@@ -3,7 +3,10 @@ import path from 'path';
 import { RegexValidator } from './regexValidator.js';
 
 const ALLOWED_COMMANDS: Record<string, string[]> = {
-  git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', '--abbrev-ref', 'HEAD', '--porcelain'],
+  // SECURITY FIX: Added 'clone' command to git allowlist
+  // Previously: npm installation feature would fail with "Argument not allowed: clone"
+  // Now: git clone command is allowed for npm installation functionality
+  git: ['pull', 'status', 'log', 'rev-parse', 'branch', 'checkout', 'fetch', 'clone', '--abbrev-ref', 'HEAD', '--porcelain'],
   npm: ['install', 'run', 'audit', 'ci', '--version', 'build'],
   node: ['--version'],
   npx: ['--version']

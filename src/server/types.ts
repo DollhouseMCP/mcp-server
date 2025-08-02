@@ -47,6 +47,7 @@ export interface IToolHandler {
   updateServer(confirm: boolean): Promise<any>;
   rollbackUpdate(confirm: boolean): Promise<any>;
   getServerStatus(): Promise<any>;
+  convertToGitInstallation(targetDir?: string, confirm?: boolean): Promise<any>;
   
   // Config tools
   configureIndicator(config: any): Promise<any>;
