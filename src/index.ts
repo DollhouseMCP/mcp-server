@@ -198,11 +198,39 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // If it's a plural form, convert to singular
     if (pluralToSingularMap[type]) {
+      // Log deprecation warning
+      logger.warn(`Using plural element type '${type}' is deprecated. Please use singular form '${pluralToSingularMap[type]}' instead.`);
       return pluralToSingularMap[type];
     }
     
     // Unknown type - return as-is and let validation handle it
     return type;
+  }
+
+  /**
+   * Sanitize metadata object to prevent prototype pollution
+   * Removes any dangerous properties that could affect Object.prototype
+   */
+  private sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
+    if (!metadata || typeof metadata !== 'object') {
+      return {};
+    }
+    
+    const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
+    const sanitized: Record<string, any> = {};
+    
+    for (const [key, value] of Object.entries(metadata)) {
+      if (!dangerousProperties.includes(key)) {
+        // Recursively sanitize nested objects
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          sanitized[key] = this.sanitizeMetadata(value);
+        } else {
+          sanitized[key] = value;
+        }
+      }
+    }
+    
+    return sanitized;
   }
 
   private async loadPersonas() {
@@ -549,7 +577,7 @@ export class DollhouseMCPServer implements IToolHandler {
           return {
             content: [{
               type: "text",
-              text: `❌ Unknown element type '${type}'. Available types: ${Object.values(ElementType).join(', ')}`
+              text: `❌ Unknown element type '${type}'. Available types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
             }]
           };
       }
@@ -1104,7 +1132,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
           }]
         };
       }
@@ -1113,6 +1141,9 @@ export class DollhouseMCPServer implements IToolHandler {
       const validatedName = validateFilename(name);
       const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       
+      // SECURITY FIX: Sanitize metadata to prevent prototype pollution
+      const sanitizedMetadata = this.sanitizeMetadata(metadata || {});
+      
       // Create element based on type
       switch (type as ElementType) {
         case ElementType.PERSONA:
@@ -1120,16 +1151,16 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.createPersona(
             validatedName, 
             validatedDescription, 
-            metadata?.category || 'general',
+            sanitizedMetadata?.category || 'general',
             content || '',
-            metadata?.triggers
+            sanitizedMetadata?.triggers
           );
           
         case ElementType.SKILL:
           const skill = await this.skillManager.create({
             name: validatedName,
             description: validatedDescription,
-            ...metadata,
+            ...sanitizedMetadata,
             content: content || ''
           });
           return {
@@ -1144,7 +1175,7 @@ export class DollhouseMCPServer implements IToolHandler {
             name: validatedName,
             description: validatedDescription,
             content: content || '',
-            ...metadata
+            ...sanitizedMetadata
           });
           return {
             content: [{
@@ -1158,7 +1189,7 @@ export class DollhouseMCPServer implements IToolHandler {
             validatedName,
             validatedDescription,
             content || '',
-            metadata
+            sanitizedMetadata
           );
           if (!agentResult.success) {
             return {
@@ -1203,7 +1234,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
           }]
         };
       }
@@ -1247,6 +1278,20 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Handle nested field updates (e.g., "metadata.author")
       const fieldParts = field.split('.');
+      
+      // SECURITY FIX: Validate field names to prevent prototype pollution
+      const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
+      for (const part of fieldParts) {
+        if (dangerousProperties.includes(part)) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid field name: '${part}' is not allowed for security reasons`
+            }]
+          };
+        }
+      }
+      
       let target: any = element;
       for (let i = 0; i < fieldParts.length - 1; i++) {
         if (!target[fieldParts[i]]) {
@@ -1312,7 +1357,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
           }]
         };
       }
@@ -1421,7 +1466,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')}`
+            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
           }]
         };
       }
