@@ -5,8 +5,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { fileURLToPath } from "url";
-import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -15,14 +13,12 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
+import { validateFilename, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
-import { YamlValidator } from './security/yamlValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
@@ -46,7 +42,6 @@ export class DollhouseMCPServer implements IToolHandler {
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
-  private personaManager: PersonaManager;
   private githubClient: GitHubClient;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
@@ -102,7 +97,6 @@ export class DollhouseMCPServer implements IToolHandler {
     this.indicatorConfig = loadIndicatorConfig();
     
     // Initialize persona manager
-    this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
     
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
@@ -1366,6 +1360,223 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [{
           type: "text",
           text: `❌ Failed to validate element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    try {
+      const { name, type, deleteData } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')}`
+          }]
+        };
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        case ElementType.PERSONA:
+          // For personas, use a different approach
+          const personaPath = path.join(this.personasDir, `${name}.md`);
+          try {
+            await fs.access(personaPath);
+            await fs.unlink(personaPath);
+            
+            // Reload personas to update the cache
+            await this.loadPersonas();
+            
+            return {
+              content: [{
+                type: "text",
+                text: `✅ Successfully deleted persona '${name}'`
+              }]
+            };
+          } catch (error) {
+            if ((error as any).code === 'ENOENT') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Persona '${name}' not found`
+                }]
+              };
+            }
+            throw error;
+          }
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for deletion`
+            }]
+          };
+      }
+      
+      // Ensure manager was assigned (TypeScript type safety)
+      if (!manager) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Element type '${type}' is not supported for deletion`
+          }]
+        };
+      }
+      
+      // Find the element first to check if it exists
+      const element = await manager!.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Check for associated data files
+      let dataFiles: string[] = [];
+      
+      // Agent-specific: Check for state files
+      if (type === ElementType.AGENT) {
+        const stateDir = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state');
+        const stateFile = path.join(stateDir, `${name}-state.json`);
+        try {
+          const stat = await fs.stat(stateFile);
+          dataFiles.push(`- .state/${name}-state.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No state file exists, which is fine
+        }
+      }
+      
+      // Memory-specific: Check for storage files
+      if (type === ElementType.MEMORY) {
+        const storageDir = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage');
+        const storageFile = path.join(storageDir, `${name}-memory.json`);
+        try {
+          const stat = await fs.stat(storageFile);
+          dataFiles.push(`- .storage/${name}-memory.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No storage file exists, which is fine
+        }
+      }
+      
+      // Ensemble-specific: Check for config files
+      if (type === ElementType.ENSEMBLE) {
+        const configDir = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs');
+        const configFile = path.join(configDir, `${name}-config.json`);
+        try {
+          const stat = await fs.stat(configFile);
+          dataFiles.push(`- .configs/${name}-config.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No config file exists, which is fine
+        }
+      }
+      
+      // If data files exist and deleteData is not specified, we need to inform the user
+      if (dataFiles.length > 0 && deleteData === undefined) {
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
+          }]
+        };
+      }
+      
+      // Delete the main element file
+      const filename = `${slugify(name)}.md`;
+      const filepath = path.join(this.portfolioManager.getElementDir(type as ElementType), filename);
+      
+      try {
+        await fs.unlink(filepath);
+      } catch (error) {
+        if ((error as any).code === 'ENOENT') {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ ${type} file '${filename}' not found`
+            }]
+          };
+        }
+        throw error;
+      }
+      
+      // Delete associated data files if requested
+      if (deleteData && dataFiles.length > 0) {
+        const updatedDataFiles: string[] = [];
+        
+        if (type === ElementType.AGENT) {
+          const stateFile = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state', `${name}-state.json`);
+          try {
+            await fs.unlink(stateFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if state file deletion fails
+            logger.warn(`Failed to delete agent state file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.MEMORY) {
+          const storageFile = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage', `${name}-memory.json`);
+          try {
+            await fs.unlink(storageFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if storage file deletion fails
+            logger.warn(`Failed to delete memory storage file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.ENSEMBLE) {
+          const configFile = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs', `${name}-config.json`);
+          try {
+            await fs.unlink(configFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if config file deletion fails
+            logger.warn(`Failed to delete ensemble config file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        }
+        
+        dataFiles = updatedDataFiles;
+      }
+      
+      // Build success message
+      let message = `✅ Successfully deleted ${type} '${name}'`;
+      if (dataFiles.length > 0) {
+        if (deleteData) {
+          message += `\n\nAssociated data files:\n${dataFiles.join('\n')}`;
+        } else {
+          message += `\n\n⚠️ Associated data files were preserved:\n${dataFiles.join('\n')}`;
+        }
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: message
+        }]
+      };
+      
+    } catch (error) {
+      logger.error(`Failed to delete element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to delete element: ${error instanceof Error ? error.message : 'Unknown error'}`
         }]
       };
     }
