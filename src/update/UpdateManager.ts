@@ -290,7 +290,14 @@ export class UpdateManager {
       
       // Check latest version from npm registry
       logger.info('[UpdateManager] Checking npm registry for latest version');
-      const { stdout: npmViewOutput } = await safeExec('npm', ['view', '@dollhousemcp/mcp-server', 'version'], {
+      
+      // Security: Validate package name to prevent any potential injection
+      const packageName = '@dollhousemcp/mcp-server';
+      if (!/^@[a-z0-9-]+\/[a-z0-9-]+$/.test(packageName)) {
+        throw new Error('Invalid package name format');
+      }
+      
+      const { stdout: npmViewOutput } = await safeExec('npm', ['view', packageName, 'version'], {
         cwd: this.rootDir,
         timeout: 30000
       });
@@ -310,25 +317,27 @@ export class UpdateManager {
         };
       }
       
-      // Create backup if requested
-      if (createBackup) {
-        logger.info('[UpdateManager] Creating backup before npm update');
-        try {
-          // For npm installations, we backup the global installation directory
-          const npmGlobalPath = InstallationDetector.getNpmGlobalPath();
-          if (npmGlobalPath) {
-            // Create npm-specific backup
-            const backupPath = await this.backupManager.createNpmBackup(npmGlobalPath, currentVersion);
-            logger.info(`[UpdateManager] Backup created at: ${backupPath}`);
-          }
-        } catch (backupError) {
-          logger.error('[UpdateManager] Backup failed:', backupError);
-          return {
-            text: personaIndicator + '❌ **Update Failed**\n\n' +
-              'Failed to create backup before update.\n' +
-              'Error: ' + (backupError instanceof Error ? backupError.message : String(backupError))
-          };
+      // For npm installations, backup is mandatory for safety
+      logger.info('[UpdateManager] Creating backup before npm update');
+      try {
+        // For npm installations, we backup the global installation directory
+        const npmGlobalPath = InstallationDetector.getNpmGlobalPath();
+        if (!npmGlobalPath) {
+          throw new Error('Could not determine npm global installation path');
         }
+        
+        // Create npm-specific backup
+        const backupPath = await this.backupManager.createNpmBackup(npmGlobalPath, currentVersion);
+        logger.info(`[UpdateManager] Backup created at: ${backupPath}`);
+      } catch (backupError) {
+        logger.error('[UpdateManager] Backup failed:', backupError);
+        return {
+          text: personaIndicator + '❌ **Update Failed**\n\n' +
+            'Failed to create backup before update.\n' +
+            'Error: ' + (backupError instanceof Error ? backupError.message : String(backupError)) + '\n\n' +
+            '**Note:** Backup is mandatory for npm installations to ensure safe rollback.\n' +
+            'Please check disk space and permissions.'
+        };
       }
       
       // Perform npm update
@@ -454,12 +463,40 @@ export class UpdateManager {
       
       logger.info(`[UpdateManager] Restoring npm backup from: ${latestBackup.path}`);
       
-      // Remove current installation
-      await fs.rm(npmGlobalPath, { recursive: true, force: true });
+      // Use atomic operations to prevent race conditions
+      const tempPath = `${npmGlobalPath}.tmp-${Date.now()}`;
+      const backupPath = `${npmGlobalPath}.backup-${Date.now()}`;
       
-      // Restore from backup
-      const backupPackagePath = path.join(latestBackup.path, 'package');
-      await this.copyDirectory(backupPackagePath, npmGlobalPath);
+      try {
+        // Step 1: Copy backup to temporary location
+        const backupPackagePath = path.join(latestBackup.path, 'package');
+        await this.copyDirectory(backupPackagePath, tempPath);
+        
+        // Step 2: Move current installation to backup (atomic)
+        await fs.rename(npmGlobalPath, backupPath);
+        
+        // Step 3: Move temp to final location (atomic)
+        await fs.rename(tempPath, npmGlobalPath);
+        
+        // Step 4: Remove old backup
+        await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {
+          // Log but don't fail if cleanup fails
+          logger.warn(`[UpdateManager] Failed to cleanup backup at: ${backupPath}`);
+        });
+      } catch (rollbackError) {
+        // Attempt to restore original if rollback fails
+        try {
+          await fs.rename(backupPath, npmGlobalPath);
+        } catch {
+          // If we can't restore, at least try to put temp in place
+          try {
+            await fs.rename(tempPath, npmGlobalPath);
+          } catch {
+            // Complete failure - guide user to manual recovery
+          }
+        }
+        throw rollbackError;
+      }
       
       return {
         text: personaIndicator + '✅ **NPM Rollback Complete!**\n\n' +

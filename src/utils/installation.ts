@@ -13,6 +13,9 @@ export type InstallationType = 'npm' | 'git' | 'unknown';
 export class InstallationDetector {
   private static cachedType: InstallationType | null = null;
   
+  // Maximum directory levels to search upward for .git directory
+  private static readonly MAX_SEARCH_DEPTH = 10;
+  
   /**
    * Detect the installation type (npm global, git clone, or unknown)
    */
@@ -26,10 +29,20 @@ export class InstallationDetector {
       // Get the directory where this file is located
       const currentFileUrl = import.meta.url;
       const currentFilePath = fileURLToPath(currentFileUrl);
-      const currentDir = path.dirname(currentFilePath);
+      let currentDir = path.dirname(currentFilePath);
+      
+      // Resolve symlinks to get the real path
+      try {
+        currentDir = fs.realpathSync(currentDir);
+      } catch (error) {
+        // If realpath fails, continue with original path
+        logger.debug('[InstallationDetector] Could not resolve real path, using original');
+      }
       
       // Check if we're in a node_modules directory (npm installation)
-      if (currentDir.includes('node_modules/@dollhousemcp/mcp-server')) {
+      // Use path separator to ensure we match the exact package name
+      const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
+      if (currentDir.includes(npmPattern)) {
         logger.debug('[InstallationDetector] Detected npm installation');
         this.cachedType = 'npm';
         return 'npm';
@@ -38,7 +51,7 @@ export class InstallationDetector {
       // Check for .git directory (git installation)
       // Search up from current directory
       let searchDir = currentDir;
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < this.MAX_SEARCH_DEPTH; i++) {
         const gitDir = path.join(searchDir, '.git');
         try {
           if (fs.existsSync(gitDir) && fs.statSync(gitDir).isDirectory()) {
