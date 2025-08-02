@@ -26,10 +26,10 @@ describe('Generic Element Tools Integration', () => {
     
     // Create test directory structure
     await fs.mkdir(testDir, { recursive: true });
-    await fs.mkdir(path.join(testDir, 'skills'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'templates'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'agents'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'personas'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'skill'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'template'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'agent'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'persona'), { recursive: true });
     
     server = new DollhouseMCPServer();
   });
@@ -64,7 +64,7 @@ describe('Generic Element Tools Integration', () => {
       expect(result.content[0].text).toContain('code-review');
       
       // Verify file was created
-      const skillFile = path.join(testDir, 'skills', 'code-review.md');
+      const skillFile = path.join(testDir, 'skill', 'code-review.md');
       const exists = await fs.access(skillFile).then(() => true).catch(() => false);
       expect(exists).toBe(true);
     });
@@ -86,7 +86,7 @@ describe('Generic Element Tools Integration', () => {
       expect(result.content[0].text).toContain('meeting-notes');
       
       // Verify file was created
-      const templateFile = path.join(testDir, 'templates', 'meeting-notes.md');
+      const templateFile = path.join(testDir, 'template', 'meeting-notes.md');
       const exists = await fs.access(templateFile).then(() => true).catch(() => false);
       expect(exists).toBe(true);
     });
@@ -108,7 +108,7 @@ describe('Generic Element Tools Integration', () => {
       expect(result.content[0].text).toContain('project-manager');
       
       // Verify file was created
-      const agentFile = path.join(testDir, 'agents', 'project-manager.md');
+      const agentFile = path.join(testDir, 'agent', 'project-manager.md');
       const exists = await fs.access(agentFile).then(() => true).catch(() => false);
       expect(exists).toBe(true);
     });
@@ -177,7 +177,7 @@ describe('Generic Element Tools Integration', () => {
       
       const result = await server.editElement(args);
       
-      expect(result.content[0].text).toContain('❌ skills \'non-existent\' not found');
+      expect(result.content[0].text).toContain('❌ skill \'non-existent\' not found');
     });
   });
   
@@ -253,7 +253,7 @@ describe('Generic Element Tools Integration', () => {
       
       const result = await server.validateElement(args);
       
-      expect(result.content[0].text).toContain('❌ skills \'non-existent\' not found');
+      expect(result.content[0].text).toContain('❌ skill \'non-existent\' not found');
     });
   });
   
