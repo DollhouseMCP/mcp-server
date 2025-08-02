@@ -521,28 +521,35 @@ export class UpdateManager {
       const backups = await this.backupManager.listBackups();
       const rateLimitStatus = this.updateChecker.getRateLimitStatus();
       
-      // Get git status
-      let gitStatus = 'Unknown';
-      let gitBranch = 'Unknown';
-      let lastCommit = 'Unknown';
+      // Get installation type
+      const installationType = InstallationDetector.getInstallationType();
+      const installationDesc = InstallationDetector.getInstallationDescription();
       
-      try {
-        const { stdout: branchOutput } = await safeExec('git', ['branch', '--show-current'], { cwd: this.rootDir });
-        gitBranch = branchOutput.trim() || 'detached';
-        
-        const { stdout: statusOutput } = await safeExec('git', ['status', '--porcelain'], { cwd: this.rootDir });
-        gitStatus = statusOutput.trim() ? 'Modified' : 'Clean';
-        
-        const { stdout: logOutput } = await safeExec('git', ['log', '-1', '--oneline'], { cwd: this.rootDir });
-        lastCommit = logOutput.trim();
-      } catch {
-        // Git commands failed, use defaults
+      // Get git status (only for git installations)
+      let gitStatus = 'N/A';
+      let gitBranch = 'N/A';
+      let lastCommit = 'N/A';
+      
+      if (installationType === 'git') {
+        try {
+          const { stdout: branchOutput } = await safeExec('git', ['branch', '--show-current'], { cwd: this.rootDir });
+          gitBranch = branchOutput.trim() || 'detached';
+          
+          const { stdout: statusOutput } = await safeExec('git', ['status', '--porcelain'], { cwd: this.rootDir });
+          gitStatus = statusOutput.trim() ? 'Modified' : 'Clean';
+          
+          const { stdout: logOutput } = await safeExec('git', ['log', '-1', '--oneline'], { cwd: this.rootDir });
+          lastCommit = logOutput.trim();
+        } catch {
+          // Git commands failed, use defaults
+        }
       }
       
       const statusParts = [
         personaIndicator + '📊 **DollhouseMCP Server Status**\n\n',
         '**Version Information:**\n',
         `• Current Version: ${currentVersion}\n`,
+        `• Installation Type: ${installationType} (${installationDesc})\n`,
         `• Git Branch: ${gitBranch}\n`,
         `• Git Status: ${gitStatus}\n`,
         `• Last Commit: ${lastCommit}\n\n`,

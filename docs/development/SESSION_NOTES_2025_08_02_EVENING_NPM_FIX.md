@@ -62,24 +62,53 @@ Updated `src/update/VersionManager.ts`:
 - For git: searches from current file location
 - Falls back to original behavior as last resort
 
-### 6. Update Manager (Started) 🔄
-Started updating `src/update/UpdateManager.ts`:
+### 6. Update Manager ✅ 
+Updated `src/update/UpdateManager.ts`:
 - Added installation type detection
-- Started implementing separate npm update flow
-- **NEEDS COMPLETION**: `updateNpmInstallation()` method
+- Implemented separate npm update flow
+- ✅ Completed `updateNpmInstallation()` method
+- ✅ Added npm-specific rollback functionality
+
+## Work Completed in Continuation Session (August 2, Evening - 6:45 PM)
+
+### 7. UpdateManager NPM Implementation ✅
+Completed `src/update/UpdateManager.ts`:
+- `updateNpmInstallation()` method:
+  - Uses `npm view @dollhousemcp/mcp-server version` to check latest
+  - Runs `npm update -g @dollhousemcp/mcp-server` for updates
+  - Creates backup before update if requested
+  - Verifies installation success with `npm list -g`
+  - Comprehensive error handling and user guidance
+- `rollbackNpmInstallation()` method:
+  - Reads from npm backup manifest
+  - Restores previous version from backup
+  - Handles missing backups gracefully
+  - Force rollback option available
+
+### 8. BackupManager NPM Support ✅
+Enhanced `src/update/BackupManager.ts`:
+- `createNpmBackup()` method:
+  - Backs up to `~/.dollhouse/backups/npm/`
+  - Creates timestamped directories
+  - Maintains `manifest.json` for tracking
+  - Auto-cleanup keeps last 3 backups
+  - Copies entire npm global package directory
+- Helper methods:
+  - `copyDirectory()` for recursive copying
+  - `updateNpmBackupManifest()` for manifest management
+  - `cleanupOldNpmBackups()` for space management
+
+### 9. TypeScript Fixes ✅
+- Added proper type definitions for backup manifest
+- Imported missing dependencies (fs/promises, compareVersions)
+- Fixed all compilation errors
+- Build successful
+
+### Latest Commit
+- Commit: 95f04e4
+- Message: "feat: Implement npm-specific update and rollback functionality"
 
 ## What Still Needs to Be Done
-
-### 1. Complete UpdateManager Implementation
-- Finish `updateNpmInstallation()` method
-- Use `npm view @dollhousemcp/mcp-server version` for latest version
-- Run `npm update -g @dollhousemcp/mcp-server` for updates
-- Handle npm-specific error messages
-
-### 2. NPM Backup System
-- Implement backup for npm installations in `~/.dollhouse/backups/npm/`
-- Create manifest to track installed versions
-- Allow rollback by restoring from backup
 
 ### 3. Migration Tool
 - Create new MCP tool: `convert_to_git_installation`
