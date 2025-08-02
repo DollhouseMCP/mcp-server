@@ -7,7 +7,13 @@
  * such dangerous patterns from being executed.
  * 
  * CodeQL warnings in this file are expected and should be suppressed.
+ * 
+ * @security-severity none
  */
+
+/* eslint-disable security/detect-unsafe-regex */
+// codeql[javascript/ql/src/Security/CWE-730/PolynomialReDoS.ql] = false
+// codeql[javascript/ql/src/Security/CWE-1333/ReDoS.ql] = false
 
 // codeql[js/redos]: This entire file tests ReDoS detection with intentionally vulnerable patterns
 

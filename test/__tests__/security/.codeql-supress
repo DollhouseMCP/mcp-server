@@ -1,0 +1,12 @@
+# CodeQL Suppression File for Security Tests
+
+# This directory contains security test files that intentionally use vulnerable patterns
+# to test our security validation mechanisms. All ReDoS warnings should be suppressed.
+
+# Suppress all ReDoS warnings in regexValidator.test.ts
+query-id: js/polynomial-redos
+query-id: js/redos
+query-id: js/inefficient-regular-expression
+
+# These patterns are essential for testing our RegexValidator's ability to detect
+# and prevent Regular Expression Denial of Service (ReDoS) attacks.
