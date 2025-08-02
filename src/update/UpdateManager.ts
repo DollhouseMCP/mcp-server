@@ -680,6 +680,14 @@ export class UpdateManager {
       
       // Step 1: Clone the repository
       logger.info('[UpdateManager] Cloning repository...');
+      
+      // SECURITY FIX: Validate gitTargetDir to prevent command injection
+      // Previously: gitTargetDir passed directly to git clone command
+      // Now: Reject paths starting with '--' to prevent git option injection
+      if (gitTargetDir.startsWith('--')) {
+        throw new Error('Invalid target directory: cannot start with git options');
+      }
+      
       await safeExec('git', ['clone', 'https://github.com/DollhouseMCP/mcp-server.git', gitTargetDir], {
         timeout: config.getGitCloneTimeout()
       });
