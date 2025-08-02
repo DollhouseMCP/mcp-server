@@ -949,6 +949,19 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 6. **Validate personas:**
    Use the `reload_personas` tool to check for loading errors
 
+## 📚 Documentation
+
+### Element System Documentation
+- **[Element Architecture](docs/ELEMENT_ARCHITECTURE.md)** - System design and core concepts
+- **[Element Types Reference](docs/ELEMENT_TYPES.md)** - Detailed guide for all element types
+- **[Developer Guide](docs/ELEMENT_DEVELOPER_GUIDE.md)** - How to create new element types
+- **[API Reference](docs/API_REFERENCE.md)** - Complete MCP tool documentation
+- **[Migration Guide](docs/MIGRATION_TO_PORTFOLIO.md)** - Upgrading from personas-only
+
+### Additional Resources
+- **[Security Guidelines](docs/SECURITY.md)** - Security best practices
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
+
 ## 🤝 Contributing
 
 We welcome contributions! DollhouseMCP includes integrated tools for submitting personas directly from Claude.
