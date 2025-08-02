@@ -960,8 +960,7 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 
 ### Additional Resources
 - **[Security Guidelines](docs/SECURITY.md)** - Security best practices
-- **[Testing Guide](docs/development/TESTING.md)** - How to write tests
-- **[Contribution Guide](CONTRIBUTING.md)** - How to contribute
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
 
 ## 🤝 Contributing
 

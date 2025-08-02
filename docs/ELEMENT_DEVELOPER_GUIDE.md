@@ -670,5 +670,5 @@ After implementing your element type:
 - [Element Architecture](./ELEMENT_ARCHITECTURE.md)
 - [Element Types Reference](./ELEMENT_TYPES.md)
 - [Security Guidelines](./SECURITY.md)
-- [Testing Guide](./TESTING.md)
+- [Contributing Guide](../CONTRIBUTING.md)
 - [TypeScript Best Practices](https://www.typescriptlang.org/docs/handbook/declaration-files/do-s-and-don-ts.html)
