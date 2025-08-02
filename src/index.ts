@@ -5,8 +5,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { fileURLToPath } from "url";
-import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -15,11 +13,10 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
+import { validateFilename, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
-import { YamlValidator } from './security/yamlValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { PersonaManager } from './persona/PersonaManager.js';
@@ -1498,7 +1495,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `⚠️  ${type.endsWith('s') ? 'These' : 'This'} ${type} ${type.endsWith('s') ? 'have' : 'has'} associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
+            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
           }]
         };
       }

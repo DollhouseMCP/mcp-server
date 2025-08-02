@@ -44,7 +44,7 @@ export class AgentManager implements IElementManager<Agent> {
   private readonly stateCache: Map<string, AgentState> = new Map();
 
   constructor(portfolioPath: string) {
-    this.agentsPath = path.join(portfolioPath, 'agents');
+    this.agentsPath = path.join(portfolioPath, ElementType.AGENT);
   }
 
   /**

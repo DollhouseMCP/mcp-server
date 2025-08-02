@@ -24,11 +24,11 @@ describe('Delete Element Tool Integration', () => {
     
     // Create directory structure
     await fs.mkdir(testDir, { recursive: true });
-    await fs.mkdir(path.join(testDir, 'skills'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'templates'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'agents'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'agents', '.state'), { recursive: true });
-    await fs.mkdir(path.join(testDir, 'personas'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'skill'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'template'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'agent'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'agent', '.state'), { recursive: true });
+    await fs.mkdir(path.join(testDir, 'persona'), { recursive: true });
     
     // Initialize portfolio manager first
     portfolioManager = PortfolioManager.getInstance();
@@ -56,7 +56,7 @@ describe('Delete Element Tool Integration', () => {
     const content = `---
 name: ${name}
 description: Test skill for deletion
-type: skills
+type: skill
 version: 1.0.0
 ---
 # Test Skill
@@ -70,7 +70,7 @@ This is a test skill.`;
     const content = `---
 name: ${name}
 description: Test template for deletion
-type: templates
+type: template
 version: 1.0.0
 ---
 # Test Template
@@ -84,7 +84,7 @@ Hello {{name}}!`;
     const content = `---
 name: ${name}
 description: Test agent for deletion
-type: agents
+type: agent
 version: 1.0.0
 ---
 # Test Agent
@@ -114,13 +114,13 @@ Goals:
     it('should delete a skill element successfully', async () => {
       const args = {
         name: 'test-skill',
-        type: 'skills',
+        type: 'skill',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted skills \'test-skill\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted skill \'test-skill\'');
       
       // Verify file is deleted
       const skillsDir = portfolioManager.getElementDir(ElementType.SKILL);
@@ -131,37 +131,37 @@ Goals:
     it('should delete a template element successfully', async () => {
       const args = {
         name: 'test-template',
-        type: 'templates',
+        type: 'template',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted templates \'test-template\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted template \'test-template\'');
     });
     
     it('should delete an agent element without state', async () => {
       const args = {
         name: 'test-agent',
-        type: 'agents',
+        type: 'agent',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted agents \'test-agent\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted agent \'test-agent\'')
     });
     
     it('should report error for non-existent element', async () => {
       const args = {
         name: 'non-existent',
-        type: 'skills',
+        type: 'skill',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('❌ skills \'non-existent\' not found');
+      expect(result.content[0].text).toContain('❌ skill \'non-existent\' not found');
     });
     
     it('should report error for invalid element type', async () => {
@@ -185,13 +185,13 @@ Goals:
       
       const args = {
         name: 'agent-with-state',
-        type: 'agents'
+        type: 'agent'
         // deleteData is undefined
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('⚠️  These agents have associated data files:');
+      expect(result.content[0].text).toContain('⚠️  This agent has associated data files:');
       expect(result.content[0].text).toContain('.state/agent-with-state-state.json');
       expect(result.content[0].text).toContain('Would you like to delete these data files as well?');
       expect(result.content[0].text).toContain('To delete everything (element + data), say: "Yes, delete all data"');
@@ -205,13 +205,13 @@ Goals:
       
       const args = {
         name: 'agent-with-data',
-        type: 'agents',
+        type: 'agent',
         deleteData: true
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted agents \'agent-with-data\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted agent \'agent-with-data\'')
       expect(result.content[0].text).toContain('Associated data files:');
       expect(result.content[0].text).toContain('✓ deleted');
       
@@ -231,13 +231,13 @@ Goals:
       
       const args = {
         name: 'agent-preserve-data',
-        type: 'agents',
+        type: 'agent',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted agents \'agent-preserve-data\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted agent \'agent-preserve-data\'')
       expect(result.content[0].text).toContain('⚠️ Associated data files were preserved:');
       
       // Verify main file is deleted but state file remains
@@ -264,7 +264,7 @@ description: Test persona for deletion
       
       const args = {
         name: 'test-persona',
-        type: 'personas',
+        type: 'persona',
         deleteData: false
       };
       
