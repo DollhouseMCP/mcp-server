@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.3.0 (Ready for NPM publish)
+**📦 Version**: v1.3.3
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -56,7 +56,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **23 MCP Tools** | Complete persona lifecycle management through chat interface |
+| 🎭 **30 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
@@ -65,6 +65,76 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 | 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
+
+## 🎨 Portfolio Customization Elements (NEW! v1.3.3)
+
+DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior. Your portfolio is your personal collection of AI customization elements that enhance and tailor your AI experience.
+
+### Portfolio Element Types
+
+| Element | Purpose | Status |
+|---------|---------|--------|
+| 🎭 **Personas** | Define AI personality, tone, and behavioral characteristics | ✅ Available |
+| 🛠️ **Skills** | Add specific capabilities like code review, data analysis, or creative writing | ✅ Available |
+| 📝 **Templates** | Create reusable response formats for emails, reports, documentation | ✅ Available |
+| 🤖 **Agents** | Build autonomous assistants that can pursue goals and make decisions | ✅ Available |
+
+### Managing Your Portfolio
+
+Use these new generic tools to manage any element type in your portfolio:
+
+- **`list_elements`** - Browse your portfolio elements by type
+- **`activate_element`** - Activate elements to customize AI behavior
+- **`get_active_elements`** - View currently active customizations
+- **`deactivate_element`** - Deactivate specific customizations
+- **`get_element_details`** - Examine element configuration and metadata
+- **`reload_elements`** - Refresh portfolio from filesystem
+
+### Specialized Element Tools
+
+Some portfolio elements have specialized operations:
+
+- **`render_template`** - Generate content using template elements with variables
+- **`execute_agent`** - Deploy agent elements to accomplish specific goals
+
+### Portfolio Examples
+
+```
+# Browse your skill portfolio
+list_elements type="skills"
+
+# Activate a code review skill
+activate_element name="code-review" type="skills"
+
+# Activate a professional email template
+activate_element name="email-professional" type="templates"
+
+# Use a template to generate content
+render_template name="project-update" variables='{"project": "DollhouseMCP", "status": "Released"}'
+
+# Deploy an agent for a specific task
+execute_agent name="project-manager" goal="Create a sprint plan for next week"
+```
+
+### Portfolio Structure
+
+Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by type:
+
+```
+~/.dollhouse/portfolio/
+├── personas/       # Personality and behavior profiles
+├── skills/         # Specialized capabilities
+├── templates/      # Reusable content structures
+└── agents/         # Autonomous assistants
+```
+
+### Legacy Persona Tools
+
+For backward compatibility, the original persona-specific tools still work:
+- `list_personas` → calls `list_elements type="personas"`
+- `activate_persona` → calls `activate_element type="personas"`
+- `get_active_persona` → calls `get_active_elements type="personas"`
+- etc.
 
 ## 🔒 Enterprise-Grade Security (v1.2.4)
 
@@ -195,11 +265,23 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 23 DollhouseMCP tools will be available
+3. All 30 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (23 Total)
+## 🛠️ Available Tools (30 Total)
 
-### Core Persona Management
+### Portfolio Element Management (NEW!)
+- **`list_elements`** - List all elements of a specific type
+- **`activate_element`** - Activate an element by name and type
+- **`get_active_elements`** - Get currently active elements of a type
+- **`deactivate_element`** - Deactivate a specific element
+- **`get_element_details`** - View detailed information about an element
+- **`reload_elements`** - Refresh elements from filesystem
+
+### Element-Specific Operations (NEW!)
+- **`render_template`** - Render a template element with provided variables
+- **`execute_agent`** - Execute an agent element with a specific goal
+
+### Core Persona Management (Legacy - Still Supported)
 - **`list_personas`** - Display all local personas with enhanced metadata
 - **`activate_persona`** - Activate by name, filename, or unique ID
 - **`get_active_persona`** - Get current persona information

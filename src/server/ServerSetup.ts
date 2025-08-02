@@ -6,6 +6,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ToolRegistry } from './tools/ToolRegistry.js';
 import { getPersonaTools } from './tools/PersonaTools.js';
+import { getElementTools } from './tools/ElementTools.js';
 import { getCollectionTools } from './tools/CollectionTools.js';
 import { getUserTools } from './tools/UserTools.js';
 import { getUpdateTools } from './tools/UpdateTools.js';
@@ -37,7 +38,10 @@ export class ServerSetup {
    * Register all tool categories
    */
   private registerTools(instance: IToolHandler): void {
-    // Register persona tools
+    // Register element tools (new generic tools for all element types)
+    this.toolRegistry.registerMany(getElementTools(instance));
+    
+    // Register persona tools (legacy - kept for backward compatibility)
     this.toolRegistry.registerMany(getPersonaTools(instance));
     
     // Register collection tools

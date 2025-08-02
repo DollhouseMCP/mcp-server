@@ -10,7 +10,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     {
       tool: {
         name: "browse_collection",
-        description: "Browse content from the DollhouseMCP collection by section and content type. Content types include personas (AI behavioral profiles), skills, agents, prompts, templates, tools, and ensembles. When users ask for 'personas', they're referring to content in the personas type.",
+        description: "Browse content from the DollhouseMCP collection by section and content type. Content types include personas (AI behavioral profiles), skills, agents, and templates. When users ask for 'personas', they're referring to content in the personas type.",
         inputSchema: {
           type: "object",
           properties: {
@@ -20,7 +20,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
             },
             type: {
               type: "string",
-              description: "Content type within the library section: personas, skills, agents, prompts, templates, tools, or ensembles. Only used when section is 'library'.",
+              description: "Content type within the library section: personas, skills, agents, or templates. Only used when section is 'library'.",
             },
           },
         },
@@ -53,7 +53,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
           properties: {
             path: {
               type: "string",
-              description: "The collection path to the AI customization element. Format: 'library/[type]/[element].md' where type is personas, skills, templates, agents, memories, or ensembles. Example: 'library/skills/code-review.md'.",
+              description: "The collection path to the AI customization element. Format: 'library/[type]/[element].md' where type is personas, skills, templates, or agents. Example: 'library/skills/code-review.md'.",
             },
           },
           required: ["path"],
@@ -64,13 +64,13 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     {
       tool: {
         name: "install_content",
-        description: "Install AI customization elements from the collection to your local portfolio. Use this when users ask to download/install any element type (personas, skills, templates, agents, memories, or ensembles). Examples: 'install the creative writer persona', 'get the code review skill', 'download the meeting notes template'.",
+        description: "Install AI customization elements from the collection to your local portfolio. Use this when users ask to download/install any element type (personas, skills, templates, or agents). Examples: 'install the creative writer persona', 'get the code review skill', 'download the meeting notes template'.",
         inputSchema: {
           type: "object",
           properties: {
             path: {
               type: "string",
-              description: "The collection path to the AI customization element. Format: 'library/[type]/[element].md' where type is personas, skills, templates, agents, memories, or ensembles. Example: 'library/skills/code-review.md'.",
+              description: "The collection path to the AI customization element. Format: 'library/[type]/[element].md' where type is personas, skills, templates, or agents. Example: 'library/skills/code-review.md'.",
             },
           },
           required: ["path"],
