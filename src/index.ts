@@ -1370,6 +1370,178 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
   }
+  
+  async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    try {
+      const { name, type, deleteData } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')}`
+          }]
+        };
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        case ElementType.PERSONA:
+          // For personas, use a different approach
+          const personaPath = path.join(this.personasDir, `${name}.md`);
+          try {
+            await fs.access(personaPath);
+            await fs.unlink(personaPath);
+            
+            // Reload personas to update the cache
+            await this.loadPersonas();
+            
+            return {
+              content: [{
+                type: "text",
+                text: `✅ Successfully deleted persona '${name}'`
+              }]
+            };
+          } catch (error) {
+            if ((error as any).code === 'ENOENT') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Persona '${name}' not found`
+                }]
+              };
+            }
+            throw error;
+          }
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for deletion`
+            }]
+          };
+      }
+      
+      // Ensure manager was assigned (TypeScript type safety)
+      if (!manager) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Element type '${type}' is not supported for deletion`
+          }]
+        };
+      }
+      
+      // Find the element first to check if it exists
+      const element = await manager!.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Check for associated data files
+      let dataFiles: string[] = [];
+      
+      // Agent-specific: Check for state files
+      if (type === ElementType.AGENT) {
+        const stateDir = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state');
+        const stateFile = path.join(stateDir, `${name}-state.json`);
+        try {
+          const stat = await fs.stat(stateFile);
+          dataFiles.push(`- .state/${name}-state.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No state file exists, which is fine
+        }
+      }
+      
+      // Future: Add checks for other element types' data files
+      // e.g., memories might have .storage/ files
+      
+      // If data files exist and deleteData is not specified, we need to inform the user
+      if (dataFiles.length > 0 && deleteData === undefined) {
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nTo delete these files as well, run:\ndelete_element "${name}" "${type}" true\n\nTo delete only the element file, run:\ndelete_element "${name}" "${type}" false`
+          }]
+        };
+      }
+      
+      // Delete the main element file
+      const filename = `${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      const filepath = path.join(this.portfolioManager.getElementDir(type as ElementType), filename);
+      
+      try {
+        await fs.unlink(filepath);
+      } catch (error) {
+        if ((error as any).code === 'ENOENT') {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ ${type} file '${filename}' not found`
+            }]
+          };
+        }
+        throw error;
+      }
+      
+      // Delete associated data files if requested
+      if (deleteData && dataFiles.length > 0) {
+        if (type === ElementType.AGENT) {
+          const stateFile = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state', `${name}-state.json`);
+          try {
+            await fs.unlink(stateFile);
+            dataFiles = [`${dataFiles[0]} ✓ deleted`];
+          } catch (error) {
+            // Log but don't fail if state file deletion fails
+            logger.warn(`Failed to delete agent state file: ${error}`);
+            dataFiles = [`${dataFiles[0]} ⚠️ deletion failed`];
+          }
+        }
+      }
+      
+      // Build success message
+      let message = `✅ Successfully deleted ${type} '${name}'`;
+      if (dataFiles.length > 0) {
+        if (deleteData) {
+          message += `\n\nAssociated data files:\n${dataFiles.join('\n')}`;
+        } else {
+          message += `\n\n⚠️ Associated data files were preserved:\n${dataFiles.join('\n')}`;
+        }
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: message
+        }]
+      };
+      
+    } catch (error) {
+      logger.error(`Failed to delete element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to delete element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 

@@ -24,6 +24,7 @@ export interface IToolHandler {
   createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}): Promise<any>;
   editElement(args: {name: string; type: string; field: string; value: any}): Promise<any>;
   validateElement(args: {name: string; type: string; strict?: boolean}): Promise<any>;
+  deleteElement(args: {name: string; type: string; deleteData?: boolean}): Promise<any>;
   
   // Element-specific tools
   renderTemplate(name: string, variables: Record<string, any>): Promise<any>;

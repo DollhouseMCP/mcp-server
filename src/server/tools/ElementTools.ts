@@ -52,6 +52,12 @@ interface ValidateElementArgs {
   strict?: boolean;
 }
 
+interface DeleteElementArgs {
+  name: string;
+  type: string;
+  deleteData?: boolean;
+}
+
 interface RenderTemplateArgs {
   name: string;
   variables: Record<string, any>;
@@ -332,6 +338,34 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
         },
       },
       handler: (args: ValidateElementArgs) => server.validateElement(args)
+    },
+    // Generic element deletion tool
+    {
+      tool: {
+        name: "delete_element",
+        description: "Delete an element and optionally its associated data files",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The element name to delete",
+            },
+            type: {
+              type: "string",
+              description: "The element type",
+              enum: Object.values(ElementType),
+            },
+            deleteData: {
+              type: "boolean",
+              description: "Whether to delete associated data files (if not specified, will prompt)",
+              default: undefined,
+            },
+          },
+          required: ["name", "type"],
+        },
+      },
+      handler: (args: DeleteElementArgs) => server.deleteElement(args)
     },
   ];
 }
