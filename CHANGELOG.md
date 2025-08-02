@@ -5,6 +5,63 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-08-02
+
+### Changed
+- **BREAKING**: Element types now use singular naming convention (#435)
+  - Previous: 'skills', 'personas', 'templates', 'agents'
+  - New: 'skill', 'persona', 'template', 'agent'
+- Standardized element system architecture across all types
+- Updated version to 1.4.0 to reflect breaking changes
+
+### Added
+- Generic CRUD operations for all element types (from v1.3.4 development)
+  - create_element - Create any element type
+  - edit_element - Modify element metadata and content
+  - validate_element - Comprehensive validation with feedback
+  - delete_element - Safe deletion with data cleanup
+- Memory and Ensemble element types (placeholders for future release)
+- Enhanced security throughout element system
+
+### Fixed
+- Sync issues between main and develop branches
+- Consolidated naming conventions across codebase
+- Resolved version conflicts (main had v1.3.3, develop had v1.3.4)
+
+## [1.3.4] - 2025-08-02
+
+### Added
+- **Complete Element System Documentation** (#424): Comprehensive guides for all element types
+  - ELEMENT_ARCHITECTURE.md - System design and core concepts
+  - ELEMENT_DEVELOPER_GUIDE.md - Step-by-step creation guide
+  - ELEMENT_TYPES.md - Reference for all 6 element types
+  - API_REFERENCE.md - Complete MCP tool documentation
+  - MIGRATION_TO_PORTFOLIO.md - User migration guide
+- **Generic Element Tools** (#417, #418, #419): Universal tools for all element types
+  - create_element - Create any element type
+  - edit_element - Modify element metadata and content
+  - validate_element - Comprehensive validation with feedback
+  - delete_element - Safe deletion with confirmation
+
+### Fixed
+- **CodeQL Security Alerts** (#431): Resolved false positives in test files
+  - Added proper suppression configuration
+  - Fixed typo in .codeql-suppress filename
+  - Enhanced documentation in test files
+- **Previously Completed Issues**: Closed issues that were already implemented
+  - #417, #418, #419 - Element tools (implemented in PR #422)
+  - #402 - NPM_TOKEN already configured
+
+### Changed
+- **Issue Prioritization**: Updated priorities for better roadmap clarity
+  - Moved Ensemble Runtime Management (#300) to R&D/experimental
+  - Adjusted labels to reflect current development focus
+
+### Security
+- **Test File Suppressions**: Properly configured CodeQL to handle intentional test patterns
+  - ReDoS test patterns now correctly suppressed
+  - Security test files properly annotated
+
 ## [1.3.2] - 2025-07-29
 
 ### Fixed

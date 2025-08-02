@@ -22,15 +22,19 @@ describe('ElementTools', () => {
       getActiveElements: jest.fn().mockResolvedValue({ active: [] }),
       reloadElements: jest.fn().mockResolvedValue({ reloaded: true }),
       renderTemplate: jest.fn().mockResolvedValue({ rendered: 'content' }),
-      executeAgent: jest.fn().mockResolvedValue({ result: 'executed' })
+      executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
+      createElement: jest.fn().mockResolvedValue({ success: true }),
+      editElement: jest.fn().mockResolvedValue({ success: true }),
+      validateElement: jest.fn().mockResolvedValue({ valid: true }),
+      deleteElement: jest.fn().mockResolvedValue({ success: true })
     } as any;
 
     tools = getElementTools(mockServer);
   });
 
   describe('Tool Registration', () => {
-    it('should register exactly 8 element tools', () => {
-      expect(tools).toHaveLength(8);
+    it('should register exactly 12 element tools', () => {
+      expect(tools).toHaveLength(12);
     });
 
     it('should have all expected tool names registered', () => {
@@ -43,6 +47,10 @@ describe('ElementTools', () => {
       expect(toolNames).toContain('reload_elements');
       expect(toolNames).toContain('render_template');
       expect(toolNames).toContain('execute_agent');
+      expect(toolNames).toContain('create_element');
+      expect(toolNames).toContain('edit_element');
+      expect(toolNames).toContain('validate_element');
+      expect(toolNames).toContain('delete_element');
     });
 
     it('should have proper descriptions for all tools', () => {

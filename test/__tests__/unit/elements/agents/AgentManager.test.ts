@@ -58,7 +58,7 @@ describe('AgentManager', () => {
 
   describe('Initialization', () => {
     it('should create agents directory structure', async () => {
-      const agentsPath = path.join(portfolioPath, 'agents');
+      const agentsPath = path.join(portfolioPath, 'agent');
       const statePath = path.join(agentsPath, '.state');
 
       const agentsDirExists = await fs.access(agentsPath).then(() => true).catch(() => false);
@@ -133,7 +133,7 @@ describe('AgentManager', () => {
     beforeEach(async () => {
       (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
 name: test-agent
-type: agents
+type: agent
 version: 1.0.0
 description: Test agent
 decisionFramework: rule_based
@@ -189,7 +189,7 @@ sessionCount: 5
             // Return agent file content
             return `---
 name: test-agent
-type: agents
+type: agent
 ---
 Content`;
           }
@@ -515,7 +515,7 @@ type: persona
 Content`);
 
       await expect(agentManager.read('wrong-type'))
-        .rejects.toThrow("Invalid element type: expected 'agents', got 'persona'");
+        .rejects.toThrow("Invalid element type: expected 'agent', got 'persona'");
     });
   });
 });

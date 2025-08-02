@@ -5,8 +5,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { fileURLToPath } from "url";
-import matter from "gray-matter";
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -15,14 +13,12 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
+import { validateFilename, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
-import { YamlValidator } from './security/yamlValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { PersonaManager } from './persona/PersonaManager.js';
 import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
@@ -46,7 +42,6 @@ export class DollhouseMCPServer implements IToolHandler {
   private apiCache: APICache = new APICache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
-  private personaManager: PersonaManager;
   private githubClient: GitHubClient;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
@@ -102,7 +97,6 @@ export class DollhouseMCPServer implements IToolHandler {
     this.indicatorConfig = loadIndicatorConfig();
     
     // Initialize persona manager
-    this.personaManager = new PersonaManager(this.personasDir, this.indicatorConfig);
     
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
@@ -180,6 +174,63 @@ export class DollhouseMCPServer implements IToolHandler {
       author: persona.metadata.author,
       category: persona.metadata.category
     });
+  }
+
+  /**
+   * Normalize element type to handle both singular (new) and plural (legacy) forms
+   * This provides backward compatibility during the transition to v1.4.0
+   */
+  private normalizeElementType(type: string): string {
+    // Map plural forms to singular ElementType values
+    const pluralToSingularMap: Record<string, string> = {
+      'personas': ElementType.PERSONA,
+      'skills': ElementType.SKILL,
+      'templates': ElementType.TEMPLATE,
+      'agents': ElementType.AGENT,
+      'memories': ElementType.MEMORY,
+      'ensembles': ElementType.ENSEMBLE
+    };
+    
+    // If it's already a valid ElementType value, return as-is
+    if (Object.values(ElementType).includes(type as ElementType)) {
+      return type;
+    }
+    
+    // If it's a plural form, convert to singular
+    if (pluralToSingularMap[type]) {
+      // Log deprecation warning
+      logger.warn(`Using plural element type '${type}' is deprecated. Please use singular form '${pluralToSingularMap[type]}' instead.`);
+      return pluralToSingularMap[type];
+    }
+    
+    // Unknown type - return as-is and let validation handle it
+    return type;
+  }
+
+  /**
+   * Sanitize metadata object to prevent prototype pollution
+   * Removes any dangerous properties that could affect Object.prototype
+   */
+  private sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
+    if (!metadata || typeof metadata !== 'object') {
+      return {};
+    }
+    
+    const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
+    const sanitized: Record<string, any> = {};
+    
+    for (const [key, value] of Object.entries(metadata)) {
+      if (!dangerousProperties.includes(key)) {
+        // Recursively sanitize nested objects
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          sanitized[key] = this.sanitizeMetadata(value);
+        } else {
+          sanitized[key] = value;
+        }
+      }
+    }
+    
+    return sanitized;
   }
 
   private async loadPersonas() {
@@ -441,11 +492,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async listElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.listPersonas();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skills = await this.skillManager.list();
           if (skills.length === 0) {
             return {
@@ -470,7 +524,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const templates = await this.templateManager.list();
           if (templates.length === 0) {
             return {
@@ -494,7 +548,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agents = await this.agentManager.list();
           if (agents.length === 0) {
             return {
@@ -523,7 +577,7 @@ export class DollhouseMCPServer implements IToolHandler {
           return {
             content: [{
               type: "text",
-              text: `❌ Unknown element type '${type}'. Available types: personas, skills, templates, agents`
+              text: `❌ Unknown element type '${type}'. Available types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
             }]
           };
       }
@@ -540,11 +594,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async activateElement(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.activatePersona(name);
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -566,7 +623,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const template = await this.templateManager.find(t => t.metadata.name === name);
           if (!template) {
             return {
@@ -586,7 +643,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -629,11 +686,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async getActiveElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.getActivePersona();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skills = await this.skillManager.list();
           const activeSkills = skills.filter(s => s.getStatus() === 'active');
           
@@ -655,7 +715,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           return {
             content: [{
               type: "text",
@@ -664,7 +724,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agents = await this.agentManager.list();
           const activeAgents = agents.filter(a => a.getStatus() === 'active');
           
@@ -711,11 +771,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async deactivateElement(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.deactivatePersona();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -735,7 +798,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           return {
             content: [{
               type: "text",
@@ -744,7 +807,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -785,11 +848,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async getElementDetails(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.getPersonaDetails(name);
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -828,7 +894,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const template = await this.templateManager.find(t => t.metadata.name === name);
           if (!template) {
             return {
@@ -865,7 +931,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -926,11 +992,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async reloadElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.reloadPersonas();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           this.skillManager.clearCache();
           const skills = await this.skillManager.list();
           return {
@@ -941,7 +1010,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           // Template manager doesn't have clearCache, just list
           const templates = await this.templateManager.list();
           return {
@@ -952,7 +1021,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           // Agent manager doesn't have clearCache, just list
           const agents = await this.agentManager.list();
           return {
@@ -1054,6 +1123,578 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
   
+  async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
+    try {
+      const { name, type, description, content, metadata } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
+          }]
+        };
+      }
+      
+      // Validate inputs
+      const validatedName = validateFilename(name);
+      const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
+      
+      // SECURITY FIX: Sanitize metadata to prevent prototype pollution
+      const sanitizedMetadata = this.sanitizeMetadata(metadata || {});
+      
+      // Create element based on type
+      switch (type as ElementType) {
+        case ElementType.PERSONA:
+          // Use existing persona creation logic
+          return this.createPersona(
+            validatedName, 
+            validatedDescription, 
+            sanitizedMetadata?.category || 'general',
+            content || '',
+            sanitizedMetadata?.triggers
+          );
+          
+        case ElementType.SKILL:
+          const skill = await this.skillManager.create({
+            name: validatedName,
+            description: validatedDescription,
+            ...sanitizedMetadata,
+            content: content || ''
+          });
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created skill '${skill.metadata.name}' successfully`
+            }]
+          };
+          
+        case ElementType.TEMPLATE:
+          const template = await this.templateManager.create({
+            name: validatedName,
+            description: validatedDescription,
+            content: content || '',
+            ...sanitizedMetadata
+          });
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created template '${template.metadata.name}' successfully`
+            }]
+          };
+          
+        case ElementType.AGENT:
+          const agentResult = await this.agentManager.create(
+            validatedName,
+            validatedDescription,
+            content || '',
+            sanitizedMetadata
+          );
+          if (!agentResult.success) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ ${agentResult.message}`
+              }]
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created agent '${validatedName}' successfully`
+            }]
+          };
+          
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for creation`
+            }]
+          };
+      }
+    } catch (error) {
+      logger.error(`Failed to create element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to create element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async editElement(args: {name: string; type: string; field: string; value: string | number | boolean | Record<string, any> | any[]}) {
+    try {
+      const { name, type, field, value } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
+          }]
+        };
+      }
+      
+      // For personas, use existing edit logic
+      if (type === ElementType.PERSONA) {
+        return this.editPersona(name, field, String(value));
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for editing`
+            }]
+          };
+      }
+      
+      // Find the element
+      const element = await manager!.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Handle nested field updates (e.g., "metadata.author")
+      const fieldParts = field.split('.');
+      
+      // SECURITY FIX: Validate field names to prevent prototype pollution
+      const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
+      for (const part of fieldParts) {
+        if (dangerousProperties.includes(part)) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid field name: '${part}' is not allowed for security reasons`
+            }]
+          };
+        }
+      }
+      
+      let target: any = element;
+      for (let i = 0; i < fieldParts.length - 1; i++) {
+        // SECURITY: Additional check to prevent prototype pollution
+        if (typeof target !== 'object' || target === null) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Cannot set property '${fieldParts[i]}' on non-object`
+            }]
+          };
+        }
+        
+        if (!target[fieldParts[i]]) {
+          // SECURITY: Use Object.defineProperty to avoid prototype chain pollution
+          Object.defineProperty(target, fieldParts[i], {
+            value: {},
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
+        }
+        target = target[fieldParts[i]];
+      }
+      
+      // Update the field
+      const lastField = fieldParts[fieldParts.length - 1];
+      // SECURITY: Use Object.defineProperty for the final assignment too
+      Object.defineProperty(target, lastField, {
+        value: value,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+      
+      // Update version - handle various version formats
+      if (element.version) {
+        const versionParts = element.version.split('.');
+        if (versionParts.length >= 3) {
+          // Standard semver format (e.g., 1.0.0)
+          const patch = parseInt(versionParts[2]) || 0;
+          versionParts[2] = String(patch + 1);
+          element.version = versionParts.join('.');
+        } else if (versionParts.length === 2) {
+          // Two-part version (e.g., 1.0) - add patch version
+          element.version = `${element.version}.1`;
+        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+          // Single number version (e.g., 1) - convert to semver
+          element.version = `${element.version}.0.1`;
+        } else {
+          // Non-standard version - append or replace with standard format
+          element.version = '1.0.1';
+        }
+      } else {
+        // No version - set initial version
+        element.version = '1.0.0';
+      }
+      
+      // Save the element - need to determine filename
+      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      await manager!.save(element as any, filename);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Updated ${type} '${name}' - ${field} set to: ${JSON.stringify(value)}`
+        }]
+      };
+    } catch (error) {
+      logger.error(`Failed to edit element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to edit element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async validateElement(args: {name: string; type: string; strict?: boolean}) {
+    try {
+      const { name, type, strict = false } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
+          }]
+        };
+      }
+      
+      // For personas, use existing validation logic
+      if (type === ElementType.PERSONA) {
+        return this.validatePersona(name);
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for validation`
+            }]
+          };
+      }
+      
+      // Find the element
+      const element = await manager!.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Perform validation
+      const validationResult = element.validate();
+      
+      // Format validation report
+      let report = `🔍 Validation Report for ${type} '${name}':\n`;
+      report += `${validationResult.valid ? '✅' : '❌'} Status: ${validationResult.valid ? 'Valid' : 'Invalid'}\n\n`;
+      
+      if (validationResult.errors && validationResult.errors.length > 0) {
+        report += `❌ Errors (${validationResult.errors.length}):\n`;
+        validationResult.errors.forEach((error: any) => {
+          report += `   • ${error.field || 'General'}: ${error.message}\n`;
+          if (error.fix) {
+            report += `     💡 Fix: ${error.fix}\n`;
+          }
+        });
+        report += '\n';
+      }
+      
+      if (validationResult.warnings && validationResult.warnings.length > 0) {
+        report += `⚠️  Warnings (${validationResult.warnings.length}):\n`;
+        validationResult.warnings.forEach((warning: any) => {
+          report += `   • ${warning.field || 'General'}: ${warning.message}\n`;
+          if (warning.suggestion) {
+            report += `     💡 Suggestion: ${warning.suggestion}\n`;
+          }
+        });
+        report += '\n';
+      }
+      
+      if (validationResult.suggestions && validationResult.suggestions.length > 0) {
+        report += `💡 Suggestions:\n`;
+        validationResult.suggestions.forEach((suggestion: string) => {
+          report += `   • ${suggestion}\n`;
+        });
+      }
+      
+      // Add strict mode additional checks if requested
+      if (strict) {
+        report += '\n📋 Strict Mode: Additional quality checks applied';
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: report
+        }]
+      };
+    } catch (error) {
+      logger.error(`Failed to validate element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to validate element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    try {
+      const { name, type, deleteData } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
+          }]
+        };
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        case ElementType.PERSONA:
+          // For personas, use a different approach
+          const personaPath = path.join(this.personasDir, `${name}.md`);
+          try {
+            await fs.access(personaPath);
+            await fs.unlink(personaPath);
+            
+            // Reload personas to update the cache
+            await this.loadPersonas();
+            
+            return {
+              content: [{
+                type: "text",
+                text: `✅ Successfully deleted persona '${name}'`
+              }]
+            };
+          } catch (error) {
+            if ((error as any).code === 'ENOENT') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Persona '${name}' not found`
+                }]
+              };
+            }
+            throw error;
+          }
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for deletion`
+            }]
+          };
+      }
+      
+      // Ensure manager was assigned (TypeScript type safety)
+      if (!manager) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Element type '${type}' is not supported for deletion`
+          }]
+        };
+      }
+      
+      // Find the element first to check if it exists
+      const element = await manager!.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Check for associated data files
+      let dataFiles: string[] = [];
+      
+      // Agent-specific: Check for state files
+      if (type === ElementType.AGENT) {
+        const stateDir = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state');
+        const stateFile = path.join(stateDir, `${name}-state.json`);
+        try {
+          const stat = await fs.stat(stateFile);
+          dataFiles.push(`- .state/${name}-state.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No state file exists, which is fine
+        }
+      }
+      
+      // Memory-specific: Check for storage files
+      if (type === ElementType.MEMORY) {
+        const storageDir = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage');
+        const storageFile = path.join(storageDir, `${name}-memory.json`);
+        try {
+          const stat = await fs.stat(storageFile);
+          dataFiles.push(`- .storage/${name}-memory.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No storage file exists, which is fine
+        }
+      }
+      
+      // Ensemble-specific: Check for config files
+      if (type === ElementType.ENSEMBLE) {
+        const configDir = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs');
+        const configFile = path.join(configDir, `${name}-config.json`);
+        try {
+          const stat = await fs.stat(configFile);
+          dataFiles.push(`- .configs/${name}-config.json (${(stat.size / 1024).toFixed(2)} KB)`);
+        } catch (error) {
+          // No config file exists, which is fine
+        }
+      }
+      
+      // If data files exist and deleteData is not specified, we need to inform the user
+      if (dataFiles.length > 0 && deleteData === undefined) {
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
+          }]
+        };
+      }
+      
+      // Delete the main element file
+      const filename = `${slugify(name)}.md`;
+      const filepath = path.join(this.portfolioManager.getElementDir(type as ElementType), filename);
+      
+      try {
+        await fs.unlink(filepath);
+      } catch (error) {
+        if ((error as any).code === 'ENOENT') {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ ${type} file '${filename}' not found`
+            }]
+          };
+        }
+        throw error;
+      }
+      
+      // Delete associated data files if requested
+      if (deleteData && dataFiles.length > 0) {
+        const updatedDataFiles: string[] = [];
+        
+        if (type === ElementType.AGENT) {
+          const stateFile = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state', `${name}-state.json`);
+          try {
+            await fs.unlink(stateFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if state file deletion fails
+            logger.warn(`Failed to delete agent state file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.MEMORY) {
+          const storageFile = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage', `${name}-memory.json`);
+          try {
+            await fs.unlink(storageFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if storage file deletion fails
+            logger.warn(`Failed to delete memory storage file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        } else if (type === ElementType.ENSEMBLE) {
+          const configFile = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs', `${name}-config.json`);
+          try {
+            await fs.unlink(configFile);
+            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
+          } catch (error) {
+            // Log but don't fail if config file deletion fails
+            logger.warn(`Failed to delete ensemble config file: ${error}`);
+            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
+          }
+        }
+        
+        dataFiles = updatedDataFiles;
+      }
+      
+      // Build success message
+      let message = `✅ Successfully deleted ${type} '${name}'`;
+      if (dataFiles.length > 0) {
+        if (deleteData) {
+          message += `\n\nAssociated data files:\n${dataFiles.join('\n')}`;
+        } else {
+          message += `\n\n⚠️ Associated data files were preserved:\n${dataFiles.join('\n')}`;
+        }
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: message
+        }]
+      };
+      
+    } catch (error) {
+      logger.error(`Failed to delete element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to delete element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 

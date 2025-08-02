@@ -50,12 +50,27 @@ export function slugify(text: string): string {
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
   const normalized = text.toLowerCase();
-  return normalized
+  const transformed = normalized
     .split('')
     .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
-    .join('')
-    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
-    .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
+    .join('');
+  
+  // SECURITY FIX: Avoid polynomial regex by using separate operations
+  // Trim leading hyphens
+  let start = 0;
+  while (start < transformed.length && transformed[start] === '-') {
+    start++;
+  }
+  
+  // Trim trailing hyphens
+  let end = transformed.length - 1;
+  while (end >= start && transformed[end] === '-') {
+    end--;
+  }
+  
+  // Extract the trimmed portion and collapse multiple hyphens
+  const trimmed = transformed.slice(start, end + 1);
+  return trimmed.replace(/-{2,}/g, '-'); // This is safe as it's linear
 }
 
 /**

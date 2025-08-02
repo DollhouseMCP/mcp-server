@@ -71,7 +71,7 @@ tags: [testing, example]
 
 This is a test skill.`;
       
-      const skillPath = path.join(portfolioManager.getElementDir('skills'), 'test-skill.md');
+      const skillPath = path.join(portfolioManager.getElementDir('skill'), 'test-skill.md');
       await fs.writeFile(skillPath, skillContent);
       
       // Load the skill
@@ -113,7 +113,7 @@ This is a test skill.`;
       await skillManager.save(skill, 'save-test.md');
       
       // Verify file was created
-      const savedPath = path.join(portfolioManager.getElementDir('skills'), 'save-test.md');
+      const savedPath = path.join(portfolioManager.getElementDir('skill'), 'save-test.md');
       const exists = await fs.access(savedPath).then(() => true).catch(() => false);
       expect(exists).toBe(true);
       
@@ -144,7 +144,7 @@ This is a test skill.`;
   describe('list', () => {
     it('should list all skill files', async () => {
       // Create test skill files
-      const skillsDir = portfolioManager.getElementDir('skills');
+      const skillsDir = portfolioManager.getElementDir('skill');
       await fs.writeFile(path.join(skillsDir, 'skill1.md'), '---\nname: Skill 1\n---\nContent');
       await fs.writeFile(path.join(skillsDir, 'skill2.md'), '---\nname: Skill 2\n---\nContent');
       await fs.writeFile(path.join(skillsDir, 'not-a-skill.txt'), 'Should be ignored');
@@ -168,7 +168,7 @@ This is a test skill.`;
 
     it('should handle load errors gracefully', async () => {
       // Create an invalid skill file with malformed YAML frontmatter
-      const skillsDir = portfolioManager.getElementDir('skills');
+      const skillsDir = portfolioManager.getElementDir('skill');
       await fs.writeFile(path.join(skillsDir, 'invalid.md'), '---\ninvalid: [unclosed\n---\ncontent');
       
       const skills = await skillManager.list();
@@ -181,7 +181,7 @@ This is a test skill.`;
   describe('find', () => {
     beforeEach(async () => {
       // Create test skills
-      const skillsDir = portfolioManager.getElementDir('skills');
+      const skillsDir = portfolioManager.getElementDir('skill');
       await fs.writeFile(path.join(skillsDir, 'javascript.md'), '---\nname: JavaScript Expert\ntags: [programming, web]\n---\nContent');
       await fs.writeFile(path.join(skillsDir, 'python.md'), '---\nname: Python Developer\ntags: [programming, data]\n---\nContent');
       
@@ -235,7 +235,7 @@ This is a test skill.`;
   describe('delete', () => {
     it('should delete a skill file', async () => {
       // Create a skill file
-      const skillPath = path.join(portfolioManager.getElementDir('skills'), 'to-delete.md');
+      const skillPath = path.join(portfolioManager.getElementDir('skill'), 'to-delete.md');
       await fs.writeFile(skillPath, '---\nname: To Delete\n---\nContent');
       
       // Mock atomicReadFile
