@@ -74,7 +74,8 @@ export class Skill extends BaseElement implements IElement {
     };
     
     super(ElementType.SKILL, sanitizedMetadata);
-    this.instructions = instructions ? sanitizeInput(UnicodeValidator.normalize(instructions).normalizedContent, 10000) : '';
+    // Ensure instructions is always a string, even if empty
+    this.instructions = instructions && instructions.trim() ? sanitizeInput(UnicodeValidator.normalize(instructions).normalizedContent, 10000) : '';
     
     // Ensure skill-specific metadata
     this.metadata = {

@@ -33,7 +33,7 @@ describe('SecureErrorHandler', () => {
     it('should return safe messages in production mode', () => {
       process.env.NODE_ENV = 'production';
       
-      const error = new Error('File not found: /Users/john/secret/data.txt');
+      const error: any = new Error('File not found: /Users/john/secret/data.txt');
       error.code = 'ENOENT';
       
       const result = SecureErrorHandler.sanitizeError(error);

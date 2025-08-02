@@ -96,9 +96,6 @@ export class PortfolioManager {
     const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
     await fs.mkdir(agentStateDir, { recursive: true });
     
-    const memoryStorageDir = path.join(this.baseDir, ElementType.MEMORY, '.storage');
-    await fs.mkdir(memoryStorageDir, { recursive: true });
-    
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
   }
   

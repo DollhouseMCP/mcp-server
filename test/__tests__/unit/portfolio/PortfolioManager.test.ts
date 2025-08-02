@@ -93,9 +93,7 @@ describe('PortfolioManager', () => {
       const agentStateDir = path.join(testDir, ElementType.AGENT, '.state');
       await expect(fs.access(agentStateDir)).resolves.toBeUndefined();
       
-      // Check memory storage directory
-      const memoryStorageDir = path.join(testDir, ElementType.MEMORY, '.storage');
-      await expect(fs.access(memoryStorageDir)).resolves.toBeUndefined();
+      // Memory type has been removed from ElementType
     });
     
     it('should be idempotent', async () => {
@@ -207,9 +205,8 @@ describe('PortfolioManager', () => {
         expect(stats[ElementType.PERSONA]).toBe(2);
         expect(stats[ElementType.SKILL]).toBe(1);
         expect(stats[ElementType.TEMPLATE]).toBe(0);
-        expect(stats[ElementType.ENSEMBLE]).toBe(0);
         expect(stats[ElementType.AGENT]).toBe(0);
-        expect(stats[ElementType.MEMORY]).toBe(0);
+        // ENSEMBLE and MEMORY types have been removed
       });
     });
   });
