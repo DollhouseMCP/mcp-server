@@ -7,6 +7,7 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { safeExec } from '../utils/git.js';
 import { logger } from '../utils/logger.js';
+import { FileOperations } from '../utils/fileOperations.js';
 
 export interface BackupInfo {
   path: string;
@@ -151,9 +152,20 @@ export class BackupManager {
     const nodeModulesPath = path.join(this.rootDir, 'node_modules');
     try {
       await fs.access(nodeModulesPath);
-      await safeExec('cp', ['-r', 'node_modules', backupPath], { cwd: this.rootDir });
-    } catch {
+      const destNodeModules = path.join(backupPath, 'node_modules');
+      
+      // Use cross-platform file copy instead of Unix-specific cp -r
+      await FileOperations.copyDirectory(nodeModulesPath, destNodeModules, {
+        excludePatterns: ['.bin', '.cache'],
+        onProgress: (copied, total) => {
+          if (copied % 100 === 0) {
+            logger.debug(`[BackupManager] Backing up node_modules: ${copied}/${total} files`);
+          }
+        }
+      });
+    } catch (error) {
       // node_modules doesn't exist or copy failed, that's okay
+      logger.debug('[BackupManager] Could not backup node_modules:', error);
     }
     
     // Backup all persona files (including user-created ones not in git)
@@ -195,6 +207,132 @@ export class BackupManager {
       timestamp,
       version
     };
+  }
+  
+  /**
+   * Create a backup specifically for npm installations
+   */
+  async createNpmBackup(npmGlobalPath: string, version?: string): Promise<string> {
+    try {
+      // Create npm-specific backup directory
+      const npmBackupsDir = path.join(path.dirname(this.backupsDir), '.dollhouse', 'backups', 'npm');
+      await fs.mkdir(npmBackupsDir, { recursive: true });
+      
+      // Create timestamp-based backup directory
+      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+      const backupName = `npm-backup-${timestamp}`;
+      const backupPath = path.join(npmBackupsDir, backupName);
+      
+      logger.info(`[BackupManager] Creating npm backup at: ${backupPath}`);
+      
+      // Create backup directory
+      await fs.mkdir(backupPath, { recursive: true });
+      
+      // Copy the npm package directory
+      await this.copyDirectory(npmGlobalPath, path.join(backupPath, 'package'));
+      
+      // Save backup metadata
+      const metadata = {
+        timestamp,
+        version,
+        npmGlobalPath,
+        installationType: 'npm',
+        createdAt: new Date().toISOString()
+      };
+      
+      await fs.writeFile(
+        path.join(backupPath, 'backup-metadata.json'),
+        JSON.stringify(metadata, null, 2)
+      );
+      
+      // Update manifest
+      await this.updateNpmBackupManifest(npmBackupsDir, {
+        backupName,
+        timestamp,
+        version,
+        path: backupPath
+      });
+      
+      // Cleanup old npm backups (keep last 3)
+      await this.cleanupOldNpmBackups(npmBackupsDir, 3);
+      
+      return backupPath;
+    } catch (error) {
+      logger.error('[BackupManager] Failed to create npm backup:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Copy directory recursively with progress reporting
+   * @deprecated Use FileOperations.copyDirectory instead
+   */
+  private async copyDirectory(src: string, dest: string): Promise<void> {
+    await FileOperations.copyDirectory(src, dest, {
+      excludePatterns: ['.git'],
+      onProgress: (copied, total, file) => {
+        if (copied % 50 === 0) {
+          logger.debug(`[BackupManager] Copying: ${copied}/${total} files`);
+        }
+      }
+    });
+  }
+  
+  /**
+   * Update npm backup manifest
+   */
+  private async updateNpmBackupManifest(npmBackupsDir: string, backupInfo: {
+    backupName: string;
+    timestamp: string;
+    version?: string;
+    path: string;
+  }): Promise<void> {
+    const manifestPath = path.join(npmBackupsDir, 'manifest.json');
+    
+    let manifest: { backups: Array<{
+      backupName: string;
+      timestamp: string;
+      version?: string;
+      path: string;
+    }> } = { backups: [] };
+    try {
+      const content = await fs.readFile(manifestPath, 'utf-8');
+      manifest = JSON.parse(content);
+    } catch {
+      // File doesn't exist or is invalid, use default
+    }
+    
+    // Add new backup to beginning of list
+    manifest.backups.unshift(backupInfo);
+    
+    // Keep only last 10 entries in manifest
+    manifest.backups = manifest.backups.slice(0, 10);
+    
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  
+  /**
+   * Clean up old npm backups
+   */
+  private async cleanupOldNpmBackups(npmBackupsDir: string, keepCount: number): Promise<void> {
+    try {
+      const entries = await fs.readdir(npmBackupsDir, { withFileTypes: true });
+      const backupDirs = entries
+        .filter(e => e.isDirectory() && e.name.startsWith('npm-backup-'))
+        .map(e => e.name)
+        .sort()
+        .reverse();
+      
+      // Remove old backups
+      const toRemove = backupDirs.slice(keepCount);
+      for (const dir of toRemove) {
+        const dirPath = path.join(npmBackupsDir, dir);
+        logger.info(`[BackupManager] Removing old npm backup: ${dir}`);
+        await fs.rm(dirPath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      logger.warn('[BackupManager] Failed to cleanup old npm backups:', error);
+    }
   }
   
   /**

@@ -23,6 +23,7 @@ RUN npm ci
 # Copy source code
 COPY src/ ./src/
 COPY data/personas/ ./data/personas/
+COPY scripts/ ./scripts/
 
 # Build the application
 RUN npm run build
