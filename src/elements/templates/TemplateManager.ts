@@ -205,6 +205,39 @@ export class TemplateManager implements IElementManager<Template> {
   }
 
   /**
+   * Create a new template
+   */
+  async create(data: {name: string; description: string; content?: string; metadata?: any}): Promise<Template> {
+    // SECURITY FIX #4: Validate and sanitize all inputs
+    const sanitizedName = sanitizeInput(data.name || 'new-template', 100);
+    const sanitizedDescription = sanitizeInput(data.description || '', 500);
+    const sanitizedContent = sanitizeInput(data.content || '', 100000); // 100KB max
+    
+    // Create the template instance
+    const template = new Template({
+      ...data.metadata,
+      name: sanitizedName,
+      description: sanitizedDescription
+    }, sanitizedContent);
+    
+    // Generate filename from template name
+    const filename = `${sanitizedName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+    
+    // Save the template
+    await this.save(template, filename);
+    
+    // SECURITY FIX #5: Audit successful creation
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_CREATED',
+      severity: 'LOW',
+      source: 'TemplateManager.create',
+      details: `Template created: ${template.metadata.name}`
+    });
+    
+    return template;
+  }
+
+  /**
    * Delete a template
    * SECURITY FIX #6: Path validation to prevent deletion outside directory
    */

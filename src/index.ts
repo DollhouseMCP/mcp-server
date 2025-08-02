@@ -1054,6 +1054,307 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
   
+  async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
+    try {
+      const { name, type, description, content, metadata } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+          }]
+        };
+      }
+      
+      // Validate inputs
+      const validatedName = validateFilename(name);
+      const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
+      
+      // Create element based on type
+      switch (type as ElementType) {
+        case ElementType.PERSONA:
+          // Use existing persona creation logic
+          return this.createPersona(
+            validatedName, 
+            validatedDescription, 
+            metadata?.category || 'general',
+            content || '',
+            metadata?.triggers
+          );
+          
+        case ElementType.SKILL:
+          const skill = await this.skillManager.create({
+            name: validatedName,
+            description: validatedDescription,
+            ...metadata,
+            content: content || ''
+          });
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created skill '${skill.metadata.name}' successfully`
+            }]
+          };
+          
+        case ElementType.TEMPLATE:
+          const template = await this.templateManager.create({
+            name: validatedName,
+            description: validatedDescription,
+            content: content || '',
+            ...metadata
+          });
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created template '${template.metadata.name}' successfully`
+            }]
+          };
+          
+        case ElementType.AGENT:
+          const agentResult = await this.agentManager.create(
+            validatedName,
+            validatedDescription,
+            content || '',
+            metadata
+          );
+          if (!agentResult.success) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ ${agentResult.message}`
+              }]
+            };
+          }
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created agent '${validatedName}' successfully`
+            }]
+          };
+          
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for creation`
+            }]
+          };
+      }
+    } catch (error) {
+      logger.error(`Failed to create element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to create element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async editElement(args: {name: string; type: string; field: string; value: any}) {
+    try {
+      const { name, type, field, value } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+          }]
+        };
+      }
+      
+      // For personas, use existing edit logic
+      if (type === ElementType.PERSONA) {
+        return this.editPersona(name, field, value);
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: any;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for editing`
+            }]
+          };
+      }
+      
+      // Find the element
+      const element = await manager.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Handle nested field updates (e.g., "metadata.author")
+      const fieldParts = field.split('.');
+      let target: any = element;
+      for (let i = 0; i < fieldParts.length - 1; i++) {
+        if (!target[fieldParts[i]]) {
+          target[fieldParts[i]] = {};
+        }
+        target = target[fieldParts[i]];
+      }
+      
+      // Update the field
+      const lastField = fieldParts[fieldParts.length - 1];
+      target[lastField] = value;
+      
+      // Update version
+      if (element.version) {
+        const versionParts = element.version.split('.');
+        versionParts[2] = String(parseInt(versionParts[2]) + 1);
+        element.version = versionParts.join('.');
+      }
+      
+      // Save the element - need to determine filename
+      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      await manager.save(element, filename);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Updated ${type} '${name}' - ${field} set to: ${JSON.stringify(value)}`
+        }]
+      };
+    } catch (error) {
+      logger.error(`Failed to edit element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to edit element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async validateElement(args: {name: string; type: string; strict?: boolean}) {
+    try {
+      const { name, type, strict = false } = args;
+      
+      // Validate element type
+      if (!Object.values(ElementType).includes(type as ElementType)) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')}`
+          }]
+        };
+      }
+      
+      // For personas, use existing validation logic
+      if (type === ElementType.PERSONA) {
+        return this.validatePersona(name);
+      }
+      
+      // Get the appropriate manager based on type
+      let manager: any;
+      switch (type as ElementType) {
+        case ElementType.SKILL:
+          manager = this.skillManager;
+          break;
+        case ElementType.TEMPLATE:
+          manager = this.templateManager;
+          break;
+        case ElementType.AGENT:
+          manager = this.agentManager;
+          break;
+        default:
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Element type '${type}' is not yet supported for validation`
+            }]
+          };
+      }
+      
+      // Find the element
+      const element = await manager.find((e: any) => e.metadata.name === name);
+      if (!element) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ ${type} '${name}' not found`
+          }]
+        };
+      }
+      
+      // Perform validation
+      const validationResult = element.validate();
+      
+      // Format validation report
+      let report = `🔍 Validation Report for ${type} '${name}':\n`;
+      report += `${validationResult.valid ? '✅' : '❌'} Status: ${validationResult.valid ? 'Valid' : 'Invalid'}\n`;
+      report += `📊 Score: ${validationResult.score || 'N/A'}/100\n\n`;
+      
+      if (validationResult.errors && validationResult.errors.length > 0) {
+        report += `❌ Errors (${validationResult.errors.length}):\n`;
+        validationResult.errors.forEach((error: any) => {
+          report += `   • ${error.field || 'General'}: ${error.message}\n`;
+          if (error.fix) {
+            report += `     💡 Fix: ${error.fix}\n`;
+          }
+        });
+        report += '\n';
+      }
+      
+      if (validationResult.warnings && validationResult.warnings.length > 0) {
+        report += `⚠️  Warnings (${validationResult.warnings.length}):\n`;
+        validationResult.warnings.forEach((warning: any) => {
+          report += `   • ${warning.field || 'General'}: ${warning.message}\n`;
+          if (warning.suggestion) {
+            report += `     💡 Suggestion: ${warning.suggestion}\n`;
+          }
+        });
+        report += '\n';
+      }
+      
+      if (validationResult.suggestions && validationResult.suggestions.length > 0) {
+        report += `💡 Suggestions:\n`;
+        validationResult.suggestions.forEach((suggestion: string) => {
+          report += `   • ${suggestion}\n`;
+        });
+      }
+      
+      // Add strict mode additional checks if requested
+      if (strict) {
+        report += '\n📋 Strict Mode: Additional quality checks applied';
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: report
+        }]
+      };
+    } catch (error) {
+      logger.error(`Failed to validate element:`, error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to validate element: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
 
   // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
 
