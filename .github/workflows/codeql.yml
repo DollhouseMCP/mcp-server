@@ -53,5 +53,4 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
         upload: true
-        # Don't fail on warnings from suppressed issues
-        fail-on: 'error'
+        # Note: Using suppression config to handle false positives
