@@ -199,6 +199,42 @@ export class SkillManager implements IElementManager<Skill> {
   }
 
   /**
+   * Create a new skill
+   */
+  async create(data: Partial<SkillMetadata> & {content?: string}): Promise<Skill> {
+    // SECURITY FIX #4: Validate and sanitize all inputs
+    const sanitizedName = sanitizeInput(data.name || 'new-skill', 100);
+    const sanitizedDescription = sanitizeInput(data.description || '', 500);
+    const sanitizedContent = sanitizeInput(data.content || '', 50000);
+    
+    // Extract content from data
+    const { content, ...metadata } = data;
+    
+    // Create the skill instance
+    const skill = new Skill({
+      ...metadata,
+      name: sanitizedName,
+      description: sanitizedDescription
+    }, sanitizedContent);
+    
+    // Generate filename from skill name
+    const filename = `${sanitizedName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+    
+    // Save the skill
+    await this.save(skill, filename);
+    
+    // SECURITY FIX #5: Audit successful creation
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_CREATED',
+      severity: 'LOW',
+      source: 'SkillManager.create',
+      details: `Skill created: ${skill.metadata.name}`
+    });
+    
+    return skill;
+  }
+
+  /**
    * Delete a skill
    */
   async delete(filePath: string): Promise<void> {

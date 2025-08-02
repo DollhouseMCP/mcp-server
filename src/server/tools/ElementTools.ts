@@ -35,7 +35,7 @@ interface CreateElementArgs {
   name: string;
   description: string;
   type: string;
-  instructions?: string;
+  content?: string;
   metadata?: Record<string, any>;
 }
 
@@ -49,6 +49,7 @@ interface EditElementArgs {
 interface ValidateElementArgs {
   name: string;
   type: string;
+  strict?: boolean;
 }
 
 interface RenderTemplateArgs {
@@ -230,6 +231,107 @@ export function getElementTools(server: IToolHandler): Array<{ tool: ToolDefinit
         },
       },
       handler: (args: ExecuteAgentArgs) => server.executeAgent(args.name, args.goal)
+    },
+    // Generic element creation tool
+    {
+      tool: {
+        name: "create_element",
+        description: "Create a new element of any type",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The element name",
+            },
+            type: {
+              type: "string",
+              description: "The element type",
+              enum: Object.values(ElementType),
+            },
+            description: {
+              type: "string",
+              description: "Element description",
+            },
+            content: {
+              type: "string",
+              description: "Element content (required for some types)",
+            },
+            metadata: {
+              type: "object",
+              description: "Additional metadata specific to element type",
+              additionalProperties: true,
+            },
+          },
+          required: ["name", "type", "description"],
+        },
+      },
+      handler: (args: CreateElementArgs) => server.createElement(args)
+    },
+    // Generic element editing tool
+    {
+      tool: {
+        name: "edit_element",
+        description: "Edit an existing element of any type",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The element name to edit",
+            },
+            type: {
+              type: "string",
+              description: "The element type",
+              enum: Object.values(ElementType),
+            },
+            field: {
+              type: "string",
+              description: "The field to edit (e.g., 'description', 'metadata.author', 'content')",
+            },
+            value: {
+              description: "The new value for the field",
+              oneOf: [
+                { type: "string" },
+                { type: "number" },
+                { type: "boolean" },
+                { type: "object" },
+                { type: "array" },
+              ],
+            },
+          },
+          required: ["name", "type", "field", "value"],
+        },
+      },
+      handler: (args: EditElementArgs) => server.editElement(args)
+    },
+    // Generic element validation tool
+    {
+      tool: {
+        name: "validate_element",
+        description: "Validate an element for correctness and best practices",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The element name to validate",
+            },
+            type: {
+              type: "string",
+              description: "The element type",
+              enum: Object.values(ElementType),
+            },
+            strict: {
+              type: "boolean",
+              description: "Whether to apply strict validation rules",
+              default: false,
+            },
+          },
+          required: ["name", "type"],
+        },
+      },
+      handler: (args: ValidateElementArgs) => server.validateElement(args)
     },
   ];
 }
