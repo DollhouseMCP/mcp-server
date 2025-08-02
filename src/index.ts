@@ -1294,15 +1294,37 @@ export class DollhouseMCPServer implements IToolHandler {
       
       let target: any = element;
       for (let i = 0; i < fieldParts.length - 1; i++) {
+        // SECURITY: Additional check to prevent prototype pollution
+        if (typeof target !== 'object' || target === null) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Cannot set property '${fieldParts[i]}' on non-object`
+            }]
+          };
+        }
+        
         if (!target[fieldParts[i]]) {
-          target[fieldParts[i]] = {};
+          // SECURITY: Use Object.defineProperty to avoid prototype chain pollution
+          Object.defineProperty(target, fieldParts[i], {
+            value: {},
+            writable: true,
+            enumerable: true,
+            configurable: true
+          });
         }
         target = target[fieldParts[i]];
       }
       
       // Update the field
       const lastField = fieldParts[fieldParts.length - 1];
-      target[lastField] = value;
+      // SECURITY: Use Object.defineProperty for the final assignment too
+      Object.defineProperty(target, lastField, {
+        value: value,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
       
       // Update version - handle various version formats
       if (element.version) {
