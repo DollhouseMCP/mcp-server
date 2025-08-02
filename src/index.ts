@@ -1153,7 +1153,7 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
   
-  async editElement(args: {name: string; type: string; field: string; value: any}) {
+  async editElement(args: {name: string; type: string; field: string; value: string | number | boolean | Record<string, any> | any[]}) {
     try {
       const { name, type, field, value } = args;
       
@@ -1173,7 +1173,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Get the appropriate manager based on type
-      let manager: any;
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
       switch (type as ElementType) {
         case ElementType.SKILL:
           manager = this.skillManager;
@@ -1194,7 +1194,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Find the element
-      const element = await manager.find((e: any) => e.metadata.name === name);
+      const element = await manager!.find((e: any) => e.metadata.name === name);
       if (!element) {
         return {
           content: [{
@@ -1218,11 +1218,27 @@ export class DollhouseMCPServer implements IToolHandler {
       const lastField = fieldParts[fieldParts.length - 1];
       target[lastField] = value;
       
-      // Update version
+      // Update version - handle various version formats
       if (element.version) {
         const versionParts = element.version.split('.');
-        versionParts[2] = String(parseInt(versionParts[2]) + 1);
-        element.version = versionParts.join('.');
+        if (versionParts.length >= 3) {
+          // Standard semver format (e.g., 1.0.0)
+          const patch = parseInt(versionParts[2]) || 0;
+          versionParts[2] = String(patch + 1);
+          element.version = versionParts.join('.');
+        } else if (versionParts.length === 2) {
+          // Two-part version (e.g., 1.0) - add patch version
+          element.version = `${element.version}.1`;
+        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+          // Single number version (e.g., 1) - convert to semver
+          element.version = `${element.version}.0.1`;
+        } else {
+          // Non-standard version - append or replace with standard format
+          element.version = '1.0.1';
+        }
+      } else {
+        // No version - set initial version
+        element.version = '1.0.0';
       }
       
       // Save the element - need to determine filename
@@ -1266,7 +1282,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Get the appropriate manager based on type
-      let manager: any;
+      let manager: SkillManager | TemplateManager | AgentManager | null = null;
       switch (type as ElementType) {
         case ElementType.SKILL:
           manager = this.skillManager;
@@ -1287,7 +1303,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Find the element
-      const element = await manager.find((e: any) => e.metadata.name === name);
+      const element = await manager!.find((e: any) => e.metadata.name === name);
       if (!element) {
         return {
           content: [{
