@@ -209,7 +209,6 @@ describe('Generic Element Tools Integration', () => {
       const result = await server.validateElement(args);
       
       expect(result.content[0].text).toContain('✅ Status: Valid');
-      expect(result.content[0].text).toContain('📊 Score:');
     });
     
     it('should report validation errors for incomplete elements', async () => {

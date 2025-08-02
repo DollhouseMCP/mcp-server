@@ -1169,7 +1169,7 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // For personas, use existing edit logic
       if (type === ElementType.PERSONA) {
-        return this.editPersona(name, field, value);
+        return this.editPersona(name, field, String(value));
       }
       
       // Get the appropriate manager based on type
@@ -1243,7 +1243,7 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Save the element - need to determine filename
       const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
-      await manager.save(element, filename);
+      await manager!.save(element as any, filename);
       
       return {
         content: [{
@@ -1318,8 +1318,7 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Format validation report
       let report = `🔍 Validation Report for ${type} '${name}':\n`;
-      report += `${validationResult.valid ? '✅' : '❌'} Status: ${validationResult.valid ? 'Valid' : 'Invalid'}\n`;
-      report += `📊 Score: ${validationResult.score || 'N/A'}/100\n\n`;
+      report += `${validationResult.valid ? '✅' : '❌'} Status: ${validationResult.valid ? 'Valid' : 'Invalid'}\n\n`;
       
       if (validationResult.errors && validationResult.errors.length > 0) {
         report += `❌ Errors (${validationResult.errors.length}):\n`;
