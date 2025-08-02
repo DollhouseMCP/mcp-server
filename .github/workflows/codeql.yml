@@ -53,4 +53,4 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
         upload: true
-        # Note: Using suppression config to handle false positives
+        # Note: False positives are handled via suppression config at .github/codeql/codeql-config.yml
