@@ -12,6 +12,8 @@ import { BackupManager } from './BackupManager.js';
 import { InstallationDetector } from '../utils/installation.js';
 import { logger } from '../utils/logger.js';
 import { compareVersions } from '../utils/version.js';
+import { FileOperations, FileTransaction } from '../utils/fileOperations.js';
+import { UpdateConfigManager } from '../config/updateConfig.js';
 
 export interface UpdateProgress {
   step: string;
@@ -317,6 +319,15 @@ export class UpdateManager {
         };
       }
       
+      // Get configuration
+      const config = UpdateConfigManager.getInstance();
+      
+      // Progress tracking
+      let progressMessage = personaIndicator + '🔄 **NPM Update in Progress**\n\n';
+      progressMessage += '**Steps:**\n';
+      progressMessage += '✅ Version check complete\n';
+      progressMessage += '⏳ Creating backup...\n';
+      
       // For npm installations, backup is mandatory for safety
       logger.info('[UpdateManager] Creating backup before npm update');
       try {
@@ -326,9 +337,13 @@ export class UpdateManager {
           throw new Error('Could not determine npm global installation path');
         }
         
-        // Create npm-specific backup
+        // Create npm-specific backup with progress
         const backupPath = await this.backupManager.createNpmBackup(npmGlobalPath, currentVersion);
         logger.info(`[UpdateManager] Backup created at: ${backupPath}`);
+        
+        progressMessage = progressMessage.replace('⏳ Creating backup...', '✅ Backup created');
+        progressMessage += '⏳ Downloading and installing update...\n';
+        
       } catch (backupError) {
         logger.error('[UpdateManager] Backup failed:', backupError);
         return {
@@ -340,11 +355,17 @@ export class UpdateManager {
         };
       }
       
-      // Perform npm update
+      // Perform npm update with progress
       logger.info('[UpdateManager] Running npm update -g @dollhousemcp/mcp-server');
+      progressMessage += '\n**Progress:**\n';
+      progressMessage += '```\n';
+      progressMessage += 'Running: npm update -g @dollhousemcp/mcp-server\n';
+      progressMessage += 'This may take a few minutes...\n';
+      progressMessage += '```\n';
+      
       const updateResult = await safeExec('npm', ['update', '-g', '@dollhousemcp/mcp-server'], {
         cwd: this.rootDir,
-        timeout: 300000 // 5 minutes for npm update
+        timeout: config.getNpmUpdateTimeout()
       });
       
       logger.info('[UpdateManager] npm update completed', updateResult);
@@ -402,8 +423,9 @@ export class UpdateManager {
     try {
       logger.info('[UpdateManager] Starting npm rollback process');
       
-      // Get npm backup manifest
-      const npmBackupsDir = path.join(process.env.HOME || '', '.dollhouse', 'backups', 'npm');
+      // Get npm backup manifest from configuration
+      const config = UpdateConfigManager.getInstance();
+      const npmBackupsDir = config.getNpmBackupDir();
       const manifestPath = path.join(npmBackupsDir, 'manifest.json');
       
       let manifest;
@@ -463,38 +485,72 @@ export class UpdateManager {
       
       logger.info(`[UpdateManager] Restoring npm backup from: ${latestBackup.path}`);
       
-      // Use atomic operations to prevent race conditions
+      // First validate that the backup is restorable
+      const backupPackagePath = path.join(latestBackup.path, 'package');
+      try {
+        await fs.access(backupPackagePath);
+        const packageJsonPath = path.join(backupPackagePath, 'package.json');
+        await fs.access(packageJsonPath);
+      } catch (error) {
+        return {
+          text: personaIndicator + '❌ **Backup Validation Failed**\n\n' +
+            'The backup appears to be corrupted or incomplete.\n\n' +
+            '**Details:**\n' +
+            `Backup path: ${latestBackup.path}\n` +
+            `Error: ${error instanceof Error ? error.message : String(error)}\n\n` +
+            '**Manual Recovery:**\n' +
+            'Try another backup or reinstall manually:\n' +
+            '```bash\n' +
+            'npm install -g @dollhousemcp/mcp-server@' + (latestBackup.version || '1.4.0') + '\n' +
+            '```'
+        };
+      }
+      
+      // Use transaction for atomic operations
       const tempPath = `${npmGlobalPath}.tmp-${Date.now()}`;
       const backupPath = `${npmGlobalPath}.backup-${Date.now()}`;
+      const transaction = FileOperations.createTransaction();
       
       try {
         // Step 1: Copy backup to temporary location
-        const backupPackagePath = path.join(latestBackup.path, 'package');
-        await this.copyDirectory(backupPackagePath, tempPath);
+        await transaction.addCopy(backupPackagePath, tempPath);
         
         // Step 2: Move current installation to backup (atomic)
-        await fs.rename(npmGlobalPath, backupPath);
+        await transaction.addMove(npmGlobalPath, backupPath);
         
         // Step 3: Move temp to final location (atomic)
-        await fs.rename(tempPath, npmGlobalPath);
+        await transaction.addMove(tempPath, npmGlobalPath);
         
-        // Step 4: Remove old backup
+        // All operations successful, commit the transaction
+        transaction.commit();
+        
+        // Step 4: Clean up old backup (not part of transaction)
         await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {
-          // Log but don't fail if cleanup fails
           logger.warn(`[UpdateManager] Failed to cleanup backup at: ${backupPath}`);
         });
       } catch (rollbackError) {
-        // Attempt to restore original if rollback fails
+        logger.error('[UpdateManager] Rollback operation failed, attempting recovery:', rollbackError);
+        
+        // Rollback all operations
+        if (transaction.hasOperations()) {
+          await transaction.rollback();
+        }
+        
+        // Additional recovery attempt
         try {
-          await fs.rename(backupPath, npmGlobalPath);
+          // Check if npm path exists and is accessible
+          await fs.access(npmGlobalPath);
+          logger.info('[UpdateManager] NPM installation appears intact after rollback');
         } catch {
-          // If we can't restore, at least try to put temp in place
+          // Try to restore from backup if main path is missing
           try {
-            await fs.rename(tempPath, npmGlobalPath);
+            await fs.rename(backupPath, npmGlobalPath);
+            logger.info('[UpdateManager] Restored from backup path');
           } catch {
-            // Complete failure - guide user to manual recovery
+            logger.error('[UpdateManager] Complete rollback failure - manual intervention required');
           }
         }
+        
         throw rollbackError;
       }
       
@@ -530,22 +586,16 @@ export class UpdateManager {
   }
   
   /**
-   * Copy directory recursively (helper method)
+   * Copy directory recursively with progress reporting
+   * @deprecated Use FileOperations.copyDirectory instead
    */
   private async copyDirectory(src: string, dest: string): Promise<void> {
-    await fs.mkdir(dest, { recursive: true });
-    const entries = await fs.readdir(src, { withFileTypes: true });
-    
-    for (const entry of entries) {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
-      
-      if (entry.isDirectory()) {
-        await this.copyDirectory(srcPath, destPath);
-      } else {
-        await fs.copyFile(srcPath, destPath);
+    await FileOperations.copyDirectory(src, dest, {
+      excludePatterns: ['.git', 'node_modules'],
+      onProgress: (copied, total, file) => {
+        logger.debug(`[UpdateManager] Copying files: ${copied}/${total} - ${path.basename(file)}`);
       }
-    }
+    });
   }
   
   /**
@@ -612,25 +662,50 @@ export class UpdateManager {
         // Directory doesn't exist, good to proceed
       }
       
+      // Progress message builder
+      let progressSteps = personaIndicator + '🔄 **Git Installation Progress**\n\n';
+      progressSteps += '**Steps:**\n';
+      progressSteps += '⏳ Cloning repository...\n';
+      progressSteps += '⏳ Installing dependencies...\n';
+      progressSteps += '⏳ Building TypeScript...\n';
+      progressSteps += '⏳ Setting up configuration...\n\n';
+      progressSteps += '**Current Step:** Cloning repository\n';
+      progressSteps += '```\n';
+      progressSteps += `Target: ${gitTargetDir}\n`;
+      progressSteps += 'This may take a few minutes depending on your connection...\n';
+      progressSteps += '```\n';
+      
+      // Get configuration
+      const config = UpdateConfigManager.getInstance();
+      
       // Step 1: Clone the repository
       logger.info('[UpdateManager] Cloning repository...');
       await safeExec('git', ['clone', 'https://github.com/DollhouseMCP/mcp-server.git', gitTargetDir], {
-        timeout: 300000 // 5 minutes
+        timeout: config.getGitCloneTimeout()
       });
+      
+      progressSteps = progressSteps.replace('⏳ Cloning repository...', '✅ Repository cloned');
+      progressSteps = progressSteps.replace('**Current Step:** Cloning repository', '**Current Step:** Installing dependencies');
       
       // Step 2: Install dependencies
       logger.info('[UpdateManager] Installing dependencies...');
       await safeExec('npm', ['install'], {
         cwd: gitTargetDir,
-        timeout: 300000
+        timeout: config.getNpmInstallTimeout()
       });
+      
+      progressSteps = progressSteps.replace('⏳ Installing dependencies...', '✅ Dependencies installed');
+      progressSteps = progressSteps.replace('**Current Step:** Installing dependencies', '**Current Step:** Building TypeScript');
       
       // Step 3: Build TypeScript
       logger.info('[UpdateManager] Building TypeScript...');
       await safeExec('npm', ['run', 'build'], {
         cwd: gitTargetDir,
-        timeout: 120000
+        timeout: config.getBuildTimeout()
       });
+      
+      progressSteps = progressSteps.replace('⏳ Building TypeScript...', '✅ TypeScript built');
+      progressSteps = progressSteps.replace('**Current Step:** Building TypeScript', '**Current Step:** Configuration');
       
       // Step 4: Copy portfolio
       const portfolioSource = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');

@@ -7,6 +7,7 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { safeExec } from '../utils/git.js';
 import { logger } from '../utils/logger.js';
+import { FileOperations } from '../utils/fileOperations.js';
 
 export interface BackupInfo {
   path: string;
@@ -151,9 +152,20 @@ export class BackupManager {
     const nodeModulesPath = path.join(this.rootDir, 'node_modules');
     try {
       await fs.access(nodeModulesPath);
-      await safeExec('cp', ['-r', 'node_modules', backupPath], { cwd: this.rootDir });
-    } catch {
+      const destNodeModules = path.join(backupPath, 'node_modules');
+      
+      // Use cross-platform file copy instead of Unix-specific cp -r
+      await FileOperations.copyDirectory(nodeModulesPath, destNodeModules, {
+        excludePatterns: ['.bin', '.cache'],
+        onProgress: (copied, total) => {
+          if (copied % 100 === 0) {
+            logger.debug(`[BackupManager] Backing up node_modules: ${copied}/${total} files`);
+          }
+        }
+      });
+    } catch (error) {
       // node_modules doesn't exist or copy failed, that's okay
+      logger.debug('[BackupManager] Could not backup node_modules:', error);
     }
     
     // Backup all persona files (including user-created ones not in git)
@@ -252,22 +264,18 @@ export class BackupManager {
   }
   
   /**
-   * Copy directory recursively
+   * Copy directory recursively with progress reporting
+   * @deprecated Use FileOperations.copyDirectory instead
    */
   private async copyDirectory(src: string, dest: string): Promise<void> {
-    await fs.mkdir(dest, { recursive: true });
-    const entries = await fs.readdir(src, { withFileTypes: true });
-    
-    for (const entry of entries) {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
-      
-      if (entry.isDirectory()) {
-        await this.copyDirectory(srcPath, destPath);
-      } else {
-        await fs.copyFile(srcPath, destPath);
+    await FileOperations.copyDirectory(src, dest, {
+      excludePatterns: ['.git'],
+      onProgress: (copied, total, file) => {
+        if (copied % 50 === 0) {
+          logger.debug(`[BackupManager] Copying: ${copied}/${total} files`);
+        }
       }
-    }
+    });
   }
   
   /**
