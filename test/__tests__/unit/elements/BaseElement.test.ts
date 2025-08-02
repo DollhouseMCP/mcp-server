@@ -55,7 +55,7 @@ describe('BaseElement', () => {
     it('should generate ID based on name', () => {
       const element = new TestElement({ name: 'My Cool Element' });
       
-      expect(element.id).toMatch(/^personas_my-cool-element_\d+$/);
+      expect(element.id).toMatch(/^persona_my-cool-element_\d+$/);
     });
   });
   

@@ -58,7 +58,7 @@ describe('AgentManager', () => {
 
   describe('Initialization', () => {
     it('should create agents directory structure', async () => {
-      const agentsPath = path.join(portfolioPath, 'agents');
+      const agentsPath = path.join(portfolioPath, 'agent');
       const statePath = path.join(agentsPath, '.state');
 
       const agentsDirExists = await fs.access(agentsPath).then(() => true).catch(() => false);
