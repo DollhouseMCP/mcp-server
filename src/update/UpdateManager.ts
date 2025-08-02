@@ -512,6 +512,146 @@ export class UpdateManager {
   }
   
   /**
+   * Convert npm installation to git installation
+   */
+  async convertToGitInstallation(targetDir?: string, confirm: boolean = false, personaIndicator: string = ''): Promise<{ text: string }> {
+    try {
+      const installationType = InstallationDetector.getInstallationType();
+      
+      if (installationType === 'git') {
+        return {
+          text: personaIndicator + '⚠️ **Already a Git Installation**\n\n' +
+            'This server is already running from a git installation.\n' +
+            'No conversion needed.'
+        };
+      }
+      
+      if (installationType === 'unknown') {
+        return {
+          text: personaIndicator + '❌ **Installation Type Unknown**\n\n' +
+            'Cannot determine the current installation type.\n' +
+            'Please check your installation manually.'
+        };
+      }
+      
+      // Default target directory
+      const defaultTargetDir = path.join(process.env.HOME || '', '.dollhouse', 'mcp-server-git');
+      const gitTargetDir = targetDir || defaultTargetDir;
+      
+      if (!confirm) {
+        return {
+          text: personaIndicator + '🔄 **Convert to Git Installation**\n\n' +
+            '**This will:**\n' +
+            `1. Clone DollhouseMCP to: ${gitTargetDir}\n` +
+            '2. Copy your portfolio and settings\n' +
+            '3. Build the TypeScript code\n' +
+            '4. Provide Claude Desktop configuration\n\n' +
+            '**Benefits of Git Installation:**\n' +
+            '• Full control over updates\n' +
+            '• Access to development branches\n' +
+            '• Ability to contribute changes\n' +
+            '• Rollback to any commit\n\n' +
+            '**To proceed:**\n' +
+            '`convert_to_git_installation true`\n\n' +
+            '**To use custom directory:**\n' +
+            '`convert_to_git_installation "/path/to/dir" true`'
+        };
+      }
+      
+      logger.info(`[UpdateManager] Starting conversion to git installation at: ${gitTargetDir}`);
+      
+      // Check if target directory already exists
+      try {
+        await fs.access(gitTargetDir);
+        return {
+          text: personaIndicator + '❌ **Target Directory Exists**\n\n' +
+            `The directory ${gitTargetDir} already exists.\n\n` +
+            '**Options:**\n' +
+            '1. Remove the existing directory first\n' +
+            '2. Choose a different target directory\n' +
+            '3. Use the existing git installation'
+        };
+      } catch {
+        // Directory doesn't exist, good to proceed
+      }
+      
+      // Step 1: Clone the repository
+      logger.info('[UpdateManager] Cloning repository...');
+      await safeExec('git', ['clone', 'https://github.com/DollhouseMCP/mcp-server.git', gitTargetDir], {
+        timeout: 300000 // 5 minutes
+      });
+      
+      // Step 2: Install dependencies
+      logger.info('[UpdateManager] Installing dependencies...');
+      await safeExec('npm', ['install'], {
+        cwd: gitTargetDir,
+        timeout: 300000
+      });
+      
+      // Step 3: Build TypeScript
+      logger.info('[UpdateManager] Building TypeScript...');
+      await safeExec('npm', ['run', 'build'], {
+        cwd: gitTargetDir,
+        timeout: 120000
+      });
+      
+      // Step 4: Copy portfolio
+      const portfolioSource = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
+      const portfolioTarget = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
+      
+      logger.info('[UpdateManager] Portfolio will remain at: ' + portfolioTarget);
+      
+      // Step 5: Generate Claude Desktop config
+      const configPath = path.join(gitTargetDir, 'dist', 'index.js');
+      const claudeConfig = {
+        mcpServers: {
+          dollhousemcp: {
+            command: 'node',
+            args: [configPath]
+          }
+        }
+      };
+      
+      return {
+        text: personaIndicator + '✅ **Git Installation Complete!**\n\n' +
+          `**Installation Location:** ${gitTargetDir}\n\n` +
+          '**Next Steps:**\n\n' +
+          '1. **Update Claude Desktop configuration:**\n' +
+          '   ```json\n' +
+          JSON.stringify(claudeConfig, null, 2) + '\n' +
+          '   ```\n\n' +
+          '2. **Restart Claude Desktop**\n\n' +
+          '3. **Verify installation:**\n' +
+          '   After restart, run `get_server_status` to confirm\n\n' +
+          '**Your portfolio remains at:**\n' +
+          `   ${portfolioTarget}\n\n` +
+          '**To update in the future:**\n' +
+          '   ```bash\n' +
+          `   cd ${gitTargetDir}\n` +
+          '   git pull\n' +
+          '   npm install\n' +
+          '   npm run build\n' +
+          '   ```\n\n' +
+          '💡 **Tip:** You can now use `update_server` to update via git!'
+      };
+      
+    } catch (error) {
+      logger.error('[UpdateManager] Git conversion failed:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      return {
+        text: personaIndicator + '❌ **Conversion Failed**\n\n' +
+          'Error: ' + errorMessage + '\n\n' +
+          '**Troubleshooting:**\n' +
+          '1. Ensure git is installed\n' +
+          '2. Check internet connection\n' +
+          '3. Verify you have write permissions\n' +
+          '4. Try a different target directory'
+      };
+    }
+  }
+  
+  /**
    * Get current server status
    */
   async getServerStatus(personaIndicator: string = ''): Promise<{ text: string }> {

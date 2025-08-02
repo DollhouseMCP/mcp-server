@@ -2674,6 +2674,13 @@ ${sanitizedInstructions}
     };
   }
 
+  async convertToGitInstallation(targetDir?: string, confirm: boolean = false) {
+    const result = await this.updateManager.convertToGitInstallation(targetDir, confirm, this.getPersonaIndicator());
+    return {
+      content: [{ type: "text", text: result.text }]
+    };
+  }
+
   // Version and dependency methods are now handled by UpdateManager
 
 
