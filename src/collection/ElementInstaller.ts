@@ -156,9 +156,7 @@ export class ElementInstaller {
       [ElementType.PERSONA]: '🎭',
       [ElementType.SKILL]: '🎯',
       [ElementType.TEMPLATE]: '📄',
-      [ElementType.AGENT]: '🤖',
-      [ElementType.MEMORY]: '🧠',
-      [ElementType.ENSEMBLE]: '🎼'
+      [ElementType.AGENT]: '🤖'
     };
     
     const emoji = typeEmojis[elementType] || '📦';
