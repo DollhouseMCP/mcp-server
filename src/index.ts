@@ -1498,7 +1498,7 @@ export class DollhouseMCPServer implements IToolHandler {
         return {
           content: [{
             type: "text",
-            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
+            text: `⚠️  ${type.endsWith('s') ? 'These' : 'This'} ${type} ${type.endsWith('s') ? 'have' : 'has'} associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
           }]
         };
       }

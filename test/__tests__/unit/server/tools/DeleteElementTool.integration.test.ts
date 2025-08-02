@@ -191,7 +191,7 @@ Goals:
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('⚠️  This agents has associated data files:');
+      expect(result.content[0].text).toContain('⚠️  These agents have associated data files:');
       expect(result.content[0].text).toContain('.state/agent-with-state-state.json');
       expect(result.content[0].text).toContain('Would you like to delete these data files as well?');
       expect(result.content[0].text).toContain('To delete everything (element + data), say: "Yes, delete all data"');
