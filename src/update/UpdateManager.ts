@@ -8,6 +8,8 @@ import { VersionManager } from './VersionManager.js';
 import { UpdateChecker } from './UpdateChecker.js';
 import { DependencyChecker } from './DependencyChecker.js';
 import { BackupManager } from './BackupManager.js';
+import { InstallationDetector } from '../utils/installation.js';
+import { logger } from '../utils/logger.js';
 
 export interface UpdateProgress {
   step: string;
@@ -51,6 +53,16 @@ export class UpdateManager {
     const progress: UpdateProgress[] = [];
     
     try {
+      // Detect installation type
+      const installationType = InstallationDetector.getInstallationType();
+      logger.info(`[UpdateManager] Detected installation type: ${installationType}`);
+      
+      // Handle npm installations differently
+      if (installationType === 'npm') {
+        return this.updateNpmInstallation(createBackup, personaIndicator);
+      }
+      
+      // For git installations, proceed with existing logic
       // Step 1: Check dependencies
       progress.push({ step: 'dependencies', message: 'Checking system dependencies...', isComplete: false });
       const dependencies = await this.dependencyChecker.checkDependencies();

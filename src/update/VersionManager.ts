@@ -4,41 +4,88 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { logger } from '../utils/logger.js';
+import { InstallationDetector } from '../utils/installation.js';
 
 export class VersionManager {
   /**
-   * Get current version from package.json
+   * Get current version from package.json or embedded version
    */
   async getCurrentVersion(): Promise<string> {
-    // Use process.cwd() as a base, then search upward for package.json
-    let currentDir = process.cwd();
-    let packageJsonPath: string | null = null;
+    // First, try to import the generated version file
+    try {
+      const { PACKAGE_VERSION } = await import('../generated/version.js');
+      if (PACKAGE_VERSION) {
+        logger.debug(`[VersionManager] Using embedded version: ${PACKAGE_VERSION}`);
+        return PACKAGE_VERSION;
+      }
+    } catch (error) {
+      logger.debug('[VersionManager] No embedded version found, will search for package.json');
+    }
     
-    // Search up to 5 levels for package.json
+    // Determine installation type
+    const installationType = InstallationDetector.getInstallationType();
+    
+    // For npm installations, look relative to the module location
+    if (installationType === 'npm') {
+      const npmPath = InstallationDetector.getNpmGlobalPath();
+      if (npmPath) {
+        const packageJsonPath = path.join(npmPath, 'package.json');
+        try {
+          const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+          const packageData = JSON.parse(packageContent);
+          return packageData.version;
+        } catch (error) {
+          logger.error('[VersionManager] Error reading package.json from npm path:', error);
+        }
+      }
+    }
+    
+    // For git installations, search from current file location
+    if (installationType === 'git') {
+      const currentFileUrl = import.meta.url;
+      const currentFilePath = fileURLToPath(currentFileUrl);
+      let currentDir = path.dirname(currentFilePath);
+      
+      // Search upward for package.json
+      for (let i = 0; i < 5; i++) {
+        const candidatePath = path.join(currentDir, 'package.json');
+        try {
+          await fs.access(candidatePath);
+          const packageContent = await fs.readFile(candidatePath, 'utf-8');
+          const packageData = JSON.parse(packageContent);
+          return packageData.version;
+        } catch {
+          // File doesn't exist, try parent directory
+          const parentDir = path.dirname(currentDir);
+          if (parentDir === currentDir) {
+            break;
+          }
+          currentDir = parentDir;
+        }
+      }
+    }
+    
+    // Last resort: try process.cwd() (original behavior)
+    let currentDir = process.cwd();
     for (let i = 0; i < 5; i++) {
       const candidatePath = path.join(currentDir, 'package.json');
       try {
         await fs.access(candidatePath);
-        packageJsonPath = candidatePath;
-        break;
+        const packageContent = await fs.readFile(candidatePath, 'utf-8');
+        const packageData = JSON.parse(packageContent);
+        return packageData.version;
       } catch {
-        // File doesn't exist, try parent directory
         const parentDir = path.dirname(currentDir);
         if (parentDir === currentDir) {
-          // We've reached the root
           break;
         }
         currentDir = parentDir;
       }
     }
     
-    if (!packageJsonPath) {
-      throw new Error('Could not find package.json in current directory or any parent directory');
-    }
-    
-    const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
-    const packageData = JSON.parse(packageContent);
-    return packageData.version;
+    throw new Error('Could not determine version. Please ensure you have a valid installation.');
   }
   
   /**
