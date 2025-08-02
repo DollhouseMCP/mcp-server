@@ -5,6 +5,29 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-08-02
+
+### Changed
+- **BREAKING**: Element types now use singular naming convention (#435)
+  - Previous: 'skills', 'personas', 'templates', 'agents'
+  - New: 'skill', 'persona', 'template', 'agent'
+- Standardized element system architecture across all types
+- Updated version to 1.4.0 to reflect breaking changes
+
+### Added
+- Generic CRUD operations for all element types (from v1.3.4 development)
+  - create_element - Create any element type
+  - edit_element - Modify element metadata and content
+  - validate_element - Comprehensive validation with feedback
+  - delete_element - Safe deletion with data cleanup
+- Memory and Ensemble element types (placeholders for future release)
+- Enhanced security throughout element system
+
+### Fixed
+- Sync issues between main and develop branches
+- Consolidated naming conventions across codebase
+- Resolved version conflicts (main had v1.3.3, develop had v1.3.4)
+
 ## [1.3.4] - 2025-08-02
 
 ### Added
