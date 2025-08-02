@@ -104,19 +104,33 @@ Enhanced `src/update/BackupManager.ts`:
 - Fixed all compilation errors
 - Build successful
 
-### Latest Commit
-- Commit: 95f04e4
-- Message: "feat: Implement npm-specific update and rollback functionality"
+### 10. Server Status Enhancement ✅
+- Added installation type to `getServerStatus()` display
+- Shows full installation path description
+- Only shows git information for git installations
+- Commit: 4c49000
+
+### 11. Migration Tool Implementation ✅
+Created `convert_to_git_installation` MCP tool:
+- Added to UpdateTools.ts and IToolHandler interface
+- Implemented in UpdateManager.convertToGitInstallation()
+- Features:
+  - Detects current installation type
+  - Clones repository to specified directory
+  - Runs npm install and build automatically
+  - Generates Claude Desktop configuration
+  - Preserves existing portfolio
+  - Provides clear post-migration instructions
+- Commit: aa8c17b
+
+### Latest Commits
+- 95f04e4: "feat: Implement npm-specific update and rollback functionality"
+- 4c49000: "feat: Add installation type to server status display"
+- aa8c17b: "feat: Add npm to git installation migration tool"
 
 ## What Still Needs to Be Done
 
-### 3. Migration Tool
-- Create new MCP tool: `convert_to_git_installation`
-- Clone repo to `~/.dollhouse/mcp-server-git/`
-- Migrate portfolio and settings
-- Provide instructions for updating Claude config
-
-### 4. Testing
+### 1. Testing
 - Test with `npm link` to simulate global install
 - Verify all MCP tools work
 - Test update flows for both installation types
