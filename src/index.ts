@@ -176,6 +176,35 @@ export class DollhouseMCPServer implements IToolHandler {
     });
   }
 
+  /**
+   * Normalize element type to handle both singular (new) and plural (legacy) forms
+   * This provides backward compatibility during the transition to v1.4.0
+   */
+  private normalizeElementType(type: string): string {
+    // Map plural forms to singular ElementType values
+    const pluralToSingularMap: Record<string, string> = {
+      'personas': ElementType.PERSONA,
+      'skills': ElementType.SKILL,
+      'templates': ElementType.TEMPLATE,
+      'agents': ElementType.AGENT,
+      'memories': ElementType.MEMORY,
+      'ensembles': ElementType.ENSEMBLE
+    };
+    
+    // If it's already a valid ElementType value, return as-is
+    if (Object.values(ElementType).includes(type as ElementType)) {
+      return type;
+    }
+    
+    // If it's a plural form, convert to singular
+    if (pluralToSingularMap[type]) {
+      return pluralToSingularMap[type];
+    }
+    
+    // Unknown type - return as-is and let validation handle it
+    return type;
+  }
+
   private async loadPersonas() {
     // Validate the personas directory path
     if (!path.isAbsolute(this.personasDir)) {
@@ -435,11 +464,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async listElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.listPersonas();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skills = await this.skillManager.list();
           if (skills.length === 0) {
             return {
@@ -464,7 +496,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const templates = await this.templateManager.list();
           if (templates.length === 0) {
             return {
@@ -488,7 +520,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agents = await this.agentManager.list();
           if (agents.length === 0) {
             return {
@@ -517,7 +549,7 @@ export class DollhouseMCPServer implements IToolHandler {
           return {
             content: [{
               type: "text",
-              text: `❌ Unknown element type '${type}'. Available types: personas, skills, templates, agents`
+              text: `❌ Unknown element type '${type}'. Available types: ${Object.values(ElementType).join(', ')}`
             }]
           };
       }
@@ -534,11 +566,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async activateElement(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.activatePersona(name);
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -560,7 +595,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const template = await this.templateManager.find(t => t.metadata.name === name);
           if (!template) {
             return {
@@ -580,7 +615,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -623,11 +658,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async getActiveElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.getActivePersona();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skills = await this.skillManager.list();
           const activeSkills = skills.filter(s => s.getStatus() === 'active');
           
@@ -649,7 +687,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           return {
             content: [{
               type: "text",
@@ -658,7 +696,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agents = await this.agentManager.list();
           const activeAgents = agents.filter(a => a.getStatus() === 'active');
           
@@ -705,11 +743,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async deactivateElement(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.deactivatePersona();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -729,7 +770,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           return {
             content: [{
               type: "text",
@@ -738,7 +779,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -779,11 +820,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async getElementDetails(name: string, type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.getPersonaDetails(name);
           
-        case 'skills': {
+        case ElementType.SKILL: {
           const skill = await this.skillManager.find(s => s.metadata.name === name);
           if (!skill) {
             return {
@@ -822,7 +866,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           const template = await this.templateManager.find(t => t.metadata.name === name);
           if (!template) {
             return {
@@ -859,7 +903,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           const agent = await this.agentManager.find(a => a.metadata.name === name);
           if (!agent) {
             return {
@@ -920,11 +964,14 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async reloadElements(type: string) {
     try {
-      switch (type) {
-        case 'personas':
+      // Normalize the type to handle both plural and singular forms
+      const normalizedType = this.normalizeElementType(type);
+      
+      switch (normalizedType) {
+        case ElementType.PERSONA:
           return this.reloadPersonas();
           
-        case 'skills': {
+        case ElementType.SKILL: {
           this.skillManager.clearCache();
           const skills = await this.skillManager.list();
           return {
@@ -935,7 +982,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'templates': {
+        case ElementType.TEMPLATE: {
           // Template manager doesn't have clearCache, just list
           const templates = await this.templateManager.list();
           return {
@@ -946,7 +993,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
         }
         
-        case 'agents': {
+        case ElementType.AGENT: {
           // Agent manager doesn't have clearCache, just list
           const agents = await this.agentManager.list();
           return {
