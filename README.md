@@ -14,7 +14,7 @@
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-500%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-600%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
 [![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered collection. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.3.3
+**📦 Version**: v1.4.1
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -56,17 +56,18 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **30 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **40 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
 | 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
+| 📦 **NPM Installation** | Install MCP servers from npm with cross-platform support and atomic operations |
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
 
-## 🎨 Portfolio Customization Elements (NEW! v1.3.3)
+## 🎨 Portfolio Customization Elements
 
 DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior. Your portfolio is your personal collection of AI customization elements that enhance and tailor your AI experience.
 
@@ -78,6 +79,8 @@ DollhouseMCP introduces a comprehensive portfolio system for customizing AI beha
 | 🛠️ **Skills** | Add specific capabilities like code review, data analysis, or creative writing | ✅ Available |
 | 📝 **Templates** | Create reusable response formats for emails, reports, documentation | ✅ Available |
 | 🤖 **Agents** | Build autonomous assistants that can pursue goals and make decisions | ✅ Available |
+| 🧠 **Memory** | Persistent context storage with retention policies and search capabilities | ✅ Available |
+| 🎯 **Ensemble** | Orchestrate multiple elements together as one unified entity | ✅ Available |
 
 ### Managing Your Portfolio
 
@@ -136,7 +139,7 @@ For backward compatibility, the original persona-specific tools still work:
 - `get_active_persona` → calls `get_active_elements type="personas"`
 - etc.
 
-## 🔒 Enterprise-Grade Security (v1.2.4)
+## 🔒 Enterprise-Grade Security
 
 DollhouseMCP implements comprehensive security measures to protect your personas and system:
 
@@ -719,7 +722,7 @@ DollhouseMCP/
 ├── __tests__/
 │   ├── unit/                     # Unit tests for components
 │   ├── integration/              # Integration tests
-│   └── *.test.ts                 # Test files (372 tests total)
+│   └── *.test.ts                 # Test files (600+ tests total)
 ├── src/
 │   ├── index.ts                  # Main MCP server (DollhouseMCPServer)
 │   ├── cache/                    # API caching layer
@@ -745,7 +748,7 @@ DollhouseMCP/
 ├── scripts/                      # Management and utility scripts
 ├── Dockerfile                    # Multi-stage Docker build
 ├── docker-compose.yml           # Production and development configs
-├── package.json                 # Project config (dollhousemcp v1.2.1)
+├── package.json                 # Project config (dollhousemcp v1.4.1)
 ├── tsconfig.json                # TypeScript configuration
 ├── jest.config.cjs              # Jest test configuration
 ├── setup.sh                     # Automated installation script
@@ -1126,7 +1129,49 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.2.5 - July 2025 (Next Release)
+### v1.4.1 - August 2, 2025 (Current)
+**NPM Installation Support**:
+- 📦 **Install MCP servers from npm packages** with full cross-platform support
+- 🔄 **Atomic operations** with transaction-based rollback on failure
+- 📊 **Progress indicators** for better user experience during long operations
+- 🏗️ **Centralized configuration** respecting platform conventions (XDG on Linux)
+- 🛠️ **FileOperations utility** for consistent cross-platform behavior
+
+### v1.4.0 - August 2, 2025
+**Complete Element System**:
+- 🎭 **Ensemble elements** for orchestrating multiple elements together
+- 🧠 **Memory elements** with retention policies and search capabilities
+- 🤖 **Agent elements** with goal-oriented decision making
+- 📝 **Template elements** with secure variable substitution
+- 🛠️ **Skill elements** with parameter system and proficiency tracking
+- 🔒 **Comprehensive security** throughout all element types
+
+### v1.3.3 - August 2, 2025
+**Portfolio System & Element Types**:
+- 🎨 **Portfolio-based architecture** for managing all AI customization elements
+- 🛠️ **Generic element tools** that work with any element type
+- 📁 **Structured directory layout** under `~/.dollhouse/portfolio/`
+- 🔄 **Backward compatibility** maintained for existing personas
+
+### v1.3.2 - August 1, 2025
+**GitFlow Implementation**:
+- 🔀 **GitFlow branching model** for better release management
+- 🏷️ **Automated version tagging** on releases
+- 📦 **NPM release automation** (pending token configuration)
+
+### v1.3.1 - July 31, 2025
+**Collection System Updates**:
+- 🏪 **Improved collection browsing** with better error handling
+- 🔍 **Enhanced search functionality** for finding content
+- 📥 **Better installation process** with validation
+
+### v1.3.0 - July 30, 2025
+**Major Architecture Refactor**:
+- 🏗️ **Element interface system** providing foundation for all element types
+- 🔐 **Security-first implementation** with comprehensive protections
+- 📊 **Improved test coverage** reaching 96%+
+
+### v1.2.5 - July 2025
 
 **Collection Rename & Breaking Changes**:
 - 🔄 **Renamed all "marketplace" tools to "collection"**:
@@ -1140,7 +1185,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **Created migration guide** for users to update their scripts
 - ✅ **Fixed all date references** from January to July 2025
 
-### v1.2.4 - July 10, 2025 (Current)
+### v1.2.4 - July 10, 2025
 
 **Critical Fix**:
 - ✅ **Fixed MCP protocol compatibility** - console output no longer breaks JSON-RPC communication
