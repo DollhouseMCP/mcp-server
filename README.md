@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.4.3
+**📦 Version**: v1.4.4
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -33,7 +33,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ⚠️ IMPORTANT: If you have v1.4.2, upgrade immediately:
+# ⚠️ IMPORTANT: If you have v1.4.2 or v1.4.3, upgrade immediately:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -908,7 +908,7 @@ If the MCP server crashes on startup after NPM installation:
 2. If you have v1.4.2, upgrade immediately: `npm install -g @dollhousemcp/mcp-server@latest`
 3. Clear your portfolio and let it regenerate: `rm -rf ~/.dollhouse/portfolio`
 
-**Note**: v1.4.2 had a critical bug that prevented proper initialization. This has been fixed in v1.4.3.
+**Note**: v1.4.2 had a critical bug that prevented proper initialization. v1.4.3 attempted to fix this but introduced new crashes. Both issues are fixed in v1.4.4.
 
 ### Directory Structure (v1.4.3+)
 
@@ -926,7 +926,7 @@ If you upgraded from v1.4.2, the server will automatically migrate your director
 
 | Issue | Solution |
 |-------|----------|
-| **v1.4.2 installation broken** | Upgrade to v1.4.3+ immediately |
+| **v1.4.2 or v1.4.3 installation broken** | Upgrade to v1.4.4+ immediately |
 | **Personas not loading** | Check `~/.dollhouse/portfolio/personas/` directory exists |
 | **Server won't start** | Run `npm run rebuild` to clean and rebuild |
 | **Collection not working** | Check internet connection and GitHub API access |
@@ -1154,7 +1154,17 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.4.2 - August 4, 2025 (Current)
+### v1.4.4 - August 4, 2025 (Current)
+**Emergency Hotfix**:
+- 🚨 **Fixed v1.4.3 total failure** - initialization crashes fixed
+- 🔧 **Fixed jsdom crash** - heavy dependencies now load lazily
+- 🐳 **Fixed Docker compatibility** - handles read-only environments
+
+### v1.4.3 - August 4, 2025
+**Directory Structure Fix**:
+- 🚨 **Fixed NPM installation failure** but introduced new crashes
+
+### v1.4.2 - August 4, 2025
 **Critical NPM Installation Fix**:
 - 🚨 **Fixed NPM installation failure** where empty portfolios caused server crashes
 - 📦 **DefaultElementProvider** automatically populates default content on first run

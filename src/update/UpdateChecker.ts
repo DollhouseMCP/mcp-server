@@ -49,6 +49,41 @@ export class UpdateChecker {
   private static purifyWindow: any = null;
   private static purify: DOMPurifyInstance | null = null;
   
+  /**
+   * Lazily initialize DOMPurify to prevent crashes during startup
+   * CRITICAL FIX: Prevents jsdom from crashing during MCP initialization
+   */
+  private initializeDOMPurify(): void {
+    if (UpdateChecker.purify) return;
+    
+    try {
+      // Lazy load dependencies only when needed
+      const DOMPurify = require('dompurify');
+      const { JSDOM } = require('jsdom');
+      
+      const dom = new JSDOM('');
+      UpdateChecker.purifyWindow = dom.window;
+      UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow);
+      
+      console.log('[UpdateChecker] DOMPurify initialized successfully');
+    } catch (error) {
+      console.error('[DollhouseMCP] Failed to initialize DOMPurify:', error);
+      // Continue without HTML sanitization - better than crashing
+      UpdateChecker.purify = {
+        sanitize: (str: string) => {
+          // Basic fallback sanitization - escape HTML entities
+          // This is safer than trying to remove tags with regex
+          return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+      } as any;
+    }
+  }
+  
   // Security configuration with sensible defaults
   private readonly releaseNotesMaxLength: number;
   private readonly urlMaxLength: number;
@@ -478,16 +513,22 @@ export class UpdateChecker {
     }
     
     const beforeSanitize = sanitized;
+    
+    // CRITICAL FIX: Initialize DOMPurify lazily to prevent startup crashes
+    this.initializeDOMPurify();
+    
     // DOMPurify configuration for maximum security
     // ALLOWED_TAGS: [] strips all HTML tags
     // ALLOWED_ATTR: [] strips all attributes
     // Additional options for extra security
-    sanitized = UpdateChecker.purify.sanitize(sanitized, { 
-      ALLOWED_TAGS: [],      // Strip all HTML tags
-      ALLOWED_ATTR: [],      // Strip all attributes
-      FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'link'],
-      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
-    });
+    if (UpdateChecker.purify && UpdateChecker.purify.sanitize) {
+      sanitized = UpdateChecker.purify.sanitize(sanitized, { 
+        ALLOWED_TAGS: [],      // Strip all HTML tags
+        ALLOWED_ATTR: [],      // Strip all attributes
+        FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'link'],
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
+      });
+    }
     
     if (beforeSanitize !== sanitized) {
       this.logSecurityEvent('html_content_removed', { 
