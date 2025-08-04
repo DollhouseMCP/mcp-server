@@ -100,12 +100,15 @@ export class PortfolioManager {
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
     
     // Populate with default elements if this is a new installation
-    try {
-      const defaultProvider = new DefaultElementProvider();
-      await defaultProvider.populateDefaults(this.baseDir);
-    } catch (error) {
-      logger.error('[PortfolioManager] Error populating default elements:', error);
-      // Continue anyway - empty portfolio is valid
+    // Skip during tests to avoid interference
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const defaultProvider = new DefaultElementProvider();
+        await defaultProvider.populateDefaults(this.baseDir);
+      } catch (error) {
+        logger.error('[PortfolioManager] Error populating default elements:', error);
+        // Continue anyway - empty portfolio is valid
+      }
     }
   }
   

@@ -11,6 +11,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export class DefaultElementProvider {
   private readonly __dirname: string;
@@ -51,18 +52,30 @@ export class DefaultElementProvider {
   
   /**
    * Find the bundled data directory by checking each search path
+   * Uses Promise.allSettled for better performance
    */
   private async findDataDirectory(): Promise<string | null> {
-    for (const searchPath of this.dataSearchPaths) {
+    // Check all paths in parallel for better performance
+    const checkPromises = this.dataSearchPaths.map(async (searchPath) => {
       try {
         const stats = await fs.stat(searchPath);
         if (stats.isDirectory()) {
-          logger.info(`[DefaultElementProvider] Found data directory at: ${searchPath}`);
           return searchPath;
         }
       } catch (error) {
-        // Directory doesn't exist, continue searching
-        continue;
+        // Directory doesn't exist
+        return null;
+      }
+      return null;
+    });
+    
+    const results = await Promise.allSettled(checkPromises);
+    
+    // Find the first successful result
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value !== null) {
+        logger.info(`[DefaultElementProvider] Found data directory at: ${result.value}`);
+        return result.value;
       }
     }
     
@@ -90,13 +103,20 @@ export class DefaultElementProvider {
           continue;
         }
         
-        const sourcePath = path.join(sourceDir, file);
-        const destPath = path.join(destDir, file);
+        // Normalize filename for security
+        const normalizedFile = UnicodeValidator.normalize(file);
+        if (!normalizedFile.isValid) {
+          logger.warn(`[DefaultElementProvider] Skipping file with invalid Unicode: ${file}`);
+          continue;
+        }
+        
+        const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
+        const destPath = path.join(destDir, normalizedFile.normalizedContent);
         
         try {
           // Check if destination file already exists
           await fs.access(destPath);
-          logger.debug(`[DefaultElementProvider] Skipping existing file: ${file}`);
+          logger.debug(`[DefaultElementProvider] Skipping existing file: ${normalizedFile.normalizedContent}`);
           continue;
         } catch {
           // File doesn't exist, proceed with copy
@@ -106,9 +126,9 @@ export class DefaultElementProvider {
           // Copy the file
           await fs.copyFile(sourcePath, destPath);
           copiedCount++;
-          logger.debug(`[DefaultElementProvider] Copied ${elementType}: ${file}`);
+          logger.debug(`[DefaultElementProvider] Copied ${elementType}: ${normalizedFile.normalizedContent}`);
         } catch (error) {
-          logger.error(`[DefaultElementProvider] Failed to copy ${file}:`, error);
+          logger.error(`[DefaultElementProvider] Failed to copy ${normalizedFile.normalizedContent}:`, error);
         }
       }
       
