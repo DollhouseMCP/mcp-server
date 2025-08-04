@@ -8,6 +8,10 @@ import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { DefaultElementProvider } from './DefaultElementProvider.js';
+
+// Constants
+const ELEMENT_FILE_EXTENSION = '.md';
 
 export { ElementType };
 export type { PortfolioConfig };
@@ -15,6 +19,8 @@ export type { PortfolioConfig };
 export class PortfolioManager {
   private static instance: PortfolioManager;
   private static instanceLock = false;
+  private static initializationLock = false;
+  private static initializationPromise: Promise<void> | null = null;
   private baseDir: string;
   
   private constructor(config?: PortfolioConfig) {
@@ -78,8 +84,35 @@ export class PortfolioManager {
   
   /**
    * Initialize the portfolio directory structure
+   * Uses locking to prevent race conditions during concurrent initialization
    */
   public async initialize(): Promise<void> {
+    // If already initializing, wait for the existing initialization
+    if (PortfolioManager.initializationPromise) {
+      return PortfolioManager.initializationPromise;
+    }
+    
+    // If already initialized, check if directories exist
+    if (await this.exists()) {
+      logger.debug('[PortfolioManager] Portfolio already initialized');
+      return;
+    }
+    
+    // Create initialization promise to prevent concurrent initialization
+    PortfolioManager.initializationPromise = this.performInitialization();
+    
+    try {
+      await PortfolioManager.initializationPromise;
+    } finally {
+      // Clear the promise after completion
+      PortfolioManager.initializationPromise = null;
+    }
+  }
+  
+  /**
+   * Perform the actual initialization - should only be called once
+   */
+  private async performInitialization(): Promise<void> {
     logger.info('[PortfolioManager] Initializing portfolio directory structure');
     
     // Create base directory
@@ -97,6 +130,18 @@ export class PortfolioManager {
     await fs.mkdir(agentStateDir, { recursive: true });
     
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
+    
+    // Populate with default elements if this is a new installation
+    // Skip during tests to avoid interference
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const defaultProvider = new DefaultElementProvider();
+        await defaultProvider.populateDefaults(this.baseDir);
+      } catch (error) {
+        logger.error('[PortfolioManager] Error populating default elements:', error);
+        // Continue anyway - empty portfolio is valid
+      }
+    }
   }
   
   /**
@@ -119,8 +164,8 @@ export class PortfolioManager {
     
     try {
       const files = await fs.readdir(elementDir);
-      // Filter for .md files only
-      return files.filter(file => file.endsWith('.md'));
+      // Filter for markdown files only
+      return files.filter(file => file.endsWith(ELEMENT_FILE_EXTENSION));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       
