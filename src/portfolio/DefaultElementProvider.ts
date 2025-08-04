@@ -13,6 +13,7 @@ import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -213,6 +214,20 @@ export class DefaultElementProvider {
           await this.copyFileWithVerification(sourcePath, destPath);
           copiedCount++;
           logger.debug(`[DefaultElementProvider] Copied ${elementType}: ${normalizedFile.normalizedContent}`);
+          
+          // Log security event for each file copied
+          SecurityMonitor.logSecurityEvent({
+            type: 'FILE_COPIED',
+            severity: 'LOW',
+            source: 'DefaultElementProvider.copyElementFiles',
+            details: `Copied default ${elementType} file: ${normalizedFile.normalizedContent}`,
+            metadata: {
+              sourcePath,
+              destPath,
+              elementType,
+              fileSize: (await fs.stat(destPath)).size
+            }
+          });
         } catch (error) {
           const err = error as Error;
           logger.error(
@@ -393,6 +408,14 @@ export class DefaultElementProvider {
       { portfolioBaseDir }
     );
     
+    // Log security event for portfolio initialization
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_INITIALIZATION',
+      severity: 'LOW',
+      source: 'DefaultElementProvider.performPopulation',
+      details: `Starting default element population for portfolio: ${portfolioBaseDir}`
+    });
+    
     // Find the bundled data directory
     const dataDir = await this.findDataDirectory();
     if (!dataDir) {
@@ -450,6 +473,19 @@ export class DefaultElementProvider {
           }, {} as Record<string, number>)
         }
       );
+      
+      // Log security event for successful population
+      SecurityMonitor.logSecurityEvent({
+        type: 'PORTFOLIO_POPULATED',
+        severity: 'LOW',
+        source: 'DefaultElementProvider.performPopulation',
+        details: `Successfully populated portfolio with ${totalCopied} default elements`,
+        metadata: {
+          portfolioBaseDir,
+          dataDir,
+          copiedCounts
+        }
+      });
     } else {
       logger.info('[DefaultElementProvider] No new elements to copy - portfolio may already have content');
     }

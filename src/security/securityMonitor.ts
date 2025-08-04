@@ -24,13 +24,15 @@ export interface SecurityEvent {
         'ENSEMBLE_CIRCULAR_DEPENDENCY' | 'ENSEMBLE_RESOURCE_LIMIT_EXCEEDED' | 
         'ENSEMBLE_ACTIVATION_TIMEOUT' | 'ENSEMBLE_SUSPICIOUS_CONDITION' |
         'ENSEMBLE_NESTED_DEPTH_EXCEEDED' | 'ENSEMBLE_CONTEXT_SIZE_EXCEEDED' |
-        'ENSEMBLE_SAVED' | 'ENSEMBLE_IMPORTED' | 'ENSEMBLE_DELETED';
+        'ENSEMBLE_SAVED' | 'ENSEMBLE_IMPORTED' | 'ENSEMBLE_DELETED' |
+        'PORTFOLIO_INITIALIZATION' | 'PORTFOLIO_POPULATED' | 'FILE_COPIED';
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   source: string;
   details: string;
   userAgent?: string;
   ip?: string;
   additionalData?: Record<string, any>;
+  metadata?: Record<string, any>;
 }
 
 export interface SecurityLogEntry extends SecurityEvent {
