@@ -178,10 +178,10 @@ describe('PortfolioManager', () => {
     describe('getElementPath', () => {
       it('should return correct path with .md extension', () => {
         const path1 = portfolioManager.getElementPath(ElementType.PERSONA, 'test');
-        expect(path1).toMatch(/persona[/\\]test\.md$/);
+        expect(path1).toMatch(/personas[/\\]test\.md$/);
         
         const path2 = portfolioManager.getElementPath(ElementType.PERSONA, 'test.md');
-        expect(path2).toMatch(/persona[/\\]test\.md$/);
+        expect(path2).toMatch(/personas[/\\]test\.md$/);
       });
     });
     

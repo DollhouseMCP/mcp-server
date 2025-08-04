@@ -183,7 +183,7 @@ describe('DefaultElementProvider', () => {
   describe('copyElementFiles', () => {
     it('should copy markdown files from source to destination', async () => {
       const sourceDir = path.join(dataDir, 'personas');
-      const destDir = path.join(portfolioDir, 'persona');
+      const destDir = path.join(portfolioDir, 'personas');
       
       // Create test files
       await fs.writeFile(path.join(sourceDir, 'test1.md'), 'Test 1');
@@ -202,7 +202,7 @@ describe('DefaultElementProvider', () => {
     
     it('should skip existing files', async () => {
       const sourceDir = path.join(dataDir, 'personas');
-      const destDir = path.join(portfolioDir, 'persona');
+      const destDir = path.join(portfolioDir, 'personas');
       
       await fs.mkdir(destDir, { recursive: true });
       
@@ -223,7 +223,7 @@ describe('DefaultElementProvider', () => {
     
     it('should skip oversized files', async () => {
       const sourceDir = path.join(dataDir, 'personas');
-      const destDir = path.join(portfolioDir, 'persona');
+      const destDir = path.join(portfolioDir, 'personas');
       
       // Create oversized file (> 10MB)
       const bigContent = 'x'.repeat(11 * 1024 * 1024);
@@ -254,12 +254,12 @@ describe('DefaultElementProvider', () => {
       await testProvider.populateDefaults(portfolioDir);
       
       // Verify files were copied
-      expect(await fs.readdir(path.join(portfolioDir, 'persona'))).toContain('personas-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'skill'))).toContain('skills-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'template'))).toContain('templates-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'agent'))).toContain('agents-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'memory'))).toContain('memories-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'ensemble'))).toContain('ensembles-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'personas'))).toContain('personas-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'skills'))).toContain('skills-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'templates'))).toContain('templates-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'agents'))).toContain('agents-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'memories'))).toContain('memories-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'ensembles'))).toContain('ensembles-test.md');
     });
     
     it('should handle missing data directory gracefully', async () => {
@@ -292,7 +292,7 @@ describe('DefaultElementProvider', () => {
   describe('edge cases', () => {
     it('should handle Unicode filenames correctly', async () => {
       const sourceDir = path.join(dataDir, 'personas');
-      const destDir = path.join(portfolioDir, 'persona');
+      const destDir = path.join(portfolioDir, 'personas');
       
       // Test with various Unicode characters
       const unicodeFilename = 'test-émojis-🎭-中文.md';
@@ -341,7 +341,7 @@ describe('DefaultElementProvider', () => {
       }
       
       // Verify file was copied only once
-      const personaDir = path.join(portfolioDir, 'persona');
+      const personaDir = path.join(portfolioDir, 'personas');
       try {
         const files = await fs.readdir(personaDir);
         expect(files).toHaveLength(1);
@@ -365,7 +365,7 @@ describe('DefaultElementProvider', () => {
       await testProvider.populateDefaults(portfolioDir);
       
       // Verify the file was copied correctly
-      const copiedContent = await fs.readFile(path.join(portfolioDir, 'persona', 'test.md'), 'utf-8');
+      const copiedContent = await fs.readFile(path.join(portfolioDir, 'personas', 'test.md'), 'utf-8');
       expect(copiedContent).toBe(testContent);
     });
     
@@ -384,7 +384,7 @@ describe('DefaultElementProvider', () => {
       await provider.populateDefaults(portfolioDir);
       
       // Verify custom file was copied
-      const files = await fs.readdir(path.join(portfolioDir, 'persona'));
+      const files = await fs.readdir(path.join(portfolioDir, 'personas'));
       expect(files).toContain('custom.md');
     });
     
@@ -404,7 +404,7 @@ describe('DefaultElementProvider', () => {
       await Promise.all(promises);
       
       // Verify files were copied only once
-      const files = await fs.readdir(path.join(portfolioDir, 'persona'));
+      const files = await fs.readdir(path.join(portfolioDir, 'personas'));
       expect(files).toHaveLength(2);
       expect(files).toContain('test1.md');
       expect(files).toContain('test2.md');

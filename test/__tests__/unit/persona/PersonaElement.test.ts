@@ -35,7 +35,7 @@ describe('PersonaElement', () => {
 
       const persona = new PersonaElement(metadata);
 
-      expect(persona.id).toMatch(/^persona_creative-writer_\d+$/);
+      expect(persona.id).toMatch(/^personas_creative-writer_\d+$/);
     });
   });
 

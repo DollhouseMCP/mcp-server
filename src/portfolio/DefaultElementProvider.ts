@@ -434,30 +434,20 @@ export class DefaultElementProvider {
     let totalCopied = 0;
     const copiedCounts: Record<string, number> = {};
     
-    // Map of data subdirectory names (plural) to portfolio directory names (singular)
-    const elementMappings: Record<string, ElementType> = {
-      'personas': ElementType.PERSONA,
-      'skills': ElementType.SKILL,
-      'templates': ElementType.TEMPLATE,
-      'agents': ElementType.AGENT,
-      'memories': ElementType.MEMORY,
-      'ensembles': ElementType.ENSEMBLE
-    };
-    
-    // Copy each element type
-    for (const [dataSubdir, elementType] of Object.entries(elementMappings)) {
-      const sourceDir = path.join(dataDir, dataSubdir);
+    // Copy each element type - directories now match enum values (all plural)
+    for (const elementType of Object.values(ElementType)) {
+      const sourceDir = path.join(dataDir, elementType);
       const destDir = path.join(portfolioBaseDir, elementType);
       
       try {
         // Check if source directory exists
         await fs.access(sourceDir);
-        const copiedCount = await this.copyElementFiles(sourceDir, destDir, dataSubdir);
-        copiedCounts[dataSubdir] = copiedCount;
+        const copiedCount = await this.copyElementFiles(sourceDir, destDir, elementType);
+        copiedCounts[elementType] = copiedCount;
         totalCopied += copiedCount;
       } catch (error) {
         // Source directory doesn't exist, skip
-        logger.debug(`[DefaultElementProvider] No ${dataSubdir} directory in bundled data`);
+        logger.debug(`[DefaultElementProvider] No ${elementType} directory in bundled data`);
       }
     }
     
@@ -467,10 +457,7 @@ export class DefaultElementProvider {
         {
           portfolioBaseDir,
           dataDir,
-          breakdown: Object.entries(elementMappings).reduce((acc, [dataDir, elementType]) => {
-            acc[elementType] = copiedCounts[dataDir] || 0;
-            return acc;
-          }, {} as Record<string, number>)
+          breakdown: copiedCounts
         }
       );
       
