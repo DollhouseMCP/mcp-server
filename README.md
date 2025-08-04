@@ -268,9 +268,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 30 DollhouseMCP tools will be available
+3. All 46 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (30 Total)
+## 🛠️ Available Tools (46 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
