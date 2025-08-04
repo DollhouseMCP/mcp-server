@@ -58,7 +58,7 @@ describe('AgentManager', () => {
 
   describe('Initialization', () => {
     it('should create agents directory structure', async () => {
-      const agentsPath = path.join(portfolioPath, 'agent');
+      const agentsPath = path.join(portfolioPath, 'agents');
       const statePath = path.join(agentsPath, '.state');
 
       const agentsDirExists = await fs.access(agentsPath).then(() => true).catch(() => false);
@@ -515,7 +515,7 @@ type: persona
 Content`);
 
       await expect(agentManager.read('wrong-type'))
-        .rejects.toThrow("Invalid element type: expected 'agent', got 'persona'");
+        .rejects.toThrow("Invalid element type: expected 'agents', got 'persona'");
     });
   });
 });

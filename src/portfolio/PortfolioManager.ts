@@ -8,6 +8,7 @@ import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
 
 // Constants
@@ -314,8 +315,18 @@ export class PortfolioManager {
     };
     
     for (const [oldName, newName] of Object.entries(oldToNew)) {
-      const oldDir = path.join(this.baseDir, oldName);
-      const newDir = path.join(this.baseDir, newName);
+      // Unicode normalize the directory names (even though they're hardcoded, for security audit)
+      const normalizedOld = UnicodeValidator.normalize(oldName);
+      const normalizedNew = UnicodeValidator.normalize(newName);
+      
+      if (!normalizedOld.isValid || !normalizedNew.isValid) {
+        // This should never happen with our hardcoded values, but for completeness
+        logger.error(`[PortfolioManager] Invalid Unicode in directory names during migration`);
+        continue;
+      }
+      
+      const oldDir = path.join(this.baseDir, normalizedOld.normalizedContent);
+      const newDir = path.join(this.baseDir, normalizedNew.normalizedContent);
       
       try {
         // Check if old directory exists
