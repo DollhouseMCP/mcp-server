@@ -24,14 +24,15 @@ describe('SkillManager', () => {
   let portfolioManager: PortfolioManager;
 
   beforeEach(async () => {
-    // Create temporary test directory
-    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-manager-test-'));
+    // Create temporary test directory path (but don't create it yet)
+    testDir = path.join(os.tmpdir(), `skill-manager-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     
     // Set up portfolio directory
     process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
     
     // Reset singleton
     (PortfolioManager as any).instance = undefined;
+    (PortfolioManager as any).initializationPromise = null;
     portfolioManager = PortfolioManager.getInstance();
     await portfolioManager.initialize();
     

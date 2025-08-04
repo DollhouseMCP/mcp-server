@@ -14,15 +14,15 @@ describe('PortfolioManager', () => {
   const originalEnv = process.env.DOLLHOUSE_PORTFOLIO_DIR;
   
   beforeEach(async () => {
-    // Create a unique test directory
+    // Create a unique test directory path (but don't create it yet)
     testDir = path.join(tmpdir(), `portfolio-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    await fs.mkdir(testDir, { recursive: true });
     
     // Clear environment variable
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
     
     // Reset singleton
     (PortfolioManager as any).instance = undefined;
+    (PortfolioManager as any).initializationPromise = null;
   });
   
   afterEach(async () => {
@@ -39,6 +39,10 @@ describe('PortfolioManager', () => {
     } catch {
       // Ignore cleanup errors
     }
+    
+    // Reset singleton to ensure clean state for next test
+    (PortfolioManager as any).instance = undefined;
+    (PortfolioManager as any).initializationPromise = null;
   });
   
   describe('getInstance', () => {
@@ -73,6 +77,9 @@ describe('PortfolioManager', () => {
   
   describe('initialize', () => {
     beforeEach(() => {
+      // Reset singleton to ensure clean state
+      (PortfolioManager as any).instance = undefined;
+      (PortfolioManager as any).initializationPromise = null;
       portfolioManager = PortfolioManager.getInstance({ baseDir: testDir });
     });
     
@@ -81,7 +88,7 @@ describe('PortfolioManager', () => {
       
       // Check each element type directory
       for (const elementType of Object.values(ElementType)) {
-        const elementDir = path.join(testDir, elementType);
+        const elementDir = portfolioManager.getElementDir(elementType);
         await expect(fs.access(elementDir)).resolves.toBeUndefined();
       }
     });
@@ -90,7 +97,7 @@ describe('PortfolioManager', () => {
       await portfolioManager.initialize();
       
       // Check agent state directory
-      const agentStateDir = path.join(testDir, ElementType.AGENT, '.state');
+      const agentStateDir = path.join(portfolioManager.getElementDir(ElementType.AGENT), '.state');
       await expect(fs.access(agentStateDir)).resolves.toBeUndefined();
       
       // Memory type has been removed from ElementType
@@ -103,7 +110,7 @@ describe('PortfolioManager', () => {
       
       // Should not throw and directories should still exist
       for (const elementType of Object.values(ElementType)) {
-        const elementDir = path.join(testDir, elementType);
+        const elementDir = portfolioManager.getElementDir(elementType);
         await expect(fs.access(elementDir)).resolves.toBeUndefined();
       }
     });
@@ -130,6 +137,9 @@ describe('PortfolioManager', () => {
   
   describe('element operations', () => {
     beforeEach(async () => {
+      // Reset singleton to ensure clean state
+      (PortfolioManager as any).instance = undefined;
+      (PortfolioManager as any).initializationPromise = null;
       portfolioManager = PortfolioManager.getInstance({ baseDir: testDir });
       await portfolioManager.initialize();
     });
