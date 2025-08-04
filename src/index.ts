@@ -48,10 +48,10 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaDetails: PersonaDetails;
   private elementInstaller: ElementInstaller;
   private personaSubmitter: PersonaSubmitter;
-  private updateManager: UpdateManager;
+  private updateManager?: UpdateManager;
   private serverSetup: ServerSetup;
   private personaExporter: PersonaExporter;
-  private personaImporter: PersonaImporter;
+  private personaImporter?: PersonaImporter;
   private personaSharer: PersonaSharer;
   private portfolioManager: PortfolioManager;
   private migrationManager: MigrationManager;
@@ -76,8 +76,10 @@ export class DollhouseMCPServer implements IToolHandler {
     this.portfolioManager = PortfolioManager.getInstance();
     this.migrationManager = new MigrationManager(this.portfolioManager);
     
-    // Use portfolio personas directory
-    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
+    // CRITICAL FIX: Don't access directories until after migration runs
+    // Previously: this.personasDir was set here, creating directories before migration could fix them
+    // Now: We delay directory access until initializePortfolio() completes
+    this.personasDir = ''; // Temporary - will be set after migration
     
     // Initialize element managers
     this.skillManager = new SkillManager();
@@ -87,8 +89,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Log resolved path for debugging
     logger.info(`Personas directory resolved to: ${this.personasDir}`);
     
-    // Initialize PathValidator with the personas directory
-    PathValidator.initialize(this.personasDir);
+    // PathValidator will be initialized after migration completes
     
     // Load user identity from environment variables
     this.currentUser = process.env.DOLLHOUSE_USER || null;
@@ -106,14 +107,11 @@ export class DollhouseMCPServer implements IToolHandler {
     this.elementInstaller = new ElementInstaller(this.githubClient);
     this.personaSubmitter = new PersonaSubmitter();
     
-    // Initialize update manager with safe directory
-    // Use the parent of personas directory to avoid production check
-    const safeDir = path.dirname(this.personasDir);
-    this.updateManager = new UpdateManager(safeDir);
+    // Update manager will be initialized after migration completes to avoid jsdom crash
     
     // Initialize export/import/share modules
     this.personaExporter = new PersonaExporter(this.currentUser);
-    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+    // PersonaImporter will be initialized after migration completes
     this.personaSharer = new PersonaSharer(this.githubClient, this.currentUser);
     
     // Initialize server setup
@@ -122,8 +120,32 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize portfolio and perform migration if needed
     this.initializePortfolio().then(() => {
+      // NOW safe to access directories after migration
+      this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
+      
+      // Log resolved path for debugging
+      logger.info(`Personas directory resolved to: ${this.personasDir}`);
+      
+      // Initialize PathValidator with the personas directory
+      PathValidator.initialize(this.personasDir);
+      
+      // Initialize update manager with safe directory
+      // Use the parent of personas directory to avoid production check
+      const safeDir = path.dirname(this.personasDir);
+      try {
+        this.updateManager = new UpdateManager(safeDir);
+      } catch (error) {
+        console.error('[DollhouseMCP] Failed to initialize UpdateManager:', error);
+        logger.error(`Failed to initialize UpdateManager: ${error}`);
+        // Continue without update functionality
+      }
+      
+      // Initialize import module that depends on personasDir
+      this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+      
       this.loadPersonas();
     }).catch(error => {
+      console.error('[DollhouseMCP] CRITICAL: Failed to initialize portfolio:', error);
       logger.error(`Failed to initialize portfolio: ${error}`);
     });
   }
@@ -2630,6 +2652,11 @@ ${sanitizedInstructions}
 
   // Auto-update management tools
   async checkForUpdates() {
+    if (!this.updateManager) {
+      return {
+        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
+      };
+    }
     const { text } = await this.updateManager.checkForUpdates();
     return {
       content: [{ type: "text", text: this.getPersonaIndicator() + text }]
@@ -2661,6 +2688,11 @@ ${sanitizedInstructions}
       };
     }
 
+    if (!this.updateManager) {
+      return {
+        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
+      };
+    }
     const { text } = await this.updateManager.updateServer(confirm, this.getPersonaIndicator());
     return {
       content: [{ type: "text", text }]
@@ -2670,6 +2702,11 @@ ${sanitizedInstructions}
   // Rollback helper methods are now handled by UpdateManager
 
   async rollbackUpdate(confirm: boolean) {
+    if (!this.updateManager) {
+      return {
+        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
+      };
+    }
     const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
     return {
       content: [{ type: "text", text }]
@@ -2689,6 +2726,11 @@ ${sanitizedInstructions}
 • **User Identity:** ${this.currentUser || 'Anonymous'}
 • **Personas Directory:** ${this.personasDir}`;
     
+    if (!this.updateManager) {
+      return {
+        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)\n\n" + personaInfo }]
+      };
+    }
     const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
     // Insert persona info into the status text
     const updatedText = text.replace('**Available Commands:**', personaInfo + '\n\n**Available Commands:**');
@@ -2699,6 +2741,11 @@ ${sanitizedInstructions}
   }
 
   async convertToGitInstallation(targetDir?: string, confirm: boolean = false) {
+    if (!this.updateManager) {
+      return {
+        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
+      };
+    }
     const result = await this.updateManager.convertToGitInstallation(targetDir, confirm, this.getPersonaIndicator());
     return {
       content: [{ type: "text", text: result.text }]
@@ -2949,6 +2996,14 @@ Placeholders for custom format:
    */
   async importPersona(source: string, overwrite = false) {
     try {
+      if (!this.personaImporter) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Import functionality not available (initialization in progress)`
+          }]
+        };
+      }
       const result = await this.personaImporter.importPersona(source, this.personas, overwrite);
       
       if (result.success) {
@@ -3041,6 +3096,14 @@ Placeholders for custom format:
       }
 
       // Import the fetched data
+      if (!this.personaImporter) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Import functionality not available (initialization in progress)`
+          }]
+        };
+      }
       const importResult = await this.personaImporter.importPersona(
         JSON.stringify(fetchResult.data),
         this.personas,
