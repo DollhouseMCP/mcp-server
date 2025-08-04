@@ -5,6 +5,52 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2025-08-04
+
+### 🚨 Critical Fix
+- **Fixed NPM installation crash** caused by directory name mismatch
+  - v1.4.2 installations were completely broken on clean machines
+  - Server would crash silently with no error output
+
+### Changed
+- **BREAKING**: All element directories now use plural names consistently
+  - Portfolio directories: `personas/`, `skills/`, `templates/`, etc.
+  - Data directories: `personas/`, `skills/`, `templates/`, etc.
+  - This aligns with semantic correctness (directories contain multiple items)
+- Simplified DefaultElementProvider implementation
+  - Removed unnecessary mapping layer between directory names
+  - Code is now cleaner and more maintainable
+- Improved error logging for initialization failures
+  - Added console.error output for Claude Desktop visibility
+  - Better debugging information when issues occur
+
+### Added
+- **Automatic migration** for existing v1.4.2 installations
+  - Renames singular directories to plural automatically
+  - Preserves all existing content
+  - Logs migration progress for transparency
+- Comprehensive troubleshooting section in README
+  - Clear instructions for v1.4.2 users
+  - Directory structure documentation
+  - NPM upgrade instructions
+
+### Technical Details
+- ElementType enum values changed from singular to plural
+  - `'persona'` → `'personas'`
+  - `'skill'` → `'skills'`
+  - `'template'` → `'templates'`
+  - `'agent'` → `'agents'`
+  - `'memory'` → `'memories'`
+  - `'ensemble'` → `'ensembles'`
+- Removed `elementMappings` object from DefaultElementProvider
+- Portfolio directories now match data directory names exactly
+
+### Migration Instructions
+If upgrading from v1.4.2:
+1. Update: `npm install -g @dollhousemcp/mcp-server@latest`
+2. The server will automatically migrate your directories on first run
+3. No manual intervention required
+
 ## [1.4.0] - 2025-08-02
 
 ### Changed

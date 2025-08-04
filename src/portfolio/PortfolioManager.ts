@@ -131,6 +131,9 @@ export class PortfolioManager {
     
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
     
+    // Migration for v1.4.2 users: rename singular directories to plural
+    await this.migrateFromSingularDirectories();
+    
     // Populate with default elements if this is a new installation
     // Skip during tests to avoid interference
     if (process.env.NODE_ENV !== 'test') {
@@ -139,6 +142,8 @@ export class PortfolioManager {
         await defaultProvider.populateDefaults(this.baseDir);
       } catch (error) {
         logger.error('[PortfolioManager] Error populating default elements:', error);
+        // Log to stderr for Claude Desktop visibility
+        console.error(`[PortfolioManager] CRITICAL: Failed to populate default elements: ${error instanceof Error ? error.message : String(error)}`);
         // Continue anyway - empty portfolio is valid
       }
     }
@@ -292,5 +297,63 @@ export class PortfolioManager {
     }
     
     return stats as Record<ElementType, number>;
+  }
+  
+  /**
+   * Migrate from v1.4.2 singular directory names to v1.4.3 plural names
+   * This handles the upgrade path for existing users
+   */
+  private async migrateFromSingularDirectories(): Promise<void> {
+    const oldToNew: Record<string, string> = {
+      'persona': 'personas',
+      'skill': 'skills',
+      'template': 'templates',
+      'agent': 'agents',
+      'memory': 'memories',
+      'ensemble': 'ensembles'
+    };
+    
+    for (const [oldName, newName] of Object.entries(oldToNew)) {
+      const oldDir = path.join(this.baseDir, oldName);
+      const newDir = path.join(this.baseDir, newName);
+      
+      try {
+        // Check if old directory exists
+        await fs.access(oldDir);
+        
+        // Check if new directory already has content
+        try {
+          const newDirFiles = await fs.readdir(newDir);
+          if (newDirFiles.length > 0) {
+            logger.warn(
+              `[PortfolioManager] Both ${oldName} and ${newName} directories exist. Keeping ${newName}, skipping migration.`,
+              { oldDir, newDir, fileCount: newDirFiles.length }
+            );
+            continue;
+          }
+        } catch {
+          // New directory doesn't exist or is empty, proceed with migration
+        }
+        
+        // Perform the migration
+        logger.info(`[PortfolioManager] Migrating ${oldName} → ${newName}`);
+        await fs.rename(oldDir, newDir);
+        
+        // Log security event for audit trail
+        SecurityMonitor.logSecurityEvent({
+          type: 'DIRECTORY_MIGRATION',
+          severity: 'LOW',
+          source: 'PortfolioManager.migrateFromSingularDirectories',
+          details: `Migrated directory from ${oldName} to ${newName} for v1.4.3 compatibility`,
+          metadata: { oldDir, newDir }
+        });
+        
+      } catch (error) {
+        // Old directory doesn't exist, which is fine
+        if ((error as any).code !== 'ENOENT') {
+          logger.error(`[PortfolioManager] Error during migration of ${oldName}:`, error);
+        }
+      }
+    }
   }
 }

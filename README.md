@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.4.2
+**📦 Version**: v1.4.3
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -32,6 +32,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 ```bash
 # Install globally
 npm install -g @dollhousemcp/mcp-server
+
+# ⚠️ IMPORTANT: If you have v1.4.2, upgrade immediately:
+# npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
 # macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
@@ -898,11 +901,33 @@ export DEBUG="dollhousemcp:*"                  # Debug logging (optional)
 
 ## 🔧 Troubleshooting
 
+### ⚠️ NPM Installation Issues (v1.4.2)
+
+If the MCP server crashes on startup after NPM installation:
+1. Check your version: `npm list -g @dollhousemcp/mcp-server`
+2. If you have v1.4.2, upgrade immediately: `npm install -g @dollhousemcp/mcp-server@latest`
+3. Clear your portfolio and let it regenerate: `rm -rf ~/.dollhouse/portfolio`
+
+**Note**: v1.4.2 had a critical bug that prevented proper initialization. This has been fixed in v1.4.3.
+
+### Directory Structure (v1.4.3+)
+
+As of v1.4.3, all element directories use plural names:
+- `~/.dollhouse/portfolio/personas/` (was `persona/` in v1.4.2)
+- `~/.dollhouse/portfolio/skills/` (was `skill/` in v1.4.2)
+- `~/.dollhouse/portfolio/templates/` (was `template/` in v1.4.2)
+- `~/.dollhouse/portfolio/agents/` (was `agent/` in v1.4.2)
+- `~/.dollhouse/portfolio/memories/` (was `memory/` in v1.4.2)
+- `~/.dollhouse/portfolio/ensembles/` (was `ensemble/` in v1.4.2)
+
+If you upgraded from v1.4.2, the server will automatically migrate your directories.
+
 ### Common Issues
 
 | Issue | Solution |
 |-------|----------|
-| **Personas not loading** | Check `personas/` directory exists and has read permissions |
+| **v1.4.2 installation broken** | Upgrade to v1.4.3+ immediately |
+| **Personas not loading** | Check `~/.dollhouse/portfolio/personas/` directory exists |
 | **Server won't start** | Run `npm run rebuild` to clean and rebuild |
 | **Collection not working** | Check internet connection and GitHub API access |
 | **User identity not saving** | Set `DOLLHOUSE_USER` environment variable before starting Claude |

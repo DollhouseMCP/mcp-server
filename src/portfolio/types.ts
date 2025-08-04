@@ -3,12 +3,12 @@
  */
 
 export enum ElementType {
-  PERSONA = 'persona',
-  SKILL = 'skill',
-  TEMPLATE = 'template',
-  AGENT = 'agent',
-  MEMORY = 'memory',
-  ENSEMBLE = 'ensemble'
+  PERSONA = 'personas',
+  SKILL = 'skills',
+  TEMPLATE = 'templates',
+  AGENT = 'agents',
+  MEMORY = 'memories',
+  ENSEMBLE = 'ensembles'
 }
 
 export interface PortfolioConfig {
