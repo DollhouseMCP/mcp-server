@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.4.1
+**📦 Version**: v1.4.2
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -748,7 +748,7 @@ DollhouseMCP/
 ├── scripts/                      # Management and utility scripts
 ├── Dockerfile                    # Multi-stage Docker build
 ├── docker-compose.yml           # Production and development configs
-├── package.json                 # Project config (dollhousemcp v1.4.1)
+├── package.json                 # Project config (dollhousemcp v1.4.2)
 ├── tsconfig.json                # TypeScript configuration
 ├── jest.config.cjs              # Jest test configuration
 ├── setup.sh                     # Automated installation script
@@ -1129,7 +1129,15 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.4.1 - August 2, 2025 (Current)
+### v1.4.2 - August 4, 2025 (Current)
+**Critical NPM Installation Fix**:
+- 🚨 **Fixed NPM installation failure** where empty portfolios caused server crashes
+- 📦 **DefaultElementProvider** automatically populates default content on first run
+- 🔍 **Smart path detection** searches multiple NPM/Git installation locations
+- 💬 **Helpful error messages** guide new users when portfolios are empty
+- 🔒 **Security hardened** with audit logging and file integrity verification
+
+### v1.4.1 - August 2, 2025
 **NPM Installation Support**:
 - 📦 **Install MCP servers from npm packages** with full cross-platform support
 - 🔄 **Atomic operations** with transaction-based rollback on failure
