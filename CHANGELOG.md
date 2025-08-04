@@ -5,6 +5,28 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] - 2025-08-04
+
+### 🚨 Emergency Hotfix
+- **v1.4.3 was completely broken** - this release fixes critical initialization failures
+- Users on v1.4.3 must upgrade immediately as the server crashes 100% of the time
+
+### Fixed
+- **Initialization order bug**: Migration now runs before directory access
+  - Previously: Portfolio directories were created before migration could fix them
+  - Now: Migration completes before any directory operations
+- **jsdom crash on startup**: Heavy dependencies now load lazily
+  - Previously: UpdateChecker crashed during MCP initialization
+  - Now: jsdom/DOMPurify load only when needed with error handling
+- **Docker compatibility**: Server now handles read-only environments gracefully
+  - Added proper error handling for directory creation failures
+  - Server continues with limited functionality instead of crashing
+
+### Changed
+- Made UpdateManager and PersonaImporter optional during initialization
+- Improved error visibility with console.error for critical failures
+- Better fallback HTML sanitization using entity escaping
+
 ## [1.4.3] - 2025-08-04
 
 ### 🚨 Critical Fix
