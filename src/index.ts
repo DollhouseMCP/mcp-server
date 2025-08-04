@@ -246,10 +246,12 @@ export class DollhouseMCPServer implements IToolHandler {
       try {
         await fs.mkdir(this.personasDir, { recursive: true });
         logger.info(`Created personas directory at: ${this.personasDir}`);
-        return;
+        // Continue to try loading (directory will be empty)
       } catch (mkdirError: any) {
         logger.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
-        throw new Error(`Cannot create personas directory: ${mkdirError.message}`);
+        // Don't throw - empty portfolio is valid
+        this.personas.clear();
+        return;
       }
     }
 
@@ -258,6 +260,10 @@ export class DollhouseMCPServer implements IToolHandler {
       const markdownFiles = files.filter(file => file.endsWith('.md'));
 
       this.personas.clear();
+      
+      if (markdownFiles.length === 0) {
+        logger.info('[DollhouseMCP] No personas found in portfolio. Use browse_collection to install some!');
+      }
 
       for (const file of markdownFiles) {
         try {
@@ -314,7 +320,14 @@ export class DollhouseMCPServer implements IToolHandler {
         }
       }
     } catch (error) {
+      // Handle ENOENT gracefully - directory might not exist yet
+      if ((error as any).code === 'ENOENT') {
+        logger.info('[DollhouseMCP] Personas directory does not exist yet - portfolio is empty');
+        this.personas.clear();
+        return;
+      }
       logger.error(`Error reading personas directory: ${error}`);
+      this.personas.clear();
     }
   }
 
@@ -333,6 +346,17 @@ export class DollhouseMCPServer implements IToolHandler {
       ai_generated: persona.metadata.ai_generated || false,
       active: this.activePersona === persona.filename,
     }));
+
+    if (personaList.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}You don't have any personas installed yet. Would you like to browse the DollhouseMCP collection on GitHub to see what's available? I can show you personas for creative writing, technical analysis, and more. Just say "yes" or use 'browse_collection'.`,
+          },
+        ],
+      };
+    }
 
     return {
       content: [
@@ -505,7 +529,7 @@ export class DollhouseMCPServer implements IToolHandler {
             return {
               content: [{
                 type: "text",
-                text: "📚 No skills found in your portfolio. Skills are discrete capabilities for specific tasks."
+                text: "No skills are currently installed. The DollhouseMCP collection has skills for code review, data analysis, creative writing and more. Would you like me to show you what's available? Just say \"yes\" or I can help you create a custom skill."
               }]
             };
           }
@@ -530,7 +554,7 @@ export class DollhouseMCPServer implements IToolHandler {
             return {
               content: [{
                 type: "text",
-                text: "📝 No templates found in your portfolio. Templates are reusable content structures."
+                text: "You haven't installed any templates yet. Would you like to see available templates for emails, reports, and documentation? I can show you examples from the collection or help you create your own. What would you prefer?"
               }]
             };
           }
@@ -554,7 +578,7 @@ export class DollhouseMCPServer implements IToolHandler {
             return {
               content: [{
                 type: "text",
-                text: "🤖 No agents found in your portfolio. Agents are autonomous goal-oriented actors."
+                text: "No agents installed yet. Agents are autonomous helpers that can work on tasks independently. The DollhouseMCP collection includes task managers, research assistants, and more. Would you like to browse available agents or learn how to create your own?"
               }]
             };
           }

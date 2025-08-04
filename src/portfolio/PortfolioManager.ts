@@ -8,6 +8,7 @@ import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
 import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { DefaultElementProvider } from './DefaultElementProvider.js';
 
 export { ElementType };
 export type { PortfolioConfig };
@@ -97,6 +98,15 @@ export class PortfolioManager {
     await fs.mkdir(agentStateDir, { recursive: true });
     
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
+    
+    // Populate with default elements if this is a new installation
+    try {
+      const defaultProvider = new DefaultElementProvider();
+      await defaultProvider.populateDefaults(this.baseDir);
+    } catch (error) {
+      logger.error('[PortfolioManager] Error populating default elements:', error);
+      // Continue anyway - empty portfolio is valid
+    }
   }
   
   /**
