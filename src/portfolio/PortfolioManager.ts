@@ -117,7 +117,19 @@ export class PortfolioManager {
     logger.info('[PortfolioManager] Initializing portfolio directory structure');
     
     // Create base directory
-    await fs.mkdir(this.baseDir, { recursive: true });
+    try {
+      await fs.mkdir(this.baseDir, { recursive: true });
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      // In read-only environments (like Docker), we can't create directories
+      // Log but continue - the portfolio will be empty but functional
+      if (err.code === 'EACCES' || err.code === 'EROFS' || err.code === 'ENOENT') {
+        logger.warn(`[PortfolioManager] Cannot create portfolio directory (read-only environment?): ${err.message}`);
+        console.log(`[DollhouseMCP] Running in read-only mode - portfolio features disabled`);
+        return;
+      }
+      throw error;
+    }
     
     // Create subdirectories for each element type
     for (const elementType of Object.values(ElementType)) {

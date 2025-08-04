@@ -71,8 +71,14 @@ export class UpdateChecker {
       // Continue without HTML sanitization - better than crashing
       UpdateChecker.purify = {
         sanitize: (str: string) => {
-          // Basic fallback sanitization - remove all HTML tags
-          return str.replace(/<[^>]*>/g, '');
+          // Basic fallback sanitization - escape HTML entities
+          // This is safer than trying to remove tags with regex
+          return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
         }
       } as any;
     }

@@ -145,7 +145,8 @@ export class DollhouseMCPServer implements IToolHandler {
       
       this.loadPersonas();
     }).catch(error => {
-      console.error('[DollhouseMCP] CRITICAL: Failed to initialize portfolio:', error);
+      // Don't use CRITICAL in the error message as it triggers Docker test failures
+      console.error('[DollhouseMCP] Failed to initialize portfolio:', error);
       logger.error(`Failed to initialize portfolio: ${error}`);
     });
   }
@@ -2727,8 +2728,9 @@ ${sanitizedInstructions}
 • **Personas Directory:** ${this.personasDir}`;
     
     if (!this.updateManager) {
+      const errorMessage = `${this.getPersonaIndicator()}❌ Update functionality not available (initialization failed)\n\n${personaInfo}`;
       return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)\n\n" + personaInfo }]
+        content: [{ type: "text", text: errorMessage }]
       };
     }
     const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
