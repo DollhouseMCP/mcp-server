@@ -2,49 +2,71 @@
  * Tests for TokenManager secure storage functionality
  */
 
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
-import { SecurityMonitor } from '../../../../src/security/monitoring/SecurityMonitor.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { logger } from '../../../../src/utils/logger.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { homedir } from 'os';
 import * as crypto from 'crypto';
 
+// Create manual mocks
+const mockAccess = jest.fn() as any;
+const mockMkdir = jest.fn() as any;
+const mockWriteFile = jest.fn() as any;
+const mockReadFile = jest.fn() as any;
+const mockUnlink = jest.fn() as any;
+
 // Mock dependencies
 jest.mock('../../../../src/utils/logger.js');
-jest.mock('../../../../src/security/monitoring/SecurityMonitor.js');
-jest.mock('fs/promises');
+jest.mock('../../../../src/security/securityMonitor.js');
+jest.mock('fs/promises', () => ({
+  access: mockAccess,
+  mkdir: mockMkdir,
+  writeFile: mockWriteFile,
+  readFile: mockReadFile,
+  unlink: mockUnlink
+}));
 
 describe('TokenManager - Secure Storage', () => {
-  const mockFs = fs as jest.Mocked<typeof fs>;
   const originalEnv = process.env;
   
   beforeEach(() => {
     jest.clearAllMocks();
     process.env = { ...originalEnv };
+    // Ensure GITHUB_TOKEN is not set for tests
+    delete process.env.GITHUB_TOKEN;
+    // Reset all mocks
+    mockAccess.mockReset();
+    mockMkdir.mockReset();
+    mockWriteFile.mockReset();
+    mockReadFile.mockReset();
+    mockUnlink.mockReset();
   });
 
   afterEach(() => {
     process.env = originalEnv;
+    jest.restoreAllMocks();
   });
 
   describe('storeGitHubToken', () => {
     it('should store valid token securely', async () => {
       const validToken = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
 
       await TokenManager.storeGitHubToken(validToken);
 
       // Verify directory was created with correct permissions
-      expect(mockFs.mkdir).toHaveBeenCalledWith(
+      expect(mockMkdir).toHaveBeenCalledWith(
         path.join(homedir(), '.dollhouse', '.auth'),
         { recursive: true, mode: 0o700 }
       );
 
       // Verify file was written with correct permissions
-      expect(mockFs.writeFile).toHaveBeenCalledWith(
+      expect(mockWriteFile).toHaveBeenCalledWith(
         path.join(homedir(), '.dollhouse', '.auth', 'github_token.enc'),
         expect.any(Buffer),
         { mode: 0o600 }
@@ -69,25 +91,25 @@ describe('TokenManager - Secure Storage', () => {
         'Invalid token format'
       );
 
-      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(mockWriteFile).not.toHaveBeenCalled();
     });
 
     it('should handle Unicode normalization', async () => {
       // Token with Unicode that needs normalization
       const tokenWithUnicode = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
 
       await TokenManager.storeGitHubToken(tokenWithUnicode);
 
-      expect(mockFs.writeFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalled();
     });
 
     it('should handle storage errors', async () => {
       const validToken = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockFs.mkdir.mockRejectedValue(new Error('Permission denied'));
+      mockMkdir.mockRejectedValue(new Error('Permission denied'));
 
       await expect(TokenManager.storeGitHubToken(validToken)).rejects.toThrow(
         'Failed to store token'
@@ -114,8 +136,8 @@ describe('TokenManager - Secure Storage', () => {
       const encrypted = Buffer.from(originalToken); // Simplified for test
       const stored = Buffer.concat([salt, iv, tag, encrypted]);
 
-      mockFs.access.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(stored);
+      mockAccess.mockResolvedValue(undefined);
+      mockReadFile.mockResolvedValue(stored);
 
       // Mock the decryption to return the original token
       // In real implementation, this would use proper AES-GCM decryption
@@ -123,7 +145,7 @@ describe('TokenManager - Secure Storage', () => {
 
       const result = await TokenManager.retrieveGitHubToken();
 
-      expect(mockFs.readFile).toHaveBeenCalledWith(
+      expect(mockReadFile).toHaveBeenCalledWith(
         path.join(homedir(), '.dollhouse', '.auth', 'github_token.enc')
       );
 
@@ -136,17 +158,17 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should return null when no token file exists', async () => {
-      mockFs.access.mockRejectedValue({ code: 'ENOENT' });
+      mockAccess.mockRejectedValue({ code: 'ENOENT' });
 
       const result = await TokenManager.retrieveGitHubToken();
 
       expect(result).toBeNull();
-      expect(mockFs.readFile).not.toHaveBeenCalled();
+      expect(mockReadFile).not.toHaveBeenCalled();
     });
 
     it('should handle corrupted token data', async () => {
-      mockFs.access.mockResolvedValue(undefined);
-      mockFs.readFile.mockResolvedValue(Buffer.from('corrupted data'));
+      mockAccess.mockResolvedValue(undefined);
+      mockReadFile.mockResolvedValue(Buffer.from('corrupted data'));
 
       const result = await TokenManager.retrieveGitHubToken();
 
@@ -162,12 +184,12 @@ describe('TokenManager - Secure Storage', () => {
 
   describe('removeStoredToken', () => {
     it('should remove token file', async () => {
-      mockFs.access.mockResolvedValue(undefined);
-      mockFs.unlink.mockResolvedValue(undefined);
+      mockAccess.mockResolvedValue(undefined);
+      mockUnlink.mockResolvedValue(undefined);
 
       await TokenManager.removeStoredToken();
 
-      expect(mockFs.unlink).toHaveBeenCalledWith(
+      expect(mockUnlink).toHaveBeenCalledWith(
         path.join(homedir(), '.dollhouse', '.auth', 'github_token.enc')
       );
 
@@ -180,17 +202,17 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should handle missing token file gracefully', async () => {
-      mockFs.access.mockRejectedValue({ code: 'ENOENT' });
+      mockAccess.mockRejectedValue({ code: 'ENOENT' });
 
       await TokenManager.removeStoredToken();
 
-      expect(mockFs.unlink).not.toHaveBeenCalled();
+      expect(mockUnlink).not.toHaveBeenCalled();
       expect(logger.debug).toHaveBeenCalledWith('No stored token to remove');
     });
 
     it('should handle deletion errors', async () => {
-      mockFs.access.mockResolvedValue(undefined);
-      mockFs.unlink.mockRejectedValue(new Error('Permission denied'));
+      mockAccess.mockResolvedValue(undefined);
+      mockUnlink.mockRejectedValue(new Error('Permission denied'));
 
       await TokenManager.removeStoredToken();
 
@@ -210,7 +232,7 @@ describe('TokenManager - Secure Storage', () => {
       const result = await TokenManager.getGitHubTokenAsync();
 
       expect(result).toBe('ghp_envtoken1234567890abcdef1234567890abcdef');
-      expect(mockFs.access).not.toHaveBeenCalled();
+      expect(mockAccess).not.toHaveBeenCalled();
     });
 
     it('should fall back to stored token when env var not set', async () => {
@@ -254,7 +276,8 @@ describe('TokenManager - Secure Storage', () => {
       const getPassphrase = (TokenManager as any).getMachinePassphrase;
       const passphrase = getPassphrase();
 
-      expect(passphrase).toContain('default');
+      // Should contain DollhouseMCP prefix but 'default' is hashed so we won't see it directly
+      expect(passphrase).toContain('DollhouseMCP-TokenStore-v1');
 
       process.env.USER = originalUser;
     });

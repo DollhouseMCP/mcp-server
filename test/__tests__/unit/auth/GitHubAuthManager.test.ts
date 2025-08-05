@@ -2,15 +2,16 @@
  * Tests for GitHubAuthManager OAuth device flow implementation
  */
 
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { GitHubAuthManager } from '../../../../src/auth/GitHubAuthManager.js';
 import { APICache } from '../../../../src/cache/APICache.js';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
 import { logger } from '../../../../src/utils/logger.js';
-import { SecurityMonitor } from '../../../../src/security/monitoring/SecurityMonitor.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 // Mock dependencies
 jest.mock('../../../../src/utils/logger.js');
-jest.mock('../../../../src/security/monitoring/SecurityMonitor.js');
+jest.mock('../../../../src/security/securityMonitor.js');
 jest.mock('../../../../src/security/tokenManager.js');
 
 // Mock fetch globally
