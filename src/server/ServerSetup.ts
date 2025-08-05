@@ -11,6 +11,7 @@ import { getCollectionTools } from './tools/CollectionTools.js';
 import { getUserTools } from './tools/UserTools.js';
 import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
+import { getAuthTools } from './tools/AuthTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
@@ -49,6 +50,9 @@ export class ServerSetup {
     
     // Register user tools
     this.toolRegistry.registerMany(getUserTools(instance));
+    
+    // Register auth tools
+    this.toolRegistry.registerMany(getAuthTools(instance));
     
     // Register update tools
     this.toolRegistry.registerMany(getUpdateTools(instance));

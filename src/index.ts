@@ -33,6 +33,7 @@ import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesyst
 import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
+import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
 import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
@@ -68,6 +69,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
   private githubClient: GitHubClient;
+  private githubAuthManager: GitHubAuthManager;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
   private personaDetails: PersonaDetails;
@@ -126,6 +128,7 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
+    this.githubAuthManager = new GitHubAuthManager(this.apiCache);
     this.collectionBrowser = new CollectionBrowser(this.githubClient);
     this.collectionSearch = new CollectionSearch(this.githubClient);
     this.personaDetails = new PersonaDetails(this.githubClient);
@@ -1914,6 +1917,28 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async submitContent(contentIdentifier: string) {
+    // Check GitHub authentication first
+    const authStatus = await this.githubAuthManager.getAuthStatus();
+    
+    if (!authStatus.isAuthenticated) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}🔐 **GitHub Authentication Required**\n\n` +
+                  `To submit content to the DollhouseMCP collection, you need to connect to GitHub.\n\n` +
+                  `**Why GitHub?**\n` +
+                  `• It's where our community shares content\n` +
+                  `• Free account with millions of developers\n` +
+                  `• Secure and reliable platform\n\n` +
+                  `**To get started:**\n` +
+                  `Just say "connect to GitHub" or "set up GitHub"\n\n` +
+                  `Don't have a GitHub account? No problem! You'll be guided through creating one.`,
+          },
+        ],
+      };
+    }
+    
     // Find the content in local collection
     let persona = this.personas.get(contentIdentifier);
     
@@ -2125,6 +2150,158 @@ export class DollhouseMCPServer implements IToolHandler {
 
   private getCurrentUserForAttribution(): string {
     return this.currentUser || generateAnonymousId();
+  }
+
+  // GitHub authentication management
+  async setupGitHubAuth() {
+    try {
+      // Check current auth status first
+      const currentStatus = await this.githubAuthManager.getAuthStatus();
+      
+      if (currentStatus.isAuthenticated) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ **Already Connected to GitHub**\n\n` +
+                  `👤 **Username:** ${currentStatus.username}\n` +
+                  `🔑 **Permissions:** ${currentStatus.scopes?.join(', ') || 'basic access'}\n\n` +
+                  `You're all set! You can:\n` +
+                  `• Browse the collection\n` +
+                  `• Install content\n` +
+                  `• Submit your creations\n\n` +
+                  `To disconnect, say "disconnect from GitHub"`
+          }]
+        };
+      }
+      
+      // Initiate device flow
+      const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
+      
+      // Start polling in background
+      this.pollForAuthCompletion(deviceResponse.device_code, deviceResponse.interval);
+      
+      // Return instructions to user
+      return {
+        content: [{
+          type: "text",
+          text: this.githubAuthManager.formatAuthInstructions(deviceResponse)
+        }]
+      };
+    } catch (error) {
+      logger.error('Failed to setup GitHub auth', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **Authentication Setup Failed**\n\n` +
+                `Unable to start GitHub authentication: ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
+                `Please check your internet connection and try again.`
+        }]
+      };
+    }
+  }
+  
+  async checkGitHubAuth() {
+    try {
+      const status = await this.githubAuthManager.getAuthStatus();
+      
+      if (status.isAuthenticated) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ **GitHub Connected**\n\n` +
+                  `👤 **Username:** ${status.username}\n` +
+                  `🔑 **Permissions:** ${status.scopes?.join(', ') || 'basic access'}\n\n` +
+                  `**Available Actions:**\n` +
+                  `✅ Browse collection\n` +
+                  `✅ Install content\n` +
+                  `✅ Submit content\n\n` +
+                  `Everything is working properly!`
+          }]
+        };
+      } else if (status.hasToken) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ **GitHub Token Invalid**\n\n` +
+                  `A GitHub token was found but it appears to be invalid or expired.\n\n` +
+                  `**To fix this:**\n` +
+                  `1. Say "set up GitHub" to authenticate again\n` +
+                  `2. Or check your GITHUB_TOKEN environment variable\n\n` +
+                  `Note: Browse and install still work without authentication!`
+          }]
+        };
+      } else {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}🔒 **Not Connected to GitHub**\n\n` +
+                  `You're not currently authenticated with GitHub.\n\n` +
+                  `**What works without auth:**\n` +
+                  `✅ Browse the public collection\n` +
+                  `✅ Install community content\n` +
+                  `❌ Submit your own content (requires auth)\n\n` +
+                  `To connect, just say "set up GitHub" or "connect to GitHub"`
+          }]
+        };
+      }
+    } catch (error) {
+      logger.error('Failed to check GitHub auth', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **Unable to Check Authentication**\n\n` +
+                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  async clearGitHubAuth() {
+    try {
+      await this.githubAuthManager.clearAuthentication();
+      
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}✅ **GitHub Disconnected**\n\n` +
+                `Your GitHub connection has been cleared.\n\n` +
+                `**What still works:**\n` +
+                `✅ Browse the public collection\n` +
+                `✅ Install community content\n` +
+                `❌ Submit content (requires reconnection)\n\n` +
+                `To reconnect later, just say "connect to GitHub"\n\n` +
+                `⚠️ **Note:** To fully remove authentication, also unset the GITHUB_TOKEN environment variable.`
+        }]
+      };
+    } catch (error) {
+      logger.error('Failed to clear GitHub auth', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **Failed to Clear Authentication**\n\n` +
+                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  /**
+   * Poll for auth completion in the background
+   */
+  private async pollForAuthCompletion(deviceCode: string, interval: number): Promise<void> {
+    try {
+      const tokenResponse = await this.githubAuthManager.pollForToken(deviceCode, interval);
+      const authStatus = await this.githubAuthManager.completeAuthentication(tokenResponse);
+      
+      // Log success (user will see this in their next interaction)
+      logger.info('GitHub authentication completed successfully', { 
+        username: authStatus.username,
+        scopes: authStatus.scopes 
+      });
+    } catch (error) {
+      // Log error but don't throw - this runs in background
+      logger.error('GitHub authentication polling failed', { error });
+    }
   }
 
   // Chat-based persona management tools
