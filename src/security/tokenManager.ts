@@ -5,6 +5,12 @@
 import { logger } from '../utils/logger.js';
 import { RateLimiter } from '../update/RateLimiter.js';
 import { SecurityError } from './errors.js';
+import * as crypto from 'crypto';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { homedir } from 'os';
+import { SecurityMonitor } from './monitoring/SecurityMonitor.js';
+import { UnicodeValidator } from './unicodeValidator.js';
 
 export interface TokenScopes {
   required: string[];
@@ -33,6 +39,16 @@ export class TokenManager {
     USER_ACCESS_TOKEN: /^ghu_[A-Za-z0-9_]{36,}$/,
     REFRESH_TOKEN: /^ghr_[A-Za-z0-9_]{36,}$/
   };
+
+  // Secure storage configuration
+  private static readonly TOKEN_DIR = path.join(homedir(), '.dollhouse', '.auth');
+  private static readonly TOKEN_FILE = 'github_token.enc';
+  private static readonly ALGORITHM = 'aes-256-gcm';
+  private static readonly KEY_LENGTH = 32;
+  private static readonly IV_LENGTH = 16;
+  private static readonly TAG_LENGTH = 16;
+  private static readonly SALT_LENGTH = 32;
+  private static readonly ITERATIONS = 100000;
 
   // Rate limiter for token validation operations - prevents brute force attacks
   private static tokenValidationLimiter: RateLimiter | null = null;
@@ -357,5 +373,217 @@ export class TokenManager {
 
     const requiredScopes = this.getRequiredScopes(operation);
     return this.validateTokenScopes(token, requiredScopes);
+  }
+
+  /**
+   * Derive encryption key from a passphrase
+   */
+  private static deriveKey(passphrase: string, salt: Buffer): Buffer {
+    return crypto.pbkdf2Sync(passphrase, salt, this.ITERATIONS, this.KEY_LENGTH, 'sha256');
+  }
+
+  /**
+   * Get machine-specific passphrase for encryption
+   * Uses a combination of machine ID and user info for uniqueness
+   */
+  private static getMachinePassphrase(): string {
+    // Use a combination of hostname, username, and a fixed app identifier
+    const hostname = crypto.createHash('sha256').update(homedir()).digest('hex').substring(0, 16);
+    const username = crypto.createHash('sha256').update(process.env.USER || 'default').digest('hex').substring(0, 16);
+    const appId = 'DollhouseMCP-TokenStore-v1';
+    
+    return `${appId}-${hostname}-${username}`;
+  }
+
+  /**
+   * Store GitHub token securely to file
+   */
+  static async storeGitHubToken(token: string): Promise<void> {
+    try {
+      // Validate token format first
+      if (!this.validateTokenFormat(token)) {
+        throw new SecurityError('Invalid token format');
+      }
+
+      // Normalize and validate token
+      const validation = UnicodeValidator.normalize(token);
+      if (!validation.isValid) {
+        throw new SecurityError('Token contains invalid characters');
+      }
+
+      // Ensure directory exists
+      await fs.mkdir(this.TOKEN_DIR, { recursive: true, mode: 0o700 });
+
+      // Generate encryption components
+      const salt = crypto.randomBytes(this.SALT_LENGTH);
+      const iv = crypto.randomBytes(this.IV_LENGTH);
+      const passphrase = this.getMachinePassphrase();
+      const key = this.deriveKey(passphrase, salt);
+
+      // Encrypt token
+      const cipher = crypto.createCipheriv(this.ALGORITHM, key, iv);
+      const encrypted = Buffer.concat([
+        cipher.update(validation.normalizedContent, 'utf8'),
+        cipher.final()
+      ]);
+      const tag = cipher.getAuthTag();
+
+      // Create storage format: salt + iv + tag + encrypted
+      const stored = Buffer.concat([salt, iv, tag, encrypted]);
+
+      // Write to file with restricted permissions
+      const tokenPath = path.join(this.TOKEN_DIR, this.TOKEN_FILE);
+      await fs.writeFile(tokenPath, stored, { mode: 0o600 });
+
+      // Log security event
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_STORED',
+        severity: 'low',
+        source: 'TokenManager.storeGitHubToken',
+        details: 'GitHub token stored securely',
+        metadata: {
+          tokenType: this.getTokenType(token),
+          tokenPrefix: this.getTokenPrefix(token)
+        }
+      });
+
+      logger.info('GitHub token stored securely');
+    } catch (error) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_STORAGE_FAILED',
+        severity: 'medium',
+        source: 'TokenManager.storeGitHubToken',
+        details: 'Failed to store GitHub token',
+        error
+      });
+      
+      throw new SecurityError(`Failed to store token: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Retrieve GitHub token from secure storage
+   */
+  static async retrieveGitHubToken(): Promise<string | null> {
+    try {
+      const tokenPath = path.join(this.TOKEN_DIR, this.TOKEN_FILE);
+      
+      // Check if file exists
+      try {
+        await fs.access(tokenPath);
+      } catch {
+        // No stored token
+        return null;
+      }
+
+      // Read encrypted data
+      const stored = await fs.readFile(tokenPath);
+      
+      // Extract components
+      const salt = stored.subarray(0, this.SALT_LENGTH);
+      const iv = stored.subarray(this.SALT_LENGTH, this.SALT_LENGTH + this.IV_LENGTH);
+      const tag = stored.subarray(this.SALT_LENGTH + this.IV_LENGTH, this.SALT_LENGTH + this.IV_LENGTH + this.TAG_LENGTH);
+      const encrypted = stored.subarray(this.SALT_LENGTH + this.IV_LENGTH + this.TAG_LENGTH);
+
+      // Derive decryption key
+      const passphrase = this.getMachinePassphrase();
+      const key = this.deriveKey(passphrase, salt);
+
+      // Decrypt token
+      const decipher = crypto.createDecipheriv(this.ALGORITHM, key, iv);
+      decipher.setAuthTag(tag);
+      
+      const decrypted = Buffer.concat([
+        decipher.update(encrypted),
+        decipher.final()
+      ]).toString('utf8');
+
+      // Validate decrypted token
+      if (!this.validateTokenFormat(decrypted)) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'TOKEN_VALIDATION_FAILED',
+          severity: 'high',
+          source: 'TokenManager.retrieveGitHubToken',
+          details: 'Decrypted token has invalid format'
+        });
+        return null;
+      }
+
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_RETRIEVED',
+        severity: 'low',
+        source: 'TokenManager.retrieveGitHubToken',
+        details: 'GitHub token retrieved from secure storage',
+        metadata: {
+          tokenType: this.getTokenType(decrypted),
+          tokenPrefix: this.getTokenPrefix(decrypted)
+        }
+      });
+
+      return decrypted;
+    } catch (error) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_RETRIEVAL_FAILED',
+        severity: 'medium',
+        source: 'TokenManager.retrieveGitHubToken',
+        details: 'Failed to retrieve GitHub token',
+        error
+      });
+      
+      logger.debug('Failed to retrieve stored token', { error });
+      return null;
+    }
+  }
+
+  /**
+   * Remove stored GitHub token
+   */
+  static async removeStoredToken(): Promise<void> {
+    try {
+      const tokenPath = path.join(this.TOKEN_DIR, this.TOKEN_FILE);
+      
+      // Check if file exists before attempting deletion
+      try {
+        await fs.access(tokenPath);
+        await fs.unlink(tokenPath);
+        
+        SecurityMonitor.logSecurityEvent({
+          type: 'TOKEN_REMOVED',
+          severity: 'low',
+          source: 'TokenManager.removeStoredToken',
+          details: 'GitHub token removed from secure storage'
+        });
+        
+        logger.info('Stored GitHub token removed');
+      } catch (error) {
+        // File doesn't exist or couldn't be deleted
+        logger.debug('No stored token to remove');
+      }
+    } catch (error) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_REMOVAL_FAILED',
+        severity: 'low',
+        source: 'TokenManager.removeStoredToken',
+        details: 'Failed to remove stored token',
+        error
+      });
+      
+      logger.warn('Failed to remove stored token', { error });
+    }
+  }
+
+  /**
+   * Get GitHub token from environment or secure storage
+   * Updated to check secure storage if environment variable not set
+   */
+  static async getGitHubTokenAsync(): Promise<string | null> {
+    // First check environment variable
+    const envToken = this.getGitHubToken();
+    if (envToken) {
+      return envToken;
+    }
+
+    // Fall back to secure storage
+    return this.retrieveGitHubToken();
   }
 }

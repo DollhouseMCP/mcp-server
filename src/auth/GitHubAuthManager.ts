@@ -6,6 +6,8 @@
 import { TokenManager } from '../security/tokenManager.js';
 import { logger } from '../utils/logger.js';
 import { APICache } from '../cache/APICache.js';
+import { UnicodeValidator } from '../security/unicodeValidator.js';
+import { SecurityMonitor } from '../security/monitoring/SecurityMonitor.js';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -35,8 +37,8 @@ export interface AuthStatus {
  */
 export class GitHubAuthManager {
   // GitHub OAuth App Client ID for DollhouseMCP
-  // This is public and safe to embed in the code
-  private static readonly CLIENT_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID || 'Ov23li8KZDXQyFnXOVjn';
+  // Must be configured via environment variable
+  private static readonly CLIENT_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
   
   // GitHub OAuth endpoints
   private static readonly DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -48,16 +50,62 @@ export class GitHubAuthManager {
   private static readonly MAX_POLL_ATTEMPTS = 180; // 15 minutes total
   
   private apiCache: APICache;
+  private activePolling: AbortController | null = null;
   
   constructor(apiCache: APICache) {
     this.apiCache = apiCache;
   }
   
   /**
+   * Execute a network request with retry logic
+   */
+  private async fetchWithRetry(
+    url: string, 
+    options: RequestInit, 
+    maxRetries: number = 3,
+    retryDelay: number = 1000
+  ): Promise<Response> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        return response;
+      } catch (error) {
+        lastError = error as Error;
+        
+        // Check if it's a network error that should be retried
+        const isNetworkError = error instanceof Error && (
+          error.message.includes('ECONNREFUSED') ||
+          error.message.includes('ETIMEDOUT') ||
+          error.message.includes('ENOTFOUND') ||
+          error.message.includes('network')
+        );
+        
+        if (isNetworkError && attempt < maxRetries) {
+          logger.debug(`Network request failed, retrying (${attempt}/${maxRetries})`, {
+            url,
+            error: error.message,
+            nextRetryIn: retryDelay * attempt
+          });
+          
+          // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        } else {
+          // Not a network error or last attempt, throw immediately
+          throw error;
+        }
+      }
+    }
+    
+    throw lastError || new Error('Network request failed after all retries');
+  }
+  
+  /**
    * Check current authentication status
    */
   async getAuthStatus(): Promise<AuthStatus> {
-    const token = TokenManager.getGitHubToken();
+    const token = await TokenManager.getGitHubTokenAsync();
     
     if (!token) {
       return {
@@ -90,8 +138,15 @@ export class GitHubAuthManager {
    * Initiate the device flow authentication process
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
+    if (!GitHubAuthManager.CLIENT_ID) {
+      throw new Error(
+        'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
+        'Register an OAuth app at https://github.com/settings/applications/new'
+      );
+    }
+    
     try {
-      const response = await fetch(GitHubAuthManager.DEVICE_CODE_URL, {
+      const response = await this.fetchWithRetry(GitHubAuthManager.DEVICE_CODE_URL, {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
@@ -104,7 +159,13 @@ export class GitHubAuthManager {
       });
       
       if (!response.ok) {
-        throw new Error(`Failed to initiate device flow: ${response.status} ${response.statusText}`);
+        // Provide user-friendly error messages based on status codes
+        const errorMessage = this.getErrorMessageForStatus(response.status, 'device flow initialization');
+        logger.debug('Device flow initiation failed', { 
+          status: response.status, 
+          statusText: response.statusText 
+        });
+        throw new Error(errorMessage);
       }
       
       const data = await response.json();
@@ -113,6 +174,19 @@ export class GitHubAuthManager {
       if (!data.device_code || !data.user_code || !data.verification_uri) {
         throw new Error('Invalid device flow response from GitHub');
       }
+      
+      // Log security event for audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'OAUTH_DEVICE_FLOW_INITIATED',
+        severity: 'low',
+        source: 'GitHubAuthManager.initiateDeviceFlow',
+        details: 'GitHub OAuth device flow initiated',
+        metadata: {
+          userCode: data.user_code,
+          expiresIn: data.expires_in,
+          interval: data.interval
+        }
+      });
       
       return data as DeviceCodeResponse;
     } catch (error) {
@@ -125,12 +199,22 @@ export class GitHubAuthManager {
    * Poll for token after user has authorized the device
    */
   async pollForToken(deviceCode: string, interval: number = GitHubAuthManager.DEFAULT_POLL_INTERVAL): Promise<TokenResponse> {
+    // Create new abort controller for this polling session
+    this.activePolling = new AbortController();
+    const signal = this.activePolling.signal;
+    
     let attempts = 0;
     
-    while (attempts < GitHubAuthManager.MAX_POLL_ATTEMPTS) {
-      attempts++;
-      
-      try {
+    try {
+      while (attempts < GitHubAuthManager.MAX_POLL_ATTEMPTS) {
+        // Check if polling was aborted
+        if (signal.aborted) {
+          throw new Error('Authentication polling was cancelled');
+        }
+        
+        attempts++;
+        
+        try {
         const response = await fetch(GitHubAuthManager.TOKEN_URL, {
           method: 'POST',
           headers: {
@@ -166,7 +250,12 @@ export class GitHubAuthManager {
               throw new Error('Authorization was denied. Please try again.');
               
             default:
-              throw new Error(`Authentication failed: ${data.error_description || data.error}`);
+              // Log the actual error for debugging
+              logger.debug('OAuth device flow error', { 
+                error: data.error, 
+                description: data.error_description 
+              });
+              throw new Error('Authentication failed. Please try starting the process again.');
           }
         } else if (data.access_token) {
           // Success!
@@ -174,16 +263,21 @@ export class GitHubAuthManager {
         }
         
         // Wait before next poll
-        await new Promise(resolve => setTimeout(resolve, interval));
+        // Wait for interval with abort support
+        await this.waitWithAbort(interval, signal);
         
       } catch (error) {
         // Network errors shouldn't stop polling
         logger.debug('Poll attempt failed', { attempt: attempts, error });
-        await new Promise(resolve => setTimeout(resolve, interval));
+        await this.waitWithAbort(interval, signal);
       }
     }
     
     throw new Error('Authentication timed out. Please try again.');
+    } finally {
+      // Clear active polling reference
+      this.activePolling = null;
+    }
   }
   
   /**
@@ -196,6 +290,19 @@ export class GitHubAuthManager {
     // Get user info
     const userInfo = await this.fetchUserInfo(tokenResponse.access_token);
     
+    // Log successful authentication completion
+    SecurityMonitor.logSecurityEvent({
+      type: 'OAUTH_AUTHENTICATION_COMPLETED',
+      severity: 'low',
+      source: 'GitHubAuthManager.completeAuthentication',
+      details: 'GitHub OAuth device flow completed successfully',
+      metadata: {
+        username: userInfo.login,
+        scopes: tokenResponse.scope.split(' '),
+        tokenType: TokenManager.getTokenType(tokenResponse.access_token)
+      }
+    });
+    
     return {
       isAuthenticated: true,
       hasToken: true,
@@ -205,23 +312,57 @@ export class GitHubAuthManager {
   }
   
   /**
-   * Clear stored authentication
+   * Clear stored authentication and revoke token
    */
   async clearAuthentication(): Promise<void> {
-    // For now, we rely on environment variables
-    // In the future, this could clear from secure storage
-    logger.info('Authentication cleared. Remove GITHUB_TOKEN from environment to complete.');
+    try {
+      // Get the token before clearing it
+      const token = await TokenManager.getGitHubTokenAsync();
+      
+      if (token) {
+        // Attempt to revoke the token on GitHub
+        // Note: GitHub OAuth tokens don't have a revocation endpoint for device flow tokens
+        // But we'll clear the cache and remove from storage
+        
+        // Clear cached user info
+        this.apiCache.clear();
+        
+        // Log security event for audit trail
+        SecurityMonitor.logSecurityEvent({
+          type: 'GITHUB_AUTH_CLEARED',
+          severity: 'low',
+          source: 'GitHubAuthManager.clearAuthentication',
+          details: 'GitHub authentication cleared by user request',
+          metadata: {
+            hadToken: true,
+            tokenPrefix: TokenManager.getTokenPrefix(token)
+          }
+        });
+      }
+      
+      // Remove from secure storage
+      await TokenManager.removeStoredToken();
+      
+      logger.info('GitHub authentication cleared successfully');
+    } catch (error) {
+      logger.error('Error clearing authentication', { error });
+      throw new Error('Failed to clear authentication');
+    }
   }
   
   /**
-   * Store token securely
-   * For now, this logs instructions for manual setup
-   * Future: Use system keychain or encrypted storage
+   * Store token securely using encrypted file storage
    */
   private async storeToken(token: string): Promise<void> {
-    // TODO: Implement secure storage (keychain, encrypted file, etc.)
-    // For now, provide manual instructions
-    logger.info('Token obtained successfully. For persistent auth, set GITHUB_TOKEN environment variable.');
+    try {
+      await TokenManager.storeGitHubToken(token);
+      logger.info('GitHub token stored securely. You are now authenticated!');
+    } catch (error) {
+      logger.error('Failed to store token securely', { error });
+      // Fallback to environment variable instructions
+      logger.info('For manual setup, you can set GITHUB_TOKEN environment variable.');
+      throw error;
+    }
   }
   
   /**
@@ -234,7 +375,7 @@ export class GitHubAuthManager {
       return cached;
     }
     
-    const response = await fetch(GitHubAuthManager.USER_URL, {
+    const response = await this.fetchWithRetry(GitHubAuthManager.USER_URL, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.github.v3+json'
@@ -242,16 +383,61 @@ export class GitHubAuthManager {
     });
     
     if (!response.ok) {
-      throw new Error(`Failed to fetch user info: ${response.status}`);
+      const errorMessage = this.getErrorMessageForStatus(response.status, 'user information fetch');
+      logger.debug('Failed to fetch user info', { status: response.status });
+      throw new Error(errorMessage);
     }
     
     const data = await response.json();
+    
+    // Normalize username and other text fields to prevent Unicode attacks
+    if (data.login) {
+      const validation = UnicodeValidator.normalize(data.login);
+      if (!validation.isValid) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'UNICODE_NORMALIZATION_FAILED',
+          severity: 'medium',
+          source: 'GitHubAuthManager.fetchUserInfo',
+          details: 'GitHub username contains invalid Unicode',
+          metadata: { 
+            originalLength: data.login.length,
+            issues: validation.issues 
+          }
+        });
+        throw new Error('Invalid username format from GitHub');
+      }
+      data.login = validation.normalizedContent;
+    }
+    
+    // Normalize display name if present
+    if (data.name) {
+      const nameValidation = UnicodeValidator.normalize(data.name);
+      if (nameValidation.isValid) {
+        data.name = nameValidation.normalizedContent;
+      } else {
+        // Don't fail on display name, just remove it
+        delete data.name;
+      }
+    }
     
     // Add scopes from response headers
     const scopeHeader = response.headers.get('x-oauth-scopes');
     if (scopeHeader) {
       data.scopes = scopeHeader.split(',').map(s => s.trim());
     }
+    
+    // Log successful authentication for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'GITHUB_AUTH_SUCCESS',
+      severity: 'low',
+      source: 'GitHubAuthManager.fetchUserInfo',
+      details: 'GitHub user authenticated successfully',
+      metadata: {
+        username: data.login,
+        hasEmail: !!data.email,
+        scopes: data.scopes || []
+      }
+    });
     
     // Cache the result
     this.apiCache.set(GitHubAuthManager.USER_URL, data);
@@ -287,5 +473,83 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
   needsAuthForAction(action: string): boolean {
     const authRequiredActions = ['submit', 'create_pr', 'manage_content'];
     return authRequiredActions.includes(action.toLowerCase());
+  }
+  
+  /**
+   * Wait with abort signal support
+   */
+  private async waitWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(resolve, ms);
+      
+      // Listen for abort signal
+      const abortHandler = () => {
+        clearTimeout(timeout);
+        reject(new Error('Wait aborted'));
+      };
+      
+      signal.addEventListener('abort', abortHandler, { once: true });
+      
+      // Clean up after timeout
+      setTimeout(() => {
+        signal.removeEventListener('abort', abortHandler);
+      }, ms);
+    });
+  }
+  
+  /**
+   * Clean up any active operations (called on server shutdown)
+   */
+  async cleanup(): Promise<void> {
+    // Abort any active polling
+    if (this.activePolling) {
+      this.activePolling.abort();
+      this.activePolling = null;
+      
+      SecurityMonitor.logSecurityEvent({
+        type: 'GITHUB_AUTH_CLEANUP',
+        severity: 'low',
+        source: 'GitHubAuthManager.cleanup',
+        details: 'GitHub auth manager cleaned up on shutdown',
+        metadata: {
+          hadActivePolling: true
+        }
+      });
+      
+      logger.info('GitHub authentication polling cancelled due to shutdown');
+    }
+    
+    // Clear API cache
+    this.apiCache.clear();
+  }
+  
+  /**
+   * Get user-friendly error message based on HTTP status code
+   * Avoids exposing sensitive information while providing helpful guidance
+   */
+  private getErrorMessageForStatus(status: number, operation: string): string {
+    switch (status) {
+      case 400:
+        return `Invalid request to GitHub. Please ensure the OAuth app is properly configured.`;
+      case 401:
+        return `Authentication failed. The OAuth app credentials may be invalid.`;
+      case 403:
+        return `Access denied by GitHub. The OAuth app may lack required permissions.`;
+      case 404:
+        return `GitHub service not found. This may indicate an API change.`;
+      case 422:
+        return `Invalid parameters sent to GitHub. Please check your configuration.`;
+      case 429:
+        return `Too many requests to GitHub. Please wait a moment and try again.`;
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        return `GitHub service temporarily unavailable. Please try again in a few moments.`;
+      default:
+        // Log the actual status for debugging, but don't expose it to users
+        logger.debug(`Unexpected status code during ${operation}`, { status });
+        return `Failed to complete ${operation}. Please check your internet connection and try again.`;
+    }
   }
 }

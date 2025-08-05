@@ -3345,6 +3345,36 @@ Placeholders for custom format:
   async run() {
     const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");
+    
+    // Set up graceful shutdown handlers
+    const cleanup = async () => {
+      logger.info("Shutting down DollhouseMCP server...");
+      
+      try {
+        // Clean up GitHub auth manager
+        if (this.githubAuthManager) {
+          await this.githubAuthManager.cleanup();
+        }
+        
+        // Clean up any other resources
+        if (this.updateManager) {
+          // UpdateManager might have active operations too
+          logger.debug("Cleaning up update manager...");
+        }
+        
+        logger.info("Cleanup completed");
+      } catch (error) {
+        logger.error("Error during cleanup", { error });
+      }
+      
+      process.exit(0);
+    };
+    
+    // Register shutdown handlers
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('SIGHUP', cleanup);
+    
     await this.server.connect(transport);
     // Mark that MCP is now connected - no more console output allowed
     logger.setMCPConnected();
