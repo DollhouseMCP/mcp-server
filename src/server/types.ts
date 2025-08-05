@@ -42,6 +42,11 @@ export interface IToolHandler {
   getUserIdentity(): Promise<any>;
   clearUserIdentity(): Promise<any>;
   
+  // Authentication tools
+  setupGitHubAuth(): Promise<any>;
+  checkGitHubAuth(): Promise<any>;
+  clearGitHubAuth(): Promise<any>;
+  
   // Update tools
   checkForUpdates(): Promise<any>;
   updateServer(confirm: boolean): Promise<any>;
