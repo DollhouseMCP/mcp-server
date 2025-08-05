@@ -2,13 +2,12 @@
 
 // Defensive error handling for npx/CLI execution
 process.on('uncaughtException', (error) => {
-  console.error('[DollhouseMCP] Uncaught exception:', error);
-  console.error('[DollhouseMCP] Stack:', error.stack);
+  console.error('[DollhouseMCP] Server startup failed');
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[DollhouseMCP] Unhandled rejection at:', promise, 'reason:', reason);
+  console.error('[DollhouseMCP] Server startup failed');
   process.exit(1);
 });
 
@@ -54,9 +53,9 @@ const EXECUTION_ENV = {
   scriptPath: process.argv[1],
 };
 
-// Log execution environment for debugging
+// Only log execution environment in debug mode
 if (process.env.DOLLHOUSE_DEBUG) {
-  console.error('[DollhouseMCP] Execution environment:', JSON.stringify(EXECUTION_ENV, null, 2));
+  console.error('[DollhouseMCP] Debug mode enabled');
 }
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -3185,29 +3184,30 @@ const isNpxExecution = process.env.npm_execpath?.includes('npx');
 const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || process.argv[1]?.endsWith('\\dollhousemcp');
 const isTest = process.env.JEST_WORKER_ID;
 
-if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
-  // Add a small delay for npx/CLI to ensure proper initialization
-  if (isNpxExecution || isCliExecution) {
-    setTimeout(() => {
-      const server = new DollhouseMCPServer();
-      server.run().catch((error) => {
-        console.error("[DollhouseMCP] Fatal error starting server:", error);
-        console.error("[DollhouseMCP] Execution details:", {
-          isDirectExecution,
-          isNpxExecution,
-          isCliExecution,
-          argv1: process.argv[1],
-          importMetaUrl: import.meta.url,
-          npmExecPath: process.env.npm_execpath
-        });
-        process.exit(1);
-      });
-    }, 50); // Small delay to allow module initialization
-  } else {
+// Progressive startup with retries for npx/CLI execution
+const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
+
+async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promise<void> {
+  try {
     const server = new DollhouseMCPServer();
-    server.run().catch((error) => {
-      logger.error("Fatal error starting server", error);
-      process.exit(1);
-    });
+    await server.run();
+  } catch (error) {
+    if (retriesLeft > 0 && (isNpxExecution || isCliExecution)) {
+      // Try again with a longer delay
+      const delayIndex = STARTUP_DELAYS.length - retriesLeft;
+      const delay = STARTUP_DELAYS[delayIndex];
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return startServerWithRetry(retriesLeft - 1);
+    }
+    // Final failure - minimal error message for security
+    console.error("[DollhouseMCP] Server startup failed");
+    process.exit(1);
   }
+}
+
+if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
+  startServerWithRetry().catch(() => {
+    console.error("[DollhouseMCP] Server startup failed");
+    process.exit(1);
+  });
 }
