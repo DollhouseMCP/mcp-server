@@ -6,8 +6,8 @@
 import { TokenManager } from '../security/tokenManager.js';
 import { logger } from '../utils/logger.js';
 import { APICache } from '../cache/APICache.js';
-import { UnicodeValidator } from '../security/unicodeValidator.js';
-import { SecurityMonitor } from '../security/monitoring/SecurityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -177,8 +177,8 @@ export class GitHubAuthManager {
       
       // Log security event for audit trail
       SecurityMonitor.logSecurityEvent({
-        type: 'OAUTH_DEVICE_FLOW_INITIATED',
-        severity: 'low',
+        type: 'TOKEN_VALIDATION_SUCCESS',
+        severity: 'LOW',
         source: 'GitHubAuthManager.initiateDeviceFlow',
         details: 'GitHub OAuth device flow initiated',
         metadata: {
@@ -292,8 +292,8 @@ export class GitHubAuthManager {
     
     // Log successful authentication completion
     SecurityMonitor.logSecurityEvent({
-      type: 'OAUTH_AUTHENTICATION_COMPLETED',
-      severity: 'low',
+      type: 'TOKEN_VALIDATION_SUCCESS',
+      severity: 'LOW',
       source: 'GitHubAuthManager.completeAuthentication',
       details: 'GitHub OAuth device flow completed successfully',
       metadata: {
@@ -329,8 +329,8 @@ export class GitHubAuthManager {
         
         // Log security event for audit trail
         SecurityMonitor.logSecurityEvent({
-          type: 'GITHUB_AUTH_CLEARED',
-          severity: 'low',
+          type: 'TOKEN_CACHE_CLEARED',
+          severity: 'LOW',
           source: 'GitHubAuthManager.clearAuthentication',
           details: 'GitHub authentication cleared by user request',
           metadata: {
@@ -395,13 +395,13 @@ export class GitHubAuthManager {
       const validation = UnicodeValidator.normalize(data.login);
       if (!validation.isValid) {
         SecurityMonitor.logSecurityEvent({
-          type: 'UNICODE_NORMALIZATION_FAILED',
-          severity: 'medium',
+          type: 'UNICODE_VALIDATION_ERROR',
+          severity: 'MEDIUM',
           source: 'GitHubAuthManager.fetchUserInfo',
           details: 'GitHub username contains invalid Unicode',
           metadata: { 
             originalLength: data.login.length,
-            issues: validation.issues 
+            detectedIssues: validation.detectedIssues 
           }
         });
         throw new Error('Invalid username format from GitHub');
@@ -428,8 +428,8 @@ export class GitHubAuthManager {
     
     // Log successful authentication for audit trail
     SecurityMonitor.logSecurityEvent({
-      type: 'GITHUB_AUTH_SUCCESS',
-      severity: 'low',
+      type: 'TOKEN_VALIDATION_SUCCESS',
+      severity: 'LOW',
       source: 'GitHubAuthManager.fetchUserInfo',
       details: 'GitHub user authenticated successfully',
       metadata: {
@@ -507,8 +507,8 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
       this.activePolling = null;
       
       SecurityMonitor.logSecurityEvent({
-        type: 'GITHUB_AUTH_CLEANUP',
-        severity: 'low',
+        type: 'TOKEN_CACHE_CLEARED',
+        severity: 'LOW',
         source: 'GitHubAuthManager.cleanup',
         details: 'GitHub auth manager cleaned up on shutdown',
         metadata: {

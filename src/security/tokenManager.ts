@@ -9,8 +9,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { homedir } from 'os';
-import { SecurityMonitor } from './monitoring/SecurityMonitor.js';
-import { UnicodeValidator } from './unicodeValidator.js';
+import { SecurityMonitor } from './securityMonitor.js';
+import { UnicodeValidator } from './validators/unicodeValidator.js';
 
 export interface TokenScopes {
   required: string[];
@@ -437,8 +437,8 @@ export class TokenManager {
 
       // Log security event
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_STORED',
-        severity: 'low',
+        type: 'TOKEN_VALIDATION_SUCCESS',
+        severity: 'LOW',
         source: 'TokenManager.storeGitHubToken',
         details: 'GitHub token stored securely',
         metadata: {
@@ -450,11 +450,10 @@ export class TokenManager {
       logger.info('GitHub token stored securely');
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_STORAGE_FAILED',
-        severity: 'medium',
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
         source: 'TokenManager.storeGitHubToken',
-        details: 'Failed to store GitHub token',
-        error
+        details: `Failed to store GitHub token: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
       
       throw new SecurityError(`Failed to store token: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -501,8 +500,8 @@ export class TokenManager {
       // Validate decrypted token
       if (!this.validateTokenFormat(decrypted)) {
         SecurityMonitor.logSecurityEvent({
-          type: 'TOKEN_VALIDATION_FAILED',
-          severity: 'high',
+          type: 'TOKEN_VALIDATION_FAILURE',
+          severity: 'HIGH',
           source: 'TokenManager.retrieveGitHubToken',
           details: 'Decrypted token has invalid format'
         });
@@ -510,8 +509,8 @@ export class TokenManager {
       }
 
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_RETRIEVED',
-        severity: 'low',
+        type: 'TOKEN_VALIDATION_SUCCESS',
+        severity: 'LOW',
         source: 'TokenManager.retrieveGitHubToken',
         details: 'GitHub token retrieved from secure storage',
         metadata: {
@@ -523,11 +522,10 @@ export class TokenManager {
       return decrypted;
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_RETRIEVAL_FAILED',
-        severity: 'medium',
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
         source: 'TokenManager.retrieveGitHubToken',
-        details: 'Failed to retrieve GitHub token',
-        error
+        details: `Failed to retrieve GitHub token: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
       
       logger.debug('Failed to retrieve stored token', { error });
@@ -548,8 +546,8 @@ export class TokenManager {
         await fs.unlink(tokenPath);
         
         SecurityMonitor.logSecurityEvent({
-          type: 'TOKEN_REMOVED',
-          severity: 'low',
+          type: 'TOKEN_CACHE_CLEARED',
+          severity: 'LOW',
           source: 'TokenManager.removeStoredToken',
           details: 'GitHub token removed from secure storage'
         });
@@ -561,11 +559,10 @@ export class TokenManager {
       }
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_REMOVAL_FAILED',
-        severity: 'low',
+        type: 'TOKEN_CACHE_CLEARED',
+        severity: 'LOW',
         source: 'TokenManager.removeStoredToken',
-        details: 'Failed to remove stored token',
-        error
+        details: `Failed to remove stored token: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
       
       logger.warn('Failed to remove stored token', { error });
