@@ -100,10 +100,6 @@ export function getPersonaTools(server: IToolHandler): Array<{ tool: ToolDefinit
               type: "string",
               description: "A brief description of the persona",
             },
-            category: {
-              type: "string",
-              description: "Category: creative, professional, educational, gaming, or personal",
-            },
             instructions: {
               type: "string",
               description: "The main instructions/prompt for the persona",
@@ -113,13 +109,12 @@ export function getPersonaTools(server: IToolHandler): Array<{ tool: ToolDefinit
               description: "Comma-separated list of trigger words (optional)",
             },
           },
-          required: ["name", "description", "category", "instructions"],
+          required: ["name", "description", "instructions"],
         },
       },
       handler: (args: any) => server.createPersona(
         args.name,
         args.description,
-        args.category,
         args.instructions,
         args.triggers
       )

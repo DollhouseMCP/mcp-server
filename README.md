@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.5.0
+**📦 Version**: v1.5.1
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -33,8 +33,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.5.0 introduces GitHub OAuth authentication!
-# New secure authentication without manual token management:
+# ✅ v1.5.1 fixes critical collection browsing issues!
+# OAuth authentication + collection browsing now work seamlessly:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -407,7 +407,7 @@ export DOLLHOUSE_INDICATOR_STYLE=minimal
 export DOLLHOUSE_INDICATOR_EMOJI=🎨
 ```
 
-### GitHub Authentication (NEW! v1.5.0)
+### GitHub Authentication (v1.5.0+)
 
 DollhouseMCP now supports GitHub OAuth device flow authentication for secure access to GitHub features without exposing tokens:
 
@@ -1200,7 +1200,14 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.5.0 - August 5, 2025 (Current)
+### v1.5.1 - August 5, 2025 (Current)
+**Critical Bug Fixes**:
+- 🔧 **Fixed OAuth Token Retrieval** - `setup_github_auth` tokens now properly used for API calls
+- 🔧 **Fixed Collection Browsing** - Removed legacy category validation blocking browsing
+- 🔧 **Persona Creation Simplified** - Categories no longer required or validated
+- ✅ **Element System Alignment** - Full consistency with new architecture
+
+### v1.5.0 - August 5, 2025
 **GitHub OAuth Authentication**:
 - 🔐 **OAuth Device Flow** - Secure authentication without manual token management
 - 🔒 **AES-256-GCM Encryption** - Tokens encrypted at rest with machine-specific keys
