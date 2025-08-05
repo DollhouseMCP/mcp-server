@@ -302,7 +302,27 @@ The issue was that the server startup check `import.meta.url === file://${proces
 |-----------------|------------|-----------|
 | Direct node | ✅ Works | ✅ Works |
 | npx | ❌ Fails | ✅ Works |
-| CLI | ❌ Fails | [To Test] |
+| CLI | ❌ Fails | ✅ Works |
+
+## Session Complete - Fix Verified!
+**Time**: 10:05 AM EDT
+
+✅ **ALL EXECUTION METHODS NOW WORK**
+- Direct node execution: Working
+- npx execution: Fixed and working
+- CLI command: Fixed and working
+
+The fix is complete and ready for v1.4.5 release.
+
+## For Next Session:
+1. Update package.json version to 1.4.5
+2. Update CHANGELOG.md
+3. Create PR from hotfix branch
+4. Merge to main
+5. Tag and release to npm
+
+## Key Achievement:
+Fixed the critical "Server disconnected" error that prevented DollhouseMCP from working with Claude Desktop when installed via npm. Users can now use the standard installation and configuration methods.
 
 ---
 *This is a living document - updates will be added throughout the debugging session*
