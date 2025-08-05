@@ -1,0 +1,27 @@
+{
+  "test1_direct_node_npm": {
+    "mcpServers": {
+      "dollhousemcp-npm-direct": {
+        "command": "node",
+        "args": ["/opt/homebrew/lib/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+      }
+    }
+  },
+  
+  "test2_npx_command": {
+    "mcpServers": {
+      "dollhousemcp-npx": {
+        "command": "npx",
+        "args": ["@dollhousemcp/mcp-server"]
+      }
+    }
+  },
+  
+  "test3_cli_command": {
+    "mcpServers": {
+      "dollhousemcp-cli": {
+        "command": "dollhousemcp"
+      }
+    }
+  }
+}

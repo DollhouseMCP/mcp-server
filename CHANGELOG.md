@@ -5,6 +5,19 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.5] - 2025-08-05
+
+### Fixed
+- **Critical**: Fixed server startup with npx and CLI commands in Claude Desktop
+  - Server now properly detects and handles all execution methods (direct, npx, CLI)
+  - No more "Server disconnected" errors when using standard npm installation
+  - Added 50ms delay for npx/CLI execution to ensure proper module initialization
+  - Better error logging with execution context details
+
+### Changed
+- Improved startup detection logic to handle various execution scenarios
+- Added global error handlers for better debugging of startup issues
+
 ## [1.4.4] - 2025-08-04
 
 ### 🚨 Emergency Hotfix
