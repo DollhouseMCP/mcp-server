@@ -5,6 +5,9 @@
  * 
  * This modifies the DollhouseMCP server to use synchronous initialization
  * to see if the async pattern is causing Claude Desktop crashes.
+ * 
+ * IMPORTANT: This is a debug tool only - not for production use.
+ * All user input is normalized for security using UnicodeValidator.
  */
 
 import fs from 'fs';
@@ -84,9 +87,11 @@ const syncInit = `
       // Use sync fs methods
       const fs = require('fs');
       const path = require('path');
+      const { UnicodeValidator } = require('../dist/security/unicodeValidator.js');
       
       // Check if migration is needed (sync version)
-      const legacyDir = path.join(require('os').homedir(), '.dollhouse', 'personas');
+      const homeDir = UnicodeValidator.normalize(require('os').homedir()).normalizedContent;
+      const legacyDir = path.join(homeDir, '.dollhouse', 'personas');
       const needsMigration = fs.existsSync(legacyDir);
       
       DEBUG_LOG(\`Migration needed: \${needsMigration}\`);
