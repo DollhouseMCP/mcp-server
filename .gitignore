@@ -66,6 +66,3 @@ install.ps1
 
 # Security audit reports (keep private)
 .security-audit/
-
-# Blog posts (local only)
-docs/blog-post/
