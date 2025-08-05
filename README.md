@@ -60,7 +60,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **43 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **49 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
@@ -324,9 +324,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`get_indicator_config`** - View current indicator configuration settings
 
 ### GitHub Authentication (NEW!)
-- **`authenticate_github`** - Start GitHub OAuth device flow authentication
-- **`get_auth_status`** - Check current authentication status
-- **`clear_authentication`** - Remove stored authentication credentials
+- **`setup_github_auth`** - Start GitHub OAuth device flow authentication
+- **`check_github_auth`** - Check current authentication status
+- **`clear_github_auth`** - Remove stored authentication credentials
 
 ## 📖 Usage Examples
 
@@ -412,9 +412,9 @@ export DOLLHOUSE_INDICATOR_EMOJI=🎨
 DollhouseMCP now supports GitHub OAuth device flow authentication for secure access to GitHub features without exposing tokens:
 
 ```
-authenticate_github                        # Start OAuth device flow
-get_auth_status                           # Check authentication status
-clear_authentication                      # Remove stored credentials
+setup_github_auth                         # Start OAuth device flow
+check_github_auth                         # Check authentication status
+clear_github_auth                         # Remove stored credentials
 ```
 
 **Features:**
@@ -425,7 +425,7 @@ clear_authentication                      # Remove stored credentials
 - ✅ **Unicode Security**: Prevents homograph attacks
 
 **How It Works:**
-1. Run `authenticate_github` to start the OAuth flow
+1. Run `setup_github_auth` to start the OAuth flow
 2. Visit the provided URL and enter the user code
 3. Authorize DollhouseMCP in your browser
 4. Authentication completes automatically
@@ -434,13 +434,13 @@ clear_authentication                      # Remove stored credentials
 **Example Usage:**
 ```
 # First-time setup
-authenticate_github
+setup_github_auth
 # Copy the user code: XXXX-XXXX
 # Visit: https://github.com/login/device
 # Enter the code and authorize
 
 # Check status
-get_auth_status
+check_github_auth
 # ✅ Authenticated as: your-username
 
 # Later sessions automatically use stored token

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **GitHub OAuth Device Flow Authentication** - Secure authentication without manual token management
-  - New tools: `authenticate_github`, `get_auth_status`, `clear_authentication`
+  - New tools: `setup_github_auth`, `check_github_auth`, `clear_github_auth`
   - AES-256-GCM encrypted token storage with machine-specific keys
   - Natural language OAuth flow with user-friendly instructions
   - Built-in rate limiting and Unicode security validation

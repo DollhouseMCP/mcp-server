@@ -398,12 +398,12 @@ get_server_status
 
 ## GitHub Authentication Tools
 
-### authenticate_github
+### setup_github_auth
 Start GitHub OAuth device flow authentication for secure access to GitHub features.
 
 **Example:**
 ```bash
-authenticate_github
+setup_github_auth
 ```
 
 **Response:**
@@ -418,12 +418,12 @@ To authenticate with GitHub:
 ⏳ Waiting for authorization... (expires in 15 minutes)
 ```
 
-### get_auth_status
+### check_github_auth
 Check current GitHub authentication status.
 
 **Example:**
 ```bash
-get_auth_status
+check_github_auth
 ```
 
 **Response (Authenticated):**
@@ -438,15 +438,15 @@ get_auth_status
 ```
 ❌ Not authenticated with GitHub
 
-To authenticate, use the 'authenticate_github' tool.
+To authenticate, use the 'setup_github_auth' tool.
 ```
 
-### clear_authentication
+### clear_github_auth
 Remove stored GitHub authentication credentials.
 
 **Example:**
 ```bash
-clear_authentication
+clear_github_auth
 ```
 
 **Response:**
