@@ -1775,9 +1775,26 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async browseCollection(section?: string, type?: string) {
     try {
-      // Enhanced input validation for section and type
-      const validatedSection = section ? validateCategory(section) : undefined;
-      const validatedType = type ? validateCategory(type) : undefined;
+      // FIX #471: Replace legacy category validation with proper section/type validation
+      // Valid sections: library, showcase, catalog
+      // Valid types: personas, skills, agents, prompts, templates, tools, ensembles, memories
+      const validSections = ['library', 'showcase', 'catalog'];
+      const validTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'];
+      
+      // Validate section if provided
+      const validatedSection = section ? sanitizeInput(section.toLowerCase()) : undefined;
+      if (validatedSection && !validSections.includes(validatedSection)) {
+        throw new Error(`Invalid section '${validatedSection}'. Must be one of: ${validSections.join(', ')}`);
+      }
+      
+      // Validate type if provided (only valid when section is 'library')
+      const validatedType = type ? sanitizeInput(type.toLowerCase()) : undefined;
+      if (validatedType && validatedSection === 'library' && !validTypes.includes(validatedType)) {
+        throw new Error(`Invalid type '${validatedType}'. Must be one of: ${validTypes.join(', ')}`);
+      }
+      if (validatedType && validatedSection !== 'library') {
+        throw new Error('Type parameter is only valid when section is "library"');
+      }
       
       const result = await this.collectionBrowser.browseCollection(validatedSection, validatedType);
       
