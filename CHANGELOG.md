@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Critical**: Fixed legacy category validation blocking collection browsing (#471)
   - Replaced deprecated `validateCategory()` calls with proper section/type validation
   - Collection browsing now accepts valid sections (library, showcase, catalog) and types (personas, skills, etc.)
+- **Legacy**: Removed category validation from persona creation tools
+  - `create_persona` tool no longer requires or validates categories
+  - `edit_persona` allows editing category field for backward compatibility without validation
+  - Aligns with element system architecture where categories are deprecated
 
 ## [1.5.0] - 2025-08-05
 
