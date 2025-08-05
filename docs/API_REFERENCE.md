@@ -1,14 +1,15 @@
 # DollhouseMCP API Reference
 
-Complete reference for all MCP tools available in DollhouseMCP v1.3.3+
+Complete reference for all MCP tools available in DollhouseMCP v1.5.0+
 
 ## Overview
 
-DollhouseMCP provides 30+ MCP tools organized into these categories:
+DollhouseMCP provides 40+ MCP tools organized into these categories:
 - **Generic Element Tools**: Work with all element types
 - **Type-Specific Tools**: Specialized for certain elements
 - **Collection Tools**: GitHub marketplace integration
 - **User Management**: Identity and settings
+- **GitHub Authentication**: OAuth device flow authentication
 - **Legacy Persona Tools**: Backward compatibility
 
 ## Generic Element Tools
@@ -395,6 +396,66 @@ Display current server version and status.
 get_server_status
 ```
 
+## GitHub Authentication Tools
+
+### authenticate_github
+Start GitHub OAuth device flow authentication for secure access to GitHub features.
+
+**Example:**
+```bash
+authenticate_github
+```
+
+**Response:**
+```
+🔐 GitHub Device Flow Authentication
+
+To authenticate with GitHub:
+1. Visit: https://github.com/login/device
+2. Enter code: XXXX-XXXX
+3. Authorize 'DollhouseMCP OAuth'
+
+⏳ Waiting for authorization... (expires in 15 minutes)
+```
+
+### get_auth_status
+Check current GitHub authentication status.
+
+**Example:**
+```bash
+get_auth_status
+```
+
+**Response (Authenticated):**
+```
+✅ Authenticated as: mickdarling
+📧 Email: mick@example.com
+🔑 Token: Stored securely (encrypted)
+📅 Authenticated at: 2025-08-05T14:30:00Z
+```
+
+**Response (Not Authenticated):**
+```
+❌ Not authenticated with GitHub
+
+To authenticate, use the 'authenticate_github' tool.
+```
+
+### clear_authentication
+Remove stored GitHub authentication credentials.
+
+**Example:**
+```bash
+clear_authentication
+```
+
+**Response:**
+```
+✅ GitHub authentication cleared successfully
+
+Your stored credentials have been removed. You'll need to authenticate again to use GitHub features.
+```
+
 ## Legacy Persona Tools (Deprecated)
 
 These tools are maintained for backward compatibility but should be replaced with generic element tools.
@@ -546,6 +607,9 @@ render_template "PR Description" --variables '{
 
 ## Version History
 
+- **v1.5.0**: GitHub OAuth authentication with secure token storage
+- **v1.4.5**: Fixed Claude Desktop integration issues
+- **v1.4.0**: NPM package distribution support
 - **v1.3.3**: Full element system with generic tools
 - **v1.3.0**: Portfolio structure introduced
 - **v1.2.0**: Security enhancements

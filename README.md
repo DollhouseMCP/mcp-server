@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.4.5
+**📦 Version**: v1.5.0
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -33,8 +33,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.4.5 fixes Claude Desktop "Server disconnected" errors!
-# If you had issues with v1.4.2-v1.4.4, please upgrade:
+# ✅ v1.5.0 introduces GitHub OAuth authentication!
+# New secure authentication without manual token management:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -60,7 +60,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **40 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **43 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
@@ -150,7 +150,7 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 ### Security Features
 - **🛡️ Content Sanitization**: DOMPurify integration prevents XSS attacks in persona content
 - **📝 YAML Injection Prevention**: Secure parsing with schema validation and size limits
-- **🔐 Token Security**: GitHub tokens are validated, encrypted at rest, with rotation support
+- **🔐 Token Security**: GitHub OAuth device flow authentication with AES-256-GCM encrypted storage
 - **🐳 Container Hardening**: Non-root execution, read-only filesystem, resource limits
 - **🚦 Rate Limiting**: Token bucket algorithm prevents API abuse (10 checks/hour default)
 - **✅ Signature Verification**: GPG verification ensures release authenticity
@@ -272,9 +272,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 46 DollhouseMCP tools will be available
+3. All 49 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (46 Total)
+## 🛠️ Available Tools (49 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -322,6 +322,11 @@ Add DollhouseMCP to your Claude Desktop configuration:
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
 - **`get_indicator_config`** - View current indicator configuration settings
+
+### GitHub Authentication (NEW!)
+- **`authenticate_github`** - Start GitHub OAuth device flow authentication
+- **`get_auth_status`** - Check current authentication status
+- **`clear_authentication`** - Remove stored authentication credentials
 
 ## 📖 Usage Examples
 
@@ -400,6 +405,46 @@ Environment variables for persistent configuration:
 export DOLLHOUSE_INDICATOR_ENABLED=true
 export DOLLHOUSE_INDICATOR_STYLE=minimal
 export DOLLHOUSE_INDICATOR_EMOJI=🎨
+```
+
+### GitHub Authentication (NEW! v1.5.0)
+
+DollhouseMCP now supports GitHub OAuth device flow authentication for secure access to GitHub features without exposing tokens:
+
+```
+authenticate_github                        # Start OAuth device flow
+get_auth_status                           # Check authentication status
+clear_authentication                      # Remove stored credentials
+```
+
+**Features:**
+- 🔐 **Secure Token Storage**: Tokens encrypted with AES-256-GCM
+- 📱 **Device Flow**: No need to manually create or paste tokens
+- 🔄 **Automatic Token Management**: Secure storage and retrieval
+- 🛡️ **Rate Limiting**: Built-in protection against API abuse
+- ✅ **Unicode Security**: Prevents homograph attacks
+
+**How It Works:**
+1. Run `authenticate_github` to start the OAuth flow
+2. Visit the provided URL and enter the user code
+3. Authorize DollhouseMCP in your browser
+4. Authentication completes automatically
+5. Token is securely stored for future use
+
+**Example Usage:**
+```
+# First-time setup
+authenticate_github
+# Copy the user code: XXXX-XXXX
+# Visit: https://github.com/login/device
+# Enter the code and authorize
+
+# Check status
+get_auth_status
+# ✅ Authenticated as: your-username
+
+# Later sessions automatically use stored token
+browse_collection  # Works with authenticated access
 ```
 
 ## 🖥️ Cross-Platform Installation
@@ -1155,7 +1200,15 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.4.5 - August 5, 2025 (Current)
+### v1.5.0 - August 5, 2025 (Current)
+**GitHub OAuth Authentication**:
+- 🔐 **OAuth Device Flow** - Secure authentication without manual token management
+- 🔒 **AES-256-GCM Encryption** - Tokens encrypted at rest with machine-specific keys
+- 🛡️ **Rate Limiting** - Built-in protection against brute force attacks
+- ✅ **Natural Language Flow** - User-friendly authentication instructions
+- 🧪 **Comprehensive Tests** - 420+ lines of OAuth implementation tests
+
+### v1.4.5 - August 5, 2025
 **Claude Desktop Integration Fix**:
 - ✅ **Fixed "Server disconnected" errors** when using `npx` or `dollhousemcp` CLI
 - 🔄 **Progressive retry mechanism** for better compatibility across different machine speeds
