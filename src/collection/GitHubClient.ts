@@ -56,11 +56,12 @@ export class GitHubClient {
       };
       
       // Use TokenManager for secure token handling
-      const token = TokenManager.getGitHubToken();
+      // FIX #471: Use async method to check both env vars and secure storage
+      const token = await TokenManager.getGitHubTokenAsync();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       } else if (requireAuth) {
-        throw new Error('GitHub authentication required but no valid token available. Please set GITHUB_TOKEN environment variable.');
+        throw new Error('GitHub authentication required but no valid token available. Please use setup_github_auth or set GITHUB_TOKEN environment variable.');
       }
       
       // Create fetch with timeout
@@ -78,7 +79,7 @@ export class GitHubClient {
         if (response.status === 403) {
           const errorMsg = token 
             ? 'GitHub API rate limit exceeded or token lacks required permissions.'
-            : 'GitHub API rate limit exceeded. Consider setting GITHUB_TOKEN environment variable.';
+            : 'GitHub API rate limit exceeded. Consider using setup_github_auth or setting GITHUB_TOKEN environment variable.';
           throw new Error(errorMsg);
         }
         if (response.status === 401) {

@@ -24,7 +24,7 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
 import { APICache } from './cache/APICache.js';
-import { validateFilename, sanitizeInput, validateContentSize, validateUsername, validateCategory, MCPInputValidator } from './security/InputValidator.js';
+import { validateFilename, sanitizeInput, validateContentSize, validateUsername, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
@@ -1226,7 +1226,6 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.createPersona(
             validatedName, 
             validatedDescription, 
-            sanitizedMetadata?.category || 'general',
             content || '',
             sanitizedMetadata?.triggers
           );
@@ -1775,9 +1774,26 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async browseCollection(section?: string, type?: string) {
     try {
-      // Enhanced input validation for section and type
-      const validatedSection = section ? validateCategory(section) : undefined;
-      const validatedType = type ? validateCategory(type) : undefined;
+      // FIX #471: Replace legacy category validation with proper section/type validation
+      // Valid sections: library, showcase, catalog
+      // Valid types: personas, skills, agents, prompts, templates, tools, ensembles, memories
+      const validSections = ['library', 'showcase', 'catalog'];
+      const validTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'];
+      
+      // Validate section if provided
+      const validatedSection = section ? sanitizeInput(section.toLowerCase()) : undefined;
+      if (validatedSection && !validSections.includes(validatedSection)) {
+        throw new Error(`Invalid section '${validatedSection}'. Must be one of: ${validSections.join(', ')}`);
+      }
+      
+      // Validate type if provided (only valid when section is 'library')
+      const validatedType = type ? sanitizeInput(type.toLowerCase()) : undefined;
+      if (validatedType && validatedSection === 'library' && !validTypes.includes(validatedType)) {
+        throw new Error(`Invalid type '${validatedType}'. Must be one of: ${validTypes.join(', ')}`);
+      }
+      if (validatedType && validatedSection !== 'library') {
+        throw new Error('Type parameter is only valid when section is "library"');
+      }
       
       const result = await this.collectionBrowser.browseCollection(validatedSection, validatedType);
       
@@ -2305,10 +2321,10 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   // Chat-based persona management tools
-  async createPersona(name: string, description: string, category: string, instructions: string, triggers?: string) {
+  async createPersona(name: string, description: string, instructions: string, triggers?: string) {
     try {
       // Validate required fields
-      if (!name || !description || !category || !instructions) {
+      if (!name || !description || !instructions) {
         return {
           content: [
             {
@@ -2317,7 +2333,6 @@ export class DollhouseMCPServer implements IToolHandler {
                 `Please provide all required fields:\n` +
                 `• **name**: Display name for the persona\n` +
                 `• **description**: Brief description of what it does\n` +
-                `• **category**: creative, professional, educational, gaming, or personal\n` +
                 `• **instructions**: The persona's behavioral guidelines\n\n` +
                 `**Optional:**\n` +
                 `• **triggers**: Comma-separated keywords for activation`,
@@ -2337,8 +2352,7 @@ export class DollhouseMCPServer implements IToolHandler {
         throw new Error('Persona name must be at least 2 characters long');
       }
 
-      // Validate category
-      const validatedCategory = validateCategory(category);
+      // No category validation needed - categories are deprecated
 
       // Validate content sizes
       validateContentSize(sanitizedInstructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
@@ -2397,7 +2411,6 @@ export class DollhouseMCPServer implements IToolHandler {
         author,
         triggers: triggerList,
         version: "1.0",
-        category: validatedCategory,
         age_rating: "all",
         content_flags: ["user-created"],
         ai_generated: true,
@@ -2462,7 +2475,6 @@ ${sanitizedInstructions}
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Created Successfully!**\n\n` +
               `🎭 **${sanitizedName}** by ${author}\n` +
-              `📁 Category: ${category}\n` +
               `🆔 Unique ID: ${uniqueId}\n` +
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
@@ -2511,7 +2523,6 @@ ${sanitizedInstructions}
               `**Editable fields:**\n` +
               `• **name** - Display name\n` +
               `• **description** - Brief description\n` +
-              `• **category** - creative, professional, educational, gaming, personal\n` +
               `• **instructions** - Main persona content\n` +
               `• **triggers** - Comma-separated keywords\n` +
               `• **version** - Version number`,
@@ -2543,7 +2554,7 @@ ${sanitizedInstructions}
       };
     }
 
-    const validFields = ['name', 'description', 'category', 'instructions', 'triggers', 'version'];
+    const validFields = ['name', 'description', 'instructions', 'triggers', 'version'];
     if (!validFields.includes(field.toLowerCase())) {
       return {
         content: [
@@ -2639,21 +2650,8 @@ ${sanitizedInstructions}
         // Parse triggers as comma-separated list
         parsed.data[normalizedField] = sanitizedValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
       } else if (normalizedField === 'category') {
-        // Validate category
-        const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal'];
-        if (!validCategories.includes(sanitizedValue.toLowerCase())) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${this.getPersonaIndicator()}❌ **Invalid Category**\n\n` +
-                    `Category must be one of: ${validCategories.join(', ')}\n` +
-                    `You provided: "${sanitizedValue}"`,
-              },
-            ],
-          };
-        }
-        parsed.data[normalizedField] = sanitizedValue.toLowerCase();
+        // Category field is deprecated but still editable for backward compatibility
+        parsed.data[normalizedField] = sanitizedValue;
       } else {
         // Update metadata field
         // For name field, apply additional sanitization to remove shell metacharacters

@@ -5,6 +5,38 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2025-08-05
+
+### Fixed
+- **Critical**: Fixed OAuth token retrieval for collection browsing (#471)
+  - `GitHubClient` now uses `getGitHubTokenAsync()` to check both environment variables and secure storage
+  - OAuth tokens from `setup_github_auth` are now properly used for API calls
+- **Critical**: Fixed legacy category validation blocking collection browsing (#471)
+  - Replaced deprecated `validateCategory()` calls with proper section/type validation
+  - Collection browsing now accepts valid sections (library, showcase, catalog) and types (personas, skills, etc.)
+- **Legacy**: Removed category validation from persona creation tools
+  - `create_persona` tool no longer requires or validates categories
+  - `edit_persona` allows editing category field for backward compatibility without validation
+  - Aligns with element system architecture where categories are deprecated
+
+## [1.5.0] - 2025-08-05
+
+### Added
+- **GitHub OAuth Device Flow Authentication** - Secure authentication without manual token management
+  - New tools: `setup_github_auth`, `check_github_auth`, `clear_github_auth`
+  - AES-256-GCM encrypted token storage with machine-specific keys
+  - Natural language OAuth flow with user-friendly instructions
+  - Built-in rate limiting and Unicode security validation
+  - Automatic token persistence across sessions
+- **Comprehensive test coverage** for OAuth implementation (420+ lines of tests)
+- **ES module mocking support** using `jest.unstable_mockModule` for better test reliability
+
+### Security
+- **Token encryption**: GitHub tokens are now encrypted at rest using AES-256-GCM
+- **Machine-specific encryption keys**: Tokens are encrypted with keys derived from machine ID
+- **Secure file permissions**: Token storage uses 0o600 file and 0o700 directory permissions
+- **Rate limiting**: Built-in protection against brute force token validation attacks
+
 ## [1.4.5] - 2025-08-05
 
 ### Fixed
