@@ -1,17 +1,5 @@
 #!/usr/bin/env node
 
-// Defensive error handling for npx/CLI execution
-process.on('uncaughtException', (error) => {
-  console.error('[DollhouseMCP] Uncaught exception:', error);
-  console.error('[DollhouseMCP] Stack:', error.stack);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[DollhouseMCP] Unhandled rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -44,20 +32,6 @@ import { TemplateManager } from './elements/templates/TemplateManager.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 
 
-
-// Detect execution environment
-const EXECUTION_ENV = {
-  isNpx: process.env.npm_execpath?.includes('npx') || false,
-  isCli: process.argv[1]?.endsWith('/dollhousemcp') || false,
-  isDirect: !process.env.npm_execpath,
-  cwd: process.cwd(),
-  scriptPath: process.argv[1],
-};
-
-// Log execution environment for debugging
-if (process.env.DOLLHOUSE_DEBUG) {
-  console.error('[DollhouseMCP] Execution environment:', JSON.stringify(EXECUTION_ENV, null, 2));
-}
 
 export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
@@ -3179,35 +3153,10 @@ Placeholders for custom format:
 // Export is already at class declaration
 
 // Only start the server if this file is being run directly (not imported by tests)
-// Handle different execution methods (direct, npx, CLI)
-const isDirectExecution = import.meta.url === `file://${process.argv[1]}`;
-const isNpxExecution = process.env.npm_execpath?.includes('npx');
-const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || process.argv[1]?.endsWith('\\dollhousemcp');
-const isTest = process.env.JEST_WORKER_ID;
-
-if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
-  // Add a small delay for npx/CLI to ensure proper initialization
-  if (isNpxExecution || isCliExecution) {
-    setTimeout(() => {
-      const server = new DollhouseMCPServer();
-      server.run().catch((error) => {
-        console.error("[DollhouseMCP] Fatal error starting server:", error);
-        console.error("[DollhouseMCP] Execution details:", {
-          isDirectExecution,
-          isNpxExecution,
-          isCliExecution,
-          argv1: process.argv[1],
-          importMetaUrl: import.meta.url,
-          npmExecPath: process.env.npm_execpath
-        });
-        process.exit(1);
-      });
-    }, 50); // Small delay to allow module initialization
-  } else {
-    const server = new DollhouseMCPServer();
-    server.run().catch((error) => {
-      logger.error("Fatal error starting server", error);
-      process.exit(1);
-    });
-  }
+if (import.meta.url === `file://${process.argv[1]}` && !process.env.JEST_WORKER_ID) {
+  const server = new DollhouseMCPServer();
+  server.run().catch((error) => {
+    logger.error("Fatal error starting server", error);
+    process.exit(1);
+  });
 }
