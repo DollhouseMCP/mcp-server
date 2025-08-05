@@ -23,7 +23,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.4.4
+**📦 Version**: v1.4.5
 
 > **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
 
@@ -33,7 +33,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ⚠️ IMPORTANT: If you have v1.4.2 or v1.4.3, upgrade immediately:
+# ✅ v1.4.5 fixes Claude Desktop "Server disconnected" errors!
+# If you had issues with v1.4.2-v1.4.4, please upgrade:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -1154,7 +1155,14 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.4.4 - August 4, 2025 (Current)
+### v1.4.5 - August 5, 2025 (Current)
+**Claude Desktop Integration Fix**:
+- ✅ **Fixed "Server disconnected" errors** when using `npx` or `dollhousemcp` CLI
+- 🔄 **Progressive retry mechanism** for better compatibility across different machine speeds
+- 🔒 **Security improvements** - removed detailed error logging to prevent information disclosure
+- 🧪 **Added comprehensive tests** for execution detection logic
+
+### v1.4.4 - August 4, 2025
 **Emergency Hotfix**:
 - 🚨 **Fixed v1.4.3 total failure** - initialization crashes fixed
 - 🔧 **Fixed jsdom crash** - heavy dependencies now load lazily
