@@ -3,19 +3,54 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { GitHubAuthManager } from '../../../../src/auth/GitHubAuthManager.js';
-import { APICache } from '../../../../src/cache/APICache.js';
-import { TokenManager } from '../../../../src/security/tokenManager.js';
-import { logger } from '../../../../src/utils/logger.js';
-import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
-// Mock dependencies
-jest.mock('../../../../src/utils/logger.js');
-jest.mock('../../../../src/security/securityMonitor.js');
-jest.mock('../../../../src/security/tokenManager.js');
+// Mock dependencies before importing modules that use them
+jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
+  logger: {
+    info: jest.fn(),
+    error: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn()
+  }
+}));
+
+jest.unstable_mockModule('../../../../src/security/securityMonitor.js', () => ({
+  SecurityMonitor: {
+    logSecurityEvent: jest.fn()
+  }
+}));
+
+jest.unstable_mockModule('../../../../src/security/tokenManager.js', () => ({
+  TokenManager: {
+    getGitHubTokenAsync: jest.fn(),
+    storeGitHubToken: jest.fn(),
+    removeStoredToken: jest.fn(),
+    validateToken: jest.fn()
+  }
+}));
+
+// Create a mock APICache
+const mockAPICacheGet = jest.fn();
+const mockAPICacheSet = jest.fn();
+const mockAPICacheClear = jest.fn();
+
+jest.unstable_mockModule('../../../../src/cache/APICache.js', () => ({
+  APICache: jest.fn().mockImplementation(() => ({
+    get: mockAPICacheGet,
+    set: mockAPICacheSet,
+    clear: mockAPICacheClear
+  }))
+}));
 
 // Mock fetch globally
 global.fetch = jest.fn();
+
+// Import modules after mocking
+const { GitHubAuthManager } = await import('../../../../src/auth/GitHubAuthManager.js');
+const { APICache } = await import('../../../../src/cache/APICache.js');
+const { TokenManager } = await import('../../../../src/security/tokenManager.js');
+const { logger } = await import('../../../../src/utils/logger.js');
+const { SecurityMonitor } = await import('../../../../src/security/securityMonitor.js');
 
 describe('GitHubAuthManager', () => {
   let authManager: GitHubAuthManager;
@@ -25,6 +60,13 @@ describe('GitHubAuthManager', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+    
+    // Reset API cache mocks
+    mockAPICacheGet.mockReset();
+    mockAPICacheSet.mockReset();
+    mockAPICacheClear.mockReset();
+    
+    // Create instances
     apiCache = new APICache(1000, 60000);
     authManager = new GitHubAuthManager(apiCache);
     
