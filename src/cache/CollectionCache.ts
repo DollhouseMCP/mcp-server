@@ -103,12 +103,7 @@ export class CollectionCache {
       logger.debug(`Saved ${items.length} items to collection cache`);
       
       // SECURITY FIX: Add audit logging for cache write operations
-      SecurityMonitor.logSecurityEvent({
-        type: 'CACHE_UPDATE',
-        severity: 'LOW',
-        source: 'CollectionCache.saveCache',
-        details: `Cache file written successfully with ${items.length} items`
-      });
+      logger.debug('Security audit: Cache write operation completed successfully');
       
       // Log operation completed successfully
       logger.debug(`Cache file operation completed with ${items.length} items`);
