@@ -141,7 +141,7 @@ export class GitHubAuthManager {
     if (!GitHubAuthManager.CLIENT_ID) {
       throw new Error(
         'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
-        'Register an OAuth app at https://github.com/settings/applications/new'
+        'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'
       );
     }
     
