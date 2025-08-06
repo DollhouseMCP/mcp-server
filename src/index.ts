@@ -23,7 +23,7 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
-import { APICache } from './cache/APICache.js';
+import { APICache, CollectionCache } from './cache/index.js';
 import { validateFilename, sanitizeInput, validateContentSize, validateUsername, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
@@ -66,6 +66,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private activePersona: string | null = null;
   private currentUser: string | null = null;
   private apiCache: APICache = new APICache();
+  private collectionCache: CollectionCache = new CollectionCache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
   private githubClient: GitHubClient;
@@ -129,8 +130,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.githubAuthManager = new GitHubAuthManager(this.apiCache);
-    this.collectionBrowser = new CollectionBrowser(this.githubClient);
-    this.collectionSearch = new CollectionSearch(this.githubClient);
+    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache);
+    this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.elementInstaller = new ElementInstaller(this.githubClient);
     this.personaSubmitter = new PersonaSubmitter();
@@ -204,6 +205,31 @@ export class DollhouseMCPServer implements IToolHandler {
     if (!portfolioExists) {
       logger.info('Creating portfolio directory structure...');
       await this.portfolioManager.initialize();
+    }
+    
+    // Initialize collection cache for anonymous access
+    await this.initializeCollectionCache();
+  }
+  
+  /**
+   * Initialize collection cache with seed data for anonymous browsing
+   */
+  private async initializeCollectionCache(): Promise<void> {
+    try {
+      const isCacheValid = await this.collectionCache.isCacheValid();
+      if (!isCacheValid) {
+        logger.info('Initializing collection cache with seed data...');
+        const { CollectionSeeder } = await import('./collection/CollectionSeeder.js');
+        const seedData = CollectionSeeder.getSeedData();
+        await this.collectionCache.saveCache(seedData);
+        logger.info(`Collection cache initialized with ${seedData.length} items`);
+      } else {
+        const stats = await this.collectionCache.getCacheStats();
+        logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
+      }
+    } catch (error) {
+      logger.error(`Failed to initialize collection cache: ${error}`);
+      // Don't throw - cache failures shouldn't prevent server startup
     }
   }
 

@@ -3,3 +3,4 @@
  */
 
 export * from './APICache.js';
+export * from './CollectionCache.js';
