@@ -2,6 +2,8 @@
  * Shared utilities for search functionality
  */
 
+import { UnicodeValidator } from '../security/unicodeValidator.js';
+
 /**
  * Normalize search terms for better matching
  * Handles spaces, dashes, underscores, and file extensions
@@ -12,12 +14,16 @@
  * @throws Error if term exceeds maxLength
  */
 export function normalizeSearchTerm(term: string, maxLength: number = 1000): string {
+  // SECURITY FIX: Normalize Unicode to prevent homograph attacks
+  const normalized = UnicodeValidator.normalize(term);
+  const cleanTerm = normalized.normalizedContent;
+  
   // Security: Limit input length to prevent DoS attacks
-  if (term.length > maxLength) {
+  if (cleanTerm.length > maxLength) {
     throw new Error(`Search term exceeds maximum length of ${maxLength} characters`);
   }
   
-  return term.toLowerCase()
+  return cleanTerm.toLowerCase()
     .replace(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
     .replace(/\.md$/, '')       // Remove .md extension
     .trim();
@@ -36,7 +42,11 @@ export function validateSearchQuery(query: string, maxLength: number = 1000): bo
     throw new Error('Search query cannot be empty');
   }
   
-  if (query.length > maxLength) {
+  // SECURITY FIX: Normalize Unicode before validation
+  const normalized = UnicodeValidator.normalize(query);
+  const cleanQuery = normalized.normalizedContent;
+  
+  if (cleanQuery.length > maxLength) {
     throw new Error(`Search query exceeds maximum length of ${maxLength} characters`);
   }
   
@@ -47,7 +57,7 @@ export function validateSearchQuery(query: string, maxLength: number = 1000): bo
   ];
   
   for (const pattern of dangerousPatterns) {
-    if (pattern.test(query)) {
+    if (pattern.test(cleanQuery)) {
       throw new Error('Search query contains invalid characters');
     }
   }

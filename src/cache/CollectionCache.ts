@@ -6,7 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import { PathValidator } from '../security/pathValidator.js';
-import { normalizeSearchTerm, validateSearchQuery } from '../utils/searchUtils.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface CollectionItem {
   name: string;
@@ -28,7 +28,6 @@ export interface CollectionCacheEntry {
 export class CollectionCache {
   private cacheDir: string;
   private cacheFile: string;
-  private readonly CACHE_VERSION = '1.0';
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for collection cache
   
   constructor(baseDir: string = process.cwd()) {
@@ -55,6 +54,13 @@ export class CollectionCache {
     try {
       // Validate cache file path (basic security check)
       if (this.cacheFile.includes('..') || this.cacheFile.includes('\0')) {
+        // SECURITY FIX: Add audit logging for path traversal attempt detection
+        SecurityMonitor.logSecurityEvent({
+          type: 'PATH_TRAVERSAL_ATTEMPT',
+          severity: 'HIGH',
+          source: 'CollectionCache.loadCache',
+          details: `Potential path traversal attempt detected in cache file path: ${this.cacheFile.substring(0, 100)}`
+        });
         logger.warn('Invalid cache file path, skipping cache load');
         return null;
       }
@@ -95,6 +101,14 @@ export class CollectionCache {
       await fs.writeFile(this.cacheFile, data, 'utf8');
       
       logger.debug(`Saved ${items.length} items to collection cache`);
+      
+      // SECURITY FIX: Add audit logging for cache write operations
+      SecurityMonitor.logSecurityEvent({
+        type: 'CACHE_UPDATE',
+        severity: 'LOW',
+        source: 'CollectionCache.saveCache',
+        details: `Cache file written successfully with ${items.length} items`
+      });
       
       // Log operation completed successfully
       logger.debug(`Cache file operation completed with ${items.length} items`);

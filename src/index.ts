@@ -1961,25 +1961,7 @@ export class DollhouseMCPServer implements IToolHandler {
   async submitContent(contentIdentifier: string) {
     // Check GitHub authentication first
     const authStatus = await this.githubAuthManager.getAuthStatus();
-    
-    if (!authStatus.isAuthenticated) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}🔐 **GitHub Authentication Required**\n\n` +
-                  `To submit content to the DollhouseMCP collection, you need to connect to GitHub.\n\n` +
-                  `**Why GitHub?**\n` +
-                  `• It's where our community shares content\n` +
-                  `• Free account with millions of developers\n` +
-                  `• Secure and reliable platform\n\n` +
-                  `**To get started:**\n` +
-                  `Just say "connect to GitHub" or "set up GitHub"\n\n` +
-                  `Don't have a GitHub account? No problem! You'll be guided through creating one.`,
-          },
-        ],
-      };
-    }
+    const isAuthenticated = authStatus.isAuthenticated;
     
     // Find the content in local collection
     let persona = this.personas.get(contentIdentifier);
@@ -2051,14 +2033,46 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
 
-    const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
-    const text = this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    // Generate submission issue with rate limiting
+    let githubIssueUrl: string;
+    let rateLimitStatus: any;
+    
+    try {
+      const submissionResult = this.personaSubmitter.generateSubmissionIssue(persona);
+      githubIssueUrl = submissionResult.githubIssueUrl;
+      rateLimitStatus = submissionResult.rateLimitStatus;
+    } catch (error: any) {
+      // Handle rate limiting error specifically
+      if (error.message.includes('rate limit')) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}⏳ **Rate Limit Reached**\n\n` +
+                `${error.message}\n\n` +
+                `This protection ensures the quality and integrity of our collection.`,
+            },
+          ],
+        };
+      }
+      throw error; // Re-throw other errors
+    }
+    
+    // Choose response format based on authentication status
+    const text = isAuthenticated 
+      ? this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator())
+      : this.personaSubmitter.formatAnonymousSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    
+    // Add rate limit info if available
+    const rateLimitInfo = rateLimitStatus 
+      ? `\n\n📊 **Rate Limit Status:** ${rateLimitStatus.remainingTokens} submissions remaining this hour`
+      : '';
 
     return {
       content: [
         {
           type: "text",
-          text: text,
+          text: text + rateLimitInfo,
         },
       ],
     };
