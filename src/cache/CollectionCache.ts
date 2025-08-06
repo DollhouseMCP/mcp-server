@@ -5,6 +5,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
+import { PathValidator } from '../security/pathValidator.js';
 
 export interface CollectionItem {
   name: string;
