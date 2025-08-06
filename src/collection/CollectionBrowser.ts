@@ -3,64 +3,194 @@
  */
 
 import { GitHubClient } from './GitHubClient.js';
+import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
+import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
+  private collectionCache: CollectionCache;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
-  constructor(githubClient: GitHubClient) {
+  constructor(githubClient: GitHubClient, collectionCache?: CollectionCache) {
     this.githubClient = githubClient;
+    this.collectionCache = collectionCache || new CollectionCache();
   }
   
   /**
    * Browse collection content by section and type
+   * Falls back to cached data when GitHub API is not available or not authenticated
    * @param section - Top level section: library, showcase, or catalog
    * @param type - Optional content type within the library section (personas, skills, etc.)
    */
   async browseCollection(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
-    let url = this.baseUrl;
-    
-    // If no section provided, show top-level sections
-    if (!section) {
-      const data = await this.githubClient.fetchFromGitHub(url);
+    try {
+      // Try GitHub API first
+      let url = this.baseUrl;
+      
+      // If no section provided, show top-level sections
+      if (!section) {
+        const data = await this.githubClient.fetchFromGitHub(url, false);
+        if (!Array.isArray(data)) {
+          throw new Error('Invalid collection response. Expected directory listing.');
+        }
+        
+        // Filter to only show content directories
+        const sections = data.filter((item: any) => 
+          item.type === 'dir' && ['library', 'showcase', 'catalog'].includes(item.name)
+        );
+        
+        return { items: [], categories: [], sections };
+      }
+      
+      // Browse within a section
+      url = type 
+        ? `${this.baseUrl}/${section}/${type}` 
+        : `${this.baseUrl}/${section}`;
+      
+      const data = await this.githubClient.fetchFromGitHub(url, false);
+      
       if (!Array.isArray(data)) {
         throw new Error('Invalid collection response. Expected directory listing.');
       }
       
-      // Filter to only show content directories
-      const sections = data.filter((item: any) => 
-        item.type === 'dir' && ['library', 'showcase', 'catalog'].includes(item.name)
-      );
+      // In the library section, we have content type directories
+      if (section === 'library' && !type) {
+        const contentTypes = data.filter((item: any) => 
+          item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
+        );
+        return { items: [], categories: contentTypes };
+      }
       
+      // For library content types, show files directly (flat structure)
+      const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
+      // For non-library sections, they might still have subdirectories
+      const categories = section === 'library' ? [] : data.filter((item: any) => item.type === 'dir');
+      
+      return { items, categories };
+    } catch (error) {
+      logger.debug(`GitHub API browse failed, falling back to cache: ${error}`);
+      
+      // Fallback to cached data
+      return this.browseFromCache(section, type);
+    }
+  }
+  
+  /**
+   * Browse collection from cached data
+   */
+  private async browseFromCache(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
+    try {
+      // If no section provided, show available sections from seed data
+      if (!section) {
+        const sections = [
+          { name: 'library', type: 'dir' }
+        ];
+        return { items: [], categories: [], sections };
+      }
+      
+      // Get cached or seed data
+      let cachedItems = await this.collectionCache.loadCache();
+      
+      if (!cachedItems || cachedItems.items.length === 0) {
+        // Use seed data if cache is empty
+        const seedData = CollectionSeeder.getSeedData();
+        await this.collectionCache.saveCache(seedData);
+        cachedItems = { items: seedData, timestamp: Date.now() };
+        logger.debug('Using seed data for collection browsing');
+      }
+      
+      // In the library section, we have content type directories
+      if (section === 'library' && !type) {
+        const contentTypes = this.getContentTypesFromItems(cachedItems.items);
+        return { items: [], categories: contentTypes };
+      }
+      
+      // Get items for specific type or all items in section
+      const items = this.filterItemsBySection(cachedItems.items, section, type);
+      const formattedItems = this.convertCacheItemsToGitHubFormat(items);
+      
+      return { items: formattedItems, categories: [] };
+    } catch (error) {
+      logger.error(`Cache browse failed: ${error}`);
+      
+      // Last resort: use seed data directly
+      return this.browseFromSeedData(section, type);
+    }
+  }
+  
+  /**
+   * Browse collection from seed data as last resort
+   */
+  private browseFromSeedData(section?: string, type?: string): { items: any[], categories: any[], sections?: any[] } {
+    if (!section) {
+      const sections = [{ name: 'library', type: 'dir' }];
       return { items: [], categories: [], sections };
     }
     
-    // Browse within a section
-    url = type 
-      ? `${this.baseUrl}/${section}/${type}` 
-      : `${this.baseUrl}/${section}`;
+    const seedData = CollectionSeeder.getSeedData();
     
-    const data = await this.githubClient.fetchFromGitHub(url);
-    
-    if (!Array.isArray(data)) {
-      throw new Error('Invalid collection response. Expected directory listing.');
-    }
-    
-    // In the library section, we have content type directories
     if (section === 'library' && !type) {
-      const contentTypes = data.filter((item: any) => 
-        item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
-      );
+      const contentTypes = this.getContentTypesFromItems(seedData);
       return { items: [], categories: contentTypes };
     }
     
-    // For library content types, show files directly (flat structure)
-    const items = data.filter((item: any) => item.type === 'file' && item.name.endsWith('.md'));
-    // For non-library sections, they might still have subdirectories
-    const categories = section === 'library' ? [] : data.filter((item: any) => item.type === 'dir');
+    const items = this.filterItemsBySection(seedData, section, type);
+    const formattedItems = this.convertCacheItemsToGitHubFormat(items);
     
-    return { items, categories };
+    return { items: formattedItems, categories: [] };
+  }
+  
+  /**
+   * Get unique content types from items
+   */
+  private getContentTypesFromItems(items: CollectionItem[]): any[] {
+    const types = new Set<string>();
+    
+    items.forEach(item => {
+      const pathParts = item.path.split('/');
+      if (pathParts.length >= 2 && pathParts[0] === 'library') {
+        types.add(pathParts[1]);
+      }
+    });
+    
+    return Array.from(types).map(type => ({
+      name: type,
+      type: 'dir'
+    }));
+  }
+  
+  /**
+   * Filter items by section and type
+   */
+  private filterItemsBySection(items: CollectionItem[], section: string, type?: string): CollectionItem[] {
+    return items.filter(item => {
+      const pathParts = item.path.split('/');
+      
+      if (pathParts[0] !== section) {
+        return false;
+      }
+      
+      if (type && pathParts[1] !== type) {
+        return false;
+      }
+      
+      return true;
+    });
+  }
+  
+  /**
+   * Convert cache items to GitHub API format
+   */
+  private convertCacheItemsToGitHubFormat(items: CollectionItem[]): any[] {
+    return items.map(item => ({
+      name: item.name,
+      path: item.path,
+      sha: item.sha,
+      type: 'file',
+      url: `https://api.github.com/repos/DollhouseMCP/collection/contents/${item.path}`,
+      html_url: `https://github.com/DollhouseMCP/collection/blob/main/${item.path}`
+    }));
   }
   
   /**
