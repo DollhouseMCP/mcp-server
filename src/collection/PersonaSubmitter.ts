@@ -63,4 +63,27 @@ ${persona.content}
       `4. The maintainers will review your submission\n\n` +
       `⭐ **Tip:** You can also submit via pull request if you're familiar with Git!`;
   }
+  
+  /**
+   * Format anonymous submission response
+   */
+  formatAnonymousSubmissionResponse(persona: Persona, githubIssueUrl: string, personaIndicator: string = ''): string {
+    return `${personaIndicator}📤 **Anonymous Submission Path Available**\n\n` +
+      `🎭 **${persona.metadata.name}** can be submitted without GitHub authentication!\n\n` +
+      `**Anonymous Submission Process:**\n` +
+      `1. Click this link to create a GitHub issue (no account needed for viewing):\n` +
+      `   ${githubIssueUrl}\n\n` +
+      `2. **If you have a GitHub account:**\n` +
+      `   • Click "Submit new issue" to submit directly\n\n` +
+      `3. **If you don't have a GitHub account:**\n` +
+      `   • Copy the pre-filled content from the form\n` +
+      `   • Email it to: community@dollhousemcp.com\n` +
+      `   • Include "Anonymous Submission" in the subject line\n\n` +
+      `**What happens next:**\n` +
+      `• Community maintainers review all submissions\n` +
+      `• Anonymous submissions get the same consideration as authenticated ones\n` +
+      `• If accepted, your persona joins the collection with attribution to "Community Contributor"\n` +
+      `• The review typically takes 2-3 business days\n\n` +
+      `💡 **Pro tip:** Creating a free GitHub account unlocks additional features, but it's completely optional for submissions!`;
+  }
 }
