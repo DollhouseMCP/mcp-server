@@ -56,7 +56,10 @@ export class GitHubClient {
       };
       
       // Use TokenManager for secure token handling
-      // FIX #471: Use async method to check both env vars and secure storage
+      // CRITICAL FIX #471: Must use async method to retrieve OAuth tokens from secure storage
+      // The OAuth flow (setup_github_auth) stores tokens in secure OS keychain/credential store
+      // which requires async access. The sync method only checks environment variables,
+      // missing tokens stored by the OAuth authentication flow.
       const token = await TokenManager.getGitHubTokenAsync();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;

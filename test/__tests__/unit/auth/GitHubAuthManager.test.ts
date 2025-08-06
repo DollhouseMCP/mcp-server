@@ -136,12 +136,34 @@ describe('GitHubAuthManager', () => {
   });
 
   describe('initiateDeviceFlow', () => {
-    it('should throw error when CLIENT_ID is not set', async () => {
+    it('should throw error with documentation URL when CLIENT_ID is not set', async () => {
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
 
       await expect(authManager.initiateDeviceFlow()).rejects.toThrow(
-        'GitHub OAuth is not configured'
+        'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
+        'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'
       );
+    });
+
+    it('should provide actionable error message with correct documentation link', async () => {
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+
+      try {
+        await authManager.initiateDeviceFlow();
+        // Should not reach here
+        expect(true).toBe(false);
+      } catch (error: any) {
+        // Verify error message contains key information
+        expect(error.message).toContain('DOLLHOUSE_GITHUB_CLIENT_ID');
+        expect(error.message).toContain('environment variable');
+        expect(error.message).toContain('https://github.com/DollhouseMCP/mcp-server#github-authentication');
+        expect(error.message).not.toContain('github.com/settings/applications/new'); // Old URL should not be present
+        
+        // Verify the documentation URL is valid and accessible
+        const urlMatch = error.message.match(/https:\/\/[^\s]+/);
+        expect(urlMatch).toBeTruthy();
+        expect(urlMatch![0]).toBe('https://github.com/DollhouseMCP/mcp-server#github-authentication');
+      }
     });
 
     it('should successfully initiate device flow', async () => {
