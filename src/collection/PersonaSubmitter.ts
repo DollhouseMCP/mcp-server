@@ -10,7 +10,7 @@
 
 import { Persona } from '../types/persona.js';
 import { RateLimiter, RateLimitStatus } from '../update/RateLimiter.js';
-import { SecurityMonitor } from '../security/SecurityMonitor.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 // Configuration constants
 const GITHUB_URL_LIMIT = 8192; // GitHub's URL length limit (~8KB)

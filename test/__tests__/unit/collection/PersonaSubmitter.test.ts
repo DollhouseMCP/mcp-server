@@ -157,14 +157,14 @@ describe('PersonaSubmitter', () => {
       expect(result).toContain('🎭 📤 **Anonymous Submission Path Available**');
       expect(result).toContain('🎭 **Test Persona** can be submitted without GitHub authentication!');
       expect(result).toContain('**Anonymous Submission Process:**');
-      expect(result).toContain('1. Click this link to create a GitHub issue (no account needed for viewing):');
+      expect(result).toContain('1. Click this link to create a GitHub issue:');
       expect(result).toContain(githubUrl);
-      expect(result).toContain('2. **If you have a GitHub account:**');
+      expect(result).toContain('2. **To submit your persona:**');
+      expect(result).toContain('• You\'ll need a GitHub account (free to create)');
       expect(result).toContain('• Click "Submit new issue" to submit directly');
-      expect(result).toContain('3. **If you don\'t have a GitHub account:**');
-      expect(result).toContain('• Copy the pre-filled content from the form');
-      expect(result).toContain('• Email it to: community@dollhousemcp.com');
-      expect(result).toContain('• Include "Anonymous Submission" in the subject line');
+      expect(result).toContain('• The form is pre-filled with all your persona details');
+      expect(result).toContain('**Note:** GitHub account is required for submission to prevent spam and maintain quality.');
+      expect(result).toContain('Creating an account is free and takes less than a minute: https://github.com/signup');
       expect(result).toContain('**What happens next:**');
       expect(result).toContain('• Community maintainers review all submissions');
       expect(result).toContain('• Anonymous submissions get the same consideration as authenticated ones');
@@ -182,11 +182,15 @@ describe('PersonaSubmitter', () => {
       expect(result).not.toContain('🎭 📤'); // Should not have double indicator
     });
 
-    it('should contain email address for anonymous submissions', () => {
+    it('should require GitHub account for anonymous submissions', () => {
       const githubUrl = 'https://github.com/DollhouseMCP/collection/issues/new?title=Test';
       const result = submitter.formatAnonymousSubmissionResponse(mockPersona, githubUrl);
 
-      expect(result).toContain('community@dollhousemcp.com');
+      expect(result).toContain('GitHub account is required');
+      expect(result).toContain('prevent spam and maintain quality');
+      expect(result).toContain('https://github.com/signup');
+      expect(result).not.toContain('email');
+      expect(result).not.toContain('Email');
     });
   });
 
@@ -201,7 +205,7 @@ describe('PersonaSubmitter', () => {
         : submitter.formatAnonymousSubmissionResponse(mockPersona, submissionData.githubIssueUrl);
 
       expect(expectedResponse).toContain('**Anonymous Submission Path Available**');
-      expect(expectedResponse).toContain('community@dollhousemcp.com');
+      expect(expectedResponse).toContain('GitHub account is required');
     });
 
     it('should return standard response for authenticated users', () => {
@@ -252,13 +256,15 @@ describe('PersonaSubmitter', () => {
     });
   });
 
-  describe('email configuration', () => {
-    it('should use the configured community email address', () => {
+  describe('GitHub account requirement', () => {
+    it('should clearly state GitHub account is required', () => {
       const githubUrl = 'https://github.com/DollhouseMCP/collection/issues/new?title=Test';
       const result = submitter.formatAnonymousSubmissionResponse(mockPersona, githubUrl);
 
-      // Should use the configured email address
-      expect(result).toContain('community@dollhousemcp.com');
+      // Should clearly indicate GitHub account requirement
+      expect(result).toContain('GitHub account is required for submission');
+      expect(result).toContain('free to create');
+      expect(result).toContain('https://github.com/signup');
     });
   });
 
