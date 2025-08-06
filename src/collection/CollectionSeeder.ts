@@ -10,13 +10,22 @@ import { CollectionItem } from '../cache/CollectionCache.js';
  * This provides a minimal set of well-known collection items
  */
 export class CollectionSeeder {
+  // Cache the seed data as a static property for memory efficiency
+  private static cachedSeedData: CollectionItem[] | null = null;
   
   /**
    * Get seed data for the collection cache
    * This includes popular/essential items that are commonly requested
+   * Data is cached as a static property to avoid recreation on every call
    */
   static getSeedData(): CollectionItem[] {
-    return [
+    // Return cached data if available
+    if (CollectionSeeder.cachedSeedData) {
+      return CollectionSeeder.cachedSeedData;
+    }
+    
+    // Create and cache the seed data
+    CollectionSeeder.cachedSeedData = [
       // Popular Personas
       {
         name: 'creative-writer.md',
@@ -195,6 +204,8 @@ export class CollectionSeeder {
         last_modified: new Date().toISOString()
       }
     ];
+    
+    return CollectionSeeder.cachedSeedData;
   }
   
   /**

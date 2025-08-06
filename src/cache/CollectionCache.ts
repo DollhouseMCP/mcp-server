@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import { PathValidator } from '../security/pathValidator.js';
+import { normalizeSearchTerm, validateSearchQuery } from '../utils/searchUtils.js';
 
 export interface CollectionItem {
   name: string;
@@ -94,6 +95,9 @@ export class CollectionCache {
       await fs.writeFile(this.cacheFile, data, 'utf8');
       
       logger.debug(`Saved ${items.length} items to collection cache`);
+      
+      // Log operation completed successfully
+      logger.debug(`Cache file operation completed with ${items.length} items`);
     } catch (error) {
       logger.error(`Failed to save collection cache: ${error}`);
       // Don't throw - caching failures shouldn't break functionality

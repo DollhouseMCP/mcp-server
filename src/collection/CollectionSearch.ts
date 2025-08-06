@@ -6,6 +6,7 @@ import { GitHubClient } from './GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
+import { normalizeSearchTerm, validateSearchQuery } from '../utils/searchUtils.js';
 
 export class CollectionSearch {
   private githubClient: GitHubClient;
@@ -22,6 +23,14 @@ export class CollectionSearch {
    * Falls back to cached data when GitHub API is not available or not authenticated
    */
   async searchCollection(query: string): Promise<any[]> {
+    // Validate search query for security
+    try {
+      validateSearchQuery(query, 1000);
+    } catch (error) {
+      logger.warn(`Invalid search query: ${error}`);
+      return [];
+    }
+    
     try {
       // First, try GitHub API search if authenticated
       const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/collection+path:library+extension:md`;
@@ -84,26 +93,17 @@ export class CollectionSearch {
    */
   private searchSeedData(query: string): CollectionItem[] {
     const seedData = CollectionSeeder.getSeedData();
-    const normalizedQuery = this.normalizeSearchTerm(query);
+    const normalizedQuery = normalizeSearchTerm(query);
     
     return seedData.filter(item => {
-      const normalizedName = this.normalizeSearchTerm(item.name);
-      const normalizedPath = this.normalizeSearchTerm(item.path);
+      const normalizedName = normalizeSearchTerm(item.name);
+      const normalizedPath = normalizeSearchTerm(item.path);
       
       return normalizedName.includes(normalizedQuery) || 
              normalizedPath.includes(normalizedQuery);
     });
   }
   
-  /**
-   * Normalize search terms for better matching (handles spaces, dashes, etc.)
-   */
-  private normalizeSearchTerm(term: string): string {
-    return term.toLowerCase()
-      .replace(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
-      .replace(/\.md$/, '')       // Remove .md extension
-      .trim();
-  }
   
   /**
    * Convert cache items to GitHub API format for consistent response structure
