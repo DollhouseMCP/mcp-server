@@ -5,6 +5,40 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2025-08-06
+
+### Added
+- **Anonymous Collection Access** - Browse and search collection without GitHub authentication (#476)
+  - Implemented `CollectionCache` for offline browsing with 24-hour TTL
+  - Added `CollectionSeeder` with built-in sample data fallback
+  - Collection tools now work without authentication using cached/seed data
+- **Anonymous Submission Support** - Submit personas without GitHub authentication (#479)
+  - Removed email submission pathway for security (spam/injection prevention)
+  - Added rate limiting (5 submissions/hour with 10-second minimum delay)
+  - Clear user messaging about GitHub requirement for spam prevention
+- **Shared Search Utilities** - Extracted common search functionality to reduce duplication
+  - Created `searchUtils.ts` with `normalizeSearchTerm` and `validateSearchQuery`
+  - Added Unicode normalization for all search inputs (security)
+- **Comprehensive Documentation**
+  - Created `ANONYMOUS_SUBMISSION_GUIDE.md` for anonymous usage instructions
+  - Added `TESTING_STRATEGY_ES_MODULES.md` documenting ES module test approach
+  - Created `MULTI_AGENT_GITFLOW_PROCESS.md` for development workflow
+
+### Fixed
+- **OAuth Documentation URL** - Fixed misleading developer registration link (#480)
+  - Changed from GitHub app creation URL to proper documentation
+  - Critical UX blocker that confused users during OAuth setup
+
+### Security
+- **Removed Email Vector** - Eliminated email submission to prevent spam/injection attacks
+- **Rate Limiting** - Implemented configurable rate limits for anonymous submissions
+- **Unicode Normalization** - All user inputs now sanitized with `UnicodeValidator`
+- **Audit Logging** - Added security event logging for cache operations and submissions
+- **Path Validation** - Enhanced validation to prevent directory traversal attacks
+
+### Changed
+- **Test Organization** - Added `CollectionCache.test.ts` to excluded tests due to ES module mocking
+
 ## [1.5.1] - 2025-08-05
 
 ### Fixed
