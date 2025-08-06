@@ -2033,18 +2033,46 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
 
-    const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
+    // Generate submission issue with rate limiting
+    let githubIssueUrl: string;
+    let rateLimitStatus: any;
+    
+    try {
+      const submissionResult = this.personaSubmitter.generateSubmissionIssue(persona);
+      githubIssueUrl = submissionResult.githubIssueUrl;
+      rateLimitStatus = submissionResult.rateLimitStatus;
+    } catch (error: any) {
+      // Handle rate limiting error specifically
+      if (error.message.includes('rate limit')) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}⏳ **Rate Limit Reached**\n\n` +
+                `${error.message}\n\n` +
+                `This protection ensures the quality and integrity of our collection.`,
+            },
+          ],
+        };
+      }
+      throw error; // Re-throw other errors
+    }
     
     // Choose response format based on authentication status
     const text = isAuthenticated 
       ? this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator())
       : this.personaSubmitter.formatAnonymousSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    
+    // Add rate limit info if available
+    const rateLimitInfo = rateLimitStatus 
+      ? `\n\n📊 **Rate Limit Status:** ${rateLimitStatus.remainingTokens} submissions remaining this hour`
+      : '';
 
     return {
       content: [
         {
           type: "text",
-          text: text,
+          text: text + rateLimitInfo,
         },
       ],
     };

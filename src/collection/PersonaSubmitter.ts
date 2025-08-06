@@ -1,15 +1,21 @@
 /**
  * Submit personas to the collection
  * Handles both authenticated and anonymous submission workflows
+ * 
+ * Security Features:
+ * - Rate limiting to prevent spam (5 submissions per hour per session)
+ * - URL length validation for GitHub limits
+ * - No email submission pathway (GitHub account required)
  */
 
 import { Persona } from '../types/persona.js';
+import { RateLimiter, RateLimitStatus } from '../update/RateLimiter.js';
+import { SecurityMonitor } from '../security/SecurityMonitor.js';
 
 // Configuration constants
 const GITHUB_URL_LIMIT = 8192; // GitHub's URL length limit (~8KB)
 const COLLECTION_REPO_OWNER = 'DollhouseMCP';
 const COLLECTION_REPO_NAME = 'collection';
-const COMMUNITY_EMAIL = process.env.COMMUNITY_EMAIL || 'community@dollhousemcp.com';
 
 // Common response components
 const RESPONSE_COMPONENTS = {
@@ -20,6 +26,16 @@ const RESPONSE_COMPONENTS = {
 } as const;
 
 export class PersonaSubmitter {
+  private rateLimiter: RateLimiter;
+  
+  constructor() {
+    // Initialize rate limiter: 5 submissions per hour
+    this.rateLimiter = new RateLimiter({
+      maxRequests: 5,
+      windowMs: 60 * 60 * 1000, // 1 hour
+      minDelayMs: 10000 // Minimum 10 seconds between submissions
+    });
+  }
   /**
    * Generate GitHub issue for persona submission
    * Includes URL length validation to comply with GitHub's ~8KB limit
@@ -27,8 +43,26 @@ export class PersonaSubmitter {
   generateSubmissionIssue(persona: Persona): { 
     issueTitle: string; 
     issueBody: string; 
-    githubIssueUrl: string 
+    githubIssueUrl: string;
+    rateLimitStatus?: RateLimitStatus;
   } {
+    // Check rate limit
+    const rateLimitStatus = this.rateLimiter.checkLimit();
+    
+    if (!rateLimitStatus.allowed) {
+      // Log potential abuse attempt
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'PersonaSubmitter.generateSubmissionIssue',
+        details: `Submission rate limit exceeded. Retry after ${rateLimitStatus.retryAfterMs}ms`
+      });
+      
+      throw new Error(
+        `Submission rate limit exceeded. Please wait ${Math.ceil(rateLimitStatus.retryAfterMs! / 1000)} seconds before submitting again. ` +
+        `This limit helps prevent spam and ensures quality submissions.`
+      );
+    }
     const issueTitle = `New Persona Submission: ${persona.metadata.name}`;
     let issueBody = this.buildIssueBody(persona);
     
@@ -44,7 +78,8 @@ export class PersonaSubmitter {
     return {
       issueTitle,
       issueBody,
-      githubIssueUrl
+      githubIssueUrl,
+      rateLimitStatus
     };
   }
   
@@ -178,14 +213,14 @@ export class PersonaSubmitter {
    */
   private buildAnonymousSubmissionProcess(githubIssueUrl: string): string {
     return `**Anonymous Submission Process:**\n` +
-      `1. Click this link to create a GitHub issue (no account needed for viewing):\n` +
+      `1. Click this link to create a GitHub issue:\n` +
       `   ${githubIssueUrl}\n\n` +
-      `2. **If you have a GitHub account:**\n` +
-      `   • Click "Submit new issue" to submit directly\n\n` +
-      `3. **If you don't have a GitHub account:**\n` +
-      `   • Copy the pre-filled content from the form\n` +
-      `   • Email it to: ${COMMUNITY_EMAIL}\n` +
-      `   • Include "Anonymous Submission" in the subject line`;
+      `2. **To submit your persona:**\n` +
+      `   • You'll need a GitHub account (free to create)\n` +
+      `   • Click "Submit new issue" to submit directly\n` +
+      `   • The form is pre-filled with all your persona details\n\n` +
+      `**Note:** GitHub account is required for submission to prevent spam and maintain quality.\n` +
+      `Creating an account is free and takes less than a minute: https://github.com/signup`;
   }
 
   /**
