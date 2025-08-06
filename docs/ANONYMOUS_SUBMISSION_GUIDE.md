@@ -22,7 +22,7 @@ Different response formats are provided based on authentication status:
 #### Anonymous Users  
 - Guided anonymous submission process
 - Multiple submission pathways provided
-- Email fallback option for non-GitHub users
+- GitHub account required for all submissions
 
 ## Anonymous Submission Process
 
@@ -41,8 +41,7 @@ If the user has or creates a GitHub account:
 If the user doesn't have a GitHub account:
 1. Click the generated GitHub issue URL (read-only access)
 2. Copy the pre-filled content from the form
-3. Email the content to: `community@dollhousemcp.com`
-4. Include "Anonymous Submission" in the subject line
+3. Create a free GitHub account to submit (required for security)
 
 ### Step 3: Community Review
 - All submissions (authenticated and anonymous) receive equal consideration
@@ -53,8 +52,8 @@ If the user doesn't have a GitHub account:
 
 ### Configuration
 ```typescript
-// Configurable email address
-const COMMUNITY_EMAIL = process.env.COMMUNITY_EMAIL || 'community@dollhousemcp.com';
+// All submissions require GitHub authentication
+// This ensures security and prevents spam
 
 // GitHub URL limits
 const GITHUB_URL_LIMIT = 8192; // ~8KB GitHub URL limit
@@ -89,8 +88,8 @@ The system automatically handles large persona content:
 
 3. **If you don't have a GitHub account:**
    • Copy the pre-filled content from the form
-   • Email it to: community@dollhousemcp.com
-   • Include "Anonymous Submission" in the subject line
+   • Create a free GitHub account at: https://github.com/signup
+   • Then submit the issue with your new account
 
 **What happens next:**
 • Community maintainers review all submissions
@@ -155,13 +154,14 @@ const response = submitter.formatAnonymousSubmissionResponse(
 
 ## Environment Variables
 
-### COMMUNITY_EMAIL
-Configure the email address for anonymous submissions:
+### GITHUB_REPO
+All submissions go through the GitHub repository:
 ```bash
-export COMMUNITY_EMAIL=community@yourdomain.com
+# The official collection repository
+https://github.com/DollhouseMCP/collection
 ```
 
-If not set, defaults to: `community@dollhousemcp.com`
+Submissions are created as GitHub issues for review.
 
 ## Metrics and Analytics
 
@@ -178,7 +178,7 @@ Comprehensive test coverage includes:
 - Large persona content handling
 - Special character encoding
 - URL length validation
-- Email configuration verification
+- GitHub authentication verification
 - Security validation (XSS prevention)
 
 ## Troubleshooting
@@ -193,9 +193,9 @@ Comprehensive test coverage includes:
 - **Cause**: Improper URL encoding
 - **Solution**: All content is properly URL-encoded using `encodeURIComponent()`
 
-#### Email Submissions Not Received
-- **Cause**: Incorrect email configuration or spam filtering
-- **Solution**: Verify `COMMUNITY_EMAIL` environment variable and check spam folders
+#### GitHub Submissions Not Working
+- **Cause**: Network issues or GitHub API limitations
+- **Solution**: Check network connectivity and GitHub status page
 
 ### Debugging
 Enable detailed logging to troubleshoot submission issues:
@@ -203,16 +203,16 @@ Enable detailed logging to troubleshoot submission issues:
 // Log submission data for debugging
 console.log('Submission URL length:', submission.githubIssueUrl.length);
 console.log('Is authenticated:', isAuthenticated);
-console.log('Community email:', COMMUNITY_EMAIL);
+console.log('Submission repo:', 'https://github.com/DollhouseMCP/collection');
 ```
 
 ## Future Enhancements
 
 ### Planned Features
 - **Submission tracking**: Unique IDs for tracking anonymous submissions
-- **Email automation**: Automated processing of email submissions  
-- **Submission templates**: Pre-formatted email templates for easier submission
-- **Status notifications**: Email confirmations for anonymous submissions
+- **GitHub automation**: Automated processing of GitHub issues  
+- **Submission templates**: Pre-formatted issue templates for easier submission
+- **Status notifications**: GitHub issue status updates for submissions
 
 ### Community Feedback Integration
 - User experience surveys for anonymous submitters

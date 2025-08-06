@@ -36,6 +36,7 @@ export interface IToolHandler {
   getCollectionContent(path: string): Promise<any>;
   installContent(path: string): Promise<any>;
   submitContent(content: string): Promise<any>;
+  getCollectionCacheHealth(): Promise<any>;
   
   // User tools
   setUserIdentity(username: string, email?: string): Promise<any>;
