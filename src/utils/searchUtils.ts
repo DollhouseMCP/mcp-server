@@ -2,7 +2,7 @@
  * Shared utilities for search functionality
  */
 
-import { UnicodeValidator } from '../security/unicodeValidator.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 /**
  * Normalize search terms for better matching
