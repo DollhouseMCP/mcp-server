@@ -23,7 +23,7 @@ import { SecureErrorHandler } from './security/errorHandler.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
-import { APICache } from './cache/APICache.js';
+import { APICache, CollectionCache } from './cache/index.js';
 import { validateFilename, sanitizeInput, validateContentSize, validateUsername, MCPInputValidator } from './security/InputValidator.js';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
 import { ContentValidator } from './security/contentValidator.js';
@@ -66,6 +66,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private activePersona: string | null = null;
   private currentUser: string | null = null;
   private apiCache: APICache = new APICache();
+  private collectionCache: CollectionCache = new CollectionCache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
   private githubClient: GitHubClient;
@@ -129,8 +130,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.githubAuthManager = new GitHubAuthManager(this.apiCache);
-    this.collectionBrowser = new CollectionBrowser(this.githubClient);
-    this.collectionSearch = new CollectionSearch(this.githubClient);
+    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache);
+    this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.elementInstaller = new ElementInstaller(this.githubClient);
     this.personaSubmitter = new PersonaSubmitter();
@@ -204,6 +205,31 @@ export class DollhouseMCPServer implements IToolHandler {
     if (!portfolioExists) {
       logger.info('Creating portfolio directory structure...');
       await this.portfolioManager.initialize();
+    }
+    
+    // Initialize collection cache for anonymous access
+    await this.initializeCollectionCache();
+  }
+  
+  /**
+   * Initialize collection cache with seed data for anonymous browsing
+   */
+  private async initializeCollectionCache(): Promise<void> {
+    try {
+      const isCacheValid = await this.collectionCache.isCacheValid();
+      if (!isCacheValid) {
+        logger.info('Initializing collection cache with seed data...');
+        const { CollectionSeeder } = await import('./collection/CollectionSeeder.js');
+        const seedData = CollectionSeeder.getSeedData();
+        await this.collectionCache.saveCache(seedData);
+        logger.info(`Collection cache initialized with ${seedData.length} items`);
+      } else {
+        const stats = await this.collectionCache.getCacheStats();
+        logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
+      }
+    } catch (error) {
+      logger.error(`Failed to initialize collection cache: ${error}`);
+      // Don't throw - cache failures shouldn't prevent server startup
     }
   }
 
@@ -1935,25 +1961,7 @@ export class DollhouseMCPServer implements IToolHandler {
   async submitContent(contentIdentifier: string) {
     // Check GitHub authentication first
     const authStatus = await this.githubAuthManager.getAuthStatus();
-    
-    if (!authStatus.isAuthenticated) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}🔐 **GitHub Authentication Required**\n\n` +
-                  `To submit content to the DollhouseMCP collection, you need to connect to GitHub.\n\n` +
-                  `**Why GitHub?**\n` +
-                  `• It's where our community shares content\n` +
-                  `• Free account with millions of developers\n` +
-                  `• Secure and reliable platform\n\n` +
-                  `**To get started:**\n` +
-                  `Just say "connect to GitHub" or "set up GitHub"\n\n` +
-                  `Don't have a GitHub account? No problem! You'll be guided through creating one.`,
-          },
-        ],
-      };
-    }
+    const isAuthenticated = authStatus.isAuthenticated;
     
     // Find the content in local collection
     let persona = this.personas.get(contentIdentifier);
@@ -2025,17 +2033,128 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
 
-    const { githubIssueUrl } = this.personaSubmitter.generateSubmissionIssue(persona);
-    const text = this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    // Generate submission issue with rate limiting
+    let githubIssueUrl: string;
+    let rateLimitStatus: any;
+    
+    try {
+      const submissionResult = this.personaSubmitter.generateSubmissionIssue(persona);
+      githubIssueUrl = submissionResult.githubIssueUrl;
+      rateLimitStatus = submissionResult.rateLimitStatus;
+    } catch (error: any) {
+      // Handle rate limiting error specifically
+      if (error.message.includes('rate limit')) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.getPersonaIndicator()}⏳ **Rate Limit Reached**\n\n` +
+                `${error.message}\n\n` +
+                `This protection ensures the quality and integrity of our collection.`,
+            },
+          ],
+        };
+      }
+      throw error; // Re-throw other errors
+    }
+    
+    // Choose response format based on authentication status
+    const text = isAuthenticated 
+      ? this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator())
+      : this.personaSubmitter.formatAnonymousSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    
+    // Add rate limit info if available
+    const rateLimitInfo = rateLimitStatus 
+      ? `\n\n📊 **Rate Limit Status:** ${rateLimitStatus.remainingTokens} submissions remaining this hour`
+      : '';
 
     return {
       content: [
         {
           type: "text",
-          text: text,
+          text: text + rateLimitInfo,
         },
       ],
     };
+  }
+
+  async getCollectionCacheHealth() {
+    try {
+      // Get cache statistics
+      const stats = await this.collectionCache.getCacheStats();
+      
+      // Check if cache directory exists
+      const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
+      let cacheFileExists = false;
+      let cacheFileSize = 0;
+      
+      try {
+        const cacheFile = path.join(cacheDir, 'collection-cache.json');
+        const fileStats = await fs.stat(cacheFile);
+        cacheFileExists = true;
+        cacheFileSize = fileStats.size;
+      } catch (error) {
+        // Cache file doesn't exist yet
+      }
+      
+      // Format cache age
+      const formatAge = (ageMs: number): string => {
+        if (ageMs === 0) return 'Not cached';
+        const hours = Math.floor(ageMs / (1000 * 60 * 60));
+        const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+        if (hours > 0) {
+          return `${hours}h ${minutes}m old`;
+        }
+        return `${minutes}m old`;
+      };
+      
+      // Build health report
+      const healthReport = {
+        status: stats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+        cacheExists: cacheFileExists,
+        itemCount: stats.itemCount,
+        cacheAge: formatAge(stats.cacheAge),
+        cacheAgeMs: stats.cacheAge,
+        isValid: stats.isValid,
+        cacheFileSize: cacheFileSize,
+        cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
+        ttlRemaining: stats.isValid ? formatAge(24 * 60 * 60 * 1000 - stats.cacheAge) : 'Expired',
+        recommendation: stats.isValid 
+          ? 'Cache is healthy and serving content' 
+          : cacheFileExists 
+            ? 'Cache has expired. Will refresh on next collection access.'
+            : 'No cache present. Will be created on first collection access.'
+      };
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
+              `**Status**: ${healthReport.status === 'healthy' ? '✅' : healthReport.status === 'expired' ? '⚠️' : '📦'} ${healthReport.status.toUpperCase()}\n` +
+              `**Items Cached**: ${healthReport.itemCount}\n` +
+              `**Cache Age**: ${healthReport.cacheAge}\n` +
+              `**Cache Size**: ${healthReport.cacheFileSizeFormatted}\n` +
+              `**Valid**: ${healthReport.isValid ? 'Yes ✓' : 'No ✗'}\n` +
+              `**TTL Remaining**: ${healthReport.ttlRemaining}\n\n` +
+              `**Recommendation**: ${healthReport.recommendation}\n\n` +
+              `Cache enables offline browsing and faster collection access.`,
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Failed to get cache health: ${errorMessage}`);
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Failed to get cache health: ${errorMessage}`,
+          },
+        ],
+      };
+    }
   }
 
   // User identity management
