@@ -177,6 +177,13 @@ DollhouseMCP/
 - Test persona loading and activation
 - Test marketplace integration
 
+### ES Module Testing Strategy
+Some tests may be temporarily excluded due to Jest's ES module limitations. We follow a "write now, run later" strategy documented in [TESTING_STRATEGY_ES_MODULES.md](./docs/development/TESTING_STRATEGY_ES_MODULES.md). Key points:
+- Tests are written even if they can't run due to tooling issues
+- Excluded tests are listed in `test/jest.config.cjs` with explanations
+- Tests will be re-enabled as Jest's ES module support improves
+- This ensures documentation of expected behavior and future-ready test coverage
+
 ### Manual Testing
 - Test with your AI platform (Claude, ChatGPT, etc.)
 - Verify personas load correctly
