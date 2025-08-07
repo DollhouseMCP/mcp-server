@@ -26,7 +26,7 @@ const config = {
     'UpdateManager\\.npm\\.test\\.ts$',
     'BackupManager\\.npm\\.test\\.ts$',
     'InstallationDetector\\.test\\.ts$',
-    'GitHubAuthManager\\.test\\.ts$',  // Hanging due to complex mocking requirements
+    // 'GitHubAuthManager\\.test\\.ts$',  // Temporarily enabled for TDD
     'CollectionCache\\.test\\.ts$'  // ESM mocking issues with fs/promises
   ],
   collectCoverageFrom: [

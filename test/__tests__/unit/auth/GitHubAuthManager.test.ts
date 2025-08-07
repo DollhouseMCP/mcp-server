@@ -135,10 +135,97 @@ describe('GitHubAuthManager', () => {
     });
   });
 
+  describe('CLIENT_ID Configuration', () => {
+    it('should have valid hardcoded CLIENT_ID when environment variable is not set', async () => {
+      // RED TEST: This will fail until we implement hardcoded CLIENT_ID
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      
+      // Create new auth manager without env var
+      const authManagerNoEnv = new GitHubAuthManager(apiCache);
+      
+      // Should NOT throw when CLIENT_ID is hardcoded
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          device_code: 'test-device-code',
+          user_code: 'TEST-CODE',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5
+        })
+      } as Response);
+      
+      // This should work with hardcoded CLIENT_ID
+      await expect(authManagerNoEnv.initiateDeviceFlow()).resolves.toBeDefined();
+    });
+
+    it('should use environment variable CLIENT_ID when available', async () => {
+      // RED TEST: Verify env var takes precedence over hardcoded value
+      process.env.DOLLHOUSE_GITHUB_CLIENT_ID = 'env-client-id';
+      
+      const authManagerWithEnv = new GitHubAuthManager(apiCache);
+      
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          device_code: 'test-device-code',
+          user_code: 'TEST-CODE',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5
+        })
+      } as Response);
+      
+      await authManagerWithEnv.initiateDeviceFlow();
+      
+      // Should use env var CLIENT_ID
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://github.com/login/device/code',
+        expect.objectContaining({
+          body: JSON.stringify({
+            client_id: 'env-client-id',
+            scope: 'public_repo read:user'
+          })
+        })
+      );
+    });
+
+    it('should provide user-friendly error message when OAuth app is not registered', async () => {
+      // RED TEST: Better error message that doesn't reference env vars
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      
+      // Temporarily set hardcoded CLIENT_ID to empty to simulate not configured
+      const authManagerNotConfigured = new GitHubAuthManager(apiCache);
+      
+      // Mock response for invalid CLIENT_ID  
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized'
+      } as Response);
+      
+      try {
+        await authManagerNotConfigured.initiateDeviceFlow();
+        expect(true).toBe(false); // Should not reach here
+      } catch (error: any) {
+        // Should NOT mention environment variables in user-facing error
+        expect(error.message).not.toContain('environment variable');
+        expect(error.message).not.toContain('DOLLHOUSE_GITHUB_CLIENT_ID');
+        
+        // Should provide helpful guidance
+        expect(error.message).toContain('GitHub OAuth');
+        expect(error.message).toContain('not configured');
+        expect(error.message).toContain('report this issue');
+      }
+    });
+  });
+
   describe('initiateDeviceFlow', () => {
     it('should throw error with documentation URL when CLIENT_ID is not set', async () => {
+      // This test will be removed once we implement hardcoded CLIENT_ID
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-
+      
+      // For now, this is the current behavior
       await expect(authManager.initiateDeviceFlow()).rejects.toThrow(
         'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
         'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'

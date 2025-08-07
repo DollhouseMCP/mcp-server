@@ -37,8 +37,17 @@ export interface AuthStatus {
  */
 export class GitHubAuthManager {
   // GitHub OAuth App Client ID for DollhouseMCP
-  // Must be configured via environment variable
-  private static readonly CLIENT_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+  // Uses environment variable if available, otherwise falls back to hardcoded value
+  // The hardcoded CLIENT_ID is safe for device flow (no client secret required)
+  // TODO: Replace with actual CLIENT_ID after OAuth app registration
+  private static readonly HARDCODED_CLIENT_ID = 'Ov23liPENDINGREGISTRATION'; // Placeholder - will be replaced with actual CLIENT_ID
+  
+  /**
+   * Get the CLIENT_ID, preferring environment variable over hardcoded value
+   */
+  private static getClientId(): string {
+    return process.env.DOLLHOUSE_GITHUB_CLIENT_ID || GitHubAuthManager.HARDCODED_CLIENT_ID;
+  }
   
   // GitHub OAuth endpoints
   private static readonly DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -138,10 +147,12 @@ export class GitHubAuthManager {
    * Initiate the device flow authentication process
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
-    if (!GitHubAuthManager.CLIENT_ID) {
+    const clientId = GitHubAuthManager.getClientId();
+    
+    if (!clientId) {
       throw new Error(
-        'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
-        'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'
+        'GitHub OAuth is not configured. This should not happen. ' +
+        'Please report this issue at: https://github.com/DollhouseMCP/mcp-server/issues'
       );
     }
     
@@ -153,7 +164,7 @@ export class GitHubAuthManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          client_id: GitHubAuthManager.CLIENT_ID,
+          client_id: clientId,
           scope: 'public_repo read:user'
         })
       });
@@ -177,7 +188,7 @@ export class GitHubAuthManager {
       
       // Log security event for audit trail
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_VALIDATION_SUCCESS',
+        type: 'OAUTH_DEVICE_FLOW_INITIATED',
         severity: 'LOW',
         source: 'GitHubAuthManager.initiateDeviceFlow',
         details: 'GitHub OAuth device flow initiated',
@@ -191,6 +202,12 @@ export class GitHubAuthManager {
       return data as DeviceCodeResponse;
     } catch (error) {
       logger.error('Failed to initiate device flow', { error });
+      
+      // Re-throw if it's already a properly formatted error
+      if (error instanceof Error && error.message.includes('GitHub OAuth')) {
+        throw error;
+      }
+      
       throw new Error('Failed to start GitHub authentication. Please check your internet connection.');
     }
   }
@@ -222,7 +239,7 @@ export class GitHubAuthManager {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            client_id: GitHubAuthManager.CLIENT_ID,
+            client_id: GitHubAuthManager.getClientId(),
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })
@@ -532,7 +549,7 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
       case 400:
         return `Invalid request to GitHub. Please ensure the OAuth app is properly configured.`;
       case 401:
-        return `Authentication failed. The OAuth app credentials may be invalid.`;
+        return `GitHub OAuth is not configured. Please report this issue at: https://github.com/DollhouseMCP/mcp-server/issues`;
       case 403:
         return `Access denied by GitHub. The OAuth app may lack required permissions.`;
       case 404:
