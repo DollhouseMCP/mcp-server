@@ -23,9 +23,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.5.1
+**📦 Version**: v1.5.2
 
-> **⚠️ Breaking Change Notice**: Tool names have changed from "marketplace" to "collection" terminology. Old names still work but are deprecated. See [Migration Guide](docs/MIGRATION_GUIDE_COLLECTION_RENAME.md) for details.
+> **🎉 New in v1.5.2**: Anonymous collection browsing and submission! No GitHub authentication required for basic usage. See [Anonymous Submission Guide](docs/ANONYMOUS_SUBMISSION_GUIDE.md) for details.
 
 ## 🚀 Quick Start
 
@@ -33,8 +33,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.5.1 fixes critical collection browsing issues!
-# OAuth authentication + collection browsing now work seamlessly:
+# ✅ v1.5.2 enables anonymous usage - no GitHub auth required!
+# Browse and submit to collection without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -407,13 +407,9 @@ export DOLLHOUSE_INDICATOR_STYLE=minimal
 export DOLLHOUSE_INDICATOR_EMOJI=🎨
 ```
 
-<<<<<<< HEAD
-### GitHub Authentication (NEW! v1.5.0)
-=======
 ### GitHub Authentication (v1.5.0+)
->>>>>>> origin/main
 
-DollhouseMCP now supports GitHub OAuth device flow authentication for secure access to GitHub features without exposing tokens:
+DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.5.2**: Authentication is now optional - browse and submit anonymously!
 
 ```
 setup_github_auth                         # Start OAuth device flow

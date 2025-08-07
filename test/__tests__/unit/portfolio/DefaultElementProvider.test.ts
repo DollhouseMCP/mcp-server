@@ -48,8 +48,8 @@ class TestableDefaultElementProvider extends DefaultElementProvider {
     this._dataSearchPaths = dataSearchPaths;
   }
   
-  // Override the private getter by redefining it
-  private get dataSearchPaths(): string[] {
+  // Expose the private getter with a public method
+  public getDataSearchPaths(): string[] {
     return this._dataSearchPaths;
   }
 }
@@ -331,7 +331,7 @@ describe('DefaultElementProvider', () => {
       
       // Check if the directory was found
       const foundDataDirCalls = mockLogger.info.mock.calls.filter(
-        call => call[0].includes('Found data directory')
+        (call: any) => call[0].includes('Found data directory')
       );
       
       // If no data directory was found, that's the issue

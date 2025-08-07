@@ -192,7 +192,7 @@ describe('SecureErrorHandler', () => {
 
   describe('createErrorResponse', () => {
     it('should create a properly formatted error response', () => {
-      const error = new Error('Test error');
+      const error = new Error('Test error') as any;
       error.code = 'TEST';
       
       const response = SecureErrorHandler.createErrorResponse(error, 'req-456');

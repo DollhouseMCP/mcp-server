@@ -37,9 +37,9 @@ describe('AgentManager', () => {
     // Set up mocks
     jest.clearAllMocks();
     
-    // Set default mock implementations by assigning functions directly
-    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
+    // Set default mock implementations - simplified for Jest compatibility
+    (FileLockManager as any).atomicWriteFile = jest.fn(() => Promise.resolve(undefined));
+    (FileLockManager as any).atomicReadFile = jest.fn(() => Promise.resolve(''));
     (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
     
@@ -48,7 +48,7 @@ describe('AgentManager', () => {
       writeFile: jest.fn(() => Promise.resolve()),
       close: jest.fn(() => Promise.resolve())
     };
-    jest.spyOn(fs, 'open').mockResolvedValue(mockFileHandle as any);
+    jest.spyOn(fs, 'open').mockImplementation(() => Promise.resolve(mockFileHandle as any));
   });
 
   afterEach(async () => {
@@ -107,7 +107,7 @@ describe('AgentManager', () => {
       expect(firstResult.success).toBe(true);
       
       // Mock fs.open to throw EEXIST error for duplicate
-      jest.spyOn(fs, 'open').mockRejectedValueOnce({ code: 'EEXIST' });
+      jest.spyOn(fs, 'open').mockImplementationOnce(() => Promise.reject({ code: 'EEXIST' }));
 
       // Try to create duplicate
       const result = await agentManager.create('duplicate', 'Second', 'Content');
@@ -131,7 +131,7 @@ describe('AgentManager', () => {
 
   describe('Read', () => {
     beforeEach(async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.resolve(`---
 name: test-agent
 type: agent
 version: 1.0.0
@@ -143,7 +143,7 @@ specializations:
 
 # Test Agent
 
-Agent instructions here`);
+Agent instructions here`));
     });
 
     it('should read an existing agent', async () => {
@@ -155,14 +155,14 @@ Agent instructions here`);
     });
 
     it('should return null for non-existent agent', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue({ code: 'ENOENT' });
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.reject({ code: 'ENOENT' }));
 
       const agent = await agentManager.read('non-existent');
       expect(agent).toBeNull();
     });
 
     it('should reject oversized files', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue('x'.repeat(200 * 1024)); // 200KB
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.resolve('x'.repeat(200 * 1024))); // 200KB
 
       await expect(agentManager.read('huge-agent'))
         .rejects.toThrow('exceeds maximum size');
@@ -170,8 +170,7 @@ Agent instructions here`);
 
     it('should load agent state if available', async () => {
       // Mock both agent file and state file
-      (FileLockManager.atomicReadFile as jest.Mock)
-        .mockImplementation(async (path: string) => {
+      (FileLockManager.atomicReadFile as any) = jest.fn(async (path: string) => {
           if (path.includes('.state.yaml')) {
             // Return state file content in YAML frontmatter format
             return `---
@@ -206,11 +205,11 @@ Content`;
 
   describe('Update', () => {
     it('should update agent metadata', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.resolve(`---
 name: test-agent
 description: Old description
 ---
-Content`);
+Content`));
 
       const success = await agentManager.update('test-agent', {
         description: 'New description',
@@ -226,7 +225,7 @@ Content`);
     });
 
     it('should return false for non-existent agent', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue({ code: 'ENOENT' });
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.reject({ code: 'ENOENT' }));
 
       const success = await agentManager.update('non-existent', {
         description: 'New'
@@ -241,7 +240,7 @@ Content`);
       agent.addGoal({ description: 'New goal' }); // This makes state dirty
       
       // Mock the read to return our agent
-      (FileLockManager.atomicReadFile as jest.Mock).mockImplementation(async () => {
+      (FileLockManager.atomicReadFile as any) = jest.fn(async () => {
         return `---
 name: test-agent
 ---
@@ -249,7 +248,7 @@ Content`;
       });
       
       // Mock the manager's read method to return our agent
-      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'read').mockImplementation(() => Promise.resolve(agent));
 
       await agentManager.update('test-agent', {});
 
@@ -260,8 +259,8 @@ Content`;
 
   describe('Delete', () => {
     it('should delete agent and state files', async () => {
-      const mockUnlink = jest.spyOn(fs, 'unlink').mockResolvedValue();
-      const mockAccess = jest.spyOn(fs, 'access').mockResolvedValue();
+      const mockUnlink = jest.spyOn(fs, 'unlink').mockImplementation(() => Promise.resolve());
+      const mockAccess = jest.spyOn(fs, 'access').mockImplementation(() => Promise.resolve());
 
       await agentManager.delete('test-agent');
 
@@ -275,8 +274,8 @@ Content`;
     });
 
     it('should log security event on deletion', async () => {
-      const mockUnlink = jest.spyOn(fs, 'unlink').mockResolvedValue();
-      const mockAccess = jest.spyOn(fs, 'access').mockResolvedValue();
+      const mockUnlink = jest.spyOn(fs, 'unlink').mockImplementation(() => Promise.resolve());
+      const mockAccess = jest.spyOn(fs, 'access').mockImplementation(() => Promise.resolve());
 
       await agentManager.delete('test-agent');
 
@@ -290,7 +289,7 @@ Content`;
     });
 
     it('should not throw if agent does not exist', async () => {
-      const mockAccess = jest.spyOn(fs, 'access').mockRejectedValue({ code: 'ENOENT' });
+      const mockAccess = jest.spyOn(fs, 'access').mockImplementation(() => Promise.reject({ code: 'ENOENT' }));
 
       await expect(agentManager.delete('non-existent')).resolves.not.toThrow();
     });
@@ -298,15 +297,15 @@ Content`;
 
   describe('List', () => {
     it('should list all agents', async () => {
-      const mockReaddir = jest.spyOn(fs, 'readdir').mockResolvedValue([
+      const mockReaddir = jest.spyOn(fs, 'readdir').mockImplementation(() => Promise.resolve([
         'agent1.md',
         'agent2.md',
         '.hidden.md', // Should be ignored
         'not-agent.txt', // Should be ignored
         '.state' // Should be ignored
-      ] as any);
+      ] as any));
 
-      (FileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (path) => {
+      (FileLockManager.atomicReadFile as any) = jest.fn(async (path: any) => {
         if (path.includes('agent1')) {
           return `---
 name: agent1
@@ -328,8 +327,8 @@ Content`;
     });
 
     it('should handle read errors gracefully', async () => {
-      const mockReaddir = jest.spyOn(fs, 'readdir').mockResolvedValue(['bad.md'] as any);
-      (FileLockManager.atomicReadFile as jest.Mock).mockRejectedValue(new Error('Read error'));
+      const mockReaddir = jest.spyOn(fs, 'readdir').mockImplementation(() => Promise.resolve(['bad.md'] as any));
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.reject(new Error('Read error')));
 
       const agents = await agentManager.list();
       expect(agents).toHaveLength(0);
@@ -469,8 +468,7 @@ This is the agent content.`;
 
     it('should cache loaded state', async () => {
       let callCount = 0;
-      (FileLockManager.atomicReadFile as jest.Mock)
-        .mockImplementation(async (path: string) => {
+      (FileLockManager.atomicReadFile as any) = jest.fn(async (path: string) => {
           callCount++;
           if (path.includes('.state.yaml')) {
             return `---
@@ -501,18 +499,18 @@ Content`;
 
   describe('Error Handling', () => {
     it('should handle file parse errors', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue('Invalid YAML content');
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.resolve('Invalid YAML content'));
 
       await expect(agentManager.read('bad-agent'))
         .rejects.toThrow('Invalid agent file format');
     });
 
     it('should validate element type in files', async () => {
-      (FileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(`---
+      (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.resolve(`---
 name: wrong-type
 type: persona
 ---
-Content`);
+Content`));
 
       await expect(agentManager.read('wrong-type'))
         .rejects.toThrow("Invalid element type: expected 'agents', got 'persona'");

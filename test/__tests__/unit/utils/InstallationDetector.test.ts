@@ -14,12 +14,12 @@ jest.mock('../../../../src/utils/logger.js', () => ({
 }));
 
 // Mock fs module methods
-const mockRealpathSync = jest.fn();
-const mockExistsSync = jest.fn();
-const mockStatSync = jest.fn();
+let mockRealpathSync = jest.fn();
+let mockExistsSync = jest.fn();
+let mockStatSync = jest.fn();
 
 jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
+  ...(jest.requireActual('fs') as any),
   realpathSync: mockRealpathSync,
   existsSync: mockExistsSync,
   statSync: mockStatSync
@@ -87,7 +87,7 @@ describe('InstallationDetector', () => {
         });
         
         // Mock realpath to resolve symlink
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(realPath));
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(realPath));
         
         const result = InstallationDetector.getInstallationType();
         
@@ -104,11 +104,11 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-        mockFs.existsSync = jest.fn().mockImplementation((p) => {
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           return p.endsWith('.git');
         });
-        mockFs.statSync = jest.fn().mockReturnValue({
+        mockStatSync = jest.fn().mockReturnValue({
           isDirectory: () => true
         });
         
@@ -125,14 +125,14 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(deepPath));
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(deepPath));
         let searchCount = 0;
-        mockFs.existsSync = jest.fn().mockImplementation((p) => {
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           searchCount++;
           // Return true on the 3rd search
           return searchCount === 3 && p.endsWith('.git');
         });
-        mockFs.statSync = jest.fn().mockReturnValue({
+        mockStatSync = jest.fn().mockReturnValue({
           isDirectory: () => true
         });
         
@@ -150,8 +150,8 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(noGitPath));
-        mockFs.existsSync = jest.fn().mockReturnValue(false);
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(noGitPath));
+        mockExistsSync = jest.fn().mockReturnValue(false);
         
         const result = InstallationDetector.getInstallationType();
         
@@ -168,17 +168,17 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
         
         // First call
         const result1 = InstallationDetector.getInstallationType();
         expect(result1).toBe('npm');
-        expect(mockFs.realpathSync).toHaveBeenCalledTimes(1);
+        expect(mockRealpathSync).toHaveBeenCalledTimes(1);
         
         // Second call should use cache
         const result2 = InstallationDetector.getInstallationType();
         expect(result2).toBe('npm');
-        expect(mockFs.realpathSync).toHaveBeenCalledTimes(1); // Not called again
+        expect(mockRealpathSync).toHaveBeenCalledTimes(1); // Not called again
       });
       
       it('should clear cache when clearCache is called', () => {
@@ -189,18 +189,18 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
+        mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
         
         // First call
         InstallationDetector.getInstallationType();
-        expect(mockFs.realpathSync).toHaveBeenCalledTimes(1);
+        expect(mockRealpathSync).toHaveBeenCalledTimes(1);
         
         // Clear cache
         InstallationDetector.clearCache();
         
         // Next call should re-detect
         InstallationDetector.getInstallationType();
-        expect(mockFs.realpathSync).toHaveBeenCalledTimes(2);
+        expect(mockRealpathSync).toHaveBeenCalledTimes(2);
       });
     });
     
@@ -213,14 +213,14 @@ describe('InstallationDetector', () => {
         });
         
         // Mock realpath to throw error
-        mockFs.realpathSync = jest.fn().mockImplementation(() => {
+        mockRealpathSync = jest.fn().mockImplementation(() => {
           throw new Error('Permission denied');
         });
         
-        mockFs.existsSync = jest.fn().mockImplementation((p) => {
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           return p.endsWith('.git');
         });
-        mockFs.statSync = jest.fn().mockReturnValue({
+        mockStatSync = jest.fn().mockReturnValue({
           isDirectory: () => true
         });
         
@@ -237,8 +237,8 @@ describe('InstallationDetector', () => {
           writable: true
         });
         
-        mockFs.realpathSync = jest.fn().mockReturnValue(path);
-        mockFs.existsSync = jest.fn().mockImplementation(() => {
+        mockRealpathSync = jest.fn().mockReturnValue(path);
+        mockExistsSync = jest.fn().mockImplementation(() => {
           throw new Error('Access denied');
         });
         
@@ -273,8 +273,8 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
-      mockFs.existsSync = jest.fn().mockImplementation((p) => {
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p === path.join(expectedRoot, 'package.json');
       });
       
@@ -291,11 +291,11 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-      mockFs.existsSync = jest.fn().mockImplementation((p) => {
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p.endsWith('.git');
       });
-      mockFs.statSync = jest.fn().mockReturnValue({
+      mockStatSync = jest.fn().mockReturnValue({
         isDirectory: () => true
       });
       
@@ -312,8 +312,8 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
-      mockFs.existsSync = jest.fn().mockImplementation(() => {
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
+      mockExistsSync = jest.fn().mockImplementation(() => {
         throw new Error('Access denied');
       });
       
@@ -334,11 +334,11 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-      mockFs.existsSync = jest.fn().mockImplementation((p) => {
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p === path.join(expectedRoot, '.git');
       });
-      mockFs.statSync = jest.fn().mockReturnValue({
+      mockStatSync = jest.fn().mockReturnValue({
         isDirectory: () => true
       });
       
@@ -355,7 +355,7 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
       
       const result = InstallationDetector.getGitRepositoryPath();
       
@@ -370,9 +370,9 @@ describe('InstallationDetector', () => {
         writable: true
       });
       
-      mockFs.realpathSync = jest.fn().mockReturnValue(path.dirname(deepPath));
-      mockFs.existsSync = jest.fn().mockReturnValue(false);
-      mockFs.statSync = jest.fn().mockReturnValue({
+      mockRealpathSync = jest.fn().mockReturnValue(path.dirname(deepPath));
+      mockExistsSync = jest.fn().mockReturnValue(false);
+      mockStatSync = jest.fn().mockReturnValue({
         isDirectory: () => true
       });
       

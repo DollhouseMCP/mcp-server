@@ -94,6 +94,17 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
         },
       },
       handler: (args: any) => server.submitContent(args.content)
+    },
+    {
+      tool: {
+        name: "get_collection_cache_health",
+        description: "Get health status and statistics for the collection cache system. This helps monitor cache performance and identify any issues with offline browsing capability.",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      handler: () => server.getCollectionCacheHealth()
     }
   ];
 

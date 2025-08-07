@@ -13,19 +13,20 @@ describe('Deprecated Tool Aliases', () => {
   beforeEach(() => {
     // Create a mock server with all required methods
     mockServer = {
-      browseCollection: jest.fn().mockResolvedValue({ content: [] }),
-      searchCollection: jest.fn().mockResolvedValue({ results: [] }),
-      getCollectionContent: jest.fn().mockResolvedValue({ content: {} }),
-      installContent: jest.fn().mockResolvedValue({ success: true }),
-      submitContent: jest.fn().mockResolvedValue({ success: true })
+      browseCollection: jest.fn(() => Promise.resolve({ content: [] })),
+      searchCollection: jest.fn(() => Promise.resolve({ results: [] })),
+      getCollectionContent: jest.fn(() => Promise.resolve({ content: {} })),
+      installContent: jest.fn(() => Promise.resolve({ success: true })),
+      submitContent: jest.fn(() => Promise.resolve({ success: true })),
+      getCollectionCacheHealth: jest.fn(() => Promise.resolve({ status: 'healthy' }))
     } as any;
     
     tools = getCollectionTools(mockServer);
   });
 
   describe('Tool Registration', () => {
-    it('should register exactly 10 tools (5 new + 5 deprecated)', () => {
-      expect(tools).toHaveLength(10);
+    it('should register exactly 11 tools (6 new + 5 deprecated)', () => {
+      expect(tools).toHaveLength(11);
     });
 
     it('should have all deprecated tool names registered', () => {
@@ -44,6 +45,7 @@ describe('Deprecated Tool Aliases', () => {
       expect(toolNames).toContain('get_collection_content');
       expect(toolNames).toContain('install_content');
       expect(toolNames).toContain('submit_content');
+      expect(toolNames).toContain('get_collection_cache_health');
     });
 
     it('should mark deprecated tools with [DEPRECATED] prefix in description', () => {

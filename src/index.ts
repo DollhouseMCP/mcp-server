@@ -2078,6 +2078,85 @@ export class DollhouseMCPServer implements IToolHandler {
     };
   }
 
+  async getCollectionCacheHealth() {
+    try {
+      // Get cache statistics
+      const stats = await this.collectionCache.getCacheStats();
+      
+      // Check if cache directory exists
+      const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
+      let cacheFileExists = false;
+      let cacheFileSize = 0;
+      
+      try {
+        const cacheFile = path.join(cacheDir, 'collection-cache.json');
+        const fileStats = await fs.stat(cacheFile);
+        cacheFileExists = true;
+        cacheFileSize = fileStats.size;
+      } catch (error) {
+        // Cache file doesn't exist yet
+      }
+      
+      // Format cache age
+      const formatAge = (ageMs: number): string => {
+        if (ageMs === 0) return 'Not cached';
+        const hours = Math.floor(ageMs / (1000 * 60 * 60));
+        const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+        if (hours > 0) {
+          return `${hours}h ${minutes}m old`;
+        }
+        return `${minutes}m old`;
+      };
+      
+      // Build health report
+      const healthReport = {
+        status: stats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+        cacheExists: cacheFileExists,
+        itemCount: stats.itemCount,
+        cacheAge: formatAge(stats.cacheAge),
+        cacheAgeMs: stats.cacheAge,
+        isValid: stats.isValid,
+        cacheFileSize: cacheFileSize,
+        cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
+        ttlRemaining: stats.isValid ? formatAge(24 * 60 * 60 * 1000 - stats.cacheAge) : 'Expired',
+        recommendation: stats.isValid 
+          ? 'Cache is healthy and serving content' 
+          : cacheFileExists 
+            ? 'Cache has expired. Will refresh on next collection access.'
+            : 'No cache present. Will be created on first collection access.'
+      };
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
+              `**Status**: ${healthReport.status === 'healthy' ? '✅' : healthReport.status === 'expired' ? '⚠️' : '📦'} ${healthReport.status.toUpperCase()}\n` +
+              `**Items Cached**: ${healthReport.itemCount}\n` +
+              `**Cache Age**: ${healthReport.cacheAge}\n` +
+              `**Cache Size**: ${healthReport.cacheFileSizeFormatted}\n` +
+              `**Valid**: ${healthReport.isValid ? 'Yes ✓' : 'No ✗'}\n` +
+              `**TTL Remaining**: ${healthReport.ttlRemaining}\n\n` +
+              `**Recommendation**: ${healthReport.recommendation}\n\n` +
+              `Cache enables offline browsing and faster collection access.`,
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Failed to get cache health: ${errorMessage}`);
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Failed to get cache health: ${errorMessage}`,
+          },
+        ],
+      };
+    }
+  }
+
   // User identity management
   async setUserIdentity(username: string, email?: string) {
     try {

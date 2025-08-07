@@ -44,10 +44,10 @@ describe('SkillManager', () => {
     jest.clearAllMocks();
     
     // Mock FileLockManager - make atomicWriteFile actually write the file
-    (FileLockManager as any).atomicWriteFile = jest.fn().mockImplementation(async (filePath: string, content: string) => {
+    (FileLockManager as any).atomicWriteFile = jest.fn(async (filePath: string, content: string) => {
       await fs.writeFile(filePath, content, 'utf-8');
     });
-    (FileLockManager as any).atomicReadFile = jest.fn().mockImplementation(async (filePath: string) => {
+    (FileLockManager as any).atomicReadFile = jest.fn(async (filePath: string) => {
       return fs.readFile(filePath, 'utf-8');
     });
     
@@ -152,7 +152,7 @@ This is a test skill.`;
       await fs.writeFile(path.join(skillsDir, 'not-a-skill.txt'), 'Should be ignored');
       
       // Mock atomicReadFile to read actual files
-      (FileLockManager as any).atomicReadFile = jest.fn().mockImplementation(async (filePath: string) => {
+      (FileLockManager as any).atomicReadFile = jest.fn(async (filePath: string) => {
         return fs.readFile(filePath, 'utf-8');
       });
       
@@ -188,7 +188,7 @@ This is a test skill.`;
       await fs.writeFile(path.join(skillsDir, 'python.md'), '---\nname: Python Developer\ntags: [programming, data]\n---\nContent');
       
       // Mock atomicReadFile
-      (FileLockManager as any).atomicReadFile = jest.fn().mockImplementation(async (filePath: string) => {
+      (FileLockManager as any).atomicReadFile = jest.fn(async (filePath: string) => {
         return fs.readFile(filePath, 'utf-8');
       });
     });
@@ -217,7 +217,7 @@ This is a test skill.`;
       
       const result = await skillManager.validate(skill);
       
-      expect(result.isValid).toBe(true);
+      expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
 
@@ -229,8 +229,8 @@ This is a test skill.`;
       
       const result = await skillManager.validate(skill);
       
-      expect(result.isValid).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.valid).toBe(false);
+      expect(result.errors?.length).toBeGreaterThan(0);
     });
   });
 
@@ -241,7 +241,7 @@ This is a test skill.`;
       await fs.writeFile(skillPath, '---\nname: To Delete\n---\nContent');
       
       // Mock atomicReadFile
-      (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('---\nname: To Delete\n---\nContent');
+      (FileLockManager as any).atomicReadFile = jest.fn(() => Promise.resolve('---\nname: To Delete\n---\nContent'));
       
       await skillManager.delete('to-delete.md');
       
