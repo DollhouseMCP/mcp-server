@@ -30,9 +30,9 @@ describe('Empty Directory Handling', () => {
     // Set up mocks
     jest.clearAllMocks();
     
-    // Mock FileLockManager
-    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
+    // Mock FileLockManager with proper types
+    (FileLockManager as any).atomicWriteFile = jest.fn<Promise<void>, [string, string, any?]>().mockResolvedValue(undefined);
+    (FileLockManager as any).atomicReadFile = jest.fn<Promise<string>, [string, any?]>().mockResolvedValue('');
     (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
     
     // Mock SecurityMonitor
@@ -124,10 +124,11 @@ describe('Empty Directory Handling', () => {
       // Mock fs.readdir to return empty array for templates
       const originalReaddir = fs.readdir;
       jest.spyOn(fs, 'readdir').mockImplementation(async (dir) => {
-        if (dir.includes('templates')) {
-          return [];
+        const dirStr = String(dir);
+        if (dirStr.includes('templates')) {
+          return [] as any;
         }
-        return originalReaddir(dir);
+        return originalReaddir(dir as any) as any;
       });
       
       // All managers should return empty arrays

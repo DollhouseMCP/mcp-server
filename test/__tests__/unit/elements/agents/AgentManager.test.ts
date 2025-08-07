@@ -37,9 +37,9 @@ describe('AgentManager', () => {
     // Set up mocks
     jest.clearAllMocks();
     
-    // Set default mock implementations by assigning functions directly
-    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
-    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
+    // Set default mock implementations with proper types
+    (FileLockManager as any).atomicWriteFile = jest.fn<Promise<void>, [string, string, any?]>().mockResolvedValue(undefined);
+    (FileLockManager as any).atomicReadFile = jest.fn<Promise<string>, [string, any?]>().mockResolvedValue('');
     (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
     
