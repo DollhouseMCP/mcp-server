@@ -51,11 +51,12 @@ describe('UpdateManager - NPM Installation Support', () => {
   describe('updateServer for npm installations', () => {
     it('should detect npm installation and use npm update flow', async () => {
       // Mock version check
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (args.includes('view') && args.includes('version')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        const argsArray = args as string[];
+        if (argsArray.includes('view') && argsArray.includes('version')) {
           return { stdout: '1.5.0\n', stderr: '' };
         }
-        if (args.includes('list') && args.includes('-g')) {
+        if (argsArray.includes('list') && argsArray.includes('-g')) {
           return { stdout: '@dollhousemcp/mcp-server@1.5.0\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
@@ -105,8 +106,9 @@ describe('UpdateManager - NPM Installation Support', () => {
     
     it('should detect when already up to date', async () => {
       // Mock same version
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (args.includes('view') && args.includes('version')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        const argsArray = args as string[];
+        if (argsArray.includes('view') && argsArray.includes('version')) {
           return { stdout: '1.4.0\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
@@ -123,8 +125,9 @@ describe('UpdateManager - NPM Installation Support', () => {
     
     it('should handle backup creation failure', async () => {
       // Mock version check to show update available
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (args.includes('view') && args.includes('version')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        const argsArray = args as string[];
+        if (argsArray.includes('view') && argsArray.includes('version')) {
           return { stdout: '1.5.0\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
@@ -147,11 +150,12 @@ describe('UpdateManager - NPM Installation Support', () => {
     
     it('should handle npm update command failure', async () => {
       // Mock version check
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (args.includes('view') && args.includes('version')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        const argsArray = args as string[];
+        if (argsArray.includes('view') && argsArray.includes('version')) {
           return { stdout: '1.5.0\n', stderr: '' };
         }
-        if (args.includes('update')) {
+        if (argsArray.includes('update')) {
           throw new Error('Permission denied');
         }
         return { stdout: '', stderr: '' };
@@ -172,11 +176,12 @@ describe('UpdateManager - NPM Installation Support', () => {
     
     it('should verify installation after update', async () => {
       // Mock successful update but version mismatch
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (args.includes('view') && args.includes('version')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        const argsArray = args as string[];
+        if (argsArray.includes('view') && argsArray.includes('version')) {
           return { stdout: '1.5.0\n', stderr: '' };
         }
-        if (args.includes('list') && args.includes('-g')) {
+        if (argsArray.includes('list') && argsArray.includes('-g')) {
           // Return different version than expected
           return { stdout: '@dollhousemcp/mcp-server@1.4.9\n', stderr: '' };
         }
@@ -297,11 +302,13 @@ describe('UpdateManager - NPM Installation Support', () => {
       
       // Mock fs operations to track temp path
       jest.spyOn(fs, 'stat').mockResolvedValue({ isDirectory: () => true } as any);
-      jest.spyOn(fs, 'rename').mockImplementation(async (oldPath: string, newPath: string) => {
-        if (newPath.includes('-temp-')) {
-          tempPathCreated = newPath;
+      jest.spyOn(fs, 'rename').mockImplementation(async (oldPath: unknown, newPath: unknown) => {
+        const oldPathStr = oldPath as string;
+        const newPathStr = newPath as string;
+        if (newPathStr.includes('-temp-')) {
+          tempPathCreated = newPathStr;
         }
-        if (oldPath === npmGlobalPath) {
+        if (oldPathStr === npmGlobalPath) {
           throw new Error('Simulated failure');
         }
       });
@@ -321,17 +328,17 @@ describe('UpdateManager - NPM Installation Support', () => {
     it('should handle conversion from npm to git', async () => {
       // Mock npm installation
       mockGetInstallationType.mockReturnValue('npm');
-      mockInstallationDetector.getNpmGlobalPath.mockReturnValue('/usr/local/lib/node_modules/@dollhousemcp/mcp-server');
+      mockGetNpmGlobalPath.mockReturnValue('/usr/local/lib/node_modules/@dollhousemcp/mcp-server');
       
       // Mock git operations
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (command === 'git' && args.includes('clone')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        if (command === 'git' && (args as string[]).includes('clone')) {
           return { stdout: 'Cloning complete', stderr: '' };
         }
-        if (command === 'npm' && args.includes('install')) {
+        if (command === 'npm' && (args as string[]).includes('install')) {
           return { stdout: 'Dependencies installed', stderr: '' };
         }
-        if (command === 'npm' && args.includes('build')) {
+        if (command === 'npm' && (args as string[]).includes('build')) {
           return { stdout: 'Build complete', stderr: '' };
         }
         return { stdout: '', stderr: '' };
@@ -349,8 +356,8 @@ describe('UpdateManager - NPM Installation Support', () => {
       mockGetInstallationType.mockReturnValue('git');
       
       // Mock git operations
-      mockSafeExec.mockImplementation(async (command: string, args: string[]) => {
-        if (command === 'git' && args.includes('pull')) {
+      mockSafeExec.mockImplementation(async (command: unknown, args: unknown) => {
+        if (command === 'git' && (args as string[]).includes('pull')) {
           return { stdout: 'Already up to date', stderr: '' };
         }
         return { stdout: '', stderr: '' };

@@ -42,8 +42,8 @@ jest.unstable_mockModule('../../../../src/cache/APICache.js', () => ({
   }))
 }));
 
-// Mock fetch globally
-global.fetch = jest.fn();
+// Mock fetch globally with proper typing
+global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 
 // Import modules after mocking
 const { GitHubAuthManager } = await import('../../../../src/auth/GitHubAuthManager.js');
@@ -53,8 +53,8 @@ const { logger } = await import('../../../../src/utils/logger.js');
 const { SecurityMonitor } = await import('../../../../src/security/securityMonitor.js');
 
 describe('GitHubAuthManager', () => {
-  let authManager: GitHubAuthManager;
-  let apiCache: APICache;
+  let authManager: InstanceType<typeof GitHubAuthManager>;
+  let apiCache: InstanceType<typeof APICache>;
   let mockFetch: jest.MockedFunction<typeof fetch>;
 
   beforeEach(() => {
@@ -67,7 +67,7 @@ describe('GitHubAuthManager', () => {
     mockAPICacheClear.mockReset();
     
     // Create instances
-    apiCache = new APICache(1000, 60000);
+    apiCache = new APICache();
     authManager = new GitHubAuthManager(apiCache);
     
     // Set up default environment
@@ -81,7 +81,7 @@ describe('GitHubAuthManager', () => {
 
   describe('getAuthStatus', () => {
     it('should return not authenticated when no token exists', async () => {
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(null);
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue(null);
 
       const status = await authManager.getAuthStatus();
 
@@ -98,7 +98,7 @@ describe('GitHubAuthManager', () => {
         scopes: ['public_repo', 'read:user']
       };
 
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(mockToken);
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue(mockToken);
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: new Headers({
@@ -120,7 +120,7 @@ describe('GitHubAuthManager', () => {
     it('should return invalid token status when validation fails', async () => {
       const mockToken = 'ghp_invalidtoken';
       
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(mockToken);
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue(mockToken);
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401
@@ -443,7 +443,7 @@ describe('GitHubAuthManager', () => {
         email: 'user@example.com'
       };
 
-      (TokenManager.storeGitHubToken as jest.Mock).mockResolvedValue(undefined);
+      (TokenManager.storeGitHubToken as any).mockResolvedValue(undefined);
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: new Headers({
@@ -471,8 +471,8 @@ describe('GitHubAuthManager', () => {
 
   describe('clearAuthentication', () => {
     it('should remove stored token and clear cache', async () => {
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('ghp_token');
-      (TokenManager.removeStoredToken as jest.Mock).mockResolvedValue(undefined);
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue('ghp_token');
+      (TokenManager.removeStoredToken as any).mockResolvedValue(undefined);
 
       await authManager.clearAuthentication();
 
@@ -485,8 +485,8 @@ describe('GitHubAuthManager', () => {
     });
 
     it('should handle errors gracefully', async () => {
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('ghp_token');
-      (TokenManager.removeStoredToken as jest.Mock).mockRejectedValue(new Error('Storage error'));
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue('ghp_token');
+      (TokenManager.removeStoredToken as any).mockRejectedValue(new Error('Storage error'));
 
       await expect(authManager.clearAuthentication()).rejects.toThrow(
         'Failed to clear authentication'
@@ -555,7 +555,7 @@ describe('GitHubAuthManager', () => {
         name: 'Test User\u200B' // Zero-width space
       };
 
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(mockToken);
+      (TokenManager.getGitHubTokenAsync as any).mockResolvedValue(mockToken);
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: new Headers(),
