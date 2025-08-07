@@ -14,12 +14,12 @@ jest.mock('../../../../src/utils/logger.js', () => ({
 }));
 
 // Mock fs module methods
-const mockRealpathSync = jest.fn();
-const mockExistsSync = jest.fn();
-const mockStatSync = jest.fn();
+let mockRealpathSync = jest.fn();
+let mockExistsSync = jest.fn();
+let mockStatSync = jest.fn();
 
 jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
+  ...(jest.requireActual('fs') as any),
   realpathSync: mockRealpathSync,
   existsSync: mockExistsSync,
   statSync: mockStatSync
@@ -105,7 +105,7 @@ describe('InstallationDetector', () => {
         });
         
         mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-        mockExistsSync = jest.fn().mockImplementation((p) => {
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           return p.endsWith('.git');
         });
         mockStatSync = jest.fn().mockReturnValue({
@@ -127,7 +127,7 @@ describe('InstallationDetector', () => {
         
         mockRealpathSync = jest.fn().mockReturnValue(path.dirname(deepPath));
         let searchCount = 0;
-        mockExistsSync = jest.fn().mockImplementation((p) => {
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           searchCount++;
           // Return true on the 3rd search
           return searchCount === 3 && p.endsWith('.git');
@@ -217,7 +217,7 @@ describe('InstallationDetector', () => {
           throw new Error('Permission denied');
         });
         
-        mockExistsSync = jest.fn().mockImplementation((p) => {
+        mockExistsSync = jest.fn().mockImplementation((p: any) => {
           return p.endsWith('.git');
         });
         mockStatSync = jest.fn().mockReturnValue({
@@ -274,7 +274,7 @@ describe('InstallationDetector', () => {
       });
       
       mockRealpathSync = jest.fn().mockReturnValue(path.dirname(npmPath));
-      mockExistsSync = jest.fn().mockImplementation((p) => {
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p === path.join(expectedRoot, 'package.json');
       });
       
@@ -292,7 +292,7 @@ describe('InstallationDetector', () => {
       });
       
       mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-      mockExistsSync = jest.fn().mockImplementation((p) => {
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p.endsWith('.git');
       });
       mockStatSync = jest.fn().mockReturnValue({
@@ -335,7 +335,7 @@ describe('InstallationDetector', () => {
       });
       
       mockRealpathSync = jest.fn().mockReturnValue(path.dirname(gitPath));
-      mockExistsSync = jest.fn().mockImplementation((p) => {
+      mockExistsSync = jest.fn().mockImplementation((p: any) => {
         return p === path.join(expectedRoot, '.git');
       });
       mockStatSync = jest.fn().mockReturnValue({

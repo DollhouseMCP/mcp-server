@@ -53,7 +53,7 @@ describe('Execution Detection Logic', () => {
     test('should detect npx execution', () => {
       process.env.npm_execpath = '/usr/local/bin/npx';
       
-      const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+      const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
       expect(isNpxExecution).toBe(true);
     });
     
@@ -67,7 +67,7 @@ describe('Execution Detection Logic', () => {
       
       npxPaths.forEach(path => {
         process.env.npm_execpath = path;
-        const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+        const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
         expect(isNpxExecution).toBe(true);
       });
     });
@@ -75,7 +75,7 @@ describe('Execution Detection Logic', () => {
     test('should not detect npx when using npm directly', () => {
       process.env.npm_execpath = '/usr/local/bin/npm';
       
-      const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+      const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
       expect(isNpxExecution).toBe(false);
     });
   });
@@ -180,7 +180,7 @@ describe('Execution Detection Logic', () => {
       process.argv[1] = '/path/to/dist/index.js';
       
       const isDirectExecution = !process.env.npm_execpath;
-      const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+      const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
       const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || false;
       const isTest = process.env.JEST_WORKER_ID;
       
@@ -193,7 +193,7 @@ describe('Execution Detection Logic', () => {
       delete process.env.JEST_WORKER_ID;
       
       const isDirectExecution = !process.env.npm_execpath;
-      const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+      const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
       const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || false;
       const isTest = process.env.JEST_WORKER_ID;
       
@@ -205,7 +205,7 @@ describe('Execution Detection Logic', () => {
       process.env.JEST_WORKER_ID = '1';
       
       const isDirectExecution = !process.env.npm_execpath;
-      const isNpxExecution = process.env.npm_execpath?.includes('npx') || false;
+      const isNpxExecution = (process.env.npm_execpath as any)?.includes('npx') || false;
       const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || false;
       const isTest = process.env.JEST_WORKER_ID;
       

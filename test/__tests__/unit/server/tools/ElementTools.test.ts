@@ -15,18 +15,18 @@ describe('ElementTools', () => {
   beforeEach(() => {
     // Create a mock server with all required methods
     mockServer = {
-      listElements: jest.fn().mockResolvedValue({ elements: [] }),
-      activateElement: jest.fn().mockResolvedValue({ success: true }),
-      deactivateElement: jest.fn().mockResolvedValue({ success: true }),
-      getElementDetails: jest.fn().mockResolvedValue({ details: {} }),
-      getActiveElements: jest.fn().mockResolvedValue({ active: [] }),
-      reloadElements: jest.fn().mockResolvedValue({ reloaded: true }),
-      renderTemplate: jest.fn().mockResolvedValue({ rendered: 'content' }),
-      executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
-      createElement: jest.fn().mockResolvedValue({ success: true }),
-      editElement: jest.fn().mockResolvedValue({ success: true }),
-      validateElement: jest.fn().mockResolvedValue({ valid: true }),
-      deleteElement: jest.fn().mockResolvedValue({ success: true })
+      listElements: jest.fn().mockImplementation(() => Promise.resolve({ elements: [] })),
+      activateElement: jest.fn().mockImplementation(() => Promise.resolve({ success: true })),
+      deactivateElement: jest.fn().mockImplementation(() => Promise.resolve({ success: true })),
+      getElementDetails: jest.fn().mockImplementation(() => Promise.resolve({ details: {} })),
+      getActiveElements: jest.fn().mockImplementation(() => Promise.resolve({ active: [] })),
+      reloadElements: jest.fn().mockImplementation(() => Promise.resolve({ reloaded: true })),
+      renderTemplate: jest.fn().mockImplementation(() => Promise.resolve({ rendered: "content" })),
+      executeAgent: jest.fn().mockImplementation(() => Promise.resolve({ result: "executed" })),
+      createElement: jest.fn(() => Promise.resolve({ success: true })),
+      editElement: jest.fn(() => Promise.resolve({ success: true })),
+      validateElement: jest.fn(() => Promise.resolve({ valid: true })),
+      deleteElement: jest.fn(() => Promise.resolve({ success: true }))
     } as any;
 
     tools = getElementTools(mockServer);
@@ -147,7 +147,7 @@ describe('ElementTools', () => {
 
       await activeTool!.handler(args);
 
-      expect(mockServer.getActiveElements).toHaveBeenCalledWith(undefined);
+      expect(mockServer.getActiveElements).toHaveBeenCalledWith(undefined as any);
     });
 
     it('should require type parameter', () => {
