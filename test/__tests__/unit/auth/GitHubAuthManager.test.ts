@@ -137,7 +137,7 @@ describe('GitHubAuthManager', () => {
 
   describe('CLIENT_ID Configuration', () => {
     it('should have valid hardcoded CLIENT_ID when environment variable is not set', async () => {
-      // RED TEST: This will fail until we implement hardcoded CLIENT_ID
+      // Verify hardcoded CLIENT_ID works when env var not set
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
       
       // Create new auth manager without env var
@@ -160,7 +160,7 @@ describe('GitHubAuthManager', () => {
     });
 
     it('should use environment variable CLIENT_ID when available', async () => {
-      // RED TEST: Verify env var takes precedence over hardcoded value
+      // Verify env var takes precedence over hardcoded value
       process.env.DOLLHOUSE_GITHUB_CLIENT_ID = 'env-client-id';
       
       const authManagerWithEnv = new GitHubAuthManager(apiCache);
@@ -191,7 +191,7 @@ describe('GitHubAuthManager', () => {
     });
 
     it('should provide user-friendly error message when OAuth app is not registered', async () => {
-      // RED TEST: Better error message that doesn't reference env vars
+      // Verify better error message that doesn't reference env vars
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
       
       // Temporarily set hardcoded CLIENT_ID to empty to simulate not configured

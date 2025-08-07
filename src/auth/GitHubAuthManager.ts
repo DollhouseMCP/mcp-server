@@ -39,8 +39,8 @@ export class GitHubAuthManager {
   // GitHub OAuth App Client ID for DollhouseMCP
   // Uses environment variable if available, otherwise falls back to hardcoded value
   // The hardcoded CLIENT_ID is safe for device flow (no client secret required)
-  // TODO: Replace with actual CLIENT_ID after OAuth app registration
-  private static readonly HARDCODED_CLIENT_ID = 'Ov23liPENDINGREGISTRATION'; // Placeholder - will be replaced with actual CLIENT_ID
+  // OAuth app owned by DollhouseMCP organization with Device Flow enabled
+  private static readonly HARDCODED_CLIENT_ID = 'Ov23liOrPRXkNN7PMCBt'; // Production CLIENT_ID
   
   /**
    * Get the CLIENT_ID, preferring environment variable over hardcoded value
