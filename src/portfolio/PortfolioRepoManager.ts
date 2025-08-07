@@ -147,7 +147,7 @@ export class PortfolioRepoManager {
     
     // LOW FIX: Add security audit logging (DMCP-SEC-006)
     SecurityMonitor.logSecurityEvent({
-      type: 'PORTFOLIO_CREATION_CONSENT',
+      type: 'PORTFOLIO_INITIALIZATION',
       severity: 'LOW',
       source: 'PortfolioRepoManager.createPortfolio',
       details: `User ${normalizedUsername} consented to portfolio creation`,
@@ -212,7 +212,7 @@ export class PortfolioRepoManager {
     
     // LOW FIX: Add security audit logging for element save (DMCP-SEC-006)
     SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_SAVE_CONSENT',
+      type: 'ELEMENT_CREATED',
       severity: 'LOW',
       source: 'PortfolioRepoManager.saveElement',
       details: `User consented to save element ${element.id} to portfolio`,
