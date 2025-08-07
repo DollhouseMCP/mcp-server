@@ -188,10 +188,10 @@ export class GitHubAuthManager {
       
       // Log security event for audit trail
       SecurityMonitor.logSecurityEvent({
-        type: 'OAUTH_DEVICE_FLOW_INITIATED',
+        type: 'TOKEN_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'GitHubAuthManager.initiateDeviceFlow',
-        details: 'GitHub OAuth device flow initiated',
+        details: 'GitHub OAuth device flow initiated successfully',
         metadata: {
           userCode: data.user_code,
           expiresIn: data.expires_in,

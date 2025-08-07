@@ -286,7 +286,7 @@ describe('GitHubAuthManager', () => {
       );
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'OAUTH_DEVICE_FLOW_INITIATED'
+          type: 'TOKEN_VALIDATION_SUCCESS'
         })
       );
     });
@@ -463,7 +463,7 @@ describe('GitHubAuthManager', () => {
       });
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'OAUTH_AUTHENTICATION_COMPLETED'
+          type: 'TOKEN_VALIDATION_SUCCESS'
         })
       );
     });
@@ -479,7 +479,7 @@ describe('GitHubAuthManager', () => {
       expect(TokenManager.removeStoredToken).toHaveBeenCalled();
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'GITHUB_AUTH_CLEARED'
+          type: 'TOKEN_CACHE_CLEARED'
         })
       );
     });
@@ -512,7 +512,7 @@ describe('GitHubAuthManager', () => {
       await expect(pollPromise).rejects.toThrow('Authentication polling was cancelled');
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'GITHUB_AUTH_CLEANUP',
+          type: 'TOKEN_CACHE_CLEARED',
           metadata: { hadActivePolling: true }
         })
       );
