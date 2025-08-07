@@ -309,13 +309,16 @@ describe('PortfolioRepoManager', () => {
 
       // Assert
       // Should create README.md
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining('README.md'),
-        expect.objectContaining({
-          method: 'PUT',
-          body: expect.stringContaining('DollhouseMCP Portfolio')
-        })
+      const readmeCall = mockFetch.mock.calls.find(call => 
+        call[0].includes('README.md')
       );
+      expect(readmeCall).toBeDefined();
+      expect(readmeCall![1].method).toBe('PUT');
+      
+      // Check that the body contains the base64 encoded README content
+      const bodyData = JSON.parse(readmeCall![1].body);
+      const decodedContent = Buffer.from(bodyData.content, 'base64').toString('utf-8');
+      expect(decodedContent).toContain('DollhouseMCP Portfolio');
 
       // Should create directory placeholders
       const expectedDirs = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
@@ -349,10 +352,14 @@ describe('PortfolioRepoManager', () => {
       const username = 'testuser';
       const consent = true;
       
-      // TODO: mockGitHubClient needs to be defined
-      // mockGitHubClient.createRepository = jest.fn().mockRejectedValue(
-      //   new Error('Repository creation failed: insufficient permissions')
-      // );
+      // Mock fetch to simulate permission error when creating repo
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ 
+          message: 'Repository creation failed: insufficient permissions' 
+        })
+      } as Response);
 
       // Act & Assert
       await expect(manager.createPortfolio(username, consent))
