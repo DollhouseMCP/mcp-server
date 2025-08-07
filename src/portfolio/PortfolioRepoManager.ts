@@ -12,6 +12,8 @@
 import { IElement } from '../types/elements/IElement.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface PortfolioRepoOptions {
   description?: string;
@@ -32,6 +34,7 @@ export class PortfolioRepoManager {
 
   /**
    * Get GitHub token for API calls
+   * SECURITY FIX: Added token validation to prevent token validation bypass (DMCP-SEC-002)
    */
   private async getToken(): Promise<string> {
     if (!this.token) {
@@ -39,6 +42,25 @@ export class PortfolioRepoManager {
       if (!this.token) {
         throw new Error('GitHub authentication required. Please use setup_github_auth first.');
       }
+      
+      // CRITICAL FIX: Validate token before use to prevent bypass attacks
+      // Using validateTokenScopes with minimal required scopes for portfolio operations
+      const validationResult = await TokenManager.validateTokenScopes(this.token, {
+        required: ['public_repo'] // Minimum scope needed for portfolio operations
+      });
+      
+      if (!validationResult.isValid) {
+        this.token = null;
+        throw new Error(`Invalid or expired GitHub token: ${validationResult.error || 'Please re-authenticate.'}`);
+      }
+      
+      // LOW FIX: Add audit logging for security operations (DMCP-SEC-006)
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_VALIDATION_SUCCESS',
+        severity: 'LOW',
+        source: 'PortfolioRepoManager.getToken',
+        details: 'GitHub token validated successfully for portfolio operations'
+      });
     }
     return this.token;
   }
@@ -86,11 +108,14 @@ export class PortfolioRepoManager {
   /**
    * Check if portfolio repository exists for a user
    * No consent required - this is a read-only operation
+   * SECURITY FIX: Added Unicode normalization for user input (DMCP-SEC-004)
    */
   async checkPortfolioExists(username: string): Promise<boolean> {
+    // MEDIUM FIX: Normalize username to prevent Unicode attacks
+    const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
     try {
       const repo = await this.githubRequest(
-        `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+        `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
       );
       return repo !== null;
     } catch (error) {
@@ -104,6 +129,9 @@ export class PortfolioRepoManager {
    * @throws Error if user declines consent or if consent is not provided
    */
   async createPortfolio(username: string, consent: boolean | undefined): Promise<string> {
+    // MEDIUM FIX: Normalize username to prevent Unicode attacks (DMCP-SEC-004)
+    const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
+    
     // CRITICAL: Validate consent is explicitly provided
     if (consent === undefined) {
       throw new Error('Consent is required for portfolio creation');
@@ -115,15 +143,24 @@ export class PortfolioRepoManager {
     }
 
     // Log consent for audit trail
-    console.log(`User consented to portfolio creation for ${username}`);
+    console.log(`User consented to portfolio creation for ${normalizedUsername}`);
+    
+    // LOW FIX: Add security audit logging (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_CREATION_CONSENT',
+      severity: 'LOW',
+      source: 'PortfolioRepoManager.createPortfolio',
+      details: `User ${normalizedUsername} consented to portfolio creation`,
+      metadata: { username: normalizedUsername }
+    });
 
     // Check if portfolio already exists
     const existingRepo = await this.githubRequest(
-      `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+      `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
     );
     
     if (existingRepo && existingRepo.html_url) {
-      console.log(`Portfolio already exists for ${username}`);
+      console.log(`Portfolio already exists for ${normalizedUsername}`);
       return existingRepo.html_url;
     }
 
@@ -141,7 +178,7 @@ export class PortfolioRepoManager {
       );
 
       // Initialize portfolio structure
-      await this.generatePortfolioStructure(username);
+      await this.generatePortfolioStructure(normalizedUsername);
 
       return repo.html_url;
     } catch (error: any) {
@@ -168,8 +205,23 @@ export class PortfolioRepoManager {
     // Validate element before saving
     this.validateElement(element);
 
-    const username = element.metadata.author || 'anonymous';
+    // MEDIUM FIX: Normalize username from element metadata (DMCP-SEC-004)
+    const rawUsername = element.metadata.author || 'anonymous';
+    const username = UnicodeValidator.normalize(rawUsername).normalizedContent;
     console.log(`User consented to save element ${element.id} to portfolio`);
+    
+    // LOW FIX: Add security audit logging for element save (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_SAVE_CONSENT',
+      severity: 'LOW',
+      source: 'PortfolioRepoManager.saveElement',
+      details: `User consented to save element ${element.id} to portfolio`,
+      metadata: { 
+        elementId: element.id,
+        elementType: element.type,
+        username 
+      }
+    });
 
     // Generate file path based on element type
     const fileName = this.generateFileName(element.metadata.name);
@@ -204,6 +256,7 @@ export class PortfolioRepoManager {
 
   /**
    * Generate initial portfolio structure with README and directories
+   * SECURITY: Username already normalized by calling methods
    */
   async generatePortfolioStructure(username: string): Promise<void> {
     // Create README.md
@@ -272,9 +325,12 @@ These elements can be imported into your DollhouseMCP installation.
 
   /**
    * Generate safe filename from element name
+   * SECURITY: Additional Unicode normalization for filenames
    */
   private generateFileName(name: string): string {
-    return name
+    // Normalize to prevent Unicode attacks in filenames
+    const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
+    return normalizedName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');

@@ -9,8 +9,10 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { PortfolioRepoManager } from '../../../../src/portfolio/PortfolioRepoManager.js';
 import { IElement } from '../../../../src/types/elements/IElement.js';
 
-// Mock the TokenManager module before importing it
+// Mock modules
 jest.mock('../../../../src/security/tokenManager.js');
+jest.mock('../../../../src/security/validators/unicodeValidator.js');
+jest.mock('../../../../src/security/securityMonitor.js');
 
 // Mock fetch globally
 global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
@@ -19,12 +21,27 @@ describe('PortfolioRepoManager', () => {
   let manager: PortfolioRepoManager;
   let mockFetch: jest.MockedFunction<typeof fetch>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     
-    // Mock TokenManager to return a test token
-    const TokenManager = require('../../../../src/security/tokenManager.js').TokenManager;
-    TokenManager.getGitHubTokenAsync = jest.fn().mockResolvedValue('test-token');
+    // Mock TokenManager
+    const { TokenManager } = await import('../../../../src/security/tokenManager.js');
+    (TokenManager.getGitHubTokenAsync as jest.Mock) = jest.fn().mockResolvedValue('test-token');
+    (TokenManager.validateTokenScopes as jest.Mock) = jest.fn().mockResolvedValue({ 
+      isValid: true, 
+      scopes: ['public_repo'] 
+    });
+    
+    // Mock UnicodeValidator
+    const { UnicodeValidator } = await import('../../../../src/security/validators/unicodeValidator.js');
+    (UnicodeValidator.normalize as jest.Mock) = jest.fn((input: string) => ({ 
+      normalizedContent: input,
+      warnings: [] 
+    }));
+    
+    // Mock SecurityMonitor
+    const { SecurityMonitor } = await import('../../../../src/security/securityMonitor.js');
+    (SecurityMonitor.logSecurityEvent as jest.Mock) = jest.fn();
     
     // Setup fetch mock
     mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
@@ -137,7 +154,8 @@ describe('PortfolioRepoManager', () => {
       await expect(manager.createPortfolio(username, consent))
         .rejects.toThrow('User declined portfolio creation');
       
-      expect(mockGitHubClient.createRepository).not.toHaveBeenCalled();
+      // Should not make any API calls when consent is declined
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should not create portfolio if it already exists', async () => {
@@ -186,23 +204,35 @@ describe('PortfolioRepoManager', () => {
       const expectedPath = 'personas/test-element.md';
       const commitUrl = 'https://github.com/testuser/dollhouse-portfolio/commit/abc123';
       
-      mockGitHubClient.createOrUpdateFile = jest.fn().mockResolvedValue({
-        commit: {
-          html_url: commitUrl
-        }
-      });
+      // First call: check if file exists (404 - doesn't exist)
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ message: 'Not Found' })
+      } as Response);
+      
+      // Second call: create file
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          commit: {
+            html_url: commitUrl
+          }
+        })
+      } as Response);
 
       // Act
       const url = await manager.saveElement(mockElement, consent);
 
       // Assert
       expect(url).toBe(commitUrl);
-      expect(mockGitHubClient.createOrUpdateFile).toHaveBeenCalledWith(
-        mockElement.metadata.author,
-        'dollhouse-portfolio',
-        expectedPath,
-        expect.stringContaining(mockElement.content),
-        expect.stringContaining('Add')
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining(expectedPath),
+        expect.objectContaining({
+          method: 'PUT',
+          body: expect.stringContaining('Test Element')
+        })
       );
     });
 
@@ -220,9 +250,9 @@ describe('PortfolioRepoManager', () => {
 
     it('should save element to correct location based on type', async () => {
       // Arrange
-      const skillElement: Element = {
+      const skillElement: IElement = {
         ...mockElement,
-        type: 'skill',
+        type: 'skill' as any,
         metadata: {
           ...mockElement.metadata,
           name: 'Code Review Skill'
@@ -230,20 +260,31 @@ describe('PortfolioRepoManager', () => {
       };
       const consent = true;
 
-      mockGitHubClient.createOrUpdateFile = jest.fn().mockResolvedValue({
-        commit: { html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/def456' }
-      });
+      // Mock file doesn't exist
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ message: 'Not Found' })
+      } as Response);
+      
+      // Mock file creation
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          commit: { html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/def456' }
+        })
+      } as Response);
 
       // Act
       await manager.saveElement(skillElement, consent);
 
       // Assert
-      expect(mockGitHubClient.createOrUpdateFile).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        'skills/code-review-skill.md', // Correct directory for skills
-        expect.any(String),
-        expect.any(String)
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('skills/code-review-skill.md'),
+        expect.objectContaining({
+          method: 'PUT'
+        })
       );
     });
   });
@@ -346,7 +387,19 @@ describe('PortfolioRepoManager', () => {
     it('should never perform operations without explicit consent', async () => {
       // Test that all methods requiring consent validate it properly
       const username = 'testuser';
-      const element = mockElement;
+      const element: IElement = {
+        id: 'test-element',
+        type: 'persona' as any,
+        version: '1.0.0',
+        metadata: {
+          name: 'Test',
+          description: 'Test element'
+        },
+        validate: () => ({ isValid: true, errors: [], warnings: [] }),
+        serialize: () => 'test',
+        deserialize: (data: string) => {},
+        getStatus: () => ({ status: 'active' } as any)
+      };
       
       // Test createPortfolio
       await expect(manager.createPortfolio(username, undefined as any))
@@ -357,7 +410,8 @@ describe('PortfolioRepoManager', () => {
         .rejects.toThrow('Consent is required');
       
       // Verify no API calls were made
-      expect(mockGitHubClient.createRepository).not.toHaveBeenCalled();
+      // Should not make any API calls when consent is declined
+      expect(mockFetch).not.toHaveBeenCalled();
       // Should not make any API calls
       expect(mockFetch).not.toHaveBeenCalled();
     });
