@@ -49,7 +49,7 @@ class TestableDefaultElementProvider extends DefaultElementProvider {
   }
   
   // Override the private getter by redefining it
-  private get dataSearchPaths(): string[] {
+  override get dataSearchPaths(): string[] {
     return this._dataSearchPaths;
   }
 }
