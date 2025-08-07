@@ -26,15 +26,15 @@ describe('PortfolioRepoManager', () => {
     
     // Mock TokenManager
     const { TokenManager } = await import('../../../../src/security/tokenManager.js');
-    (TokenManager.getGitHubTokenAsync as jest.Mock) = jest.fn().mockResolvedValue('test-token');
-    (TokenManager.validateTokenScopes as jest.Mock) = jest.fn().mockResolvedValue({ 
+    (TokenManager as any).getGitHubTokenAsync = jest.fn().mockResolvedValue('test-token');
+    (TokenManager as any).validateTokenScopes = jest.fn().mockResolvedValue({ 
       isValid: true, 
       scopes: ['public_repo'] 
     });
     
     // Mock UnicodeValidator
     const { UnicodeValidator } = await import('../../../../src/security/validators/unicodeValidator.js');
-    (UnicodeValidator.normalize as jest.Mock) = jest.fn((input: string) => ({ 
+    (UnicodeValidator as any).normalize = jest.fn((input: string) => ({ 
       normalizedContent: input,
       warnings: [] 
     }));
@@ -192,7 +192,7 @@ describe('PortfolioRepoManager', () => {
         description: 'A test element',
         author: 'testuser'
       },
-      validate: () => ({ isValid: true, errors: [], warnings: [] }),
+      validate: () => ({ valid: true, errors: [], warnings: [] }),
       serialize: () => '# Test Element\n\nThis is test content',
       deserialize: (data: string) => {},
       getStatus: () => ({ status: 'active' } as any)
@@ -367,7 +367,7 @@ describe('PortfolioRepoManager', () => {
           name: '', // Invalid: empty name
           description: 'Test'
         },
-        validate: () => ({ isValid: true, errors: [], warnings: [] }),
+        validate: () => ({ valid: true, errors: [], warnings: [] }),
         serialize: () => 'test',
         deserialize: (data: string) => {},
         getStatus: () => ({ status: 'active' } as any)
@@ -395,7 +395,7 @@ describe('PortfolioRepoManager', () => {
           name: 'Test',
           description: 'Test element'
         },
-        validate: () => ({ isValid: true, errors: [], warnings: [] }),
+        validate: () => ({ valid: true, errors: [], warnings: [] }),
         serialize: () => 'test',
         deserialize: (data: string) => {},
         getStatus: () => ({ status: 'active' } as any)

@@ -217,7 +217,7 @@ This is a test skill.`;
       
       const result = await skillManager.validate(skill);
       
-      expect(result.isValid).toBe(true);
+      expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
 
@@ -229,7 +229,7 @@ This is a test skill.`;
       
       const result = await skillManager.validate(skill);
       
-      expect(result.isValid).toBe(false);
+      expect(result.valid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
     });
   });

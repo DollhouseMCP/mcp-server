@@ -30,9 +30,9 @@ describe('Empty Directory Handling', () => {
     // Set up mocks
     jest.clearAllMocks();
     
-    // Mock FileLockManager with proper types
-    (FileLockManager as any).atomicWriteFile = jest.fn<Promise<void>, [string, string, any?]>().mockResolvedValue(undefined);
-    (FileLockManager as any).atomicReadFile = jest.fn<Promise<string>, [string, any?]>().mockResolvedValue('');
+    // Mock FileLockManager - simplified for Jest compatibility
+    (FileLockManager as any).atomicWriteFile = jest.fn().mockResolvedValue(undefined);
+    (FileLockManager as any).atomicReadFile = jest.fn().mockResolvedValue('');
     (FileLockManager as any).withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation());
     
     // Mock SecurityMonitor
