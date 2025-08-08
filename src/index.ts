@@ -1241,6 +1241,21 @@ export class DollhouseMCPServer implements IToolHandler {
       const validatedName = validateFilename(name);
       const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       
+      // CRITICAL FIX: Validate content size BEFORE processing to prevent memory exhaustion
+      // This prevents Claude from trying to output massive content in responses
+      if (content) {
+        try {
+          validateContentSize(content, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
+        } catch (error: any) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Content too large: ${error.message}. Maximum allowed size is ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 1024)}KB).`
+            }]
+          };
+        }
+      }
+      
       // SECURITY FIX: Sanitize metadata to prevent prototype pollution
       const sanitizedMetadata = this.sanitizeMetadata(metadata || {});
       
