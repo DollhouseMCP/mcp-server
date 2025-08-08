@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# GitFlow Guardian - Pre-commit Hook
+# Prevents direct commits to protected branches and enforces GitFlow
+# 
+# Protected branches:
+# - main (production)
+# - develop (integration)
+# 
+# Allowed branches:
+# - feature/* (new features)
+# - fix/* or bugfix/* (bug fixes)
+# - hotfix/* (urgent production fixes)
+# - release/* (release preparation)
+
+# Colors for output
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Get current branch name
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Check if we're on a protected branch
+if [[ "$BRANCH" == "main" ]] || [[ "$BRANCH" == "master" ]] || [[ "$BRANCH" == "develop" ]]; then
+    echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                   🚨 GITFLOW VIOLATION DETECTED 🚨              ║${NC}"
+    echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  You are attempting to commit directly to: ${YELLOW}$BRANCH${RED}              ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  This violates GitFlow best practices!                          ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  ${YELLOW}What you should do instead:${RED}                                   ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  1. Create a feature branch:                                    ║${NC}"
+    echo -e "${RED}║     ${GREEN}git checkout -b feature/your-feature-name${RED}                  ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  2. Or a fix branch:                                            ║${NC}"
+    echo -e "${RED}║     ${GREEN}git checkout -b fix/your-fix-description${RED}                   ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  3. Commit your changes there                                   ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  4. Push and create a Pull Request                              ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  ${YELLOW}If you REALLY need to commit here (emergency only):${RED}           ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  Use --no-verify flag:                                          ║${NC}"
+    echo -e "${RED}║     ${BLUE}git commit --no-verify -m \"Emergency: reason\"${RED}              ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  ⚠️  This should be rare and documented!                        ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}Commit aborted. Please use a feature branch.${NC}"
+    exit 1
+fi
+
+# Check if branch follows GitFlow naming convention
+if [[ ! "$BRANCH" =~ ^(feature|fix|bugfix|hotfix|release|support|docs|test|chore|refactor)/.+ ]]; then
+    echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║                    ⚠️  GITFLOW WARNING ⚠️                        ║${NC}"
+    echo -e "${YELLOW}╠════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${YELLOW}║                                                                  ║${NC}"
+    echo -e "${YELLOW}║  Current branch: ${BLUE}$BRANCH${YELLOW}                                        ║${NC}"
+    echo -e "${YELLOW}║                                                                  ║${NC}"
+    echo -e "${YELLOW}║  This branch doesn't follow GitFlow naming conventions.         ║${NC}"
+    echo -e "${YELLOW}║                                                                  ║${NC}"
+    echo -e "${YELLOW}║  Recommended prefixes:                                          ║${NC}"
+    echo -e "${YELLOW}║    • feature/  - New features                                   ║${NC}"
+    echo -e "${YELLOW}║    • fix/      - Bug fixes                                      ║${NC}"
+    echo -e "${YELLOW}║    • hotfix/   - Urgent production fixes                        ║${NC}"
+    echo -e "${YELLOW}║    • release/  - Release preparation                            ║${NC}"
+    echo -e "${YELLOW}║    • docs/     - Documentation only                             ║${NC}"
+    echo -e "${YELLOW}║    • test/     - Test additions/fixes                           ║${NC}"
+    echo -e "${YELLOW}║    • chore/    - Maintenance tasks                              ║${NC}"
+    echo -e "${YELLOW}║                                                                  ║${NC}"
+    echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${GREEN}Proceeding with commit (non-standard branch name)...${NC}"
+fi
+
+# If we get here, the commit is allowed
+echo -e "${GREEN}✅ GitFlow check passed. Branch '$BRANCH' is valid for direct commits.${NC}"
