@@ -76,7 +76,7 @@ export class ErrorHandler {
   /**
    * Truncate stack trace to prevent memory issues
    */
-  private static truncateStack(stack?: string): string | undefined {
+  public static truncateStack(stack?: string): string | undefined {
     if (!stack) return undefined;
     
     // Limit total length
@@ -131,7 +131,7 @@ export class ErrorHandler {
     return {
       message: 'An unknown error occurred',
       category: ErrorCategory.SYSTEM_ERROR,
-      details: error
+      details: error as Record<string, unknown> | undefined
     };
   }
 
