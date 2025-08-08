@@ -17,6 +17,7 @@ import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { 
   AgentGoal, 
   AgentDecision, 
@@ -62,22 +63,22 @@ export class Agent extends BaseElement implements IElement {
     // Ensures only supported frameworks are used
     if (sanitizedMetadata.decisionFramework && 
         !DECISION_FRAMEWORKS.includes(sanitizedMetadata.decisionFramework)) {
-      throw new Error(`Invalid decision framework: ${sanitizedMetadata.decisionFramework}. ` +
-        `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`);
+      throw ErrorHandler.createError(`Invalid decision framework: ${sanitizedMetadata.decisionFramework}. ` +
+        `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`, ErrorCategory.VALIDATION_ERROR);
     }
 
     // Validate risk tolerance level
     if (sanitizedMetadata.riskTolerance && 
         !RISK_TOLERANCE_LEVELS.includes(sanitizedMetadata.riskTolerance)) {
-      throw new Error(`Invalid risk tolerance: ${sanitizedMetadata.riskTolerance}. ` +
-        `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`);
+      throw ErrorHandler.createError(`Invalid risk tolerance: ${sanitizedMetadata.riskTolerance}. ` +
+        `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`, ErrorCategory.VALIDATION_ERROR);
     }
 
     // Validate max concurrent goals
     if (sanitizedMetadata.maxConcurrentGoals !== undefined) {
       const maxGoals = sanitizedMetadata.maxConcurrentGoals;
       if (!Number.isInteger(maxGoals) || maxGoals < 1 || maxGoals > AGENT_LIMITS.MAX_GOALS) {
-        throw new Error(`maxConcurrentGoals must be between 1 and ${AGENT_LIMITS.MAX_GOALS}`);
+        throw ErrorHandler.createError(`maxConcurrentGoals must be between 1 and ${AGENT_LIMITS.MAX_GOALS}`, ErrorCategory.VALIDATION_ERROR);
       }
     }
 
@@ -113,7 +114,7 @@ export class Agent extends BaseElement implements IElement {
   public addGoal(goal: Partial<AgentGoal>): AgentGoal {
     // Validate goal count
     if (this.state.goals.length >= AGENT_LIMITS.MAX_GOALS) {
-      throw new Error(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+      throw ErrorHandler.createError(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`, ErrorCategory.VALIDATION_ERROR);
     }
 
     // Sanitize goal description
@@ -123,7 +124,7 @@ export class Agent extends BaseElement implements IElement {
     );
 
     if (!sanitizedDescription || sanitizedDescription.length < 3) {
-      throw new Error('Goal description must be at least 3 characters');
+      throw ErrorHandler.createError('Goal description must be at least 3 characters', ErrorCategory.VALIDATION_ERROR);
     }
 
     // Validate goal for security threats
@@ -136,7 +137,7 @@ export class Agent extends BaseElement implements IElement {
         details: `Potentially malicious goal rejected: ${securityCheck.reason}`,
         additionalData: { agentId: this.id }
       });
-      throw new Error(`Goal contains potentially harmful content: ${securityCheck.reason}`);
+      throw ErrorHandler.createError(`Goal contains potentially harmful content: ${securityCheck.reason}`, ErrorCategory.VALIDATION_ERROR);
     }
 
     // Calculate Eisenhower quadrant
@@ -165,7 +166,7 @@ export class Agent extends BaseElement implements IElement {
     if (newGoal.dependencies && newGoal.dependencies.length > 0) {
       const cycleCheck = this.detectDependencyCycle(newGoal.id, newGoal.dependencies);
       if (cycleCheck.hasCycle) {
-        throw new Error(`Dependency cycle detected: ${cycleCheck.path.join(' → ')}`);
+        throw ErrorHandler.createError(`Dependency cycle detected: ${cycleCheck.path.join(' → ')}`, ErrorCategory.VALIDATION_ERROR);
       }
     }
 
@@ -192,11 +193,11 @@ export class Agent extends BaseElement implements IElement {
 
     const goal = this.state.goals.find(g => g.id === goalId);
     if (!goal) {
-      throw new Error(`Goal ${goalId} not found`);
+      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR);
     }
 
     if (goal.status === 'completed' || goal.status === 'cancelled') {
-      throw new Error(`Cannot make decision for ${goal.status} goal`);
+      throw ErrorHandler.createError(`Cannot make decision for ${goal.status} goal`, ErrorCategory.VALIDATION_ERROR);
     }
 
     // Update goal status
@@ -300,7 +301,7 @@ export class Agent extends BaseElement implements IElement {
         };
       
       default:
-        throw new Error(`Unknown decision framework: ${framework}`);
+        throw ErrorHandler.createError(`Unknown decision framework: ${framework}`, ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -596,7 +597,7 @@ export class Agent extends BaseElement implements IElement {
     // Validate context size
     const contextStr = JSON.stringify({ ...this.state.context, [sanitizedKey]: value });
     if (contextStr.length > AGENT_LIMITS.MAX_CONTEXT_LENGTH) {
-      throw new Error(`Context size exceeds maximum of ${AGENT_LIMITS.MAX_CONTEXT_LENGTH} characters`);
+      throw ErrorHandler.createError(`Context size exceeds maximum of ${AGENT_LIMITS.MAX_CONTEXT_LENGTH} characters`, ErrorCategory.VALIDATION_ERROR);
     }
 
     this.state.context[sanitizedKey] = value;
@@ -610,7 +611,7 @@ export class Agent extends BaseElement implements IElement {
   public completeGoal(goalId: string, outcome: 'success' | 'failure' | 'partial' = 'success'): void {
     const goal = this.state.goals.find(g => g.id === goalId);
     if (!goal) {
-      throw new Error(`Goal ${goalId} not found`);
+      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR);
     }
 
     goal.status = outcome === 'success' ? 'completed' : 'failed';
@@ -890,7 +891,7 @@ export class Agent extends BaseElement implements IElement {
       // Validate state size
       const stateStr = JSON.stringify(parsed.state);
       if (stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
-        throw new Error(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`);
+        throw ErrorHandler.createError(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR);
       }
 
       // Restore dates
