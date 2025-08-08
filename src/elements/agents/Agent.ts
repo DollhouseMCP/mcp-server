@@ -18,6 +18,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ValidationErrorCodes, SystemErrorCodes } from '../../utils/errorCodes.js';
 import { 
   AgentGoal, 
   AgentDecision, 
@@ -64,21 +65,21 @@ export class Agent extends BaseElement implements IElement {
     if (sanitizedMetadata.decisionFramework && 
         !DECISION_FRAMEWORKS.includes(sanitizedMetadata.decisionFramework)) {
       throw ErrorHandler.createError(`Invalid decision framework: ${sanitizedMetadata.decisionFramework}. ` +
-        `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`, ErrorCategory.VALIDATION_ERROR);
+        `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FRAMEWORK);
     }
 
     // Validate risk tolerance level
     if (sanitizedMetadata.riskTolerance && 
         !RISK_TOLERANCE_LEVELS.includes(sanitizedMetadata.riskTolerance)) {
       throw ErrorHandler.createError(`Invalid risk tolerance: ${sanitizedMetadata.riskTolerance}. ` +
-        `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`, ErrorCategory.VALIDATION_ERROR);
+        `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_RISK_TOLERANCE);
     }
 
     // Validate max concurrent goals
     if (sanitizedMetadata.maxConcurrentGoals !== undefined) {
       const maxGoals = sanitizedMetadata.maxConcurrentGoals;
       if (!Number.isInteger(maxGoals) || maxGoals < 1 || maxGoals > AGENT_LIMITS.MAX_GOALS) {
-        throw ErrorHandler.createError(`maxConcurrentGoals must be between 1 and ${AGENT_LIMITS.MAX_GOALS}`, ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError(`maxConcurrentGoals must be between 1 and ${AGENT_LIMITS.MAX_GOALS}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_RANGE);
       }
     }
 
@@ -114,7 +115,7 @@ export class Agent extends BaseElement implements IElement {
   public addGoal(goal: Partial<AgentGoal>): AgentGoal {
     // Validate goal count
     if (this.state.goals.length >= AGENT_LIMITS.MAX_GOALS) {
-      throw ErrorHandler.createError(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.MAX_GOALS_EXCEEDED);
     }
 
     // Sanitize goal description
@@ -124,7 +125,7 @@ export class Agent extends BaseElement implements IElement {
     );
 
     if (!sanitizedDescription || sanitizedDescription.length < 3) {
-      throw ErrorHandler.createError('Goal description must be at least 3 characters', ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError('Goal description must be at least 3 characters', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.GOAL_TOO_SHORT);
     }
 
     // Validate goal for security threats
@@ -137,7 +138,7 @@ export class Agent extends BaseElement implements IElement {
         details: `Potentially malicious goal rejected: ${securityCheck.reason}`,
         additionalData: { agentId: this.id }
       });
-      throw ErrorHandler.createError(`Goal contains potentially harmful content: ${securityCheck.reason}`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Goal contains potentially harmful content: ${securityCheck.reason}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.HARMFUL_CONTENT);
     }
 
     // Calculate Eisenhower quadrant
@@ -166,7 +167,7 @@ export class Agent extends BaseElement implements IElement {
     if (newGoal.dependencies && newGoal.dependencies.length > 0) {
       const cycleCheck = this.detectDependencyCycle(newGoal.id, newGoal.dependencies);
       if (cycleCheck.hasCycle) {
-        throw ErrorHandler.createError(`Dependency cycle detected: ${cycleCheck.path.join(' → ')}`, ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError(`Dependency cycle detected: ${cycleCheck.path.join(' → ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.DEPENDENCY_CYCLE);
       }
     }
 
@@ -193,11 +194,11 @@ export class Agent extends BaseElement implements IElement {
 
     const goal = this.state.goals.find(g => g.id === goalId);
     if (!goal) {
-      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.GOAL_NOT_FOUND);
     }
 
     if (goal.status === 'completed' || goal.status === 'cancelled') {
-      throw ErrorHandler.createError(`Cannot make decision for ${goal.status} goal`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Cannot make decision for ${goal.status} goal`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_GOAL_STATUS);
     }
 
     // Update goal status
@@ -301,7 +302,7 @@ export class Agent extends BaseElement implements IElement {
         };
       
       default:
-        throw ErrorHandler.createError(`Unknown decision framework: ${framework}`, ErrorCategory.SYSTEM_ERROR);
+        throw ErrorHandler.createError(`Unknown decision framework: ${framework}`, ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.UNKNOWN_FRAMEWORK);
     }
   }
 
@@ -597,7 +598,7 @@ export class Agent extends BaseElement implements IElement {
     // Validate context size
     const contextStr = JSON.stringify({ ...this.state.context, [sanitizedKey]: value });
     if (contextStr.length > AGENT_LIMITS.MAX_CONTEXT_LENGTH) {
-      throw ErrorHandler.createError(`Context size exceeds maximum of ${AGENT_LIMITS.MAX_CONTEXT_LENGTH} characters`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Context size exceeds maximum of ${AGENT_LIMITS.MAX_CONTEXT_LENGTH} characters`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.CONTEXT_TOO_LARGE);
     }
 
     this.state.context[sanitizedKey] = value;
@@ -611,7 +612,7 @@ export class Agent extends BaseElement implements IElement {
   public completeGoal(goalId: string, outcome: 'success' | 'failure' | 'partial' = 'success'): void {
     const goal = this.state.goals.find(g => g.id === goalId);
     if (!goal) {
-      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR);
+      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.GOAL_NOT_FOUND);
     }
 
     goal.status = outcome === 'success' ? 'completed' : 'failed';
@@ -891,7 +892,7 @@ export class Agent extends BaseElement implements IElement {
       // Validate state size
       const stateStr = JSON.stringify(parsed.state);
       if (stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
-        throw ErrorHandler.createError(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.STATE_TOO_LARGE);
       }
 
       // Restore dates

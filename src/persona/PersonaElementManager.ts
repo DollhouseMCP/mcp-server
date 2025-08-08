@@ -19,6 +19,7 @@ import { PersonaElement, PersonaElementMetadata } from './PersonaElement.js';
 import { PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ValidationErrorCodes, SystemErrorCodes } from '../utils/errorCodes.js';
 import { validatePath, validateFilename } from '../security/InputValidator.js';
 import { ensureDirectory } from '../utils/filesystem.js';
 import { FileLockManager } from '../security/fileLockManager.js';
@@ -48,7 +49,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       if (!this.validatePath(fullPath)) {
         // SECURITY FIX #206: Don't expose user paths in error messages
         logger.error('Invalid or unsafe path', { path: filePath });
-        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
       }
 
       // CRITICAL FIX: Use atomic file read to prevent race conditions
@@ -65,7 +66,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to load persona from ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to load persona', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Failed to load persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.LOAD_FAILED);
     }
   }
 
@@ -86,7 +87,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       if (!this.validatePath(fullPath)) {
         // SECURITY FIX #206: Don't expose user paths in error messages
         logger.error('Invalid or unsafe path', { path: filePath });
-        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
       }
 
       // Serialize the persona
@@ -105,7 +106,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to save persona to ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to save persona', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Failed to save persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.SAVE_FAILED);
     }
   }
 
@@ -121,7 +122,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
       if (!this.validatePath(fullPath)) {
         // SECURITY FIX #206: Don't expose user paths in error messages
         logger.error('Invalid or unsafe path', { path: filePath });
-        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError('Invalid or unsafe path', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
       }
 
       await fs.unlink(fullPath);
@@ -129,7 +130,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to delete persona ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to delete persona', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Failed to delete persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.DELETE_FAILED);
     }
   }
 
@@ -285,14 +286,14 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
           throw securityError;
         }
       } else {
-        throw ErrorHandler.createError(`Unsupported format: ${format}`, ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError(`Unsupported format: ${format}`, ErrorCategory.VALIDATION_ERROR, SystemErrorCodes.UNSUPPORTED_FORMAT);
       }
 
       return persona;
 
     } catch (error) {
       logger.error(`Failed to import persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Persona element import failed', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Persona element import failed', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.IMPORT_FAILED);
     }
   }
 
@@ -321,12 +322,12 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
           noCompatMode: true              // Use strict YAML mode
         });
       } else {
-        throw ErrorHandler.createError(`Unsupported format: ${format}`, ErrorCategory.VALIDATION_ERROR);
+        throw ErrorHandler.createError(`Unsupported format: ${format}`, ErrorCategory.VALIDATION_ERROR, SystemErrorCodes.UNSUPPORTED_FORMAT);
       }
 
     } catch (error) {
       logger.error(`Failed to export persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Persona element export failed', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Persona element export failed', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.EXPORT_FAILED);
     }
   }
 
