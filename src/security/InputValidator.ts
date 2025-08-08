@@ -101,7 +101,7 @@ export class MCPInputValidator {
       for (let i = 0; i < path.length; i++) {
         const char = path[i];
         if (!COLLECTION_PATH_CHAR_REGEX.test(char)) {
-          throw ErrorHandler.createError(`Invalid character '${char}' in collection path at position ${i + 1}`);
+          throw ErrorHandler.createError(`Invalid character '${char}' in collection path at position ${i + 1}`, ErrorCategory.VALIDATION_ERROR);
         }
       }
       // Fallback error if we somehow don't find the invalid character
@@ -198,7 +198,7 @@ export class MCPInputValidator {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw ErrorHandler.createError(`Invalid URL format: ${errorMessage}`);
+      throw ErrorHandler.createError(`Invalid URL format: ${errorMessage}`, ErrorCategory.VALIDATION_ERROR);
     }
   }
 
@@ -226,11 +226,11 @@ export class MCPInputValidator {
    */
   static validateConfirmation(confirm: boolean, operationName: string): boolean {
     if (typeof confirm !== 'boolean') {
-      throw ErrorHandler.createError(`${operationName} confirmation must be a boolean value`);
+      throw ErrorHandler.createError(`${operationName} confirmation must be a boolean value`, ErrorCategory.VALIDATION_ERROR);
     }
 
     if (!confirm) {
-      throw ErrorHandler.createError(`${operationName} operation requires explicit confirmation (true)`);
+      throw ErrorHandler.createError(`${operationName} operation requires explicit confirmation (true)`, ErrorCategory.VALIDATION_ERROR);
     }
 
     return confirm;
@@ -353,7 +353,7 @@ export function validateFilename(filename: string): string {
   }
   
   if (filename.length > SECURITY_LIMITS.MAX_FILENAME_LENGTH) {
-    throw ErrorHandler.createError(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`);
+    throw ErrorHandler.createError(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`, ErrorCategory.VALIDATION_ERROR);
   }
   
   // Remove any path separators and dangerous characters
@@ -411,7 +411,7 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   // Validate path depth
   const depth = normalized.split('/').length;
   if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
-    throw ErrorHandler.createError(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
+    throw ErrorHandler.createError(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`, ErrorCategory.VALIDATION_ERROR);
   }
   
   // If baseDir provided, ensure path is within it

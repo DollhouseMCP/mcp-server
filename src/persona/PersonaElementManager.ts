@@ -292,7 +292,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to import persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Import failed', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Persona element import failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -326,7 +326,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to export persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Export failed', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Persona element export failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 

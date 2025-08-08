@@ -749,7 +749,7 @@ export class Template extends BaseElement implements IElement {
       
     } catch (error) {
       logger.error(`Failed to deserialize template: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Deserialization failed', ErrorCategory.SYSTEM_ERROR);
+      throw ErrorHandler.wrapError(error, 'Template deserialization failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
