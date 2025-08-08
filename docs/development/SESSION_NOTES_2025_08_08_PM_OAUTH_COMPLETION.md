@@ -215,21 +215,43 @@ This session focused on addressing all remaining issues from PR #496 (portfolio-
 ## Commands for Next Session
 
 ```bash
-# Check remaining issues
-gh issue list --label "priority: high" --state open
-gh issue list --search "OAuth OR portfolio" --state open
-
-# Start work on error handling
-git checkout develop
-git pull
-git checkout -b fix/error-handling-consistency
-
-# Run security audit
-npm run security:audit
+# Continue work on error handling branch
+git checkout feature/error-handling-consistency
 
 # Run tests
 npm test
 ```
+
+## TODO for Next Session - Error Handling (Issue #498)
+
+### Already Done
+1. Created `ErrorHandler` utility class with:
+   - Error categorization (USER, SYSTEM, NETWORK, AUTH, VALIDATION)
+   - Stack trace preservation
+   - User-friendly message generation
+   - Consistent logging with appropriate levels
+
+2. Updated `submitToPortfolioTool.ts` to use ErrorHandler
+
+### Still Need To Do
+1. **Replace all console.log with logger**
+   - `/src/portfolio/PortfolioRepoManager.ts`
+   - `/src/update/UpdateChecker.ts`
+   - `/src/portfolio/PortfolioManager.ts`
+   - `/src/security/audit/SecurityAuditor.ts`
+
+2. **Update all catch blocks to use ErrorHandler**
+   - Preserve stack traces
+   - Add appropriate error categories
+   - Use ErrorHandler.logError()
+
+3. **Test the changes**
+   - Ensure all tests still pass
+   - Add tests for ErrorHandler
+
+4. **Create PR**
+   - Document all changes
+   - Reference Issue #498
 
 ## Summary
 
