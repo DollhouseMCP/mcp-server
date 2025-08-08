@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js';
 import { APICache } from '../cache/APICache.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -82,6 +83,7 @@ export class GitHubAuthManager {
         return response;
       } catch (error) {
         lastError = error as Error;
+        ErrorHandler.logError('GitHubAuthManager.fetchWithRetry', error, { url, attempt });
         
         // Check if it's a network error that should be retried
         const isNetworkError = error instanceof Error && (
@@ -135,7 +137,7 @@ export class GitHubAuthManager {
       };
     } catch (error) {
       // Token might be invalid or expired
-      logger.debug('Token validation failed', { error });
+      ErrorHandler.logError('GitHubAuthManager.checkAuthStatus', error);
       return {
         isAuthenticated: false,
         hasToken: true // Has token but it's invalid
@@ -201,7 +203,7 @@ export class GitHubAuthManager {
       
       return data as DeviceCodeResponse;
     } catch (error) {
-      logger.error('Failed to initiate device flow', { error });
+      ErrorHandler.logError('GitHubAuthManager.initiateDeviceFlow', error);
       
       // Re-throw if it's already a properly formatted error
       if (error instanceof Error && error.message.includes('GitHub OAuth')) {
@@ -285,7 +287,7 @@ export class GitHubAuthManager {
         
       } catch (error) {
         // Network errors shouldn't stop polling
-        logger.debug('Poll attempt failed', { attempt: attempts, error });
+        ErrorHandler.logError('GitHubAuthManager.pollForToken', error, { attempt: attempts });
         await this.waitWithAbort(interval, signal);
       }
     }
@@ -362,8 +364,8 @@ export class GitHubAuthManager {
       
       logger.info('GitHub authentication cleared successfully');
     } catch (error) {
-      logger.error('Error clearing authentication', { error });
-      throw new Error('Failed to clear authentication');
+      ErrorHandler.logError('GitHubAuthManager.clearAuthentication', error);
+      throw ErrorHandler.createError('Failed to clear authentication', ErrorCategory.AUTH_ERROR, undefined, error);
     }
   }
   
@@ -375,10 +377,10 @@ export class GitHubAuthManager {
       await TokenManager.storeGitHubToken(token);
       logger.info('GitHub token stored securely. You are now authenticated!');
     } catch (error) {
-      logger.error('Failed to store token securely', { error });
+      ErrorHandler.logError('GitHubAuthManager.storeToken', error);
       // Fallback to environment variable instructions
       logger.info('For manual setup, you can set GITHUB_TOKEN environment variable.');
-      throw error;
+      throw ErrorHandler.wrapError(error, 'Failed to store GitHub token', ErrorCategory.AUTH_ERROR);
     }
   }
   

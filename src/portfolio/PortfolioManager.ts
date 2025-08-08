@@ -125,7 +125,7 @@ export class PortfolioManager {
       // Log but continue - the portfolio will be empty but functional
       if (err.code === 'EACCES' || err.code === 'EROFS' || err.code === 'ENOENT') {
         logger.warn(`[PortfolioManager] Cannot create portfolio directory (read-only environment?): ${err.message}`);
-        console.log(`[DollhouseMCP] Running in read-only mode - portfolio features disabled`);
+        logger.info(`[DollhouseMCP] Running in read-only mode - portfolio features disabled`);
         return;
       }
       throw error;
