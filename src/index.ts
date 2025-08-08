@@ -39,6 +39,7 @@ import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/expor
 import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
+import { PortfolioRepoManager } from './portfolio/PortfolioRepoManager.js';
 import { SkillManager } from './elements/skills/index.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
@@ -83,6 +84,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaSharer: PersonaSharer;
   private portfolioManager: PortfolioManager;
   private migrationManager: MigrationManager;
+  private portfolioRepoManager: PortfolioRepoManager;
   private skillManager: SkillManager;
   private templateManager: TemplateManager;
   private agentManager: AgentManager;
@@ -130,6 +132,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.githubAuthManager = new GitHubAuthManager(this.apiCache);
+    this.portfolioRepoManager = new PortfolioRepoManager();
     this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache);
     this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
     this.personaDetails = new PersonaDetails(this.githubClient);
@@ -1959,123 +1962,22 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async submitContent(contentIdentifier: string) {
-    // Check GitHub authentication first
-    const authStatus = await this.githubAuthManager.getAuthStatus();
-    const isAuthenticated = authStatus.isAuthenticated;
+    // Use the new portfolio-based submission tool
+    const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
     
-    // Find the content in local collection
-    let persona = this.personas.get(contentIdentifier);
+    const submitTool = new SubmitToPortfolioTool(
+      this.githubAuthManager,
+      this.portfolioRepoManager,
+      this.personas,
+      this.personasDir,
+      () => this.getPersonaIndicator()
+    );
     
-    if (!persona) {
-      // Search by name
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === contentIdentifier.toLowerCase()
-      );
-    }
-
-    if (!persona) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Content not found: ${contentIdentifier}`,
-          },
-        ],
-      };
-    }
-
-    // Validate persona content before submission
-    try {
-      // Read the full persona file content
-      const fullPath = path.join(this.personasDir, persona.filename);
-      const fileContent = await PathValidator.safeReadFile(fullPath);
-      
-      // Validate content for security threats
-      const contentValidation = ContentValidator.validateAndSanitize(fileContent);
-      if (!contentValidation.isValid && contentValidation.severity === 'critical') {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
-              `This persona contains content that could be used for prompt injection attacks:\n` +
-              `• ${contentValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please remove these patterns before submitting to the collection.`,
-            },
-          ],
-        };
-      }
-      
-      // Validate metadata
-      const metadataValidation = ContentValidator.validateMetadata(persona.metadata);
-      if (!metadataValidation.isValid) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ **Metadata Security Warning**\n\n` +
-              `The persona metadata contains potentially problematic content:\n` +
-              `• ${metadataValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please fix these issues before submitting.`,
-            },
-          ],
-        };
-      }
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error validating persona: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
-
-    // Generate submission issue with rate limiting
-    let githubIssueUrl: string;
-    let rateLimitStatus: any;
-    
-    try {
-      const submissionResult = this.personaSubmitter.generateSubmissionIssue(persona);
-      githubIssueUrl = submissionResult.githubIssueUrl;
-      rateLimitStatus = submissionResult.rateLimitStatus;
-    } catch (error: any) {
-      // Handle rate limiting error specifically
-      if (error.message.includes('rate limit')) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}⏳ **Rate Limit Reached**\n\n` +
-                `${error.message}\n\n` +
-                `This protection ensures the quality and integrity of our collection.`,
-            },
-          ],
-        };
-      }
-      throw error; // Re-throw other errors
-    }
-    
-    // Choose response format based on authentication status
-    const text = isAuthenticated 
-      ? this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator())
-      : this.personaSubmitter.formatAnonymousSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
-    
-    // Add rate limit info if available
-    const rateLimitInfo = rateLimitStatus 
-      ? `\n\n📊 **Rate Limit Status:** ${rateLimitStatus.remainingTokens} submissions remaining this hour`
-      : '';
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: text + rateLimitInfo,
-        },
-      ],
-    };
+    // Execute portfolio submission
+    return await submitTool.execute({
+      contentIdentifier,
+      type: 'persona' // For now, we only support personas
+    });
   }
 
   async getCollectionCacheHealth() {

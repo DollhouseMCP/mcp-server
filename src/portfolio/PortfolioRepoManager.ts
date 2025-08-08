@@ -33,6 +33,14 @@ export class PortfolioRepoManager {
   }
 
   /**
+   * Set the GitHub token for API operations
+   * Used when token is already available from GitHubAuthManager
+   */
+  setToken(token: string): void {
+    this.token = token;
+  }
+
+  /**
    * Get GitHub token for API calls with validation
    * SECURITY FIX: Added token validation to prevent token validation bypass (DMCP-SEC-002)
    * Method name includes 'validate' to satisfy security scanner pattern
