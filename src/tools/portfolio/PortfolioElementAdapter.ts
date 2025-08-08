@@ -13,6 +13,9 @@ import {
 } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { PortfolioElement } from './submitToPortfolioTool.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Adapter class that wraps a simple PortfolioElement and implements IElement
@@ -27,25 +30,62 @@ export class PortfolioElementAdapter implements IElement {
   private readonly portfolioElement: PortfolioElement;
 
   constructor(element: PortfolioElement) {
+    // SECURITY: Normalize and validate all user input (DMCP-SEC-004)
+    const normalizedName = UnicodeValidator.normalize(element.metadata.name);
+    if (!normalizedName.isValid) {
+      // Log security event for invalid Unicode
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'PortfolioElementAdapter.constructor',
+        details: `Invalid Unicode in element name: ${normalizedName.detectedIssues?.[0] || 'unknown'}`
+      });
+      logger.warn('Invalid Unicode detected in element name', {
+        issues: normalizedName.detectedIssues
+      });
+    }
+    
     this.portfolioElement = element;
     this.type = element.type;
     this.version = element.metadata.version || '1.0.0';
     
-    // Generate ID from type and name
+    // Generate ID from type and normalized name
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const nameSlug = element.metadata.name.toLowerCase().replace(/\s+/g, '-');
+    const safeName = normalizedName.normalizedContent || element.metadata.name;
+    const nameSlug = safeName.toLowerCase().replace(/\s+/g, '-');
     this.id = `${element.type}_${nameSlug}_${timestamp}`;
     
-    // Convert metadata to IElementMetadata format
+    // Convert metadata to IElementMetadata format with normalized values
     this.metadata = {
-      name: element.metadata.name,
-      description: element.metadata.description || '',
-      author: element.metadata.author,
+      name: safeName,
+      description: this.normalizeString(element.metadata.description || ''),
+      author: this.normalizeString(element.metadata.author || ''),
       version: element.metadata.version,
       created: element.metadata.created,
       modified: element.metadata.updated,
       tags: []
     };
+    
+    // SECURITY: Log element creation for audit trail (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_CREATED',
+      severity: 'LOW',
+      source: 'PortfolioElementAdapter.constructor',
+      details: `Created portfolio element adapter: ${this.id}`,
+      metadata: {
+        elementType: this.type,
+        elementId: this.id
+      }
+    });
+  }
+  
+  /**
+   * Helper to normalize string values safely
+   */
+  private normalizeString(value: string): string {
+    if (!value) return value;
+    const normalized = UnicodeValidator.normalize(value);
+    return normalized.normalizedContent || value;
   }
 
   /**

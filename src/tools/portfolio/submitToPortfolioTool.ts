@@ -14,6 +14,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
+import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -225,38 +226,24 @@ export class SubmitToPortfolioTool {
       const portfolioManager = PortfolioManager.getInstance();
       const portfolioDir = portfolioManager.getElementDir(type);
       
-      // Look for files matching the name (with or without .md extension)
-      const possibleFiles = [
-        `${name}.md`,
-        `${name}`,
-        `${name.toLowerCase()}.md`,
-        `${name.toLowerCase()}`
-      ];
-
-      for (const fileName of possibleFiles) {
-        const filePath = path.join(portfolioDir, fileName);
-        try {
-          await fs.access(filePath);
-          return filePath;
-        } catch {
-          // File doesn't exist, try next
-          continue;
-        }
+      // Use optimized file discovery utility
+      const file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
+        extensions: ['.md', '.json', '.yaml', '.yml'],
+        partialMatch: true,
+        cacheResults: true
+      });
+      
+      if (file) {
+        logger.debug('Found local content file', { name, type, file });
       }
-
-      // Also check for partial matches
-      const files = await fs.readdir(portfolioDir);
-      const match = files.find(file => 
-        file.toLowerCase().includes(name.toLowerCase())
-      );
-
-      if (match) {
-        return path.join(portfolioDir, match);
-      }
-
-      return null;
+      
+      return file;
     } catch (error) {
-      logger.error(`Error finding local content: ${error}`);
+      logger.error('Error finding local content', {
+        name,
+        type,
+        error: error instanceof Error ? error.message : String(error)
+      });
       return null;
     }
   }
