@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# GitFlow Guardian Configuration File
+# Customize branch protection rules and naming conventions
+
+# Protected branches that cannot receive direct commits
+# Add or remove branches as needed for your workflow
+PROTECTED_BRANCHES=(
+    "main"
+    "master" 
+    "develop"
+    # Add more protected branches here if needed
+    # "staging"
+    # "production"
+)
+
+# Allowed branch prefixes for GitFlow naming convention
+# These are the prefixes that won't trigger warnings
+ALLOWED_PREFIXES=(
+    "feature"      # New features
+    "fix"          # Bug fixes
+    "bugfix"       # Alternative to fix
+    "hotfix"       # Urgent production fixes
+    "release"      # Release preparation
+    "support"      # Long-term support branches
+    "docs"         # Documentation changes
+    "test"         # Test additions/fixes
+    "chore"        # Maintenance tasks
+    "refactor"     # Code refactoring
+    # Add more prefixes as needed
+    # "experiment"
+    # "spike"
+)
+
+# Minimum branch name length after the prefix
+# e.g., "feature/a" would be valid if MIN_NAME_LENGTH=1
+MIN_NAME_LENGTH=1
+
+# Maximum branch name display length in messages
+# Longer names will be truncated with "..."
+MAX_DISPLAY_LENGTH=50
+
+# Enable/disable colored output
+USE_COLORS=true
+
+# Enable/disable the post-checkout hook messages
+SHOW_CHECKOUT_MESSAGES=true
+
+# Enable/disable the pre-commit hook
+ENABLE_COMMIT_PROTECTION=true
