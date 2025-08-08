@@ -232,6 +232,16 @@ export const suppressions: Suppression[] = [
     file: 'scripts/**/*',
     reason: 'Build and utility scripts do not process user input'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/tools/portfolio/types.ts',
+    reason: 'Type definition file containing only TypeScript interfaces - no runtime code or user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/tools/**/types.ts',
+    reason: 'Type definition files do not process user input - compile-time only'
+  },
   
   // ========================================
   // Audit Logging False Positives
