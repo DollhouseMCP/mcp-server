@@ -37,17 +37,12 @@ export interface AuthStatus {
  * This is the recommended approach for CLI/desktop applications
  */
 export class GitHubAuthManager {
-  // GitHub OAuth App Client ID for DollhouseMCP
-  // Uses environment variable if available, otherwise falls back to hardcoded value
-  // The hardcoded CLIENT_ID is safe for device flow (no client secret required)
-  // OAuth app owned by DollhouseMCP organization with Device Flow enabled
-  private static readonly HARDCODED_CLIENT_ID = 'Ov23liOrPRXkNN7PMCBt'; // Production CLIENT_ID
-  
   /**
-   * Get the CLIENT_ID, preferring environment variable over hardcoded value
+   * Get the CLIENT_ID from environment variable
+   * No hardcoded fallback for security reasons
    */
-  private static getClientId(): string {
-    return process.env.DOLLHOUSE_GITHUB_CLIENT_ID || GitHubAuthManager.HARDCODED_CLIENT_ID;
+  private static getClientId(): string | null {
+    return process.env.DOLLHOUSE_GITHUB_CLIENT_ID || null;
   }
   
   // GitHub OAuth endpoints
@@ -153,8 +148,8 @@ export class GitHubAuthManager {
     
     if (!clientId) {
       throw new Error(
-        'GitHub OAuth is not configured. This should not happen. ' +
-        'Please report this issue at: https://github.com/DollhouseMCP/mcp-server/issues'
+        'GitHub OAuth client ID is not configured. ' +
+        'Please set the DOLLHOUSE_GITHUB_CLIENT_ID environment variable.'
       );
     }
     
@@ -241,7 +236,7 @@ export class GitHubAuthManager {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            client_id: GitHubAuthManager.getClientId(),
+            client_id: GitHubAuthManager.getClientId() || '',
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })

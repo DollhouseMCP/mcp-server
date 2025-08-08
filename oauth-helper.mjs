@@ -16,11 +16,17 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import { homedir } from 'os';
 
 // Get the directory of this script
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Constants
+const DEFAULT_POLL_INTERVAL = 5;
+const DEFAULT_EXPIRES_IN = 900; // 15 minutes
+const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -30,8 +36,17 @@ if (args.length < 4) {
 }
 
 const [deviceCode, intervalStr, expiresInStr, clientId] = args;
-const pollInterval = parseInt(intervalStr, 10) || 5;
-const expiresIn = parseInt(expiresInStr, 10) || 900; // Default 15 minutes
+const pollInterval = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
+const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
+
+// Validate client ID is provided (no hardcoded fallback)
+if (!clientId || clientId === 'undefined') {
+  console.error('⚠️  GitHub OAuth Configuration Missing\n');
+  console.error('The server administrator needs to configure GitHub OAuth.');
+  console.error('Please contact your administrator to set up the DOLLHOUSE_GITHUB_CLIENT_ID.');
+  console.error('\nFor administrators: Set the environment variable before starting the server.');
+  process.exit(1);
+}
 
 // Log file for debugging (optional, can be disabled in production)
 const LOG_FILE = join(homedir(), '.dollhouse', 'oauth-helper.log');
@@ -44,12 +59,26 @@ async function log(message) {
     const timestamp = new Date().toISOString();
     const logMessage = `[${timestamp}] ${message}\n`;
     
-    // Ensure directory exists
+    // Ensure directory exists with secure permissions
     const logDir = dirname(LOG_FILE);
-    await fs.mkdir(logDir, { recursive: true }).catch(() => {});
+    await fs.mkdir(logDir, { recursive: true, mode: 0o700 }).catch(() => {});
+    
+    // Check if log file exists
+    let fileExists = false;
+    try {
+      await fs.access(LOG_FILE);
+      fileExists = true;
+    } catch {
+      fileExists = false;
+    }
     
     // Append to log file
     await fs.appendFile(LOG_FILE, logMessage);
+    
+    // Set secure permissions on first write
+    if (!fileExists) {
+      await fs.chmod(LOG_FILE, 0o600);
+    }
   } catch (error) {
     // Silently fail if logging doesn't work
   }
@@ -85,6 +114,12 @@ async function pollGitHub(deviceCode, clientId) {
 }
 
 async function storeToken(token) {
+  // Validate token size to prevent DoS
+  if (!token || token.length > MAX_TOKEN_SIZE) {
+    await log('Invalid token size');
+    throw new Error('Invalid token received');
+  }
+  
   try {
     // Import the compiled TokenManager
     const { TokenManager } = await import('./dist/security/tokenManager.js');
@@ -101,14 +136,39 @@ async function storeToken(token) {
       const tempTokenFile = join(homedir(), '.dollhouse', '.auth', 'pending_token.txt');
       const tempDir = dirname(tempTokenFile);
       
+      // Create directory with secure permissions
       await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
+      
+      // Verify directory permissions
+      const dirStats = await fs.stat(tempDir);
+      const dirMode = dirStats.mode & parseInt('777', 8);
+      if (dirMode !== parseInt('700', 8)) {
+        await fs.chmod(tempDir, 0o700);
+      }
+      
+      // Write token with secure permissions
       await fs.writeFile(tempTokenFile, token, { mode: 0o600 });
-      await log(`Token written to fallback file: ${tempTokenFile}`);
+      
+      // Verify file permissions
+      await fs.chmod(tempTokenFile, 0o600);
+      
+      await log(`Token written to fallback file with secure permissions`);
       return true;
     } catch (fallbackError) {
       await log(`Fallback storage also failed: ${fallbackError.message}`);
       throw fallbackError;
     }
+  }
+}
+
+function cleanupPidFileSync() {
+  try {
+    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+    if (fsSync.existsSync(pidFile)) {
+      fsSync.unlinkSync(pidFile);
+    }
+  } catch (error) {
+    // Ignore cleanup errors
   }
 }
 
@@ -137,9 +197,9 @@ async function writePidFile() {
 
 async function main() {
   await log(`OAuth helper started - PID: ${process.pid}`);
-  await log(`Device code: ${deviceCode.substring(0, 4)}...`);
+  await log(`Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
   await log(`Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
-  await log(`Client ID: ${clientId}`);
+  // Never log client ID
   
   // Write PID file for tracking
   await writePidFile();
@@ -147,22 +207,27 @@ async function main() {
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
   let attempts = 0;
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 5;
   
-  // Set up cleanup on exit
-  process.on('exit', async () => {
-    await cleanupPidFile();
-    await log('OAuth helper exiting');
+  // Set up cleanup on exit - use synchronous cleanup for exit event
+  process.on('exit', () => {
+    cleanupPidFileSync();
   });
   
-  process.on('SIGINT', async () => {
-    await log('OAuth helper interrupted by SIGINT');
+  // Use beforeExit for async cleanup when possible
+  process.on('beforeExit', async () => {
+    await log('OAuth helper completing cleanup');
     await cleanupPidFile();
+  });
+  
+  process.on('SIGINT', () => {
+    cleanupPidFileSync();
     process.exit(0);
   });
   
-  process.on('SIGTERM', async () => {
-    await log('OAuth helper terminated by SIGTERM');
-    await cleanupPidFile();
+  process.on('SIGTERM', () => {
+    cleanupPidFileSync();
     process.exit(0);
   });
   
@@ -203,6 +268,7 @@ async function main() {
       } else if (response.access_token) {
         // Success! We got the token
         await log('✅ Token received from GitHub!');
+        consecutiveErrors = 0; // Reset error counter
         
         // Store the token
         const stored = await storeToken(response.access_token);
@@ -218,10 +284,37 @@ async function main() {
           await cleanupPidFile();
           process.exit(1);
         }
+      } else {
+        // Reset error counter on successful communication
+        consecutiveErrors = 0;
       }
     } catch (error) {
       await log(`Error during polling: ${error.message}`);
-      // Don't exit on network errors, just continue polling
+      
+      // Classify error types
+      const isNetworkError = error.message && (
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('ETIMEDOUT') ||
+        error.message.includes('ENOTFOUND') ||
+        error.message.includes('EAI_AGAIN') ||
+        error.message.includes('fetch failed')
+      );
+      
+      if (isNetworkError) {
+        consecutiveErrors++;
+        await log(`Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
+        
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          await log('Too many consecutive network errors, exiting');
+          await cleanupPidFile();
+          process.exit(1);
+        }
+      } else {
+        // Non-network error, likely fatal
+        await log(`Fatal error: ${error.message}`);
+        await cleanupPidFile();
+        process.exit(1);
+      }
     }
     
     // Wait before next poll

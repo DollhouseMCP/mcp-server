@@ -2310,13 +2310,48 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Spawn detached OAuth helper process
       try {
-        // Get the path to the oauth-helper script
+        // Get the path to the oauth-helper script - handle both dev and production paths
         const currentFileUrl = import.meta.url;
         const currentDir = path.dirname(fileURLToPath(currentFileUrl));
-        const helperPath = path.join(currentDir, '..', 'oauth-helper.mjs');
         
-        // Get the client ID (from environment or hardcoded)
-        const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID || 'Ov23liOrPRXkNN7PMCBt';
+        // Try multiple possible locations for the helper script
+        const possiblePaths = [
+          path.join(currentDir, '..', 'oauth-helper.mjs'), // Production: dist/../oauth-helper.mjs
+          path.join(currentDir, '..', '..', 'oauth-helper.mjs'), // Dev: dist/subdir/../oauth-helper.mjs
+          path.join(process.cwd(), 'oauth-helper.mjs'), // Current working directory
+        ];
+        
+        let helperPath: string | null = null;
+        for (const testPath of possiblePaths) {
+          try {
+            await fs.access(testPath, fs.constants.R_OK);
+            helperPath = testPath;
+            break;
+          } catch {
+            // Try next path
+          }
+        }
+        
+        if (!helperPath) {
+          throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
+        }
+        
+        // Get the client ID from environment (required)
+        const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+        
+        if (!clientId) {
+          logger.error('GitHub OAuth client ID not configured');
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ **Configuration Error**\n\n` +
+                    `GitHub OAuth is not properly configured.\n\n` +
+                    `**For administrators:**\n` +
+                    `Set the DOLLHOUSE_GITHUB_CLIENT_ID environment variable.\n\n` +
+                    `Please contact the server administrator to resolve this issue.`
+            }]
+          };
+        }
         
         // Spawn the helper as a detached process
         const helper = spawn('node', [
