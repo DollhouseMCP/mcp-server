@@ -12,6 +12,8 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { APICache } from '../../cache/APICache.js';
+import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -45,7 +47,7 @@ export class SubmitToPortfolioTool {
   private portfolioManager: PortfolioRepoManager;
   private contentValidator: ContentValidator;
 
-  constructor(apiCache: any) {
+  constructor(apiCache: APICache) {
     this.authManager = new GitHubAuthManager(apiCache);
     this.portfolioManager = new PortfolioRepoManager();
     this.contentValidator = new ContentValidator();
@@ -178,8 +180,9 @@ export class SubmitToPortfolioTool {
         content
       };
       
-      // Save element with consent (cast to IElement since PortfolioRepoManager expects it)
-      const fileUrl = await this.portfolioManager.saveElement(element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0], true);
+      // Convert to IElement using adapter for type safety
+      const adapter = new PortfolioElementAdapter(element);
+      const fileUrl = await this.portfolioManager.saveElement(adapter, true);
       
       if (!fileUrl) {
         return {
