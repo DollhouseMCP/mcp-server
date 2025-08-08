@@ -175,8 +175,7 @@ export class DollhouseMCPServer implements IToolHandler {
       this.loadPersonas();
     }).catch(error => {
       // Don't use CRITICAL in the error message as it triggers Docker test failures
-      console.error('[DollhouseMCP] Failed to initialize portfolio:', error);
-      logger.error(`Failed to initialize portfolio: ${error}`);
+      ErrorHandler.logError('DollhouseMCPServer.initializePortfolio', error);
     });
   }
   
@@ -3435,6 +3434,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
       return startServerWithRetry(retriesLeft - 1);
     }
     // Final failure - minimal error message for security
+    // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed");
     process.exit(1);
   }
@@ -3442,6 +3442,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
 
 if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
   startServerWithRetry().catch(() => {
+    // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed");
     process.exit(1);
   });

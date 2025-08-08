@@ -20,6 +20,7 @@ import { ConsoleReporter } from './reporters/ConsoleReporter.js';
 import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
 import { shouldSuppress } from './config/suppressions.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -96,7 +97,7 @@ export class SecurityAuditor {
       } catch (error) {
         const errorMessage = `Scanner ${scanner.name} failed: ${error instanceof Error ? error.message : String(error)}`;
         errors.push(errorMessage);
-        console.error(`SecurityAuditor: ${errorMessage}`);
+        ErrorHandler.logError('SecurityAuditor.auditProject', error, { projectRoot });
       }
     }
 
@@ -170,7 +171,10 @@ export class SecurityAuditor {
         return true;
       } catch (error) {
         // If suppression check fails, log error but don't suppress the finding
-        console.error(`Error checking suppression for ${finding.ruleId} in ${finding.file}:`, error);
+        ErrorHandler.logError('SecurityAuditor.applySuppression', error, { 
+          ruleId: finding.ruleId, 
+          file: finding.file 
+        });
         return true;
       }
     });
@@ -256,7 +260,7 @@ export class SecurityAuditor {
           // SARIF format would be implemented similarly
         }
       } catch (error) {
-        console.error(`SecurityAuditor: Failed to generate ${format} report: ${error instanceof Error ? error.message : String(error)}`);
+        ErrorHandler.logError('SecurityAuditor.generateReports', error, { format });
       }
     }
   }
