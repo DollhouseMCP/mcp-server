@@ -14,6 +14,7 @@ import { TokenManager } from '../security/tokenManager.js';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 export interface PortfolioRepoOptions {
   description?: string;
@@ -129,6 +130,7 @@ export class PortfolioRepoManager {
       return repo !== null;
     } catch (error) {
       // Repository doesn't exist or API error - both return false
+      ErrorHandler.logError('PortfolioRepoManager.checkIfRepoExists', error, { username });
       return false;
     }
   }
@@ -147,12 +149,12 @@ export class PortfolioRepoManager {
     }
 
     if (!consent) {
-      console.log(`User declined portfolio creation for ${username}`);
+      logger.info(`User declined portfolio creation for ${username}`);
       throw new Error('User declined portfolio creation');
     }
 
     // Log consent for audit trail
-    console.log(`User consented to portfolio creation for ${normalizedUsername}`);
+    logger.info(`User consented to portfolio creation for ${normalizedUsername}`);
     
     // LOW FIX: Add security audit logging (DMCP-SEC-006)
     SecurityMonitor.logSecurityEvent({
@@ -169,7 +171,7 @@ export class PortfolioRepoManager {
     );
     
     if (existingRepo && existingRepo.html_url) {
-      console.log(`Portfolio already exists for ${normalizedUsername}`);
+      logger.info(`Portfolio already exists for ${normalizedUsername}`);
       return existingRepo.html_url;
     }
 
@@ -190,9 +192,9 @@ export class PortfolioRepoManager {
       await this.generatePortfolioStructure(normalizedUsername);
 
       return repo.html_url;
-    } catch (error: any) {
-      // Preserve original error message for debugging
-      throw error;
+    } catch (error) {
+      ErrorHandler.logError('PortfolioRepoManager.createPortfolioRepo', error, { username: normalizedUsername });
+      throw ErrorHandler.wrapError(error, 'Failed to create portfolio repository', ErrorCategory.NETWORK_ERROR);
     }
   }
 
@@ -207,7 +209,7 @@ export class PortfolioRepoManager {
     }
 
     if (!consent) {
-      console.log(`User declined to save element ${element.id} to portfolio`);
+      logger.info(`User declined to save element ${element.id} to portfolio`);
       throw new Error('User declined to save element to portfolio');
     }
 
@@ -217,7 +219,7 @@ export class PortfolioRepoManager {
     // MEDIUM FIX: Normalize username from element metadata (DMCP-SEC-004)
     const rawUsername = element.metadata.author || 'anonymous';
     const username = UnicodeValidator.normalize(rawUsername).normalizedContent;
-    console.log(`User consented to save element ${element.id} to portfolio`);
+    logger.info(`User consented to save element ${element.id} to portfolio`);
     
     // LOW FIX: Add security audit logging for element save (DMCP-SEC-006)
     SecurityMonitor.logSecurityEvent({
@@ -258,8 +260,12 @@ export class PortfolioRepoManager {
       );
 
       return result.commit.html_url;
-    } catch (error: any) {
-      throw error;
+    } catch (error) {
+      ErrorHandler.logError('PortfolioRepoManager.saveElementToRepo', error, { 
+        elementId: element.id,
+        username 
+      });
+      throw ErrorHandler.wrapError(error, 'Failed to save element to portfolio', ErrorCategory.NETWORK_ERROR);
     }
   }
 

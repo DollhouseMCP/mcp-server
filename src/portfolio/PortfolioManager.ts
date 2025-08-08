@@ -10,6 +10,7 @@ import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 // Constants
 const ELEMENT_FILE_EXTENSION = '.md';
@@ -125,7 +126,7 @@ export class PortfolioManager {
       // Log but continue - the portfolio will be empty but functional
       if (err.code === 'EACCES' || err.code === 'EROFS' || err.code === 'ENOENT') {
         logger.warn(`[PortfolioManager] Cannot create portfolio directory (read-only environment?): ${err.message}`);
-        console.log(`[DollhouseMCP] Running in read-only mode - portfolio features disabled`);
+        logger.info(`[DollhouseMCP] Running in read-only mode - portfolio features disabled`);
         return;
       }
       throw error;
@@ -156,7 +157,7 @@ export class PortfolioManager {
       } catch (error) {
         logger.error('[PortfolioManager] Error populating default elements:', error);
         // Log to stderr for Claude Desktop visibility
-        console.error(`[PortfolioManager] CRITICAL: Failed to populate default elements: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error(`[PortfolioManager] CRITICAL: Failed to populate default elements: ${error instanceof Error ? error.message : String(error)}`);
         // Continue anyway - empty portfolio is valid
       }
     }
@@ -195,29 +196,19 @@ export class PortfolioManager {
       
       if (err.code === 'EACCES' || err.code === 'EPERM') {
         // Permission denied - log but return empty array
-        logger.error(`[PortfolioManager] Permission denied accessing directory: ${elementDir}`, {
-          code: err.code,
-          message: err.message
-        });
+        ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
         return [];
       }
       
       if (err.code === 'ENOTDIR') {
         // Path exists but is not a directory
-        logger.error(`[PortfolioManager] Path is not a directory: ${elementDir}`, {
-          code: err.code,
-          message: err.message
-        });
-        throw new Error(`Path is not a directory: ${elementDir}`);
+        ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
+        throw ErrorHandler.createError(`Path is not a directory: ${elementDir}`, ErrorCategory.SYSTEM_ERROR);
       }
       
       // For any other errors, throw with context
-      logger.error(`[PortfolioManager] Error reading directory: ${elementDir}`, {
-        code: err.code,
-        message: err.message,
-        stack: err.stack
-      });
-      throw error;
+      ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
+      throw ErrorHandler.wrapError(error, 'Failed to list elements', ErrorCategory.SYSTEM_ERROR);
     }
   }
   

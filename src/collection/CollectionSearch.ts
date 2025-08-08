@@ -7,6 +7,7 @@ import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
 import { normalizeSearchTerm, validateSearchQuery } from '../utils/searchUtils.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 export class CollectionSearch {
   private githubClient: GitHubClient;
@@ -27,7 +28,7 @@ export class CollectionSearch {
     try {
       validateSearchQuery(query, 1000);
     } catch (error) {
-      logger.warn(`Invalid search query: ${error}`);
+      ErrorHandler.logError('CollectionSearch.search.validateQuery', error, { query });
       return [];
     }
     
@@ -47,7 +48,7 @@ export class CollectionSearch {
       
       return [];
     } catch (error) {
-      logger.debug(`GitHub API search failed, falling back to cache: ${error}`);
+      ErrorHandler.logError('CollectionSearch.search.githubApi', error, { query });
       
       // Fallback to cached search
       return this.searchFromCache(query);
@@ -79,7 +80,7 @@ export class CollectionSearch {
       logger.debug('No items found in cache or seed data');
       return [];
     } catch (error) {
-      logger.error(`Cache search failed: ${error}`);
+      ErrorHandler.logError('CollectionSearch.search.cache', error, { query });
       
       // Last resort: search seed data without cache
       const seedItems = this.searchSeedData(query);
@@ -137,7 +138,7 @@ export class CollectionSearch {
       await this.collectionCache.saveCache(cacheItems);
       logger.debug(`Updated cache with ${cacheItems.length} items from GitHub API`);
     } catch (error) {
-      logger.debug(`Failed to update cache: ${error}`);
+      ErrorHandler.logError('CollectionSearch.updateCacheInBackground', error);
       // Don't throw - cache update failures shouldn't break functionality
     }
   }

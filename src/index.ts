@@ -20,6 +20,7 @@ import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type Indica
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
 import { SecureErrorHandler } from './security/errorHandler.js';
+import { ErrorHandler, ErrorCategory } from './utils/ErrorHandler.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
@@ -164,8 +165,7 @@ export class DollhouseMCPServer implements IToolHandler {
       try {
         this.updateManager = new UpdateManager(safeDir);
       } catch (error) {
-        console.error('[DollhouseMCP] Failed to initialize UpdateManager:', error);
-        logger.error(`Failed to initialize UpdateManager: ${error}`);
+        ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
         // Continue without update functionality
       }
       
@@ -228,7 +228,7 @@ export class DollhouseMCPServer implements IToolHandler {
         logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
       }
     } catch (error) {
-      logger.error(`Failed to initialize collection cache: ${error}`);
+      ErrorHandler.logError('DollhouseMCPServer.initializeCollectionCache', error);
       // Don't throw - cache failures shouldn't prevent server startup
     }
   }
@@ -324,8 +324,8 @@ export class DollhouseMCPServer implements IToolHandler {
         await fs.mkdir(this.personasDir, { recursive: true });
         logger.info(`Created personas directory at: ${this.personasDir}`);
         // Continue to try loading (directory will be empty)
-      } catch (mkdirError: any) {
-        logger.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
+      } catch (mkdirError) {
+        ErrorHandler.logError('DollhouseMCPServer.loadPersonas.mkdir', mkdirError, { personasDir: this.personasDir });
         // Don't throw - empty portfolio is valid
         this.personas.clear();
         return;
@@ -393,7 +393,7 @@ export class DollhouseMCPServer implements IToolHandler {
           this.personas.set(file, persona);
           logger.debug(`Loaded persona: ${metadata.name} (${uniqueId}`);
         } catch (error) {
-          logger.error(`Error loading persona ${file}: ${error}`);
+          ErrorHandler.logError('DollhouseMCPServer.loadPersonas.loadFile', error, { file });
         }
       }
     } catch (error) {
@@ -403,7 +403,7 @@ export class DollhouseMCPServer implements IToolHandler {
         this.personas.clear();
         return;
       }
-      logger.error(`Error reading personas directory: ${error}`);
+      ErrorHandler.logError('DollhouseMCPServer.loadPersonas', error);
       this.personas.clear();
     }
   }
@@ -683,11 +683,11 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
     } catch (error) {
-      logger.error(`Failed to list ${type} elements:`, error);
+      ErrorHandler.logError('DollhouseMCPServer.handleListElements', error, { type });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to list ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to list ${type}: ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
@@ -775,11 +775,11 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
     } catch (error) {
-      logger.error(`Failed to activate ${type} '${name}':`, error);
+      ErrorHandler.logError('DollhouseMCPServer.handleActivateElement', error, { type, name });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to activate ${type} '${name}': ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to activate ${type} '${name}': ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
