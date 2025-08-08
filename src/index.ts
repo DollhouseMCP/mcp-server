@@ -1983,8 +1983,8 @@ export class DollhouseMCPServer implements IToolHandler {
     let elementType: ElementType | undefined;
     let foundPath: string | null = null;
     
-    // Search through all element types to find the content
-    for (const type of Object.values(ElementType)) {
+    // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+    const searchPromises = Object.values(ElementType).map(async (type) => {
       const dir = portfolioManager.getElementDir(type);
       try {
         const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
@@ -1993,22 +1993,48 @@ export class DollhouseMCPServer implements IToolHandler {
           cacheResults: true
         });
         
-        if (file) {
-          foundPath = file;
-          elementType = type as ElementType;
-          logger.debug(`Found content in ${type} directory`, { contentIdentifier, type, file });
-          break;
+        return file ? { type: type as ElementType, file } : null;
+      } catch (error: any) {
+        // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+          // Not just a missing directory - this could be a permission issue or other problem
+          logger.warn(`Unexpected error searching ${type} directory`, { 
+            contentIdentifier,
+            type,
+            error: error?.message || String(error),
+            code: error?.code 
+          });
+        } else {
+          // Directory doesn't exist - this is expected for unused element types
+          logger.debug(`${type} directory does not exist, skipping`, { type });
         }
-      } catch (error) {
-        // Directory might not exist, continue searching
-        logger.debug(`Could not search ${type} directory: ${error}`);
+        return null;
+      }
+    });
+    
+    // Wait for all searches to complete and find the first match
+    const searchResults = await Promise.allSettled(searchPromises);
+    
+    for (const result of searchResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        foundPath = result.value.file;
+        elementType = result.value.type;
+        logger.debug(`Found content in ${elementType} directory`, { 
+          contentIdentifier, 
+          type: elementType, 
+          file: foundPath 
+        });
+        break;
       }
     }
     
     // If not found in any element directory, default to persona for backward compatibility
     if (!elementType) {
       elementType = ElementType.PERSONA;
-      logger.debug(`Content not found in any portfolio directory, defaulting to ${elementType}`, { contentIdentifier });
+      logger.info(`Content "${contentIdentifier}" not found in any portfolio directory, defaulting to ${elementType}`, { 
+        contentIdentifier,
+        searchedTypes: Object.values(ElementType) 
+      });
     }
     
     // Execute the submission with the detected element type
