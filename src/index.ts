@@ -1984,6 +1984,8 @@ export class DollhouseMCPServer implements IToolHandler {
     let foundPath: string | null = null;
     
     // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+    // NOTE: This dynamically handles all element types from the ElementType enum
+    // Future element types will be automatically included without code changes
     const searchPromises = Object.values(ElementType).map(async (type) => {
       const dir = portfolioManager.getElementDir(type);
       try {
@@ -2015,6 +2017,12 @@ export class DollhouseMCPServer implements IToolHandler {
     // Wait for all searches to complete and find the first match
     const searchResults = await Promise.allSettled(searchPromises);
     
+    // NOTE: File validation - we rely on the portfolio directory structure to ensure
+    // files are in the correct element type directory. Additional schema validation
+    // could be added here if needed, but the current approach is sufficient as:
+    // 1. FileDiscoveryUtil already validates file extensions
+    // 2. Portfolio structure enforces proper organization
+    // 3. submitToPortfolioTool performs additional validation downstream
     for (const result of searchResults) {
       if (result.status === 'fulfilled' && result.value) {
         foundPath = result.value.file;
