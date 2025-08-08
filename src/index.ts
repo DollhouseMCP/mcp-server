@@ -1984,8 +1984,9 @@ export class DollhouseMCPServer implements IToolHandler {
     let foundPath: string | null = null;
     
     // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
-    // NOTE: This dynamically handles all element types from the ElementType enum
-    // Future element types will be automatically included without code changes
+    // NOTE: This dynamically handles ALL element types from the ElementType enum
+    // No hardcoded count - if you add 10 more element types tomorrow, this code
+    // will automatically search all 16 types without any changes needed here
     const searchPromises = Object.values(ElementType).map(async (type) => {
       const dir = portfolioManager.getElementDir(type);
       try {

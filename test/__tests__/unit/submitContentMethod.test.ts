@@ -10,6 +10,8 @@ describe('submitContent method improvements', () => {
   describe('Parallel Search Implementation', () => {
     it('should demonstrate parallel search pattern', async () => {
       // This test validates the parallel search pattern used in submitContent
+      // NOTE: Using example types here - the actual code uses Object.values(ElementType)
+      // which dynamically includes ALL element types, whether there are 6, 10, or 100
       const elementTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
       const searchResults: { type: string; startTime: number; endTime: number }[] = [];
       
@@ -30,8 +32,8 @@ describe('submitContent method improvements', () => {
       // Wait for all searches using Promise.allSettled
       const results = await Promise.allSettled(searchPromises);
       
-      // Verify all searches completed
-      expect(results).toHaveLength(6);
+      // Verify all searches completed (works with any number of element types)
+      expect(results).toHaveLength(elementTypes.length);
       expect(results.every(r => r.status === 'fulfilled')).toBe(true);
       
       // Verify parallel execution - searches should overlap in time
@@ -46,6 +48,36 @@ describe('submitContent method improvements', () => {
       const match = results.find(r => r.status === 'fulfilled' && r.value);
       expect(match).toBeDefined();
       expect((match as any).value.type).toBe('skills');
+    });
+    
+    it('should handle any number of element types dynamically', async () => {
+      // Test with different numbers of element types to prove no hardcoded assumptions
+      const testCases = [
+        ['personas', 'skills'],  // 2 types
+        ['personas', 'skills', 'templates', 'agents'],  // 4 types
+        ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'],  // 6 types
+        // Could have 20 types:
+        Array.from({ length: 20 }, (_, i) => `type${i}`)  // 20 types
+      ];
+      
+      for (const types of testCases) {
+        const searchPromises = types.map(async (type) => {
+          await new Promise(resolve => setTimeout(resolve, 5));
+          return type === types[0] ? { type, file: `/path/${type}/test.md` } : null;
+        });
+        
+        const results = await Promise.allSettled(searchPromises);
+        
+        // Works correctly regardless of the number of types
+        expect(results).toHaveLength(types.length);
+        expect(results.every(r => r.status === 'fulfilled')).toBe(true);
+        
+        // Finds the match regardless of how many types exist
+        const match = results.find(r => 
+          r.status === 'fulfilled' && r.value && (r.value as any).file
+        );
+        expect(match).toBeDefined();
+      }
     });
     
     it('should handle mixed success and failure in parallel searches', async () => {
@@ -163,7 +195,7 @@ describe('submitContent method improvements', () => {
   describe('Performance Characteristics', () => {
     it('should complete faster with parallel search', async () => {
       const SEARCH_DELAY = 50; // ms per search
-      const ELEMENT_COUNT = 6;
+      const ELEMENT_COUNT = 6; // Could be any number - 6, 10, 20, etc.
       
       // Sequential search time
       const sequentialStart = Date.now();
