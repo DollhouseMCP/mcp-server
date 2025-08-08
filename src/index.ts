@@ -1975,12 +1975,46 @@ export class DollhouseMCPServer implements IToolHandler {
   async submitContent(contentIdentifier: string) {
     // Use the new portfolio-based submission tool
     const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
+    const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
     const submitTool = new SubmitToPortfolioTool(this.apiCache);
     
-    // Execute the submission
+    // Try to find the content across all element types
+    const portfolioManager = PortfolioManager.getInstance();
+    let elementType: ElementType | undefined;
+    let foundPath: string | null = null;
+    
+    // Search through all element types to find the content
+    for (const type of Object.values(ElementType)) {
+      const dir = portfolioManager.getElementDir(type);
+      try {
+        const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+          extensions: ['.md', '.json', '.yaml', '.yml'],
+          partialMatch: true,
+          cacheResults: true
+        });
+        
+        if (file) {
+          foundPath = file;
+          elementType = type as ElementType;
+          logger.debug(`Found content in ${type} directory`, { contentIdentifier, type, file });
+          break;
+        }
+      } catch (error) {
+        // Directory might not exist, continue searching
+        logger.debug(`Could not search ${type} directory: ${error}`);
+      }
+    }
+    
+    // If not found in any element directory, default to persona for backward compatibility
+    if (!elementType) {
+      elementType = ElementType.PERSONA;
+      logger.debug(`Content not found in any portfolio directory, defaulting to ${elementType}`, { contentIdentifier });
+    }
+    
+    // Execute the submission with the detected element type
     const result = await submitTool.execute({
       name: contentIdentifier,
-      type: ElementType.PERSONA // Default to persona for backward compatibility
+      type: elementType
     });
     
     // Format the response
