@@ -22,6 +22,8 @@ import { SignatureVerifier } from './SignatureVerifier.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { logger } from '../utils/logger.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -65,9 +67,9 @@ export class UpdateChecker {
       UpdateChecker.purifyWindow = dom.window;
       UpdateChecker.purify = DOMPurify(UpdateChecker.purifyWindow);
       
-      console.log('[UpdateChecker] DOMPurify initialized successfully');
+      logger.debug('[UpdateChecker] DOMPurify initialized successfully');
     } catch (error) {
-      console.error('[DollhouseMCP] Failed to initialize DOMPurify:', error);
+      ErrorHandler.logError('UpdateChecker.initializeDOMPurify', error);
       // Continue without HTML sanitization - better than crashing
       UpdateChecker.purify = {
         sanitize: (str: string) => {
@@ -166,6 +168,7 @@ export class UpdateChecker {
         return await operation();
       } catch (error) {
         lastError = error as Error;
+        ErrorHandler.logError('UpdateChecker.retryWithBackoff', error, { attempt, maxRetries });
         
         // Don't retry on the last attempt
         if (attempt === maxRetries) {
@@ -232,7 +235,7 @@ export class UpdateChecker {
         return response;
       } catch (error) {
         clearTimeout(timeoutId);
-        throw error;
+        throw ErrorHandler.wrapError(error, 'Request timed out or failed', ErrorCategory.NETWORK_ERROR);
       }
     });
     
@@ -289,8 +292,9 @@ export class UpdateChecker {
         }
       } catch (error) {
         // If we can't verify the signature and it's required, fail
+        ErrorHandler.logError('UpdateChecker.checkForUpdates.signatureVerification', error);
         if (this.requireSignedReleases) {
-          throw error;
+          throw ErrorHandler.wrapError(error, 'Signature verification failed', ErrorCategory.VALIDATION_ERROR);
         }
         // Otherwise, log and continue
         if (this.securityLogger) {

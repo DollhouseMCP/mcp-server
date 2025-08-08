@@ -8,6 +8,7 @@
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { PortfolioRepoManager } from '../../../../src/portfolio/PortfolioRepoManager.js';
 import { IElement } from '../../../../src/types/elements/IElement.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 // Mock modules
 jest.mock('../../../../src/security/tokenManager.js');
@@ -427,7 +428,7 @@ describe('PortfolioRepoManager', () => {
 
     it('should log consent decisions for audit trail', async () => {
       // Arrange
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const loggerSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
       const username = 'testuser';
       const consent = true;
       
@@ -460,11 +461,11 @@ describe('PortfolioRepoManager', () => {
       await manager.createPortfolio(username, consent);
 
       // Assert
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
         expect.stringContaining('User consented to portfolio creation')
       );
       
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
   });
 });

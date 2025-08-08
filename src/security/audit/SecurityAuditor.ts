@@ -4,6 +4,7 @@
  */
 
 // import { SecurityMonitor } from '../securityMonitor.js';
+import { logger } from '../../utils/logger.js';
 import type { 
   SecurityAuditConfig, 
   ScanContext, 
@@ -19,6 +20,7 @@ import { ConsoleReporter } from './reporters/ConsoleReporter.js';
 import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
 import { shouldSuppress } from './config/suppressions.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -50,7 +52,7 @@ export class SecurityAuditor {
     }
 
     // Audit logging would go here if SecurityMonitor supported audit events
-    console.log(`SecurityAuditor: Initialized ${this.scanners.length} security scanners`);
+    logger.info(`SecurityAuditor: Initialized ${this.scanners.length} security scanners`);
   }
 
   /**
@@ -78,7 +80,7 @@ export class SecurityAuditor {
     const errors: string[] = [];
     const scannedFilesSet = new Set<string>();
 
-    console.log(`SecurityAuditor: Starting security audit of ${projectRoot}`);
+    logger.info(`SecurityAuditor: Starting security audit of ${projectRoot}`);
 
     // Run all enabled scanners
     for (const scanner of this.scanners) {
@@ -95,7 +97,7 @@ export class SecurityAuditor {
       } catch (error) {
         const errorMessage = `Scanner ${scanner.name} failed: ${error instanceof Error ? error.message : String(error)}`;
         errors.push(errorMessage);
-        console.error(`SecurityAuditor: ${errorMessage}`);
+        ErrorHandler.logError('SecurityAuditor.auditProject', error, { projectRoot });
       }
     }
 
@@ -103,7 +105,7 @@ export class SecurityAuditor {
     const result = this.createScanResult(allFindings, duration, scannedFilesSet.size, errors);
 
     // Log audit completion
-    console.log(`SecurityAuditor: Audit completed: ${result.summary.total} findings in ${duration}ms`);
+    logger.info(`SecurityAuditor: Audit completed: ${result.summary.total} findings in ${duration}ms`);
 
     // Generate reports
     await this.generateReports(result);
@@ -169,16 +171,19 @@ export class SecurityAuditor {
         return true;
       } catch (error) {
         // If suppression check fails, log error but don't suppress the finding
-        console.error(`Error checking suppression for ${finding.ruleId} in ${finding.file}:`, error);
+        ErrorHandler.logError('SecurityAuditor.applySuppression', error, { 
+          ruleId: finding.ruleId, 
+          file: finding.file 
+        });
         return true;
       }
     });
     
     // Log suppression summary if verbose and suppressions were applied
     if (this.config.reporting?.verbose && suppressedFindings.length > 0) {
-      console.log(`\nSecurityAuditor: Suppressed ${suppressedFindings.length} findings:`);
+      logger.debug(`SecurityAuditor: Suppressed ${suppressedFindings.length} findings:`);
       suppressedFindings.forEach(s => {
-        console.log(`  - ${s.rule} in ${s.file || 'global'}${s.reason ? ` (${s.reason})` : ''}`);
+        logger.debug(`  - ${s.rule} in ${s.file || 'global'}${s.reason ? ` (${s.reason})` : ''}`);
       });
     }
     
@@ -235,6 +240,8 @@ export class SecurityAuditor {
         switch (format) {
           case 'console':
             const consoleReporter = new ConsoleReporter(result);
+            // Console reporter output is meant to be shown directly to user
+            // Using console.log here is intentional for formatting
             console.log(consoleReporter.generate());
             break;
             
@@ -253,7 +260,7 @@ export class SecurityAuditor {
           // SARIF format would be implemented similarly
         }
       } catch (error) {
-        console.error(`SecurityAuditor: Failed to generate ${format} report: ${error instanceof Error ? error.message : String(error)}`);
+        ErrorHandler.logError('SecurityAuditor.generateReports', error, { format });
       }
     }
   }

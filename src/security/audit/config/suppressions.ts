@@ -6,6 +6,7 @@
  */
 
 import * as path from 'path';
+import { logger } from '../../../utils/logger.js';
 
 export interface Suppression {
   rule: string;
@@ -609,7 +610,7 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
           return true;
         }
       } catch (error) {
-        console.error(`Invalid suppression pattern "${suppression.file}":`, error);
+        logger.error(`Invalid suppression pattern "${suppression.file}":`, error);
       }
     }
   }
@@ -655,5 +656,5 @@ export function getSuppressionStats(): {
 // Validate suppressions on module load
 const validationErrors = validateSuppressions();
 if (validationErrors.length > 0) {
-  console.warn('Suppression configuration warnings:', validationErrors);
+  logger.warn('Suppression configuration warnings:', validationErrors);
 }

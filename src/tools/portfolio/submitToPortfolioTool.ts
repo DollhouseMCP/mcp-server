@@ -20,6 +20,7 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -217,16 +218,13 @@ export class SubmitToPortfolioTool {
       };
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error('Error in submitToPortfolio:', error);
+      // Improved error handling with context preservation
+      ErrorHandler.logError('submitToPortfolio', error, {
+        elementName: params.name,
+        elementType: params.type
+      });
       
-      // Log failure (DMCP-SEC-006)
-
-      return {
-        success: false,
-        message: `Unexpected error: ${errorMessage}`,
-        error: 'UNEXPECTED_ERROR'
-      };
+      return ErrorHandler.formatForResponse(error);
     }
   }
 
