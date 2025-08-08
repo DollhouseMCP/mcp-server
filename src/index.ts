@@ -1975,12 +1975,81 @@ export class DollhouseMCPServer implements IToolHandler {
   async submitContent(contentIdentifier: string) {
     // Use the new portfolio-based submission tool
     const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
+    const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
     const submitTool = new SubmitToPortfolioTool(this.apiCache);
     
-    // Execute the submission
+    // Try to find the content across all element types
+    const portfolioManager = PortfolioManager.getInstance();
+    let elementType: ElementType | undefined;
+    let foundPath: string | null = null;
+    
+    // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+    // NOTE: This dynamically handles ALL element types from the ElementType enum
+    // No hardcoded count - if you add 10 more element types tomorrow, this code
+    // will automatically search all 16 types without any changes needed here
+    const searchPromises = Object.values(ElementType).map(async (type) => {
+      const dir = portfolioManager.getElementDir(type);
+      try {
+        const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+          extensions: ['.md', '.json', '.yaml', '.yml'],
+          partialMatch: true,
+          cacheResults: true
+        });
+        
+        return file ? { type: type as ElementType, file } : null;
+      } catch (error: any) {
+        // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+          // Not just a missing directory - this could be a permission issue or other problem
+          logger.warn(`Unexpected error searching ${type} directory`, { 
+            contentIdentifier,
+            type,
+            error: error?.message || String(error),
+            code: error?.code 
+          });
+        } else {
+          // Directory doesn't exist - this is expected for unused element types
+          logger.debug(`${type} directory does not exist, skipping`, { type });
+        }
+        return null;
+      }
+    });
+    
+    // Wait for all searches to complete and find the first match
+    const searchResults = await Promise.allSettled(searchPromises);
+    
+    // NOTE: File validation - we rely on the portfolio directory structure to ensure
+    // files are in the correct element type directory. Additional schema validation
+    // could be added here if needed, but the current approach is sufficient as:
+    // 1. FileDiscoveryUtil already validates file extensions
+    // 2. Portfolio structure enforces proper organization
+    // 3. submitToPortfolioTool performs additional validation downstream
+    for (const result of searchResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        foundPath = result.value.file;
+        elementType = result.value.type;
+        logger.debug(`Found content in ${elementType} directory`, { 
+          contentIdentifier, 
+          type: elementType, 
+          file: foundPath 
+        });
+        break;
+      }
+    }
+    
+    // If not found in any element directory, default to persona for backward compatibility
+    if (!elementType) {
+      elementType = ElementType.PERSONA;
+      logger.info(`Content "${contentIdentifier}" not found in any portfolio directory, defaulting to ${elementType}`, { 
+        contentIdentifier,
+        searchedTypes: Object.values(ElementType) 
+      });
+    }
+    
+    // Execute the submission with the detected element type
     const result = await submitTool.execute({
       name: contentIdentifier,
-      type: ElementType.PERSONA // Default to persona for backward compatibility
+      type: elementType
     });
     
     // Format the response
