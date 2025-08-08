@@ -42,6 +42,11 @@ fi
 echo -e "${GREEN}→ Configuring Git to use .githooks directory...${NC}"
 git config core.hooksPath .githooks
 
+# Ensure hooks are executable
+echo -e "${GREEN}→ Setting hook permissions...${NC}"
+chmod +x "$REPO_ROOT/.githooks/pre-commit"
+chmod +x "$REPO_ROOT/.githooks/post-checkout"
+
 # Verify configuration
 HOOKS_PATH=$(git config core.hooksPath)
 if [ "$HOOKS_PATH" = ".githooks" ]; then

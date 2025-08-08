@@ -3,13 +3,41 @@
 # GitFlow Guardian - Post-checkout Hook
 # Provides helpful reminders when switching branches
 
-# Colors
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Get the directory where this hook is located
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load configuration if it exists
+CONFIG_FILE="$HOOK_DIR/config"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    # Default configuration
+    USE_COLORS=true
+    SHOW_CHECKOUT_MESSAGES=true
+    MAX_DISPLAY_LENGTH=50
+fi
+
+# Exit early if messages are disabled
+if [ "$SHOW_CHECKOUT_MESSAGES" != "true" ]; then
+    exit 0
+fi
+
+# Colors (only if enabled)
+if [ "$USE_COLORS" = "true" ]; then
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    NC='\033[0m'
+else
+    RED=''
+    YELLOW=''
+    GREEN=''
+    BLUE=''
+    CYAN=''
+    NC=''
+fi
 
 # Get the branch we just switched to
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
@@ -54,11 +82,18 @@ case "$BRANCH" in
         ;;
         
     feature/*)
+        # Truncate long branch names to fit in the box
+        if [ ${#BRANCH} -gt $MAX_DISPLAY_LENGTH ]; then
+            TRUNCATE_LENGTH=$((MAX_DISPLAY_LENGTH - 3))
+            DISPLAY_BRANCH="${BRANCH:0:$TRUNCATE_LENGTH}..."
+        else
+            DISPLAY_BRANCH="$BRANCH"
+        fi
         echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "${GREEN}║            ✅ You are on a FEATURE branch                       ║${NC}"
         echo -e "${GREEN}╠════════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${GREEN}║                                                                  ║${NC}"
-        echo -e "${GREEN}║  Branch: ${CYAN}$BRANCH${GREEN}${NC}"
+        echo -e "${GREEN}║  Branch: ${CYAN}$DISPLAY_BRANCH${GREEN}${NC}"
         echo -e "${GREEN}║                                                                  ║${NC}"
         echo -e "${GREEN}║  You can safely commit and experiment here!                     ║${NC}"
         echo -e "${GREEN}║                                                                  ║${NC}"
@@ -70,11 +105,18 @@ case "$BRANCH" in
         ;;
         
     fix/*|bugfix/*)
+        # Truncate long branch names to fit in the box
+        if [ ${#BRANCH} -gt $MAX_DISPLAY_LENGTH ]; then
+            TRUNCATE_LENGTH=$((MAX_DISPLAY_LENGTH - 3))
+            DISPLAY_BRANCH="${BRANCH:0:$TRUNCATE_LENGTH}..."
+        else
+            DISPLAY_BRANCH="$BRANCH"
+        fi
         echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "${BLUE}║              🔧 You are on a FIX branch                         ║${NC}"
         echo -e "${BLUE}╠════════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${BLUE}║                                                                  ║${NC}"
-        echo -e "${BLUE}║  Branch: ${CYAN}$BRANCH${BLUE}${NC}"
+        echo -e "${BLUE}║  Branch: ${CYAN}$DISPLAY_BRANCH${BLUE}${NC}"
         echo -e "${BLUE}║                                                                  ║${NC}"
         echo -e "${BLUE}║  Good practices for fixes:                                      ║${NC}"
         echo -e "${BLUE}║  • Keep changes focused on the specific bug                     ║${NC}"
@@ -85,9 +127,18 @@ case "$BRANCH" in
         ;;
         
     hotfix/*)
+        # Truncate long branch names to fit in the box
+        if [ ${#BRANCH} -gt $MAX_DISPLAY_LENGTH ]; then
+            TRUNCATE_LENGTH=$((MAX_DISPLAY_LENGTH - 3))
+            DISPLAY_BRANCH="${BRANCH:0:$TRUNCATE_LENGTH}..."
+        else
+            DISPLAY_BRANCH="$BRANCH"
+        fi
         echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "${RED}║              🚨 You are on a HOTFIX branch                      ║${NC}"
         echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  Branch: ${CYAN}$DISPLAY_BRANCH${RED}${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}║  This is for URGENT production fixes only!                      ║${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
@@ -100,9 +151,18 @@ case "$BRANCH" in
         ;;
         
     release/*)
+        # Truncate long branch names to fit in the box
+        if [ ${#BRANCH} -gt $MAX_DISPLAY_LENGTH ]; then
+            TRUNCATE_LENGTH=$((MAX_DISPLAY_LENGTH - 3))
+            DISPLAY_BRANCH="${BRANCH:0:$TRUNCATE_LENGTH}..."
+        else
+            DISPLAY_BRANCH="$BRANCH"
+        fi
         echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "${CYAN}║             📦 You are on a RELEASE branch                      ║${NC}"
         echo -e "${CYAN}╠════════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║                                                                  ║${NC}"
+        echo -e "${CYAN}║  Branch: ${CYAN}$DISPLAY_BRANCH${CYAN}${NC}"
         echo -e "${CYAN}║                                                                  ║${NC}"
         echo -e "${CYAN}║  Only bug fixes and release prep allowed here!                  ║${NC}"
         echo -e "${CYAN}║                                                                  ║${NC}"

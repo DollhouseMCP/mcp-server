@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "dollhousemcp": {
-      "command": "node",
-      "args": ["/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/dist/index.js"]
-    }
-  }
-}

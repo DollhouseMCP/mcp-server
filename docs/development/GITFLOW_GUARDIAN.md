@@ -33,6 +33,10 @@ GitFlow Guardian is a set of Git hooks that enforce GitFlow best practices and p
 ```bash
 # Configure Git to use our hooks directory
 git config core.hooksPath .githooks
+
+# Make hooks executable
+chmod +x .githooks/pre-commit
+chmod +x .githooks/post-checkout
 ```
 
 ### Verify Installation
@@ -40,6 +44,42 @@ git config core.hooksPath .githooks
 # Check if hooks are configured
 git config core.hooksPath
 # Should output: .githooks
+```
+
+## Configuration
+
+GitFlow Guardian can be customized via the `.githooks/config` file. This file allows you to:
+
+- Define which branches are protected
+- Specify allowed branch prefixes
+- Control display settings
+- Enable/disable hooks
+
+### Configuration Options
+
+```bash
+# .githooks/config
+
+# Protected branches that cannot receive direct commits
+PROTECTED_BRANCHES=("main" "master" "develop")
+
+# Allowed branch prefixes
+ALLOWED_PREFIXES=("feature" "fix" "bugfix" "hotfix" "release" "docs" "test" "chore")
+
+# Minimum branch name length after prefix
+MIN_NAME_LENGTH=1
+
+# Maximum branch name display length
+MAX_DISPLAY_LENGTH=50
+
+# Enable/disable colored output
+USE_COLORS=true
+
+# Enable/disable checkout messages
+SHOW_CHECKOUT_MESSAGES=true
+
+# Enable/disable commit protection
+ENABLE_COMMIT_PROTECTION=true
 ```
 
 ## How It Works
