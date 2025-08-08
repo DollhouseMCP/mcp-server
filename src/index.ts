@@ -16,6 +16,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -2306,14 +2308,66 @@ export class DollhouseMCPServer implements IToolHandler {
       // Initiate device flow
       const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
       
-      // Start polling in background
-      this.pollForAuthCompletion(deviceResponse.device_code, deviceResponse.interval);
+      // Spawn detached OAuth helper process
+      try {
+        // Get the path to the oauth-helper script
+        const currentFileUrl = import.meta.url;
+        const currentDir = path.dirname(fileURLToPath(currentFileUrl));
+        const helperPath = path.join(currentDir, '..', 'oauth-helper.mjs');
+        
+        // Get the client ID (from environment or hardcoded)
+        const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID || 'Ov23liOrPRXkNN7PMCBt';
+        
+        // Spawn the helper as a detached process
+        const helper = spawn('node', [
+          helperPath,
+          deviceResponse.device_code,
+          (deviceResponse.interval || 5).toString(),
+          deviceResponse.expires_in.toString(),
+          clientId
+        ], {
+          detached: true,
+          stdio: 'ignore', // Completely detach I/O
+          windowsHide: true // Hide console on Windows
+        });
+        
+        // Allow the parent process to exit without waiting for the helper
+        helper.unref();
+        
+        logger.info('OAuth helper process spawned', {
+          pid: helper.pid,
+          expiresIn: deviceResponse.expires_in,
+          userCode: deviceResponse.user_code
+        });
+        
+        // Optional: Write helper state for tracking
+        const helperStateFile = path.join(process.env.HOME || process.env.USERPROFILE || '', '.dollhouse', '.auth', 'oauth-helper-state.json');
+        const helperState = {
+          pid: helper.pid,
+          deviceCode: deviceResponse.device_code,
+          userCode: deviceResponse.user_code,
+          startedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + (deviceResponse.expires_in * 1000)).toISOString()
+        };
+        
+        // Write state file (non-blocking, ignore errors)
+        fs.mkdir(path.dirname(helperStateFile), { recursive: true })
+          .then(() => fs.writeFile(helperStateFile, JSON.stringify(helperState, null, 2)))
+          .catch(err => logger.debug('Could not write helper state file', { error: err.message }));
+          
+      } catch (spawnError) {
+        logger.error('Failed to spawn OAuth helper process', { error: spawnError });
+        // Don't fail the whole auth process, just log the error
+        // The user can still complete auth manually if needed
+      }
       
       // Return instructions to user
       return {
         content: [{
           type: "text",
-          text: this.githubAuthManager.formatAuthInstructions(deviceResponse)
+          text: this.githubAuthManager.formatAuthInstructions(deviceResponse) +
+                '\n\n📝 **Note**: Authentication is being handled in the background. ' +
+                'Once you authorize on GitHub, you\'ll be authenticated automatically!'
         }]
       };
     } catch (error) {
@@ -2331,9 +2385,38 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async checkGitHubAuth() {
     try {
+      // First check for pending OAuth helper process
+      const helperStateFile = path.join(process.env.HOME || process.env.USERPROFILE || '', '.dollhouse', '.auth', 'oauth-helper-state.json');
+      let pendingAuth = false;
+      let pendingDetails = null;
+      
+      try {
+        const stateData = await fs.readFile(helperStateFile, 'utf-8');
+        const state = JSON.parse(stateData);
+        const expiresAt = new Date(state.expiresAt);
+        
+        if (expiresAt > new Date()) {
+          pendingAuth = true;
+          pendingDetails = {
+            userCode: state.userCode,
+            timeRemaining: Math.ceil((expiresAt.getTime() - Date.now()) / 1000),
+            pid: state.pid
+          };
+        } else {
+          // Expired, clean up the state file
+          await fs.unlink(helperStateFile).catch(() => {});
+        }
+      } catch (error) {
+        // No state file or invalid JSON, that's ok
+      }
+      
       const status = await this.githubAuthManager.getAuthStatus();
       
       if (status.isAuthenticated) {
+        // Clean up state file if auth is successful
+        if (pendingAuth) {
+          await fs.unlink(helperStateFile).catch(() => {});
+        }
         return {
           content: [{
             type: "text",
@@ -2357,6 +2440,23 @@ export class DollhouseMCPServer implements IToolHandler {
                   `1. Say "set up GitHub" to authenticate again\n` +
                   `2. Or check your GITHUB_TOKEN environment variable\n\n` +
                   `Note: Browse and install still work without authentication!`
+          }]
+        };
+      } else if (pendingAuth && pendingDetails) {
+        // OAuth helper is actively polling
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⏳ **GitHub Authentication In Progress**\n\n` +
+                  `🔑 **User Code:** ${pendingDetails.userCode}\n` +
+                  `⏱️ **Time Remaining:** ${Math.floor(pendingDetails.timeRemaining / 60)} minutes\n` +
+                  `📋 **Process ID:** ${pendingDetails.pid}\n\n` +
+                  `**Status:** Waiting for you to authorize on GitHub\n\n` +
+                  `If you haven't already:\n` +
+                  `1. Visit: https://github.com/login/device\n` +
+                  `2. Enter code: **${pendingDetails.userCode}**\n` +
+                  `3. Authorize 'DollhouseMCP Collection'\n\n` +
+                  `The authentication will complete automatically once you authorize!`
           }]
         };
       } else {
@@ -2411,25 +2511,6 @@ export class DollhouseMCPServer implements IToolHandler {
                 `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
         }]
       };
-    }
-  }
-  
-  /**
-   * Poll for auth completion in the background
-   */
-  private async pollForAuthCompletion(deviceCode: string, interval: number): Promise<void> {
-    try {
-      const tokenResponse = await this.githubAuthManager.pollForToken(deviceCode, interval);
-      const authStatus = await this.githubAuthManager.completeAuthentication(tokenResponse);
-      
-      // Log success (user will see this in their next interaction)
-      logger.info('GitHub authentication completed successfully', { 
-        username: authStatus.username,
-        scopes: authStatus.scopes 
-      });
-    } catch (error) {
-      // Log error but don't throw - this runs in background
-      logger.error('GitHub authentication polling failed', { error });
     }
   }
 
