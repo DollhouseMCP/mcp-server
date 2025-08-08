@@ -66,7 +66,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to load persona from ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to load persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.LOAD_FAILED);
+      throw ErrorHandler.wrapError(error, 'Failed to load persona', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -106,7 +106,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to save persona to ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to save persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.SAVE_FAILED);
+      throw ErrorHandler.wrapError(error, 'Failed to save persona', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -130,7 +130,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to delete persona ${filePath}: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Failed to delete persona', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.DELETE_FAILED);
+      throw ErrorHandler.wrapError(error, 'Failed to delete persona', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -293,7 +293,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to import persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Persona element import failed', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.IMPORT_FAILED);
+      throw ErrorHandler.wrapError(error, 'Persona element import failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
@@ -327,7 +327,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
 
     } catch (error) {
       logger.error(`Failed to export persona: ${error}`);
-      throw ErrorHandler.wrapError(error, 'Persona element export failed', ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.EXPORT_FAILED);
+      throw ErrorHandler.wrapError(error, 'Persona element export failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
