@@ -1,6 +1,15 @@
 /**
  * Utility class for efficient file discovery operations
  * Provides optimized file search with caching and security
+ * 
+ * IMPLEMENTATION (PR #503 - PR #496 Recommendation):
+ * 1. PERFORMANCE: Single readdir operation instead of multiple file checks
+ * 2. PERFORMANCE: 5-second cache TTL for repeated searches
+ * 3. SECURITY: Unicode normalization for all search inputs
+ * 4. MEMORY: Efficient cache management with 100 entry limit
+ * 
+ * This addresses the PR #496 review recommendation to extract file discovery
+ * logic to a reusable utility class for better performance and maintainability.
  */
 
 import * as fs from 'fs/promises';

@@ -1,6 +1,12 @@
 /**
  * Adapter to convert simple portfolio elements to full IElement interface
  * This resolves type safety issues without complex type casting
+ * 
+ * FIXES IMPLEMENTED (PR #503):
+ * 1. TYPE SAFETY (Issue #497): Eliminates complex type casting with adapter pattern
+ * 2. SECURITY FIX DMCP-SEC-004 (MEDIUM): Added Unicode normalization for all user input
+ * 3. SECURITY FIX DMCP-SEC-006 (LOW): Added audit logging for element creation
+ * 4. PERFORMANCE: Helper methods for efficient string normalization
  */
 
 import { 
@@ -30,7 +36,9 @@ export class PortfolioElementAdapter implements IElement {
   private readonly portfolioElement: PortfolioElement;
 
   constructor(element: PortfolioElement) {
-    // SECURITY: Normalize and validate all user input (DMCP-SEC-004)
+    // SECURITY FIX #2 (DMCP-SEC-004): Normalize and validate all user input
+    // Previously: User input was used directly without validation
+    // Now: All string inputs go through UnicodeValidator to prevent homograph attacks
     const normalizedName = UnicodeValidator.normalize(element.metadata.name);
     if (!normalizedName.isValid) {
       // Log security event for invalid Unicode
@@ -66,7 +74,9 @@ export class PortfolioElementAdapter implements IElement {
       tags: []
     };
     
-    // SECURITY: Log element creation for audit trail (DMCP-SEC-006)
+    // SECURITY FIX #3 (DMCP-SEC-006): Log element creation for audit trail
+    // Previously: No audit logging for portfolio operations
+    // Now: Complete audit trail using SecurityMonitor.logSecurityEvent()
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_CREATED',
       severity: 'LOW',
