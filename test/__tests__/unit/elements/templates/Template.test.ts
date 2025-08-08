@@ -431,7 +431,7 @@ describe('Template', () => {
       
       expect(() => {
         template.deserialize('invalid json');
-      }).toThrow('Deserialization failed');
+      }).toThrow('Template deserialization failed');
     });
   });
 

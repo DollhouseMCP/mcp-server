@@ -8,6 +8,8 @@ import { GitHubClient } from '../../collection/GitHubClient.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { SecurityError } from '../../security/errors.js';
 import { logger } from '../../utils/logger.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ValidationErrorCodes, NetworkErrorCodes } from '../../utils/errorCodes.js';
 import { RateLimiter } from '../../update/RateLimiter.js';
 
 export interface ShareResult {
@@ -138,7 +140,7 @@ export class PersonaSharer {
 
       // Validate URL for security
       if (!this.validateShareUrl(url)) {
-        throw new Error('Invalid or potentially malicious URL');
+        throw ErrorHandler.createError('Invalid or potentially malicious URL', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
 
       // Try direct fetch with timeout
@@ -157,20 +159,20 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
         
         if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
+          throw ErrorHandler.createError(`Request failed with status ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.REQUEST_FAILED);
         }
 
         // Validate Content-Type header
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw new Error('Invalid response type: expected JSON');
+          throw ErrorHandler.createError('Invalid response type: expected JSON', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
         }
 
         // Check response size to prevent memory exhaustion
         const contentLength = response.headers.get('content-length');
         const maxSize = 5 * 1024 * 1024; // 5MB max
         if (contentLength && parseInt(contentLength) > maxSize) {
-          throw new Error('Response too large');
+          throw ErrorHandler.createError('Response too large', ErrorCategory.VALIDATION_ERROR, NetworkErrorCodes.RESPONSE_TOO_LARGE);
         }
 
         const data = await response.json();
@@ -238,13 +240,13 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`GitHub API error: ${response.status}`);
+          throw ErrorHandler.createError(`GitHub API error: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.API_ERROR);
         }
 
         // Validate Content-Type for GitHub API response
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw new Error('Invalid GitHub API response type');
+          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
         }
 
         const gist = await response.json();
@@ -292,14 +294,14 @@ export class PersonaSharer {
       // Check rate limit
       const rateLimitStatus = this.githubRateLimiter.checkLimit();
       if (!rateLimitStatus.allowed) {
-        throw new Error(`GitHub API rate limit exceeded. Please try again in ${Math.ceil(rateLimitStatus.retryAfterMs! / 1000)} seconds`);
+        throw ErrorHandler.createError(`GitHub API rate limit exceeded. Please try again in ${Math.ceil(rateLimitStatus.retryAfterMs! / 1000)} seconds`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.RATE_LIMIT_EXCEEDED);
       }
       
       const gistUrl = `https://api.github.com/gists/${gistId}`;
       
       // Validate URL (should always pass for GitHub API)
       if (!this.validateShareUrl(gistUrl)) {
-        throw new Error('Invalid GitHub API URL');
+        throw ErrorHandler.createError('Invalid GitHub API URL', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
       
       const controller = new AbortController();
@@ -317,20 +319,20 @@ export class PersonaSharer {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(`Failed to fetch gist: ${response.status}`);
+          throw ErrorHandler.createError(`Failed to fetch gist: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.FETCH_FAILED);
         }
 
         // Validate Content-Type for GitHub API response
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw new Error('Invalid GitHub API response type');
+          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
         }
 
         const gist = await response.json();
         const personaFile = gist.files['persona.json'];
         
         if (!personaFile) {
-          throw new Error('No persona data found in gist');
+          throw ErrorHandler.createError('No persona data found in gist', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_INPUT);
         }
 
         const data = JSON.parse(personaFile.content);
@@ -519,7 +521,7 @@ export class PersonaSharer {
       // Limit base64 length to prevent ReDoS attacks (10KB max for base64 encoded data)
       const match = url.match(/#dollhouse-persona=([A-Za-z0-9+/=]{1,10000})$/);
       if (!match) {
-        throw new Error('Invalid share URL format');
+        throw ErrorHandler.createError('Invalid share URL format', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FORMAT);
       }
 
       const base64 = match[1];

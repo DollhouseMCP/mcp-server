@@ -15,6 +15,8 @@ import { BaseElement } from '../BaseElement.js';
 import { IElement, IElementMetadata, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
+import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -84,7 +86,7 @@ export class Template extends BaseElement implements IElement {
         source: 'Template.constructor',
         details: `Template size ${content.length} exceeds maximum ${this.MAX_TEMPLATE_SIZE}`
       });
-      throw new Error(`Template content exceeds maximum size of ${this.MAX_TEMPLATE_SIZE} bytes`);
+      throw ErrorHandler.createError(`Template content exceeds maximum size of ${this.MAX_TEMPLATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TEMPLATE_TOO_LARGE);
     }
     
     // SECURITY FIX #3: Sanitize template content
@@ -106,7 +108,7 @@ export class Template extends BaseElement implements IElement {
     // SECURITY FIX #3 & #4: Validate variables
     if (this.metadata.variables) {
       if (this.metadata.variables.length > this.MAX_VARIABLE_COUNT) {
-        throw new Error(`Variable count ${this.metadata.variables.length} exceeds maximum ${this.MAX_VARIABLE_COUNT}`);
+        throw ErrorHandler.createError(`Variable count ${this.metadata.variables.length} exceeds maximum ${this.MAX_VARIABLE_COUNT}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TOO_MANY_VARIABLES);
       }
       
       this.metadata.variables = this.metadata.variables.map(variable => ({
@@ -129,7 +131,7 @@ export class Template extends BaseElement implements IElement {
             source: 'Template.constructor',
             details: `Invalid include path: ${sanitizedPath}`
           });
-          throw new Error(`Invalid include path: ${sanitizedPath}`);
+          throw ErrorHandler.createError(`Invalid include path: ${sanitizedPath}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_INCLUDE_PATH);
         }
         return sanitizedPath;
       });
@@ -205,7 +207,7 @@ export class Template extends BaseElement implements IElement {
         source: 'Template.render',
         details: `Include depth ${includeDepth} exceeds maximum ${this.MAX_INCLUDE_DEPTH}`
       });
-      throw new Error('Maximum template include depth exceeded');
+      throw ErrorHandler.createError('Maximum template include depth exceeded', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.MAX_INCLUDE_DEPTH);
     }
 
     // Compile the template
@@ -269,7 +271,7 @@ export class Template extends BaseElement implements IElement {
         if (varDef.default !== undefined) {
           sanitized[varDef.name] = varDef.default;
         } else {
-          throw new Error(`Required variable '${varDef.name}' not provided`);
+          throw ErrorHandler.createError(`Required variable '${varDef.name}' not provided`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.REQUIRED_VARIABLE);
         }
       }
     }
@@ -318,7 +320,7 @@ export class Template extends BaseElement implements IElement {
           try {
             // Check for dangerous regex patterns
             if (this.isDangerousRegex(varDef.validation)) {
-              throw new Error(`Variable '${varDef.name}' has potentially dangerous validation pattern`);
+              throw ErrorHandler.createError(`Variable '${varDef.name}' has potentially dangerous validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.DANGEROUS_PATTERN);
             }
             
             const regex = new RegExp(varDef.validation);
@@ -335,15 +337,15 @@ export class Template extends BaseElement implements IElement {
                 source: 'Template.sanitizeVariableValue',
                 details: `Regex validation took ${duration}ms for variable '${varDef.name}', possible ReDoS`
               });
-              throw new Error(`Variable '${varDef.name}' validation pattern is too complex`);
+              throw ErrorHandler.createError(`Variable '${varDef.name}' validation pattern is too complex`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_TOO_COMPLEX);
             }
             
             if (!result) {
-              throw new Error(`Variable '${varDef.name}' does not match validation pattern`);
+              throw ErrorHandler.createError(`Variable '${varDef.name}' does not match validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATTERN_MISMATCH);
             }
           } catch (e) {
             if (e instanceof SyntaxError) {
-              throw new Error(`Variable '${varDef.name}' has invalid validation pattern`);
+              throw ErrorHandler.createError(`Variable '${varDef.name}' has invalid validation pattern`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATTERN);
             }
             throw e;
           }
@@ -351,7 +353,7 @@ export class Template extends BaseElement implements IElement {
         
         // Check enum options if specified
         if (varDef.options && !varDef.options.includes(stringValue)) {
-          throw new Error(`Variable '${varDef.name}' must be one of: ${varDef.options.join(', ')}`);
+          throw ErrorHandler.createError(`Variable '${varDef.name}' must be one of: ${varDef.options.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_OPTIONS);
         }
         
         return stringValue;
@@ -359,7 +361,7 @@ export class Template extends BaseElement implements IElement {
       case 'number':
         const num = Number(value);
         if (isNaN(num)) {
-          throw new Error(`Variable '${varDef.name}' must be a number`);
+          throw ErrorHandler.createError(`Variable '${varDef.name}' must be a number`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
         }
         return num;
         
@@ -369,13 +371,13 @@ export class Template extends BaseElement implements IElement {
       case 'date':
         const date = new Date(value);
         if (isNaN(date.getTime())) {
-          throw new Error(`Variable '${varDef.name}' must be a valid date`);
+          throw ErrorHandler.createError(`Variable '${varDef.name}' must be a valid date`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_DATE);
         }
         return date;
         
       case 'array':
         if (!Array.isArray(value)) {
-          throw new Error(`Variable '${varDef.name}' must be an array`);
+          throw ErrorHandler.createError(`Variable '${varDef.name}' must be an array`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_ARRAY);
         }
         // SECURITY FIX: Limit array size to prevent memory exhaustion attacks
         // Previously: No limit on array size could lead to DoS
@@ -397,7 +399,7 @@ export class Template extends BaseElement implements IElement {
         
       case 'object':
         if (typeof value !== 'object' || value === null) {
-          throw new Error(`Variable '${varDef.name}' must be an object`);
+          throw ErrorHandler.createError(`Variable '${varDef.name}' must be an object`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_OBJECT);
         }
         // Deep sanitize string values in objects
         return this.sanitizeObject(value);
@@ -748,7 +750,7 @@ export class Template extends BaseElement implements IElement {
       
     } catch (error) {
       logger.error(`Failed to deserialize template: ${error}`);
-      throw new Error(`Deserialization failed: ${error}`);
+      throw ErrorHandler.wrapError(error, 'Template deserialization failed', ErrorCategory.SYSTEM_ERROR);
     }
   }
 
