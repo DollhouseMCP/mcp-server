@@ -12,7 +12,7 @@ import { ContentValidator } from '../../../../../src/security/contentValidator.j
 import { PortfolioManager } from '../../../../../src/portfolio/PortfolioManager.js';
 import { SecurityMonitor } from '../../../../../src/security/securityMonitor.js';
 import { UnicodeValidator } from '../../../../../src/security/validators/unicodeValidator.js';
-import { APICache } from '../../../../../src/utils/APICache.js';
+// APICache import removed - using mock
 import { ElementType } from '../../../../../src/portfolio/types.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
