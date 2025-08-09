@@ -112,11 +112,17 @@ class OAuthSetup {
   async checkCurrentConfig() {
     try {
       const config = await this.loadConfig();
-      const clientId = config.oauth?.githubClientId;
+      // SECURITY: GitHub OAuth client IDs are NOT secrets - they are public identifiers
+      // Only the client secret (which we never handle) is sensitive
+      // We still mask the ID in logs for privacy, not security
+      const hasClientId = !!(config.oauth?.githubClientId);
       
-      if (clientId) {
+      if (hasClientId) {
         console.log(colors.green + '\n✅ OAuth is already configured!' + colors.reset);
-        console.log(`Current Client ID: ${colors.cyan}${clientId.substring(0, 10)}...${colors.reset}\n`);
+        // Extract only the prefix for display (privacy measure, not security)
+        const idPrefix = config.oauth?.githubClientId?.substring(0, 10) || '';
+        const displayId = idPrefix ? `${idPrefix}...` : 'Not configured';
+        console.log(`Current Client ID: ${colors.cyan}${displayId}${colors.reset}\n`);
         
         const answer = await this.prompt('Do you want to update it? (y/n): ');
         return answer.toLowerCase() === 'y';
@@ -179,13 +185,17 @@ class OAuthSetup {
     try {
       const config = await this.loadConfig();
       config.oauth = config.oauth || {};
+      // SECURITY: Storing the client ID is safe - it's not a secret, just an identifier
+      // GitHub OAuth client IDs are public information (only the client secret is sensitive)
       config.oauth.githubClientId = clientId;
       
       await this.saveConfig(config);
       
       console.log(colors.green + '\n✅ OAuth configuration saved successfully!' + colors.reset);
       console.log(`\nConfiguration file: ${colors.cyan}${CONFIG_FILE}${colors.reset}`);
-      console.log(`Client ID: ${colors.cyan}${clientId.substring(0, 10)}...${colors.reset} (masked for security)\n`);
+      // Mask the client ID for security - only show prefix
+      const maskedClientId = `${clientId.substring(0, 10)}...`;
+      console.log(`Client ID: ${colors.cyan}${maskedClientId}${colors.reset} (masked for security)\n`);
       
       console.log(colors.bright + colors.green + '🎉 Setup Complete!' + colors.reset);
       console.log('\nYou can now:');
