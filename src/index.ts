@@ -45,6 +45,7 @@ import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
+import { ConfigManager } from './config/ConfigManager.js';
 
 
 
@@ -2336,19 +2337,46 @@ export class DollhouseMCPServer implements IToolHandler {
           throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
         }
         
-        // Get the client ID from environment (required)
-        const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+        // Get the client ID with ConfigManager fallback
+        let clientId: string | null = null;
+        
+        // Check environment variable first (for backward compatibility)
+        clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID || null;
+        
+        // If not found in environment, try ConfigManager
+        if (!clientId) {
+          try {
+            const configManager = ConfigManager.getInstance();
+            await configManager.loadConfig();
+            clientId = configManager.getGitHubClientId();
+          } catch (configError) {
+            logger.debug('Failed to load ConfigManager for client ID', { error: configError });
+          }
+        }
         
         if (!clientId) {
-          logger.error('GitHub OAuth client ID not configured');
+          logger.error('GitHub OAuth client ID not configured in any source');
           return {
             content: [{
               type: "text",
-              text: `${this.getPersonaIndicator()}❌ **Configuration Error**\n\n` +
-                    `GitHub OAuth is not properly configured.\n\n` +
-                    `**For administrators:**\n` +
-                    `Set the DOLLHOUSE_GITHUB_CLIENT_ID environment variable.\n\n` +
-                    `Please contact the server administrator to resolve this issue.`
+              text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Configuration Missing**\n\n` +
+                    `GitHub OAuth client ID not found in any of these sources:\n` +
+                    `• DOLLHOUSE_GITHUB_CLIENT_ID environment variable\n` +
+                    `• ~/.dollhouse/config.json file\n\n` +
+                    `**Setup Instructions:**\n\n` +
+                    `**Option 1 - Environment Variable:**\n` +
+                    `Set DOLLHOUSE_GITHUB_CLIENT_ID before starting the server.\n\n` +
+                    `**Option 2 - Config File:**\n` +
+                    `Create ~/.dollhouse/config.json with:\n` +
+                    `\`\`\`json\n` +
+                    `{\n` +
+                    `  "version": "1.0.0",\n` +
+                    `  "oauth": {\n` +
+                    `    "githubClientId": "your_client_id_here"\n` +
+                    `  }\n` +
+                    `}\n` +
+                    `\`\`\`\n\n` +
+                    `Contact your administrator for the client ID value.`
             }]
           };
         }
