@@ -9,6 +9,7 @@ import { APICache } from '../cache/APICache.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -38,11 +39,26 @@ export interface AuthStatus {
  */
 export class GitHubAuthManager {
   /**
-   * Get the CLIENT_ID from environment variable
+   * Get the CLIENT_ID from environment variable or ConfigManager
+   * Environment variable takes precedence, then ConfigManager
    * No hardcoded fallback for security reasons
    */
-  private static getClientId(): string | null {
-    return process.env.DOLLHOUSE_GITHUB_CLIENT_ID || null;
+  private static async getClientId(): Promise<string | null> {
+    // Check environment variable first (for backward compatibility)
+    const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+    if (envClientId) {
+      return envClientId;
+    }
+
+    // Fallback to ConfigManager
+    try {
+      const configManager = ConfigManager.getInstance();
+      await configManager.loadConfig();
+      return configManager.getGitHubClientId();
+    } catch (error) {
+      logger.debug('Failed to load config for client ID', { error });
+      return null;
+    }
   }
   
   // GitHub OAuth endpoints
@@ -144,7 +160,7 @@ export class GitHubAuthManager {
    * Initiate the device flow authentication process
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
-    const clientId = GitHubAuthManager.getClientId();
+    const clientId = await GitHubAuthManager.getClientId();
     
     if (!clientId) {
       throw new Error(
@@ -236,7 +252,7 @@ export class GitHubAuthManager {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            client_id: GitHubAuthManager.getClientId() || '',
+            client_id: await GitHubAuthManager.getClientId() || '',
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })

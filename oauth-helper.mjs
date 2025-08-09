@@ -28,6 +28,62 @@ const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
 
+// Config cache for performance optimization
+let cachedConfig = null;
+let configLastRead = 0;
+const CONFIG_CACHE_TTL = 30000; // 30 seconds cache
+
+/**
+ * Get client ID from multiple sources in order of priority:
+ * 1. Command line argument (highest priority)
+ * 2. Environment variable (for backward compatibility)
+ * 3. Config file (fallback) - with caching for performance
+ */
+async function getClientId(providedClientId) {
+  // 1. Check command line argument first
+  if (providedClientId && providedClientId !== 'undefined') {
+    return providedClientId;
+  }
+  
+  // 2. Check environment variable
+  const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+  if (envClientId) {
+    return envClientId;
+  }
+  
+  // 3. Check config file as fallback (with caching for performance)
+  try {
+    const now = Date.now();
+    
+    // Use cached config if still valid
+    if (cachedConfig && (now - configLastRead) < CONFIG_CACHE_TTL) {
+      if (cachedConfig.oauth && cachedConfig.oauth.githubClientId) {
+        await log('Using GitHub client ID from cached config');
+        return cachedConfig.oauth.githubClientId;
+      }
+    }
+    
+    // Read fresh config
+    const configPath = join(homedir(), '.dollhouse', 'config.json');
+    const configContent = await fs.readFile(configPath, 'utf-8');
+    const config = JSON.parse(configContent);
+    
+    // Update cache
+    cachedConfig = config;
+    configLastRead = now;
+    
+    if (config.oauth && config.oauth.githubClientId) {
+      await log('Using GitHub client ID from config file');
+      return config.oauth.githubClientId;
+    }
+  } catch (error) {
+    // Config file doesn't exist or is invalid - this is OK
+    await log(`Config file not available: ${error.message}`);
+  }
+  
+  return null;
+}
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 if (args.length < 4) {
@@ -35,18 +91,11 @@ if (args.length < 4) {
   process.exit(1);
 }
 
-const [deviceCode, intervalStr, expiresInStr, clientId] = args;
+const [deviceCode, intervalStr, expiresInStr, providedClientId] = args;
 const pollInterval = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
-// Validate client ID is provided (no hardcoded fallback)
-if (!clientId || clientId === 'undefined') {
-  console.error('⚠️  GitHub OAuth Configuration Missing\n');
-  console.error('The server administrator needs to configure GitHub OAuth.');
-  console.error('Please contact your administrator to set up the DOLLHOUSE_GITHUB_CLIENT_ID.');
-  console.error('\nFor administrators: Set the environment variable before starting the server.');
-  process.exit(1);
-}
+// Note: Client ID resolution is now done inside main() function to handle async properly
 
 // Log file for debugging (optional, can be disabled in production)
 const LOG_FILE = join(homedir(), '.dollhouse', 'oauth-helper.log');
@@ -199,7 +248,26 @@ async function main() {
   await log(`OAuth helper started - PID: ${process.pid}`);
   await log(`Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
   await log(`Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
-  // Never log client ID
+  
+  // Get client ID from multiple sources with proper fallback
+  const clientId = await getClientId(providedClientId);
+  
+  // Validate client ID is available from any source
+  if (!clientId) {
+    console.error('⚠️  GitHub OAuth Configuration Missing\n');
+    console.error('GitHub OAuth client ID not found in any of these sources:');
+    console.error('  • Command line argument');
+    console.error('  • DOLLHOUSE_GITHUB_CLIENT_ID environment variable');
+    console.error('  • ~/.dollhouse/config.json file\n');
+    console.error('To fix this:');
+    console.error('  1. Set DOLLHOUSE_GITHUB_CLIENT_ID environment variable, OR');
+    console.error('  2. Configure it in ~/.dollhouse/config.json\n');
+    console.error('For administrators: Contact DollhouseMCP support for setup instructions.');
+    process.exit(1);
+  }
+  
+  await log(`Client ID source: ${providedClientId && providedClientId !== 'undefined' ? 'command line' : process.env.DOLLHOUSE_GITHUB_CLIENT_ID ? 'environment' : 'config file'}`);
+  // Never log actual client ID value
   
   // Write PID file for tracking
   await writePidFile();
