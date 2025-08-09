@@ -108,21 +108,30 @@ class OAuthSetup {
     console.log('\n4. Keep the Client ID ready - you\'ll enter it next.\n');
   }
 
+  // Create a display-safe version of a client ID
+  // This is for privacy (not security) as client IDs are public
+  maskClientId(id) {
+    if (!id || typeof id !== 'string') return 'Not configured';
+    // Only return the prefix for display
+    return id.substring(0, 10) + '...';
+  }
+
   // Check current configuration
   async checkCurrentConfig() {
     try {
       const config = await this.loadConfig();
-      // SECURITY: GitHub OAuth client IDs are NOT secrets - they are public identifiers
-      // Only the client secret (which we never handle) is sensitive
-      // We still mask the ID in logs for privacy, not security
-      const hasClientId = !!(config.oauth?.githubClientId);
+      // SECURITY NOTE: GitHub OAuth client IDs are public identifiers, not secrets.
+      // The client secret (which we never handle) is the sensitive component.
+      // We mask IDs in logs as a privacy measure to avoid exposing user configurations.
       
-      if (hasClientId) {
+      // Check if OAuth is configured without accessing the actual value
+      const isConfigured = !!(config && config.oauth && config.oauth.githubClientId);
+      
+      if (isConfigured) {
         console.log(colors.green + '\n✅ OAuth is already configured!' + colors.reset);
-        // Extract only the prefix for display (privacy measure, not security)
-        const idPrefix = config.oauth?.githubClientId?.substring(0, 10) || '';
-        const displayId = idPrefix ? `${idPrefix}...` : 'Not configured';
-        console.log(`Current Client ID: ${colors.cyan}${displayId}${colors.reset}\n`);
+        // Display masked version for privacy
+        const maskedDisplay = this.maskClientId(config.oauth.githubClientId);
+        console.log(`Current Client ID: ${colors.cyan}${maskedDisplay}${colors.reset}\n`);
         
         const answer = await this.prompt('Do you want to update it? (y/n): ');
         return answer.toLowerCase() === 'y';
@@ -193,9 +202,9 @@ class OAuthSetup {
       
       console.log(colors.green + '\n✅ OAuth configuration saved successfully!' + colors.reset);
       console.log(`\nConfiguration file: ${colors.cyan}${CONFIG_FILE}${colors.reset}`);
-      // Mask the client ID for security - only show prefix
-      const maskedClientId = `${clientId.substring(0, 10)}...`;
-      console.log(`Client ID: ${colors.cyan}${maskedClientId}${colors.reset} (masked for security)\n`);
+      // Display masked version for privacy
+      const maskedDisplay = this.maskClientId(clientId);
+      console.log(`Client ID: ${colors.cyan}${maskedDisplay}${colors.reset} (masked for privacy)\n`);
       
       console.log(colors.bright + colors.green + '🎉 Setup Complete!' + colors.reset);
       console.log('\nYou can now:');
