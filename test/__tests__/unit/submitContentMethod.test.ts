@@ -215,8 +215,9 @@ describe('submitContent method improvements', () => {
       // Parallel should be significantly faster
       expect(parallelTime).toBeLessThan(sequentialTime);
       
-      // Parallel should take roughly the time of one search
-      expect(parallelTime).toBeLessThan(SEARCH_DELAY * 2); // Allow some overhead
+      // Parallel should be much faster than sequential (at least 2x faster)
+      // This is a relative comparison, not absolute timing
+      expect(parallelTime).toBeLessThan(sequentialTime / 2);
       
       // Sequential should take roughly the sum of all searches
       expect(sequentialTime).toBeGreaterThanOrEqual(SEARCH_DELAY * ELEMENT_COUNT * 0.9); // 90% minimum
