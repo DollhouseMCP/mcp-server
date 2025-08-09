@@ -112,11 +112,11 @@ describe('ConfigManager', () => {
       const configManager = ConfigManager.getInstance();
       await configManager.loadConfig();
       
-      // Should write default config
+      // Should write default config (atomic write uses temp file)
       expect(mockWriteFile).toHaveBeenCalledWith(
-        configPath,
+        expect.stringContaining('.tmp'),
         JSON.stringify({ version: '1.0.0' }, null, 2),
-        { mode: 0o600 }
+        { mode: 384 }
       );
     });
     
@@ -153,11 +153,11 @@ describe('ConfigManager', () => {
       // Should not throw, should create new config
       await expect(configManager.loadConfig()).resolves.not.toThrow();
       
-      // Should write new default config
+      // Should write new default config (atomic write uses temp file)
       expect(mockWriteFile).toHaveBeenCalledWith(
-        configPath,
+        expect.stringContaining('.tmp'),
         JSON.stringify({ version: '1.0.0' }, null, 2),
-        { mode: 0o600 }
+        { mode: 384 }
       );
     });
     
@@ -358,7 +358,7 @@ describe('ConfigManager', () => {
       
       const configManager = ConfigManager.getInstance();
       await configManager.loadConfig();
-      await configManager.setGitHubClientId('Ov23liNewId456');
+      await configManager.setGitHubClientId('Ov23liNewId456789012');
       
       // Check that unknown fields are preserved
       const writeCall = mockWriteFile.mock.calls[0];
@@ -522,7 +522,7 @@ describe('ConfigManager', () => {
       mockRename.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.setGitHubClientId('Ov23liAtomicTest123');
+      await configManager.setGitHubClientId('Ov23liAtomicTest123456');
       
       // Should write to temp file first
       expect(mockWriteFile).toHaveBeenCalledWith(
