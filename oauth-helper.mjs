@@ -28,11 +28,16 @@ const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
 
+// Config cache for performance optimization
+let cachedConfig = null;
+let configLastRead = 0;
+const CONFIG_CACHE_TTL = 30000; // 30 seconds cache
+
 /**
  * Get client ID from multiple sources in order of priority:
  * 1. Command line argument (highest priority)
  * 2. Environment variable (for backward compatibility)
- * 3. Config file (fallback)
+ * 3. Config file (fallback) - with caching for performance
  */
 async function getClientId(providedClientId) {
   // 1. Check command line argument first
@@ -46,11 +51,26 @@ async function getClientId(providedClientId) {
     return envClientId;
   }
   
-  // 3. Check config file as fallback
+  // 3. Check config file as fallback (with caching for performance)
   try {
+    const now = Date.now();
+    
+    // Use cached config if still valid
+    if (cachedConfig && (now - configLastRead) < CONFIG_CACHE_TTL) {
+      if (cachedConfig.oauth && cachedConfig.oauth.githubClientId) {
+        await log('Using GitHub client ID from cached config');
+        return cachedConfig.oauth.githubClientId;
+      }
+    }
+    
+    // Read fresh config
     const configPath = join(homedir(), '.dollhouse', 'config.json');
     const configContent = await fs.readFile(configPath, 'utf-8');
     const config = JSON.parse(configContent);
+    
+    // Update cache
+    cachedConfig = config;
+    configLastRead = now;
     
     if (config.oauth && config.oauth.githubClientId) {
       await log('Using GitHub client ID from config file');

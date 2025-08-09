@@ -191,7 +191,7 @@ class OAuthSetup {
       console.log('\nYou can now:');
       console.log('1. Use ' + colors.cyan + 'setup_github_auth' + colors.reset + ' in Claude Desktop to authenticate');
       console.log('2. Or set the environment variable:');
-      console.log('   ' + colors.cyan + `export DOLLHOUSE_GITHUB_CLIENT_ID="${clientId}"` + colors.reset);
+      console.log('   ' + colors.cyan + `export DOLLHOUSE_GITHUB_CLIENT_ID="<your_client_id>"` + colors.reset);
       console.log('\n' + colors.magenta + 'Happy coding with DollhouseMCP! 🎭' + colors.reset + '\n');
       
     } catch (error) {

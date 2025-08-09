@@ -66,6 +66,28 @@ export class ConfigManager {
   }
 
   /**
+   * Attempt to repair file permissions if they're incorrect
+   * This helps with error recovery in permission-related issues
+   */
+  private async repairPermissions(): Promise<void> {
+    try {
+      // Try to fix directory permissions
+      await fs.chmod(this.configDir, 0o700);
+      
+      // Try to fix file permissions if it exists
+      try {
+        await fs.access(this.configPath);
+        await fs.chmod(this.configPath, 0o600);
+      } catch {
+        // File doesn't exist, that's OK
+      }
+    } catch (error) {
+      // Log but don't fail - this is best-effort recovery
+      // We don't have a logger here, so we'll silently continue
+    }
+  }
+
+  /**
    * Load configuration from file system
    */
   public async loadConfig(): Promise<void> {
@@ -86,8 +108,21 @@ export class ConfigManager {
         // Config file doesn't exist, create directory and file
         await this.ensureConfigDirectory();
         await this.saveConfig();
-      } else if (error.code === 'EACCES') {
-        throw new Error(`Permission denied accessing config directory: ${this.configDir}`);
+      } else if (error.code === 'EACCES' || error.code === 'EPERM') {
+        // Permission denied - attempt repair
+        await this.repairPermissions();
+        
+        // Try once more after repair attempt
+        try {
+          const configContent = await fs.readFile(this.configPath, 'utf-8');
+          this.config = JSON.parse(configContent);
+        } catch (retryError: any) {
+          // Still failing, throw original error with helpful message
+          throw new Error(
+            `Permission denied accessing config at ${this.configPath}. ` +
+            `Please check file permissions or run with appropriate privileges.`
+          );
+        }
       } else {
         throw error;
       }
@@ -130,6 +165,16 @@ export class ConfigManager {
 
   /**
    * Validate GitHub OAuth client ID format
+   * Client IDs start with "Ov23li" followed by at least 14 alphanumeric characters
+   * 
+   * @param clientId - The client ID to validate
+   * @returns true if valid, false otherwise
+   * 
+   * @example
+   * ConfigManager.validateClientId("Ov23liABCDEFGHIJKLMN123456") // true
+   * ConfigManager.validateClientId("invalid") // false
+   * ConfigManager.validateClientId("Ov23li") // false (too short)
+   * ConfigManager.validateClientId("Xv23liABCDEFGHIJKLMN") // false (wrong prefix)
    */
   public static validateClientId(clientId: any): boolean {
     if (typeof clientId !== 'string' || !clientId) {
