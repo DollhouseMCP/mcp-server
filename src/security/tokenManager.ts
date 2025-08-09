@@ -37,7 +37,8 @@ export class TokenManager {
     PERSONAL_ACCESS_TOKEN: /^ghp_[A-Za-z0-9_]{36,}$/,
     INSTALLATION_TOKEN: /^ghs_[A-Za-z0-9_]{36,}$/,
     USER_ACCESS_TOKEN: /^ghu_[A-Za-z0-9_]{36,}$/,
-    REFRESH_TOKEN: /^ghr_[A-Za-z0-9_]{36,}$/
+    REFRESH_TOKEN: /^ghr_[A-Za-z0-9_]{36,}$/,
+    OAUTH_ACCESS_TOKEN: /^gho_[A-Za-z0-9_]{16,}$/  // OAuth device flow tokens
   };
 
   // Secure storage configuration
@@ -151,6 +152,9 @@ export class TokenManager {
     }
     if (this.GITHUB_TOKEN_PATTERNS.REFRESH_TOKEN.test(token)) {
       return 'Refresh Token';
+    }
+    if (this.GITHUB_TOKEN_PATTERNS.OAUTH_ACCESS_TOKEN.test(token)) {
+      return 'OAuth Access Token';
     }
     return 'Unknown';
   }
@@ -302,7 +306,8 @@ export class TokenManager {
       .replace(/ghp_[A-Za-z0-9_]{36,}/g, '[REDACTED_PAT]')
       .replace(/ghs_[A-Za-z0-9_]{36,}/g, '[REDACTED_INSTALL]')
       .replace(/ghu_[A-Za-z0-9_]{36,}/g, '[REDACTED_USER]')
-      .replace(/ghr_[A-Za-z0-9_]{36,}/g, '[REDACTED_REFRESH]');
+      .replace(/ghr_[A-Za-z0-9_]{36,}/g, '[REDACTED_REFRESH]')
+      .replace(/gho_[A-Za-z0-9_]{16,}/g, '[REDACTED_OAUTH]');
 
     if (token) {
       const tokenPrefix = this.getTokenPrefix(token);
