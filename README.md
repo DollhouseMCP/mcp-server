@@ -411,6 +411,36 @@ export DOLLHOUSE_INDICATOR_EMOJI=🎨
 
 DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.5.2**: Authentication is now optional - browse and submit anonymously!
 
+#### OAuth Setup (For Self-Hosting)
+
+If you're self-hosting or developing, you need to configure a GitHub OAuth app:
+
+1. **Create GitHub OAuth App**:
+   - Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+   - **Application name**: `DollhouseMCP Server`
+   - **Homepage URL**: `https://github.com/DollhouseMCP/mcp-server`
+   - **Authorization callback URL**: `http://localhost:12345/callback` (required but not used)
+   - Click "Register application"
+
+2. **Enable Device Flow**:
+   - In your OAuth app settings, check ✅ **Enable Device Flow**
+   - Copy your Client ID (format: `Ov23liXXXXXXXXXXXXXX`)
+
+3. **Configure Environment**:
+   ```bash
+   # Add to your shell profile (.bashrc, .zshrc, etc)
+   export DOLLHOUSE_GITHUB_CLIENT_ID="your_client_id_here"
+   
+   # Or in Claude Desktop config:
+   "env": {
+     "DOLLHOUSE_GITHUB_CLIENT_ID": "your_client_id_here"
+   }
+   ```
+
+See [OAuth Setup Guide](docs/setup/OAUTH_SETUP.md) for detailed instructions.
+
+#### Using Authentication
+
 ```
 setup_github_auth                         # Start OAuth device flow
 check_github_auth                         # Check authentication status
@@ -933,6 +963,9 @@ Customize server behavior with these environment variables:
 # User Attribution
 export DOLLHOUSE_USER="your-username"          # User attribution for persona creation
 export DOLLHOUSE_EMAIL="your-email"            # Contact email (optional)
+
+# GitHub OAuth Configuration
+export DOLLHOUSE_GITHUB_CLIENT_ID="Ov23li..."  # OAuth app client ID (for self-hosting)
 
 # Directory Configuration
 export PERSONAS_DIR="/custom/path/to/personas"  # Custom personas directory
