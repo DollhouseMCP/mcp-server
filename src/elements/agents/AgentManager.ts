@@ -175,7 +175,7 @@ export class AgentManager implements IElementManager<Agent> {
       const state = await this.loadAgentState(sanitizedName);
       if (state) {
         agent.deserialize(JSON.stringify({
-          ...JSON.parse(agent.serialize()),
+          ...JSON.parse(agent.serializeToJSON()),
           state
         }));
       }
@@ -659,7 +659,7 @@ export class AgentManager implements IElementManager<Agent> {
       const agent = new Agent(agentData.metadata);
       if (agentData.state) {
         agent.deserialize(JSON.stringify({
-          ...JSON.parse(agent.serialize()),
+          ...JSON.parse(agent.serializeToJSON()),
           state: agentData.state
         }));
       }
@@ -672,9 +672,10 @@ export class AgentManager implements IElementManager<Agent> {
    */
   public async exportElement(element: Agent, format?: 'json' | 'yaml' | 'markdown'): Promise<string> {
     if (format === 'json') {
-      return element.serialize();
+      // Use serializeToJSON for JSON format to maintain backward compatibility
+      return element.serializeToJSON();
     } else {
-      // Export as markdown with YAML frontmatter
+      // Export as markdown with YAML frontmatter (default)
       const content = `# ${element.metadata.name}\n\n${element.metadata.description || ''}`;
       return this.serializeToFile(element, content);
     }

@@ -19,7 +19,7 @@ describe('Deprecated Tool Aliases', () => {
       installContent: jest.fn().mockResolvedValue({ success: true }),
       submitContent: jest.fn().mockResolvedValue({ success: true }),
       getCollectionCacheHealth: jest.fn().mockResolvedValue({ status: 'healthy' })
-    } as any;
+    } as jest.Mocked<IToolHandler>;
     
     tools = getCollectionTools(mockServer);
   });

@@ -17,9 +17,11 @@ import {
 } from '../types/elements/index.js';
 import { ElementType } from '../portfolio/types.js';
 import { v4 as uuidv4 } from 'uuid';
+import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
 
 export abstract class BaseElement implements IElement {
   // Identity
@@ -188,10 +190,10 @@ export abstract class BaseElement implements IElement {
   }
   
   /**
-   * Default serialization to JSON.
-   * Subclasses can override for custom formats.
+   * Serialize to JSON format for internal use and testing.
+   * Maintains backward compatibility with existing tests.
    */
-  public serialize(): string {
+  public serializeToJSON(): string {
     const data = {
       id: this.id,
       type: this.type,
@@ -204,6 +206,86 @@ export abstract class BaseElement implements IElement {
     
     return JSON.stringify(data, null, 2);
   }
+
+  /**
+   * Default serialization to markdown with YAML frontmatter.
+   * Uses js-yaml for secure YAML generation to prevent injection attacks.
+   * FIX: Changed from JSON to proper markdown format for GitHub portfolio storage.
+   * This ensures elements are readable on GitHub and compatible with collection workflow.
+   */
+  public serialize(): string {
+    // Build YAML frontmatter starting with all metadata fields
+    // This ensures subclasses can add their own fields
+    const frontmatter: Record<string, any> = {
+      ...this.metadata,  // Include all metadata fields
+      type: this.type,
+      version: this.version
+    };
+    
+    // Note: metadata already includes name, description, author, created, modified
+    // and any additional fields added by subclasses
+    if (this.references && this.references.length > 0) {
+      frontmatter.references = this.references.map(ref => ({
+        type: ref.type,
+        uri: ref.uri,
+        title: ref.title
+      }));
+    }
+    if (this.ratings && this.ratings.aiRating > 0) {
+      frontmatter.ratings = {
+        aiRating: this.ratings.aiRating,
+        userRating: this.ratings.userRating,
+        ratingCount: this.ratings.ratingCount
+      };
+    }
+    
+    // Remove undefined/null values
+    const cleanFrontmatter = Object.fromEntries(
+      Object.entries(frontmatter).filter(([_, value]) => value !== undefined && value !== null)
+    );
+    
+    // Use js-yaml for secure YAML generation
+    // This prevents YAML injection attacks and handles special characters properly
+    let yamlFrontmatter: string;
+    try {
+      yamlFrontmatter = yaml.dump(cleanFrontmatter, {
+        noRefs: true,          // Don't use YAML references
+        sortKeys: false,       // Keep our order
+        lineWidth: -1,         // Don't wrap lines
+        quotingType: '"',      // Use double quotes when needed
+        forceQuotes: false,    // Only quote when necessary
+        skipInvalid: false     // Don't skip invalid values
+      });
+    } catch (error) {
+      // If YAML generation fails, log and throw a more informative error
+      logger.error('Failed to generate YAML frontmatter', { error, frontmatter: cleanFrontmatter });
+      throw new Error(`Failed to serialize element metadata to YAML: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+    
+    // Validate the generated YAML can be parsed back using SecureYamlParser
+    // HIGH SEVERITY FIX: Use SecureYamlParser instead of yaml.load to prevent code execution
+    try {
+      SecureYamlParser.parse(yamlFrontmatter, {
+        maxYamlSize: 64 * 1024, // 64KB limit for frontmatter
+        validateContent: true
+      });
+    } catch (error) {
+      logger.error('Generated invalid YAML', { error, yaml: yamlFrontmatter });
+      throw new Error(`Generated YAML is invalid: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+    
+    // Get content - subclasses should override this to provide actual content
+    const content = this.getContent ? this.getContent() : `# ${this.metadata.name}\n\n${this.metadata.description || ''}`;
+    
+    // Trim the YAML to remove trailing newline that yaml.dump adds
+    return `---\n${yamlFrontmatter.trim()}\n---\n\n${content}`;
+  }
+  
+  /**
+   * Get element content for serialization.
+   * Subclasses should override this to provide their specific content.
+   */
+  protected getContent?(): string;
   
   /**
    * Default deserialization from JSON.
@@ -231,8 +313,23 @@ export abstract class BaseElement implements IElement {
       
       this._isDirty = false;
     } catch (error) {
-      logger.error('Failed to deserialize element', { error, data });
-      throw new Error(`Failed to deserialize element: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Enhanced error context preservation
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      logger.error('Failed to deserialize element', { 
+        error: errorMessage,
+        stack: errorStack,
+        dataPreview: data.substring(0, 200), // First 200 chars for context
+        elementType: this.type
+      });
+      
+      // Create new error with original as cause
+      const deserializeError = new Error(`BaseElement deserialization failed: ${errorMessage}`);
+      if (error instanceof Error) {
+        deserializeError.cause = error;
+      }
+      throw deserializeError;
     }
   }
   

@@ -859,14 +859,67 @@ export class Agent extends BaseElement implements IElement {
   }
 
   /**
-   * Serialize agent including state
+   * Serialize to JSON format for internal use and testing
    */
-  public override serialize(): string {
+  public override serializeToJSON(): string {
     const data = {
-      ...JSON.parse(super.serialize()),
+      ...JSON.parse(super.serializeToJSON()),
       state: this.state
     };
     return JSON.stringify(data, null, 2);
+  }
+
+  /**
+   * Get content for serialization
+   */
+  protected override getContent(): string {
+    let content = `# ${this.metadata.name}\n\n`;
+    content += `${this.metadata.description}\n\n`;
+    
+    if (this.state.goals.length > 0) {
+      content += `## Current Goals\n\n`;
+      this.state.goals.forEach(goal => {
+        content += `### ${goal.description}\n`;
+        content += `- **Priority**: ${goal.priority}\n`;
+        content += `- **Status**: ${goal.status}\n`;
+        // Progress tracking could be added in future
+        // if (goal.progress !== undefined) {
+        //   content += `- **Progress**: ${goal.progress}%\n`;
+        // }
+        content += '\n';
+      });
+    }
+    
+    if (this.state.context && Object.keys(this.state.context).length > 0) {
+      content += `## Context\n\n`;
+      for (const [key, value] of Object.entries(this.state.context)) {
+        content += `- **${key}**: ${JSON.stringify(value)}\n`;
+      }
+      content += '\n';
+    }
+    
+    return content;
+  }
+
+  /**
+   * Serialize agent to markdown format with YAML frontmatter
+   * FIX: Changed from JSON to markdown for GitHub portfolio compatibility
+   */
+  public override serialize(): string {
+    // Add agent state to extensions for frontmatter
+    const originalExtensions = this.extensions;
+    this.extensions = {
+      ...originalExtensions,
+      state: this.state
+    };
+    
+    // Use base class serialize which now outputs markdown
+    const result = super.serialize();
+    
+    // Restore original extensions
+    this.extensions = originalExtensions;
+    
+    return result;
   }
 
   /**

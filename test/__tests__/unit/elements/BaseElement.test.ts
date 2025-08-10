@@ -139,19 +139,20 @@ describe('BaseElement', () => {
   });
   
   describe('serialize/deserialize', () => {
-    it('should serialize to JSON', () => {
+    it('should serialize to markdown with YAML frontmatter', () => {
       const element = new TestElement({
         name: 'Test Element',
         description: 'For serialization'
       });
       
-      const json = element.serialize();
-      const parsed = JSON.parse(json);
+      const markdown = element.serialize();
       
-      expect(parsed.id).toBe(element.id);
-      expect(parsed.type).toBe(ElementType.PERSONA);
-      expect(parsed.metadata.name).toBe('Test Element');
-      expect(parsed.metadata.description).toBe('For serialization');
+      // Check it's markdown format with frontmatter
+      expect(markdown).toContain('---');
+      expect(markdown).toContain('name: Test Element');
+      expect(markdown).toContain('description: For serialization');
+      expect(markdown).toContain('type: personas');
+      expect(markdown).toContain('# Test Element');
     });
     
     it('should deserialize from JSON', () => {
@@ -160,7 +161,17 @@ describe('BaseElement', () => {
         description: 'Original description'
       });
       
-      const json = original.serialize();
+      // Create JSON format for deserialization (still supports JSON input)
+      const json = JSON.stringify({
+        id: original.id,
+        type: original.type,
+        version: original.version,
+        metadata: original.metadata,
+        references: original.references,
+        extensions: original.extensions,
+        ratings: original.ratings
+      });
+      
       const element = new TestElement();
       element.deserialize(json);
       

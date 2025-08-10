@@ -351,7 +351,8 @@ export class TemplateManager implements IElementManager<Template> {
     try {
       switch (format) {
         case 'json':
-          return template.serialize();
+          // Use serializeToJSON for JSON format, or serialize if not available
+          return (template as any).serializeToJSON ? (template as any).serializeToJSON() : template.serialize();
           
         case 'yaml':
           // SECURITY FIX: Use yaml.dump with FAILSAFE_SCHEMA to prevent code execution

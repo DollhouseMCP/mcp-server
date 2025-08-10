@@ -203,12 +203,14 @@ describe('PersonaElement', () => {
       const serialized = persona.serialize();
 
       expect(serialized).toContain('---');
-      expect(serialized).toContain('name: "Serializable Persona"');
-      expect(serialized).toContain('description: "A persona for serialization testing"');
-      expect(serialized).toContain('author: "test-author"');
-      expect(serialized).toContain('triggers:\n  - test\n  - serialize');
-      expect(serialized).toContain('category: "testing"');
-      expect(serialized).toContain('version: "1.5.0"');
+      // js-yaml doesn't quote strings unless necessary
+      expect(serialized).toContain('name: Serializable Persona');
+      expect(serialized).toContain('description: A persona for serialization testing');
+      expect(serialized).toContain('author: test-author');
+      // Check triggers are formatted as YAML list
+      expect(serialized).toMatch(/triggers:\s*\n\s*- test\s*\n\s*- serialize/);
+      expect(serialized).toContain('category: testing');
+      expect(serialized).toContain('version: 1.5.0');
       expect(serialized).toContain('Serializable content');
     });
 

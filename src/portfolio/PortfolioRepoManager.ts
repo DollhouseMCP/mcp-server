@@ -235,8 +235,9 @@ export class PortfolioRepoManager {
     });
 
     // Generate file path based on element type
+    // FIX: Don't add 's' - element.type is already plural (e.g., 'personas', 'skills')
     const fileName = this.generateFileName(element.metadata.name);
-    const filePath = `${element.type}s/${fileName}.md`;
+    const filePath = `${element.type}/${fileName}.md`;
 
     // Prepare content (could be markdown with frontmatter)
     const content = this.formatElementContent(element);
