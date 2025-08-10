@@ -703,21 +703,20 @@ export class Template extends BaseElement implements IElement {
   }
 
   /**
-   * Serialize template to JSON format
+   * Get content for serialization
+   */
+  protected override getContent(): string {
+    return this.content;
+  }
+
+  /**
+   * Serialize template to markdown format with YAML frontmatter
+   * FIX: Changed from JSON to markdown for GitHub portfolio compatibility
    */
   public override serialize(): string {
-    const data = {
-      id: this.id,
-      type: this.type,
-      version: this.version,
-      metadata: this.metadata,
-      content: this.content,
-      references: this.references,
-      extensions: this.extensions,
-      ratings: this.ratings
-    };
-
-    return JSON.stringify(data, null, 2);
+    // Template content is already the main content
+    // Just use base class serialize which outputs markdown
+    return super.serialize();
   }
 
   /**

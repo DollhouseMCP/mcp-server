@@ -188,22 +188,88 @@ export abstract class BaseElement implements IElement {
   }
   
   /**
-   * Default serialization to JSON.
+   * Default serialization to markdown with YAML frontmatter.
    * Subclasses can override for custom formats.
+   * FIX: Changed from JSON to proper markdown format for GitHub portfolio storage
    */
   public serialize(): string {
-    const data = {
-      id: this.id,
+    // Build YAML frontmatter with metadata
+    const frontmatter: Record<string, any> = {
+      name: this.metadata.name,
+      description: this.metadata.description,
       type: this.type,
       version: this.version,
-      metadata: this.metadata,
-      references: this.references,
-      extensions: this.extensions,
-      ratings: this.ratings
+      author: this.metadata.author,
+      created: this.metadata.created,
+      modified: this.metadata.modified
     };
     
-    return JSON.stringify(data, null, 2);
+    // Add optional fields if present
+    if (this.metadata.tags && this.metadata.tags.length > 0) {
+      frontmatter.tags = this.metadata.tags;
+    }
+    if (this.metadata.dependencies && this.metadata.dependencies.length > 0) {
+      frontmatter.dependencies = this.metadata.dependencies;
+    }
+    if (this.references && this.references.length > 0) {
+      frontmatter.references = this.references.map(ref => ({
+        type: ref.type,
+        uri: ref.uri,
+        title: ref.title
+      }));
+    }
+    if (this.ratings && this.ratings.aiRating > 0) {
+      frontmatter.ratings = {
+        aiRating: this.ratings.aiRating,
+        userRating: this.ratings.userRating,
+        ratingCount: this.ratings.ratingCount
+      };
+    }
+    
+    // Convert frontmatter to YAML
+    const yamlLines: string[] = [];
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (value === undefined || value === null) continue;
+      
+      if (typeof value === 'string') {
+        // Quote strings that contain special characters
+        const needsQuotes = value.includes(':') || value.includes('#') || value.includes('\n');
+        yamlLines.push(`${key}: ${needsQuotes ? JSON.stringify(value) : value}`);
+      } else if (Array.isArray(value)) {
+        if (value.length === 0) continue;
+        yamlLines.push(`${key}:`);
+        value.forEach(item => {
+          if (typeof item === 'object') {
+            yamlLines.push(`  - ${JSON.stringify(item)}`);
+          } else {
+            yamlLines.push(`  - ${item}`);
+          }
+        });
+      } else if (typeof value === 'object') {
+        yamlLines.push(`${key}:`);
+        for (const [subKey, subValue] of Object.entries(value)) {
+          if (subValue !== undefined && subValue !== null) {
+            yamlLines.push(`  ${subKey}: ${subValue}`);
+          }
+        }
+      } else {
+        yamlLines.push(`${key}: ${value}`);
+      }
+    }
+    
+    const yamlFrontmatter = yamlLines.join('\n');
+    
+    // Get content - subclasses should override this to provide actual content
+    const content = this.getContent ? this.getContent() : `# ${this.metadata.name}\n\n${this.metadata.description || ''}`;
+    
+    return `---\n${yamlFrontmatter}\n---\n\n${content}`;
   }
+  
+  /**
+   * Get element content for serialization.
+   * Subclasses should override this to provide their specific content.
+   */
+  protected getContent?(): string;
   
   /**
    * Default deserialization from JSON.
