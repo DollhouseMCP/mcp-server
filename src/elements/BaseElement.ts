@@ -17,6 +17,7 @@ import {
 } from '../types/elements/index.js';
 import { ElementType } from '../portfolio/types.js';
 import { v4 as uuidv4 } from 'uuid';
+import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -188,8 +189,26 @@ export abstract class BaseElement implements IElement {
   }
   
   /**
+   * Serialize to JSON format for internal use and testing.
+   * Maintains backward compatibility with existing tests.
+   */
+  public serializeToJSON(): string {
+    const data = {
+      id: this.id,
+      type: this.type,
+      version: this.version,
+      metadata: this.metadata,
+      references: this.references,
+      extensions: this.extensions,
+      ratings: this.ratings
+    };
+    
+    return JSON.stringify(data, null, 2);
+  }
+
+  /**
    * Default serialization to markdown with YAML frontmatter.
-   * Subclasses can override for custom formats.
+   * Uses js-yaml for secure YAML generation to prevent injection attacks.
    * FIX: Changed from JSON to proper markdown format for GitHub portfolio storage.
    * This ensures elements are readable on GitHub and compatible with collection workflow.
    */
@@ -227,43 +246,42 @@ export abstract class BaseElement implements IElement {
       };
     }
     
-    // Convert frontmatter to YAML
-    const yamlLines: string[] = [];
-    for (const [key, value] of Object.entries(frontmatter)) {
-      if (value === undefined || value === null) continue;
-      
-      if (typeof value === 'string') {
-        // Quote strings that contain special characters
-        const needsQuotes = value.includes(':') || value.includes('#') || value.includes('\n');
-        yamlLines.push(`${key}: ${needsQuotes ? JSON.stringify(value) : value}`);
-      } else if (Array.isArray(value)) {
-        if (value.length === 0) continue;
-        yamlLines.push(`${key}:`);
-        value.forEach(item => {
-          if (typeof item === 'object') {
-            yamlLines.push(`  - ${JSON.stringify(item)}`);
-          } else {
-            yamlLines.push(`  - ${item}`);
-          }
-        });
-      } else if (typeof value === 'object') {
-        yamlLines.push(`${key}:`);
-        for (const [subKey, subValue] of Object.entries(value)) {
-          if (subValue !== undefined && subValue !== null) {
-            yamlLines.push(`  ${subKey}: ${subValue}`);
-          }
-        }
-      } else {
-        yamlLines.push(`${key}: ${value}`);
-      }
+    // Remove undefined/null values
+    const cleanFrontmatter = Object.fromEntries(
+      Object.entries(frontmatter).filter(([_, value]) => value !== undefined && value !== null)
+    );
+    
+    // Use js-yaml for secure YAML generation
+    // This prevents YAML injection attacks and handles special characters properly
+    let yamlFrontmatter: string;
+    try {
+      yamlFrontmatter = yaml.dump(cleanFrontmatter, {
+        noRefs: true,          // Don't use YAML references
+        sortKeys: false,       // Keep our order
+        lineWidth: -1,         // Don't wrap lines
+        quotingType: '"',      // Use double quotes when needed
+        forceQuotes: false,    // Only quote when necessary
+        skipInvalid: false     // Don't skip invalid values
+      });
+    } catch (error) {
+      // If YAML generation fails, log and throw a more informative error
+      logger.error('Failed to generate YAML frontmatter', { error, frontmatter: cleanFrontmatter });
+      throw new Error(`Failed to serialize element metadata to YAML: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     
-    const yamlFrontmatter = yamlLines.join('\n');
+    // Validate the generated YAML can be parsed back
+    try {
+      yaml.load(yamlFrontmatter);
+    } catch (error) {
+      logger.error('Generated invalid YAML', { error, yaml: yamlFrontmatter });
+      throw new Error(`Generated YAML is invalid: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
     
     // Get content - subclasses should override this to provide actual content
     const content = this.getContent ? this.getContent() : `# ${this.metadata.name}\n\n${this.metadata.description || ''}`;
     
-    return `---\n${yamlFrontmatter}\n---\n\n${content}`;
+    // Trim the YAML to remove trailing newline that yaml.dump adds
+    return `---\n${yamlFrontmatter.trim()}\n---\n\n${content}`;
   }
   
   /**

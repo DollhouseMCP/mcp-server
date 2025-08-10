@@ -859,6 +859,17 @@ export class Agent extends BaseElement implements IElement {
   }
 
   /**
+   * Serialize to JSON format for internal use and testing
+   */
+  public override serializeToJSON(): string {
+    const data = {
+      ...JSON.parse(super.serializeToJSON()),
+      state: this.state
+    };
+    return JSON.stringify(data, null, 2);
+  }
+
+  /**
    * Get content for serialization
    */
   protected override getContent(): string {

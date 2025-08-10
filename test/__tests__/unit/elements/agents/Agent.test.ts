@@ -400,15 +400,15 @@ describe('Agent Element', () => {
       const goal = agent.addGoal({ description: 'Test goal' });
       agent.updateContext('testKey', 'testValue');
 
-      // Serialize
-      const serialized = agent.serialize();
+      // Serialize to JSON for testing
+      const serialized = agent.serializeToJSON();
       const parsed = JSON.parse(serialized);
       
       expect(parsed.state).toBeDefined();
       expect(parsed.state.goals).toHaveLength(1);
       expect(parsed.state.context.testKey).toBe('testValue');
 
-      // Deserialize into new agent
+      // Deserialize into new agent (deserialize still accepts JSON)
       const newAgent = new Agent({ name: 'New' });
       newAgent.deserialize(serialized);
       

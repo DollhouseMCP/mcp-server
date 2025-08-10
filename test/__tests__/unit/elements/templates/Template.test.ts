@@ -415,9 +415,10 @@ describe('Template', () => {
         tags: ['test', 'example']
       }, 'Content: {{var1}}, {{var2}}');
       
-      const serialized = original.serialize();
+      // Test with JSON serialization for backward compatibility
+      const serializedJSON = original.serializeToJSON();
       const restored = new Template({}, '');
-      restored.deserialize(serialized);
+      restored.deserialize(serializedJSON);
       
       expect(restored.metadata.name).toBe('Test Template');
       expect(restored.metadata.description).toBe('A test template');

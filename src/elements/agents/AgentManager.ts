@@ -175,7 +175,7 @@ export class AgentManager implements IElementManager<Agent> {
       const state = await this.loadAgentState(sanitizedName);
       if (state) {
         agent.deserialize(JSON.stringify({
-          ...JSON.parse(agent.serialize()),
+          ...JSON.parse(agent.serializeToJSON()),
           state
         }));
       }
@@ -659,7 +659,7 @@ export class AgentManager implements IElementManager<Agent> {
       const agent = new Agent(agentData.metadata);
       if (agentData.state) {
         agent.deserialize(JSON.stringify({
-          ...JSON.parse(agent.serialize()),
+          ...JSON.parse(agent.serializeToJSON()),
           state: agentData.state
         }));
       }

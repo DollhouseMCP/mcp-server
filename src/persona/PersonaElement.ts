@@ -171,42 +171,46 @@ export class PersonaElement extends BaseElement implements IElement {
 
   /**
    * Serialize persona to markdown format
+   * Refactored to use base class pattern with getContent()
    */
   public override serialize(): string {
-    const frontmatter = {
-      name: this.metadata.name,
-      description: this.metadata.description,
-      unique_id: this.id,
-      author: this.metadata.author,
-      triggers: this.metadata.triggers,
-      version: this.metadata.version,
-      category: this.metadata.category,
-      age_rating: this.metadata.age_rating,
-      content_flags: this.metadata.content_flags,
-      ai_generated: this.metadata.ai_generated,
-      generation_method: this.metadata.generation_method,
-      price: this.metadata.price,
-      revenue_split: this.metadata.revenue_split,
-      license: this.metadata.license,
-      created_date: this.metadata.created_date
+    // Store original metadata
+    const originalMetadata = this.metadata;
+    
+    // Add persona-specific fields to metadata temporarily
+    this.metadata = {
+      ...originalMetadata,
+      triggers: (originalMetadata as PersonaMetadata).triggers,
+      category: (originalMetadata as PersonaMetadata).category,
+      age_rating: (originalMetadata as PersonaMetadata).age_rating,
+      content_flags: (originalMetadata as PersonaMetadata).content_flags,
+      ai_generated: (originalMetadata as PersonaMetadata).ai_generated,
+      generation_method: (originalMetadata as PersonaMetadata).generation_method,
+      price: (originalMetadata as PersonaMetadata).price,
+      revenue_split: (originalMetadata as PersonaMetadata).revenue_split,
+      license: (originalMetadata as PersonaMetadata).license,
+      created_date: (originalMetadata as PersonaMetadata).created_date
     };
-
-    // Remove undefined values
-    const cleanFrontmatter = Object.fromEntries(
-      Object.entries(frontmatter).filter(([_, value]) => value !== undefined)
-    );
-
-    const yamlFrontmatter = Object.entries(cleanFrontmatter)
-      .map(([key, value]) => {
-        if (Array.isArray(value)) {
-          if (value.length === 0) return `${key}: []`;
-          return `${key}:\n${value.map(item => `  - ${item}`).join('\n')}`;
-        }
-        return `${key}: ${JSON.stringify(value)}`;
-      })
-      .join('\n');
-
-    return `---\n${yamlFrontmatter}\n---\n\n${this.content}`;
+    
+    // Use base class serialize which now uses js-yaml
+    const result = super.serialize();
+    
+    // Restore original metadata
+    this.metadata = originalMetadata;
+    
+    return result;
+  }
+  
+  /**
+   * Serialize to JSON format for internal use and testing
+   */
+  public override serializeToJSON(): string {
+    // Include persona-specific fields
+    const data = {
+      ...JSON.parse(super.serializeToJSON()),
+      content: this.content
+    };
+    return JSON.stringify(data, null, 2);
   }
 
   /**
@@ -248,8 +252,22 @@ export class PersonaElement extends BaseElement implements IElement {
       logger.debug(`Deserialized persona: ${this.metadata.name}`);
       
     } catch (error) {
-      logger.error(`Failed to deserialize persona: ${error}`);
-      throw new Error(`Deserialization failed: ${error}`);
+      // Preserve original error context for better debugging
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      logger.error('Failed to deserialize persona', { 
+        error: errorMessage,
+        stack: errorStack,
+        data: data.substring(0, 200) // Log first 200 chars for context
+      });
+      
+      // Re-throw with original error as cause
+      const deserializeError = new Error(`PersonaElement deserialization failed: ${errorMessage}`);
+      if (error instanceof Error) {
+        deserializeError.cause = error;
+      }
+      throw deserializeError;
     }
   }
 

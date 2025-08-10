@@ -703,6 +703,23 @@ export class Template extends BaseElement implements IElement {
   }
 
   /**
+   * Serialize to JSON format for internal use and testing
+   */
+  public override serializeToJSON(): string {
+    const data = {
+      id: this.id,
+      type: this.type,
+      version: this.version,
+      metadata: this.metadata,
+      content: this.content,
+      references: this.references,
+      extensions: this.extensions,
+      ratings: this.ratings
+    };
+    return JSON.stringify(data, null, 2);
+  }
+
+  /**
    * Get content for serialization
    */
   protected override getContent(): string {

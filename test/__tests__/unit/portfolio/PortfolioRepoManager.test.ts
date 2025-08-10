@@ -187,7 +187,7 @@ describe('PortfolioRepoManager', () => {
   describe('saveElement', () => {
     const mockElement = {
       id: 'test-element-123',
-      type: 'persona' as any,
+      type: 'personas' as any,
       version: '1.0.0',
       metadata: {
         name: 'Test Element',
@@ -203,6 +203,7 @@ describe('PortfolioRepoManager', () => {
     it('should save element to portfolio with user consent', async () => {
       // Arrange
       const consent = true;
+      // FIX: ElementType.PERSONA is already 'personas', don't add extra 's'
       const expectedPath = 'personas/test-element.md';
       const commitUrl = 'https://github.com/testuser/dollhouse-portfolio/commit/abc123';
       
@@ -254,7 +255,7 @@ describe('PortfolioRepoManager', () => {
       // Arrange
       const skillElement: IElement = {
         ...mockElement,
-        type: 'skill' as any,
+        type: 'skills' as any,
         metadata: {
           ...mockElement.metadata,
           name: 'Code Review Skill'
@@ -371,7 +372,7 @@ describe('PortfolioRepoManager', () => {
       // Arrange
       const invalidElement: IElement = {
         id: '',
-        type: 'persona' as any,
+        type: 'personas' as any,
         version: '1.0.0',
         metadata: {
           name: '', // Invalid: empty name
@@ -399,7 +400,7 @@ describe('PortfolioRepoManager', () => {
       const username = 'testuser';
       const element: IElement = {
         id: 'test-element',
-        type: 'persona' as any,
+        type: 'personas' as any,
         version: '1.0.0',
         metadata: {
           name: 'Test',
