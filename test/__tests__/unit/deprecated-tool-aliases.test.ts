@@ -13,12 +13,18 @@ describe('Deprecated Tool Aliases', () => {
   beforeEach(() => {
     // Create a mock server with all required methods
     mockServer = {
-      browseCollection: jest.fn<any, any>().mockResolvedValue({ content: [] }),
-      searchCollection: jest.fn<any, any>().mockResolvedValue({ results: [] }),
-      getCollectionContent: jest.fn<any, any>().mockResolvedValue({ content: {} }),
-      installContent: jest.fn<any, any>().mockResolvedValue({ success: true }),
-      submitContent: jest.fn<any, any>().mockResolvedValue({ success: true }),
-      getCollectionCacheHealth: jest.fn<any, any>().mockResolvedValue({ status: 'healthy' })
+      // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
+      browseCollection: jest.fn().mockResolvedValue({ content: [] }),
+      // @ts-ignore
+      searchCollection: jest.fn().mockResolvedValue({ results: [] }),
+      // @ts-ignore
+      getCollectionContent: jest.fn().mockResolvedValue({ content: {} }),
+      // @ts-ignore
+      installContent: jest.fn().mockResolvedValue({ success: true }),
+      // @ts-ignore
+      submitContent: jest.fn().mockResolvedValue({ success: true }),
+      // @ts-ignore
+      getCollectionCacheHealth: jest.fn().mockResolvedValue({ status: 'healthy' })
     } as any;
     
     tools = getCollectionTools(mockServer);

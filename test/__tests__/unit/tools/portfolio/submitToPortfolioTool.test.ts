@@ -46,26 +46,29 @@ describe('SubmitToPortfolioTool', () => {
     };
     
     // Setup auth manager mock
+    // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
     mockAuthManager = {
-      getAuthStatus: jest.fn<any, any>().mockResolvedValue({
+      getAuthStatus: jest.fn().mockResolvedValue({
         isAuthenticated: true,
         username: 'testuser'
       })
     };
     
     // Setup portfolio repo manager mock
+    // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
     mockPortfolioRepoManager = {
-      setToken: jest.fn<any, any>(),
-      checkPortfolioExists: jest.fn<any, any>().mockResolvedValue(true),
-      createPortfolio: jest.fn<any, any>().mockResolvedValue('https://github.com/testuser/portfolio'),
-      saveElement: jest.fn<any, any>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
+      setToken: jest.fn(),
+      checkPortfolioExists: jest.fn().mockResolvedValue(true),
+      createPortfolio: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio'),
+      saveElement: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
     };
     
     // Mock constructors
     (GitHubAuthManager as any).mockImplementation(() => mockAuthManager);
     (PortfolioRepoManager as any).mockImplementation(() => mockPortfolioRepoManager);
     
-    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue<any, any>('test-token');
+    // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
+    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('test-token');
     
     (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
       isValid: true,
@@ -77,16 +80,21 @@ describe('SubmitToPortfolioTool', () => {
       normalizedContent: 'test-element'
     });
     
+    // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
     (PortfolioManager.getInstance as jest.Mock).mockReturnValue({
       getElementDir: jest.fn().mockReturnValue('/test/portfolio/personas')
     });
     
     (SecurityMonitor.logSecurityEvent as jest.Mock).mockImplementation(() => {});
     
-    (fs.stat as jest.Mock).mockResolvedValue({ size: 1024 } as any); // 1KB file
-    (fs.readFile as jest.Mock).mockResolvedValue('test content' as any);
-    (fs.access as jest.Mock).mockResolvedValue(undefined as any);
-    (fs.readdir as jest.Mock).mockResolvedValue(['test-element.md'] as any);
+    // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
+    (fs.stat as jest.Mock).mockResolvedValue({ size: 1024 }); // 1KB file
+    // @ts-ignore
+    (fs.readFile as jest.Mock).mockResolvedValue('test content');
+    // @ts-ignore
+    (fs.access as jest.Mock).mockResolvedValue(undefined);
+    // @ts-ignore
+    (fs.readdir as jest.Mock).mockResolvedValue(['test-element.md']);
     
     tool = new SubmitToPortfolioTool(mockApiCache);
   });
@@ -179,8 +187,10 @@ describe('SubmitToPortfolioTool', () => {
     });
     
     it('should fail when content is not found', async () => {
-      (fs.access as jest.Mock).mockRejectedValue<any, any>(new Error('File not found'));
-      (fs.readdir as jest.Mock).mockResolvedValue<any, any>([]);
+      // @ts-ignore
+      (fs.access as jest.Mock).mockRejectedValue(new Error('File not found'));
+      // @ts-ignore
+      (fs.readdir as jest.Mock).mockResolvedValue([]);
       
       const result = await tool.execute({
         name: 'nonexistent',
@@ -194,7 +204,7 @@ describe('SubmitToPortfolioTool', () => {
   
   describe('File size validation', () => {
     it('should reject files larger than 10MB', async () => {
-      (fs.stat as jest.Mock).mockResolvedValue<any, any>({ size: 11 * 1024 * 1024 }); // 11MB
+      (fs.stat as jest.Mock).mockResolvedValue({ size: 11 * 1024 * 1024 } as any); // 11MB
       
       const result = await tool.execute({
         name: 'test-element'
@@ -211,7 +221,7 @@ describe('SubmitToPortfolioTool', () => {
     });
     
     it('should accept files under 10MB', async () => {
-      (fs.stat as jest.Mock).mockResolvedValue<any, any>({ size: 5 * 1024 * 1024 }); // 5MB
+      (fs.stat as jest.Mock).mockResolvedValue({ size: 5 * 1024 * 1024 } as any); // 5MB
       
       const result = await tool.execute({
         name: 'test-element'
@@ -261,7 +271,7 @@ describe('SubmitToPortfolioTool', () => {
   
   describe('Token management', () => {
     it('should fail when token cannot be retrieved', async () => {
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue<any, any>(null);
+      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(null as any);
       
       const result = await tool.execute({
         name: 'test-element'
