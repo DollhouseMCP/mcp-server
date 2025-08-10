@@ -163,6 +163,13 @@ export class PersonaElement extends BaseElement implements IElement {
   }
 
   /**
+   * Get content for serialization
+   */
+  protected override getContent(): string {
+    return this.content;
+  }
+
+  /**
    * Serialize persona to markdown format
    */
   public override serialize(): string {

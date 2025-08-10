@@ -344,22 +344,48 @@ export class Skill extends BaseElement implements IElement {
   }
 
   /**
-   * Serialize skill to JSON format
+   * Get content for serialization
+   */
+  protected override getContent(): string {
+    let content = `# ${this.metadata.name}\n\n`;
+    content += `${this.metadata.description}\n\n`;
+    
+    if (this.instructions) {
+      content += `## Instructions\n\n${this.instructions}\n\n`;
+    }
+    
+    const params = this.getAllParameters();
+    if (params && Object.keys(params).length > 0) {
+      content += `## Parameters\n\n`;
+      for (const [key, value] of Object.entries(params)) {
+        content += `- **${key}**: ${JSON.stringify(value)}\n`;
+      }
+      content += '\n';
+    }
+    
+    return content;
+  }
+
+  /**
+   * Serialize skill to markdown format with YAML frontmatter
+   * FIX: Changed from JSON to markdown for GitHub portfolio compatibility
    */
   public override serialize(): string {
-    const data = {
-      id: this.id,
-      type: this.type,
-      version: this.version,
-      metadata: this.metadata,
+    // Add skill-specific data to extensions for frontmatter
+    const originalExtensions = this.extensions;
+    this.extensions = {
+      ...originalExtensions,
       instructions: this.instructions,
-      parameters: this.getAllParameters(),
-      references: this.references,
-      extensions: this.extensions,
-      ratings: this.ratings
+      parameters: this.getAllParameters()
     };
-
-    return JSON.stringify(data, null, 2);
+    
+    // Use base class serialize which now outputs markdown
+    const result = super.serialize();
+    
+    // Restore original extensions
+    this.extensions = originalExtensions;
+    
+    return result;
   }
 
   /**
