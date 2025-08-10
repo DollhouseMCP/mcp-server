@@ -13,19 +13,13 @@ describe('Deprecated Tool Aliases', () => {
   beforeEach(() => {
     // Create a mock server with all required methods
     mockServer = {
-      // @ts-ignore - TypeScript has issues with Jest mock types in strict mode
       browseCollection: jest.fn().mockResolvedValue({ content: [] }),
-      // @ts-ignore
       searchCollection: jest.fn().mockResolvedValue({ results: [] }),
-      // @ts-ignore
       getCollectionContent: jest.fn().mockResolvedValue({ content: {} }),
-      // @ts-ignore
       installContent: jest.fn().mockResolvedValue({ success: true }),
-      // @ts-ignore
       submitContent: jest.fn().mockResolvedValue({ success: true }),
-      // @ts-ignore
       getCollectionCacheHealth: jest.fn().mockResolvedValue({ status: 'healthy' })
-    } as any;
+    } as jest.Mocked<IToolHandler>;
     
     tools = getCollectionTools(mockServer);
   });
