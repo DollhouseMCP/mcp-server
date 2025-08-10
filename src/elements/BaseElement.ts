@@ -21,6 +21,7 @@ import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
 
 export abstract class BaseElement implements IElement {
   // Identity
@@ -269,9 +270,13 @@ export abstract class BaseElement implements IElement {
       throw new Error(`Failed to serialize element metadata to YAML: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     
-    // Validate the generated YAML can be parsed back
+    // Validate the generated YAML can be parsed back using SecureYamlParser
+    // HIGH SEVERITY FIX: Use SecureYamlParser instead of yaml.load to prevent code execution
     try {
-      yaml.load(yamlFrontmatter);
+      SecureYamlParser.parse(yamlFrontmatter, {
+        maxYamlSize: 64 * 1024, // 64KB limit for frontmatter
+        validateContent: true
+      });
     } catch (error) {
       logger.error('Generated invalid YAML', { error, yaml: yamlFrontmatter });
       throw new Error(`Generated YAML is invalid: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -316,8 +321,23 @@ export abstract class BaseElement implements IElement {
       
       this._isDirty = false;
     } catch (error) {
-      logger.error('Failed to deserialize element', { error, data });
-      throw new Error(`Failed to deserialize element: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Enhanced error context preservation
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      logger.error('Failed to deserialize element', { 
+        error: errorMessage,
+        stack: errorStack,
+        dataPreview: data.substring(0, 200), // First 200 chars for context
+        elementType: this.type
+      });
+      
+      // Create new error with original as cause
+      const deserializeError = new Error(`BaseElement deserialization failed: ${errorMessage}`);
+      if (error instanceof Error) {
+        deserializeError.cause = error;
+      }
+      throw deserializeError;
     }
   }
   

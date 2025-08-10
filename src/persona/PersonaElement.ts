@@ -12,6 +12,7 @@ import matter from 'gray-matter';
 
 // Extend IElementMetadata with persona-specific fields
 export interface PersonaElementMetadata extends IElementMetadata {
+  unique_id?: string;  // Legacy ID for backward compatibility
   triggers?: string[];
   category?: string;
   age_rating?: 'all' | '13+' | '18+';
@@ -178,18 +179,20 @@ export class PersonaElement extends BaseElement implements IElement {
     const originalMetadata = this.metadata;
     
     // Add persona-specific fields to metadata temporarily
+    // Cast to PersonaElementMetadata to include unique_id
     this.metadata = {
       ...originalMetadata,
-      triggers: (originalMetadata as PersonaMetadata).triggers,
-      category: (originalMetadata as PersonaMetadata).category,
-      age_rating: (originalMetadata as PersonaMetadata).age_rating,
-      content_flags: (originalMetadata as PersonaMetadata).content_flags,
-      ai_generated: (originalMetadata as PersonaMetadata).ai_generated,
-      generation_method: (originalMetadata as PersonaMetadata).generation_method,
-      price: (originalMetadata as PersonaMetadata).price,
-      revenue_split: (originalMetadata as PersonaMetadata).revenue_split,
-      license: (originalMetadata as PersonaMetadata).license,
-      created_date: (originalMetadata as PersonaMetadata).created_date
+      unique_id: this.id,  // Include ID as unique_id for legacy compatibility
+      triggers: (originalMetadata as PersonaElementMetadata).triggers,
+      category: (originalMetadata as PersonaElementMetadata).category,
+      age_rating: (originalMetadata as PersonaElementMetadata).age_rating,
+      content_flags: (originalMetadata as PersonaElementMetadata).content_flags,
+      ai_generated: (originalMetadata as PersonaElementMetadata).ai_generated,
+      generation_method: (originalMetadata as PersonaElementMetadata).generation_method,
+      price: (originalMetadata as PersonaElementMetadata).price,
+      revenue_split: (originalMetadata as PersonaElementMetadata).revenue_split,
+      license: (originalMetadata as PersonaElementMetadata).license,
+      created_date: (originalMetadata as PersonaElementMetadata).created_date
     };
     
     // Use base class serialize which now uses js-yaml
