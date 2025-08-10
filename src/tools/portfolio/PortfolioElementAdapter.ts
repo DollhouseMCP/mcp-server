@@ -22,6 +22,7 @@ import { PortfolioElement } from './submitToPortfolioTool.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import * as yaml from 'js-yaml';
 
 /**
  * Adapter class that wraps a simple PortfolioElement and implements IElement
@@ -127,16 +128,30 @@ export class PortfolioElementAdapter implements IElement {
   }
 
   /**
-   * Serialize the element to string
+   * Serialize the element to markdown with YAML frontmatter
+   * FIX: Changed from JSON to markdown format for GitHub portfolio compatibility
    */
   serialize(): string {
-    return JSON.stringify({
+    // If the content already has frontmatter, return it as-is
+    if (this.portfolioElement.content.startsWith('---\n')) {
+      return this.portfolioElement.content;
+    }
+    
+    // Otherwise, create markdown with YAML frontmatter
+    // Build frontmatter from metadata
+    const frontmatter = yaml.dump({
+      ...this.metadata,
       id: this.id,
       type: this.type,
-      version: this.version,
-      metadata: this.metadata,
-      content: this.portfolioElement.content
-    }, null, 2);
+      version: this.version
+    }, {
+      noRefs: true,
+      sortKeys: false,
+      lineWidth: -1
+    });
+    
+    // Return markdown with frontmatter
+    return `---\n${frontmatter}---\n\n${this.portfolioElement.content}`;
   }
 
   /**
