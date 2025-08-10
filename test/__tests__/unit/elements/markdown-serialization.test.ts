@@ -70,7 +70,11 @@ describe('Markdown Serialization', () => {
       const skill = new Skill({
         name: 'Code Review',
         description: 'Reviews code for quality',
-        author: 'dev-team'
+        author: 'dev-team',
+        parameters: [
+          { name: 'language', type: 'string', description: 'Programming language', required: true },
+          { name: 'strictness', type: 'string', description: 'Review strictness level', required: false }
+        ]
       });
       skill.instructions = 'Analyze code for bugs and style issues';
       skill.setParameter('language', 'TypeScript');

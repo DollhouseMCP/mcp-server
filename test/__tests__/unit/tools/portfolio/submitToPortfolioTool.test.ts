@@ -47,7 +47,7 @@ describe('SubmitToPortfolioTool', () => {
     
     // Setup auth manager mock
     mockAuthManager = {
-      getAuthStatus: jest.fn().mockResolvedValue({
+      getAuthStatus: jest.fn<any, any>().mockResolvedValue({
         isAuthenticated: true,
         username: 'testuser'
       })
@@ -55,17 +55,17 @@ describe('SubmitToPortfolioTool', () => {
     
     // Setup portfolio repo manager mock
     mockPortfolioRepoManager = {
-      setToken: jest.fn(),
-      checkPortfolioExists: jest.fn().mockResolvedValue(true),
-      createPortfolio: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio'),
-      saveElement: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
+      setToken: jest.fn<any, any>(),
+      checkPortfolioExists: jest.fn<any, any>().mockResolvedValue(true),
+      createPortfolio: jest.fn<any, any>().mockResolvedValue('https://github.com/testuser/portfolio'),
+      saveElement: jest.fn<any, any>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
     };
     
     // Mock constructors
     (GitHubAuthManager as any).mockImplementation(() => mockAuthManager);
     (PortfolioRepoManager as any).mockImplementation(() => mockPortfolioRepoManager);
     
-    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('test-token');
+    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue<any, any>('test-token');
     
     (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
       isValid: true,
@@ -83,10 +83,10 @@ describe('SubmitToPortfolioTool', () => {
     
     (SecurityMonitor.logSecurityEvent as jest.Mock).mockImplementation(() => {});
     
-    (fs.stat as jest.Mock).mockResolvedValue({ size: 1024 }); // 1KB file
-    (fs.readFile as jest.Mock).mockResolvedValue('test content');
-    (fs.access as jest.Mock).mockResolvedValue(undefined);
-    (fs.readdir as jest.Mock).mockResolvedValue(['test-element.md']);
+    (fs.stat as jest.Mock).mockResolvedValue({ size: 1024 } as any); // 1KB file
+    (fs.readFile as jest.Mock).mockResolvedValue('test content' as any);
+    (fs.access as jest.Mock).mockResolvedValue(undefined as any);
+    (fs.readdir as jest.Mock).mockResolvedValue(['test-element.md'] as any);
     
     tool = new SubmitToPortfolioTool(mockApiCache);
   });
@@ -179,8 +179,8 @@ describe('SubmitToPortfolioTool', () => {
     });
     
     it('should fail when content is not found', async () => {
-      (fs.access as jest.Mock).mockRejectedValue(new Error('File not found'));
-      (fs.readdir as jest.Mock).mockResolvedValue([]);
+      (fs.access as jest.Mock).mockRejectedValue<any, any>(new Error('File not found'));
+      (fs.readdir as jest.Mock).mockResolvedValue<any, any>([]);
       
       const result = await tool.execute({
         name: 'nonexistent',
@@ -194,7 +194,7 @@ describe('SubmitToPortfolioTool', () => {
   
   describe('File size validation', () => {
     it('should reject files larger than 10MB', async () => {
-      (fs.stat as jest.Mock).mockResolvedValue({ size: 11 * 1024 * 1024 }); // 11MB
+      (fs.stat as jest.Mock).mockResolvedValue<any, any>({ size: 11 * 1024 * 1024 }); // 11MB
       
       const result = await tool.execute({
         name: 'test-element'
@@ -211,7 +211,7 @@ describe('SubmitToPortfolioTool', () => {
     });
     
     it('should accept files under 10MB', async () => {
-      (fs.stat as jest.Mock).mockResolvedValue({ size: 5 * 1024 * 1024 }); // 5MB
+      (fs.stat as jest.Mock).mockResolvedValue<any, any>({ size: 5 * 1024 * 1024 }); // 5MB
       
       const result = await tool.execute({
         name: 'test-element'
@@ -261,7 +261,7 @@ describe('SubmitToPortfolioTool', () => {
   
   describe('Token management', () => {
     it('should fail when token cannot be retrieved', async () => {
-      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue(null);
+      (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue<any, any>(null);
       
       const result = await tool.execute({
         name: 'test-element'

@@ -311,14 +311,15 @@ describe('PortfolioRepoManager', () => {
 
       // Assert
       // Should create README.md
-      const readmeCall = mockFetch.mock.calls.find(call => 
-        call[0].includes('README.md')
-      );
+      const readmeCall = mockFetch.mock.calls.find(call => {
+        const url = typeof call[0] === 'string' ? call[0] : call[0].toString();
+        return url.includes('README.md');
+      });
       expect(readmeCall).toBeDefined();
-      expect(readmeCall![1].method).toBe('PUT');
+      expect(readmeCall![1]?.method).toBe('PUT');
       
       // Check that the body contains the base64 encoded README content
-      const bodyData = JSON.parse(readmeCall![1].body);
+      const bodyData = JSON.parse(readmeCall![1]?.body as string);
       const decodedContent = Buffer.from(bodyData.content, 'base64').toString('utf-8');
       expect(decodedContent).toContain('DollhouseMCP Portfolio');
 

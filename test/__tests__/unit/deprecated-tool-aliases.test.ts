@@ -13,12 +13,12 @@ describe('Deprecated Tool Aliases', () => {
   beforeEach(() => {
     // Create a mock server with all required methods
     mockServer = {
-      browseCollection: jest.fn().mockResolvedValue({ content: [] }),
-      searchCollection: jest.fn().mockResolvedValue({ results: [] }),
-      getCollectionContent: jest.fn().mockResolvedValue({ content: {} }),
-      installContent: jest.fn().mockResolvedValue({ success: true }),
-      submitContent: jest.fn().mockResolvedValue({ success: true }),
-      getCollectionCacheHealth: jest.fn().mockResolvedValue({ status: 'healthy' })
+      browseCollection: jest.fn<any, any>().mockResolvedValue({ content: [] }),
+      searchCollection: jest.fn<any, any>().mockResolvedValue({ results: [] }),
+      getCollectionContent: jest.fn<any, any>().mockResolvedValue({ content: {} }),
+      installContent: jest.fn<any, any>().mockResolvedValue({ success: true }),
+      submitContent: jest.fn<any, any>().mockResolvedValue({ success: true }),
+      getCollectionCacheHealth: jest.fn<any, any>().mockResolvedValue({ status: 'healthy' })
     } as any;
     
     tools = getCollectionTools(mockServer);

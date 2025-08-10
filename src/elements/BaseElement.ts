@@ -214,24 +214,16 @@ export abstract class BaseElement implements IElement {
    * This ensures elements are readable on GitHub and compatible with collection workflow.
    */
   public serialize(): string {
-    // Build YAML frontmatter with metadata
+    // Build YAML frontmatter starting with all metadata fields
+    // This ensures subclasses can add their own fields
     const frontmatter: Record<string, any> = {
-      name: this.metadata.name,
-      description: this.metadata.description,
+      ...this.metadata,  // Include all metadata fields
       type: this.type,
-      version: this.version,
-      author: this.metadata.author,
-      created: this.metadata.created,
-      modified: this.metadata.modified
+      version: this.version
     };
     
-    // Add optional fields if present
-    if (this.metadata.tags && this.metadata.tags.length > 0) {
-      frontmatter.tags = this.metadata.tags;
-    }
-    if (this.metadata.dependencies && this.metadata.dependencies.length > 0) {
-      frontmatter.dependencies = this.metadata.dependencies;
-    }
+    // Note: metadata already includes name, description, author, created, modified
+    // and any additional fields added by subclasses
     if (this.references && this.references.length > 0) {
       frontmatter.references = this.references.map(ref => ({
         type: ref.type,
