@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# GitFlow Guardian - Pre-push Hook
+# Prevents pushing feature branches that were created from main instead of develop
+
+# Get the directory where this hook is located
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load configuration if it exists
+CONFIG_FILE="$HOOK_DIR/config"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    # Default configuration
+    USE_COLORS=true
+    ENABLE_PUSH_PROTECTION=true
+    ENFORCE_GITFLOW=true
+fi
+
+# Exit early if protection is disabled
+if [ "$ENABLE_PUSH_PROTECTION" != "true" ]; then
+    exit 0
+fi
+
+# Colors (only if enabled)
+if [ "$USE_COLORS" = "true" ]; then
+    RED='\033[0;31m'
+    YELLOW='\033[1;33m'
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    NC='\033[0m'
+else
+    RED=''
+    YELLOW=''
+    GREEN=''
+    BLUE=''
+    CYAN=''
+    NC=''
+fi
+
+# Get current branch
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Function to check if a feature branch was created from main
+check_branch_parent() {
+    local branch=$1
+    
+    # Skip if not a feature/fix/bugfix branch
+    if [[ "$branch" != feature/* ]] && [[ "$branch" != fix/* ]] && [[ "$branch" != bugfix/* ]]; then
+        return 0  # Not a feature branch, allow push
+    fi
+    
+    # Check if main and develop exist
+    if ! git rev-parse --verify main >/dev/null 2>&1; then
+        return 0  # main doesn't exist, can't check
+    fi
+    
+    if ! git rev-parse --verify develop >/dev/null 2>&1; then
+        return 0  # develop doesn't exist, can't check
+    fi
+    
+    # Get the merge base with main and develop
+    MAIN_BASE=$(git merge-base HEAD main 2>/dev/null)
+    DEVELOP_BASE=$(git merge-base HEAD develop 2>/dev/null)
+    
+    # Get the actual HEAD commits
+    MAIN_HEAD=$(git rev-parse main 2>/dev/null)
+    DEVELOP_HEAD=$(git rev-parse develop 2>/dev/null)
+    
+    # Check if the branch appears to be from main
+    # This happens when the merge base with main is more recent than with develop
+    # and the branch hasn't been merged to develop yet
+    if [ "$MAIN_BASE" = "$MAIN_HEAD" ]; then
+        # Branch is directly from main's HEAD
+        if [ "$DEVELOP_BASE" != "$DEVELOP_HEAD" ]; then
+            # And it's not from develop's HEAD
+            return 1  # Branch was created from main - this is wrong!
+        fi
+    fi
+    
+    return 0  # Branch is OK
+}
+
+# Check if GitFlow enforcement is enabled
+if [ "$ENFORCE_GITFLOW" = "true" ]; then
+    if ! check_branch_parent "$BRANCH"; then
+        echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║                    ⛔ PUSH BLOCKED ⛔                            ║${NC}"
+        echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  This feature branch was created from MAIN instead of DEVELOP!  ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  GitFlow requires:                                              ║${NC}"
+        echo -e "${RED}║  • feature/* branches must be created from develop              ║${NC}"
+        echo -e "${RED}║  • Only hotfix/* branches should be created from main           ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  To fix this:                                                    ║${NC}"
+        echo -e "${RED}║  1. Create a new branch from develop:                           ║${NC}"
+        echo -e "${RED}║     ${YELLOW}git checkout develop${RED}                                       ║${NC}"
+        echo -e "${RED}║     ${YELLOW}git checkout -b ${BRANCH}${RED}          ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  2. Cherry-pick your commits:                                   ║${NC}"
+        echo -e "${RED}║     ${YELLOW}git cherry-pick <commit-hash>${RED}                              ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  3. Push the new branch:                                        ║${NC}"
+        echo -e "${RED}║     ${YELLOW}git push -u origin ${BRANCH}${RED}       ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  Or, if you're sure this is correct, override with:             ║${NC}"
+        echo -e "${RED}║     ${YELLOW}SKIP_GITFLOW_CHECK=1 git push${RED}                             ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+        
+        # Allow override with environment variable
+        if [ "$SKIP_GITFLOW_CHECK" = "1" ]; then
+            echo -e "${YELLOW}Warning: GitFlow check skipped by user override${NC}"
+            exit 0
+        fi
+        
+        exit 1
+    fi
+fi
+
+# If we get here, the push is allowed
+exit 0
