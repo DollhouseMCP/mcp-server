@@ -2055,12 +2055,8 @@ export class DollhouseMCPServer implements IToolHandler {
       type: elementType
     });
     
-    // Format the response
+    // Format the response - the message already contains all details
     let responseText = result.message;
-    
-    if (result.success && result.url) {
-      responseText += `\n\n🔗 View on GitHub: ${result.url}`;
-    }
     
     // Add persona indicator for consistency
     responseText = `${this.getPersonaIndicator()}${result.success ? '✅' : '❌'} ${responseText}`;
@@ -3419,6 +3415,61 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
   /**
    * Get current indicator configuration
    */
+  async configureCollectionSubmission(autoSubmit: boolean) {
+    try {
+      // Store the configuration in environment variable
+      if (autoSubmit) {
+        process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
+      } else {
+        delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
+      }
+
+      const message = autoSubmit 
+        ? "✅ Collection submission enabled! Content will automatically be submitted to the DollhouseMCP collection after portfolio upload."
+        : "✅ Collection submission disabled. Content will only be uploaded to your personal portfolio.";
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}${message}`
+          }
+        ]
+      };
+    } catch (error) {
+      logger.error('Error configuring collection submission', { error });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Failed to configure collection submission: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }
+        ]
+      };
+    }
+  }
+
+  async getCollectionSubmissionConfig() {
+    const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+    
+    const message = `**Collection Submission Configuration**\n\n` +
+      `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
+      `When auto-submit is enabled, the \`submit_content\` tool will:\n` +
+      `1. Upload content to your GitHub portfolio\n` +
+      `2. Automatically create a submission issue in DollhouseMCP/collection\n\n` +
+      `To change this setting, use:\n` +
+      `\`\`\`\nconfigure_collection_submission autoSubmit: true/false\n\`\`\``;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}${message}`
+        }
+      ]
+    };
+  }
+
   async getIndicatorConfig() {
     // Show current configuration and example
     let exampleIndicator = "";

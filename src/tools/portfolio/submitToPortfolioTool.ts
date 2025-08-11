@@ -211,9 +211,34 @@ export class SubmitToPortfolioTool {
         fileUrl
       });
 
+      // ENHANCEMENT (Issue #549): Ask user if they want to submit to collection
+      // This completes the community contribution workflow
+      const collectionSubmissionResult = await this.promptForCollectionSubmission({
+        elementName: safeName,
+        elementType,
+        portfolioUrl: fileUrl,
+        username: authStatus.username || 'unknown',
+        metadata,
+        token
+      });
+
+      // Build the response message based on what happened
+      let message = `✅ Successfully uploaded ${safeName} to your GitHub portfolio!\n`;
+      message += `📁 Portfolio URL: ${fileUrl}\n\n`;
+      
+      if (collectionSubmissionResult.submitted) {
+        message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
+        message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
+      } else if (collectionSubmissionResult.declined) {
+        message += `💡 You can submit to the collection later using the same command.`;
+      } else if (collectionSubmissionResult.error) {
+        message += `⚠️ Collection submission failed: ${collectionSubmissionResult.error}\n`;
+        message += `💡 You can manually submit at: https://github.com/DollhouseMCP/collection/issues/new`;
+      }
+
       return {
         success: true,
-        message: `Successfully submitted ${safeName} to your GitHub portfolio!`,
+        message,
         url: fileUrl
       };
 
@@ -225,6 +250,171 @@ export class SubmitToPortfolioTool {
       });
       
       return ErrorHandler.formatForResponse(error);
+    }
+  }
+
+  /**
+   * Prompts user to submit content to the DollhouseMCP collection
+   * ENHANCEMENT (Issue #549): Complete the community contribution workflow
+   */
+  private async promptForCollectionSubmission(params: {
+    elementName: string;
+    elementType: ElementType;
+    portfolioUrl: string;
+    username: string;
+    metadata: any;
+    token: string;
+  }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string }> {
+    try {
+      // Create a simple prompt message for the user
+      // Note: In MCP context, we can't do interactive prompts, so we'll need to
+      // either make this automatic or require a parameter
+      
+      // For now, let's check if the user has set an environment variable
+      // to auto-submit to collection (opt-in behavior)
+      const autoSubmit = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+      
+      if (!autoSubmit) {
+        // User hasn't opted in to auto-submission
+        logger.info('Collection submission skipped (set DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION=true to enable)');
+        return { submitted: false, declined: true };
+      }
+
+      logger.info('Auto-submitting to DollhouseMCP collection...');
+
+      // Create the issue in the collection repository
+      const issueUrl = await this.createCollectionIssue({
+        ...params,
+        token: params.token
+      });
+
+      if (issueUrl) {
+        logger.info('Successfully created collection submission issue', { issueUrl });
+        return { submitted: true, declined: false, issueUrl };
+      } else {
+        return { submitted: false, declined: false, error: 'Failed to create issue' };
+      }
+
+    } catch (error) {
+      logger.error('Error in collection submission prompt', { error });
+      return {
+        submitted: false,
+        declined: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Creates an issue in the DollhouseMCP/collection repository
+   * ENHANCEMENT (Issue #549): GitHub API integration for collection submission
+   */
+  private async createCollectionIssue(params: {
+    elementName: string;
+    elementType: ElementType;
+    portfolioUrl: string;
+    username: string;
+    metadata: any;
+    token: string;
+  }): Promise<string | null> {
+    try {
+
+      // Format the issue title
+      const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
+
+      // Format the issue body with all relevant information
+      const body = `## New ${params.elementType} Submission
+
+` +
+        `**Name**: ${params.elementName}\n` +
+        `**Author**: @${params.username}\n` +
+        `**Type**: ${params.elementType}\n` +
+        `**Description**: ${params.metadata.description || 'No description provided'}\n\n` +
+        `### Portfolio Link\n` +
+        `${params.portfolioUrl}\n\n` +
+        `### Metadata\n` +
+        `\`\`\`json\n${JSON.stringify(params.metadata, null, 2)}\n\`\`\`\n\n` +
+        `### Review Checklist\n` +
+        `- [ ] Content is appropriate and follows community guidelines\n` +
+        `- [ ] No security vulnerabilities or malicious patterns\n` +
+        `- [ ] Metadata is complete and accurate\n` +
+        `- [ ] Element works as described\n` +
+        `- [ ] No duplicate of existing collection content\n\n` +
+        `---\n` +
+        `*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
+
+      // Determine labels based on element type
+      const labels = [
+        'contribution',  // All submissions get this
+        'pending-review', // Needs review
+        params.elementType.toLowerCase() // Element type label
+      ];
+
+      // Create the issue using GitHub REST API directly
+      // SECURITY IMPROVEMENT: Add timeout to prevent hanging connections
+      const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
+      
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'Authorization': `Bearer ${params.token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'DollhouseMCP/1.0'
+          },
+          body: JSON.stringify({
+            title,
+            body,
+            labels
+          }),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          logger.error('GitHub API error creating issue', { 
+            status: response.status, 
+            statusText: response.statusText,
+            error: errorText 
+          });
+          
+          if (response.status === 404) {
+            logger.error('Collection repository not found or no access');
+          } else if (response.status === 403) {
+            logger.error('Permission denied to create issue in collection repo');
+          } else if (response.status === 401) {
+            logger.error('Authentication failed for collection submission');
+          }
+          return null;
+        }
+
+        const data = await response.json();
+        return data.html_url;
+        
+      } catch (fetchError: any) {
+        // Re-throw to outer catch block
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+    } catch (error: any) {
+      // Handle timeout specifically
+      if (error.name === 'AbortError') {
+        logger.error('GitHub API request timeout after 30 seconds');
+      } else {
+        logger.error('Failed to create collection issue', { 
+          error: error.message || error
+        });
+      }
+      return null;
     }
   }
 

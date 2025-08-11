@@ -59,6 +59,8 @@ export interface IToolHandler {
   // Config tools
   configureIndicator(config: any): Promise<any>;
   getIndicatorConfig(): Promise<any>;
+  configureCollectionSubmission(autoSubmit: boolean): Promise<any>;
+  getCollectionSubmissionConfig(): Promise<any>;
   
   // Export/Import/Share tools
   exportPersona(persona: string): Promise<any>;

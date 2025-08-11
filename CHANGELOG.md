@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Collection Submission Workflow** (#549) - Complete community contribution pipeline
+  - Enhanced `submit_content` tool to optionally submit to DollhouseMCP collection after portfolio upload
+  - Automatic GitHub issue creation in collection repository with proper labels
+  - New configuration tools: `configure_collection_submission` and `get_collection_submission_config`
+  - Opt-in behavior via environment variable or configuration setting
+  - Comprehensive error handling with fallback to manual submission
+
 ### Breaking Changes
 - **Removed Deprecated Marketplace Aliases** (#548) - Performance improvement
   - Removed 5 deprecated tool aliases that duplicated collection tools
