@@ -77,6 +77,23 @@ export class ContentValidator {
   ];
 
   // Malicious YAML patterns
+  // SECURITY FIX #364: YAML bomb detection patterns
+  private static readonly YAML_BOMB_PATTERNS = [
+    // Detects recursive anchor references that could cause exponential expansion
+    // Example: &a [*a] or &bomb ["test", *bomb]
+    /&(\w+)\s*\[[^\]]*\*\1[^\]]*\]/,      // Direct recursion in array
+    /&(\w+)\s*\{[^}]*\*\1[^}]*\}/,        // Direct recursion in object
+    /^\s*\w+:\s*&(\w+)\s*\n\s*\w+:\s*\*\1/m,  // Multi-line value recursion (data: &ref / value: *ref)
+    
+    // Detects multiple levels of anchor nesting that could be used for amplification
+    // Example: &a [&b [&c [*a, *b, *c]]]
+    /(&\w+\s*\[[^\]]*){3,}/,              // Deeply nested anchors
+    
+    // Detects excessive aliases in close proximity (potential amplification)
+    // Example: [*a, *b, *c, *d, *e, *f, *g, *h, *i, *j]
+    /(\*\w+[,\s]*){10,}/,                 // 10+ aliases in sequence
+  ];
+
   private static readonly MALICIOUS_YAML_PATTERNS = [
     // Language-specific deserialization attacks
     /!!python\/object/,
@@ -225,6 +242,7 @@ export class ContentValidator {
 
   /**
    * Validates YAML frontmatter for malicious content
+   * SECURITY FIX #364: Added YAML bomb detection to prevent denial of service
    */
   static validateYamlContent(yamlContent: string): boolean {
     // Length validation before pattern matching
@@ -238,6 +256,81 @@ export class ContentValidator {
       return false;
     }
 
+    // SECURITY FIX #364: Check for YAML bombs before other validation
+    for (const pattern of this.YAML_BOMB_PATTERNS) {
+      if (pattern.test(yamlContent)) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_INJECTION_ATTEMPT',
+          severity: 'CRITICAL',
+          source: 'yaml_bomb_detection',
+          details: `YAML bomb pattern detected: ${pattern.source}`,
+          metadata: {
+            patternType: 'YAML_BOMB',
+            contentLength: yamlContent.length
+          }
+        });
+        return false;
+      }
+    }
+    
+    // SECURITY FIX #364: Count anchor/alias ratio for amplification detection
+    const anchorMatches = yamlContent.match(/&\w+/g) || [];
+    const aliasMatches = yamlContent.match(/\*\w+/g) || [];
+    const amplificationRatio = anchorMatches.length > 0 ? aliasMatches.length / anchorMatches.length : 0;
+    
+    if (amplificationRatio > 10) {  // More than 10 aliases per anchor is suspicious
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'yaml_amplification_detection',
+        details: `Excessive alias amplification detected: ${aliasMatches.length} aliases for ${anchorMatches.length} anchors (ratio: ${amplificationRatio.toFixed(2)})`,
+        metadata: {
+          anchors: anchorMatches.length,
+          aliases: aliasMatches.length,
+          ratio: amplificationRatio
+        }
+      });
+      return false;
+    }
+    
+    // SECURITY FIX #364: Detect circular reference chains
+    // Extract anchor definitions and their content to check for mutual references
+    const anchorDefinitions = new Map<string, string>();
+    // Split YAML into lines and process each anchor with its following content
+    const lines = yamlContent.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const anchorMatch = lines[i].match(/&(\w+)/);
+      if (anchorMatch) {
+        const anchorName = anchorMatch[1];
+        // Capture this line and next few lines for context
+        const contentLines = lines.slice(i, Math.min(i + 5, lines.length));
+        const contentAfterAnchor = contentLines.join('\n');
+        anchorDefinitions.set(anchorName, contentAfterAnchor);
+      }
+    }
+    
+    // Check for circular references between anchors
+    for (const [anchor1, content1] of anchorDefinitions) {
+      for (const [anchor2, content2] of anchorDefinitions) {
+        if (anchor1 !== anchor2) {
+          // Check if anchor1's content references anchor2 AND anchor2's content references anchor1
+          if (content1.includes(`*${anchor2}`) && content2.includes(`*${anchor1}`)) {
+            SecurityMonitor.logSecurityEvent({
+              type: 'YAML_INJECTION_ATTEMPT',
+              severity: 'CRITICAL',
+              source: 'yaml_bomb_detection',
+              details: `Circular reference chain detected between anchors: &${anchor1} and &${anchor2}`,
+              metadata: {
+                patternType: 'CIRCULAR_REFERENCE',
+                anchors: [anchor1, anchor2]
+              }
+            });
+            return false;
+          }
+        }
+      }
+    }
+    
     // Unicode normalization preprocessing for YAML content
     const unicodeResult = UnicodeValidator.normalize(yamlContent);
     const normalizedYaml = unicodeResult.normalizedContent;
