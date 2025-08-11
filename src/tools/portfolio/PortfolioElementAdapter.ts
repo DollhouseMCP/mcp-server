@@ -23,6 +23,8 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import * as yaml from 'js-yaml';
+import matter from 'gray-matter';
+import { ContentValidator } from '../../security/contentValidator.js';
 
 /**
  * Adapter class that wraps a simple PortfolioElement and implements IElement
@@ -130,28 +132,114 @@ export class PortfolioElementAdapter implements IElement {
   /**
    * Serialize the element to markdown with YAML frontmatter
    * FIX: Changed from JSON to markdown format for GitHub portfolio compatibility
+   * SECURITY FIX #544: Parse and validate existing frontmatter instead of returning as-is
+   * SECURITY FIX #543: Use gray-matter for robust frontmatter detection
    */
   serialize(): string {
-    // If the content already has frontmatter, return it as-is
-    if (this.portfolioElement.content.startsWith('---\n')) {
-      return this.portfolioElement.content;
+    // SECURITY FIX #543: Use gray-matter for robust frontmatter detection
+    // This handles different line endings, whitespace variations, and malformed YAML
+    let contentToProcess = this.portfolioElement.content;
+    let existingMetadata: Record<string, any> = {};
+    let bodyContent = contentToProcess;
+    
+    // Try to parse existing frontmatter if present
+    try {
+      // gray-matter handles all edge cases:
+      // - Different line endings (\n, \r\n)
+      // - Whitespace variations
+      // - Malformed YAML (returns empty data object)
+      // - Missing closing delimiter
+      const parsed = matter(contentToProcess);
+      
+      if (parsed.data && Object.keys(parsed.data).length > 0) {
+        // SECURITY FIX #544: Validate existing frontmatter instead of bypassing
+        logger.debug('Found existing frontmatter, validating before merge');
+        
+        // Validate the parsed frontmatter
+        const validationResult = ContentValidator.validateAndSanitize(
+          yaml.dump(parsed.data)
+        );
+        
+        if (!validationResult.isValid && validationResult.severity === 'critical') {
+          // Log security event for malicious frontmatter
+          SecurityMonitor.logSecurityEvent({
+            type: 'CONTENT_INJECTION_ATTEMPT',
+            severity: 'HIGH',
+            source: 'PortfolioElementAdapter.serialize',
+            details: `Critical security issues in frontmatter: ${validationResult.detectedPatterns?.join(', ')}`,
+            metadata: {
+              elementId: this.id,
+              elementType: this.type
+            }
+          });
+          
+          // Don't use the malicious frontmatter, create new
+          existingMetadata = {};
+          bodyContent = contentToProcess; // Use original content
+        } else {
+          // Frontmatter is safe, merge with our metadata
+          existingMetadata = parsed.data;
+          bodyContent = parsed.content;
+        }
+      }
+    } catch (error) {
+      // If gray-matter fails to parse, treat as content without frontmatter
+      logger.warn('Failed to parse potential frontmatter, treating as plain content', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      // Continue with empty metadata and full content
     }
     
-    // Otherwise, create markdown with YAML frontmatter
-    // Build frontmatter from metadata
-    const frontmatter = yaml.dump({
-      ...this.metadata,
-      id: this.id,
-      type: this.type,
-      version: this.version
-    }, {
+    // Merge metadata, with our metadata taking precedence for security
+    // This ensures critical fields like ID and type are always from our validated source
+    const mergedMetadata = {
+      ...existingMetadata, // Existing metadata first
+      ...this.metadata,    // Our validated metadata overwrites
+      id: this.id,         // Always use our ID
+      type: this.type,     // Always use our type
+      version: this.version // Always use our version
+    };
+    
+    // Validate the final merged metadata
+    const metadataYaml = yaml.dump(mergedMetadata, {
       noRefs: true,
       sortKeys: false,
       lineWidth: -1
     });
     
-    // Return markdown with frontmatter
-    return `---\n${frontmatter}---\n\n${this.portfolioElement.content}`;
+    // Final security check on the complete metadata
+    const finalValidation = ContentValidator.validateAndSanitize(metadataYaml);
+    
+    if (!finalValidation.isValid && finalValidation.severity === 'critical') {
+      // This shouldn't happen with our sanitized data, but log if it does
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'PortfolioElementAdapter.serialize',
+        details: 'Final metadata validation failed after merge',
+        metadata: { elementId: this.id }
+      });
+      
+      // Fall back to minimal safe metadata
+      const safeMetadata = {
+        id: this.id,
+        type: this.type,
+        version: this.version,
+        name: this.normalizeString(this.metadata.name || 'Untitled'),
+        description: this.normalizeString(this.metadata.description || '')
+      };
+      
+      const safeFrontmatter = yaml.dump(safeMetadata, {
+        noRefs: true,
+        sortKeys: false,
+        lineWidth: -1
+      });
+      
+      return `---\n${safeFrontmatter}---\n\n${bodyContent}`;
+    }
+    
+    // Return validated and sanitized markdown with frontmatter
+    return `---\n${metadataYaml}---\n\n${bodyContent}`;
   }
 
   /**

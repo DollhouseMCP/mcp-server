@@ -50,16 +50,16 @@ export DOLLHOUSE_GITHUB_CLIENT_ID="your_client_id_here"
 ```
 
 #### Method B: Shell Profile (Permanent)
-Add to `~/.bashrc`, `~/.zshrc`, or your shell profile:
+# Add to `~/.bashrc`, `~/.zshrc`, or your shell profile:
 ```bash
-echo 'export DOLLHOUSE_GITHUB_CLIENT_ID="your_client_id_here"' >> ~/.zshrc
+echo 'export DOLLHOUSE_GITHUB_CLIENT_ID="Ov23li9gyNZP6m9aJ2EP"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
 #### Method C: .env File (Development)
 Create a `.env` file in the project root:
 ```bash
-DOLLHOUSE_GITHUB_CLIENT_ID=your_client_id_here
+DOLLHOUSE_GITHUB_CLIENT_ID=Ov23li9gyNZP6m9aJ2EP
 ```
 
 #### Method D: Claude Desktop Configuration
