@@ -78,6 +78,7 @@ export class ContentValidator {
 
   // Malicious YAML patterns
   // SECURITY FIX #364: YAML bomb detection patterns
+  // SECURITY FIX (PR #552 review): Simplified patterns to reduce ReDoS risk
   private static readonly YAML_BOMB_PATTERNS = [
     // Detects recursive anchor references that could cause exponential expansion
     // Example: &a [*a] or &bomb ["test", *bomb]
@@ -85,13 +86,13 @@ export class ContentValidator {
     /&(\w+)\s*\{[^}]*\*\1[^}]*\}/,        // Direct recursion in object
     /^\s*\w+:\s*&(\w+)\s*\n\s*\w+:\s*\*\1/m,  // Multi-line value recursion (data: &ref / value: *ref)
     
-    // Detects multiple levels of anchor nesting that could be used for amplification
-    // Example: &a [&b [&c [*a, *b, *c]]]
-    /(&\w+\s*\[[^\]]*){3,}/,              // Deeply nested anchors
+    // Simplified pattern to detect deeply nested anchors (less ReDoS risk)
+    // Looks for 3+ anchor definitions in close proximity
+    /&\w+[^&]*&\w+[^&]*&\w+/,            // 3+ anchors (simplified, less backtracking)
     
     // Detects excessive aliases in close proximity (potential amplification)
     // Example: [*a, *b, *c, *d, *e, *f, *g, *h, *i, *j]
-    /(\*\w+[,\s]*){10,}/,                 // 10+ aliases in sequence
+    /\*\w+(?:[,\s]+\*\w+){9,}/,          // 10+ aliases in sequence (non-capturing group)
   ];
 
   private static readonly MALICIOUS_YAML_PATTERNS = [
@@ -257,8 +258,17 @@ export class ContentValidator {
     }
 
     // SECURITY FIX #364: Check for YAML bombs before other validation
+    // SECURITY FIX (PR #552 review): Use RegexValidator for ReDoS protection
     for (const pattern of this.YAML_BOMB_PATTERNS) {
-      if (pattern.test(yamlContent)) {
+      // Use RegexValidator to safely check patterns with timeout protection
+      // This prevents ReDoS attacks from maliciously crafted YAML
+      const isMatch = RegexValidator.validate(yamlContent, pattern, {
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        rejectDangerousPatterns: false, // Our patterns are trusted
+        logEvents: false // We handle logging ourselves
+      });
+      
+      if (isMatch) {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',
@@ -294,39 +304,49 @@ export class ContentValidator {
     }
     
     // SECURITY FIX #364: Detect circular reference chains
-    // Extract anchor definitions and their content to check for mutual references
-    const anchorDefinitions = new Map<string, string>();
-    // Split YAML into lines and process each anchor with its following content
+    // SECURITY FIX (PR #552 review): Optimized from O(n²) to O(n) using Set-based lookups
+    const anchorRefs = new Map<string, Set<string>>();
     const lines = yamlContent.split('\n');
+    
+    // First pass: Build reference map efficiently
     for (let i = 0; i < lines.length; i++) {
       const anchorMatch = lines[i].match(/&(\w+)/);
       if (anchorMatch) {
         const anchorName = anchorMatch[1];
-        // Capture this line and next few lines for context
-        const contentLines = lines.slice(i, Math.min(i + 5, lines.length));
-        const contentAfterAnchor = contentLines.join('\n');
-        anchorDefinitions.set(anchorName, contentAfterAnchor);
+        // Get references in next 5 lines
+        const contextEnd = Math.min(i + 5, lines.length);
+        const references = new Set<string>();
+        
+        for (let j = i; j < contextEnd; j++) {
+          const aliasMatches = lines[j].match(/\*(\w+)/g);
+          if (aliasMatches) {
+            aliasMatches.forEach(alias => {
+              references.add(alias.substring(1)); // Remove * prefix
+            });
+          }
+        }
+        
+        anchorRefs.set(anchorName, references);
       }
     }
     
-    // Check for circular references between anchors
-    for (const [anchor1, content1] of anchorDefinitions) {
-      for (const [anchor2, content2] of anchorDefinitions) {
-        if (anchor1 !== anchor2) {
-          // Check if anchor1's content references anchor2 AND anchor2's content references anchor1
-          if (content1.includes(`*${anchor2}`) && content2.includes(`*${anchor1}`)) {
-            SecurityMonitor.logSecurityEvent({
-              type: 'YAML_INJECTION_ATTEMPT',
-              severity: 'CRITICAL',
-              source: 'yaml_bomb_detection',
-              details: `Circular reference chain detected between anchors: &${anchor1} and &${anchor2}`,
-              metadata: {
-                patternType: 'CIRCULAR_REFERENCE',
-                anchors: [anchor1, anchor2]
-              }
-            });
-            return false;
-          }
+    // Second pass: Check for circular references (O(n) with Set lookups)
+    for (const [anchor1, refs1] of anchorRefs) {
+      for (const refAnchor of refs1) {
+        const refs2 = anchorRefs.get(refAnchor);
+        // Check if the referenced anchor references back to the original
+        if (refs2 && refs2.has(anchor1)) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_INJECTION_ATTEMPT',
+            severity: 'CRITICAL',
+            source: 'yaml_bomb_detection',
+            details: `Circular reference chain detected between anchors: &${anchor1} and &${refAnchor}`,
+            metadata: {
+              patternType: 'CIRCULAR_REFERENCE',
+              anchors: [anchor1, refAnchor]
+            }
+          });
+          return false;
         }
       }
     }
