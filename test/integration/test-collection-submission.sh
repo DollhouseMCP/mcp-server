@@ -3,6 +3,7 @@
 # This script verifies the complete workflow from portfolio upload to collection submission
 
 set -e  # Exit on error
+set -u  # Exit on unset variables
 
 # Colors for output
 RED='\033[0;31m'
@@ -10,11 +11,26 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Source helper scripts
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/detect-github-user.sh"
+source "${SCRIPT_DIR}/cross-platform-helpers.sh"
+
 # Test configuration
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}"
-TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}"
-GITHUB_USER="${GITHUB_USER:-mickdarling}"
+# Add random suffix to prevent conflicts (uses cross-platform helper)
+RANDOM_SUFFIX=$(generate_random_suffix 4)
+TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}-${RANDOM_SUFFIX}"
+TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}-${RANDOM_SUFFIX}"
+
+# Detect GitHub user
+GITHUB_USER=$(detect_github_user)
+if [ -z "$GITHUB_USER" ]; then
+    print_error "Could not detect GitHub username"
+    echo "Please set GITHUB_USER environment variable or authenticate with 'gh auth login'"
+    exit 1
+fi
+
 PORTFOLIO_REPO="dollhouse-portfolio"
 
 # Function to print colored output
@@ -51,6 +67,7 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 print_success "Pre-flight checks passed"
+print_success "Detected GitHub user: ${GITHUB_USER}"
 
 # Test 1: Check GitHub portfolio repository
 print_test "Checking GitHub portfolio repository..."

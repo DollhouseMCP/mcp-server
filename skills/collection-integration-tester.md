@@ -55,7 +55,7 @@ Test each scenario systematically:
 ### Phase 4: GitHub Verification
 Check the actual GitHub repositories:
 
-1. **Portfolio Repository** (`https://github.com/{username}/dollhouse-portfolio`):
+1. **Portfolio Repository** (auto-detect username from `gh auth status` or use environment variable `GITHUB_USER`):
    - Exists and is accessible
    - Contains uploaded test content
    - Has correct file structure

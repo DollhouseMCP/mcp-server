@@ -101,7 +101,8 @@ Please test with different element types:
 ## Test 7: Verify GitHub Portfolio
 ```
 Please check my GitHub portfolio:
-1. Go to https://github.com/mickdarling and look for the "dollhouse-portfolio" repository
+1. First, determine my GitHub username (you can check from previous test outputs or use 'gh auth status')
+2. Go to https://github.com/{username} and look for the "dollhouse-portfolio" repository
 2. Tell me:
    - Does the repository exist?
    - Are there any recent commits?
