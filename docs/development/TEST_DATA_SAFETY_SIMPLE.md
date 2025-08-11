@@ -11,7 +11,7 @@ You've cloned the DollhouseMCP repository and want to run it locally. By default
 
 2. **Navigate to the MCP server folder:**
    ```bash
-   cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
+   cd /path/to/mcp-server
    ```
 
 3. **Choose ONE of these options to run the server:**
@@ -45,17 +45,17 @@ This variable only exists for that one command. Next time you run `npm run dev` 
 
 ```bash
 # Monday - Working on a new feature, don't need test data
-cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
+cd /path/to/mcp-server
 npm run dev
 # Result: Server starts, portfolio is empty/clean
 
 # Tuesday - Need to test with example personas
-cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
+cd /path/to/mcp-server
 DOLLHOUSE_LOAD_TEST_DATA=true npm run dev
 # Result: Server starts, example personas/skills are available
 
 # Wednesday - Back to regular development
-cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
+cd /path/to/mcp-server
 npm run dev
 # Result: Server starts, portfolio is empty/clean again
 ```

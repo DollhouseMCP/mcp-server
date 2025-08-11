@@ -71,7 +71,8 @@ export class DefaultElementProvider {
     this.config = {
       useDefaultPaths: true,
       // In development mode, don't load test data unless explicitly enabled
-      loadTestData: loadTestDataFromEnv || (!IS_DEVELOPMENT_MODE && config?.loadTestData !== false),
+      loadTestData: loadTestDataFromEnv || 
+                   (!IS_DEVELOPMENT_MODE && (config?.loadTestData ?? true)),
       ...config
     };
     
@@ -79,6 +80,22 @@ export class DefaultElementProvider {
       logger.info('[DefaultElementProvider] Development mode detected - test data loading disabled');
       logger.info('[DefaultElementProvider] To enable test data, set DOLLHOUSE_LOAD_TEST_DATA=true');
     }
+  }
+  
+  /**
+   * Get the current loadTestData configuration value
+   * @returns Whether test data loading is enabled
+   */
+  public get isTestDataLoadingEnabled(): boolean {
+    return this.config.loadTestData ?? false;
+  }
+  
+  /**
+   * Get whether the system is in development mode
+   * @returns Whether running in development mode
+   */
+  public get isDevelopmentMode(): boolean {
+    return IS_DEVELOPMENT_MODE;
   }
   
   /**
@@ -436,6 +453,8 @@ export class DefaultElementProvider {
    */
   private async performPopulation(portfolioBaseDir: string): Promise<void> {
     // Check if test data loading is disabled
+    // Note: This check is needed even though constructor sets config, because
+    // config can be overridden after construction
     if (IS_DEVELOPMENT_MODE && !this.config.loadTestData) {
       logger.info(
         '[DefaultElementProvider] Skipping default element population in development mode',
