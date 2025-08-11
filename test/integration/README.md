@@ -34,6 +34,30 @@ Test data includes random suffixes to prevent conflicts:
 
 This allows multiple test runs without cleanup between runs.
 
+## Cross-Platform Support
+
+The test suite works on macOS, Linux, and Windows:
+
+### macOS/Linux
+```bash
+./test-collection-submission.sh
+```
+
+### Windows (Git Bash)
+```bash
+bash test-collection-submission.sh
+```
+
+### Windows (Command Prompt)
+```cmd
+test-collection-submission.bat
+```
+
+### Windows (PowerShell)
+```powershell
+.\test-collection-submission.ps1
+```
+
 ## Available Tests
 
 ### 1. Bash Environment Test
@@ -44,6 +68,7 @@ This allows multiple test runs without cleanup between runs.
 - Creates test personas
 - Verifies GitHub repository access
 - Shows test commands for Claude Desktop
+- Works on all platforms with bash
 
 ### 2. Claude Desktop Test Script
 See `CLAUDE_DESKTOP_TEST_SCRIPT.md` for step-by-step instructions to copy/paste into Claude Desktop.
@@ -66,6 +91,20 @@ Can be sourced by other scripts:
 ```bash
 source ./detect-github-user.sh
 user=$(detect_github_user)
+```
+
+### cross-platform-helpers.sh
+Provides portable functions for cross-platform compatibility:
+- `generate_random_suffix` - Creates random hex strings without md5 dependency
+- `command_exists` - Checks if a command is available
+- `detect_os` - Identifies the operating system
+- `get_home_dir` - Gets home directory across platforms
+- `print_color` - Colored output that respects CI environments
+
+Source in your scripts:
+```bash
+source ./cross-platform-helpers.sh
+suffix=$(generate_random_suffix 4)  # e.g., "a3f2"
 ```
 
 ## Test Coverage

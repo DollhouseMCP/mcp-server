@@ -10,16 +10,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Test configuration
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-# Add random suffix to prevent conflicts
-RANDOM_SUFFIX=$(echo $RANDOM | md5sum | head -c 4)
-TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}-${RANDOM_SUFFIX}"
-TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}-${RANDOM_SUFFIX}"
-
-# Source the user detection helper
+# Source helper scripts
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/detect-github-user.sh"
+source "${SCRIPT_DIR}/cross-platform-helpers.sh"
+
+# Test configuration
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+# Add random suffix to prevent conflicts (uses cross-platform helper)
+RANDOM_SUFFIX=$(generate_random_suffix 4)
+TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}-${RANDOM_SUFFIX}"
+TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}-${RANDOM_SUFFIX}"
 
 # Detect GitHub user
 GITHUB_USER=$(detect_github_user)
