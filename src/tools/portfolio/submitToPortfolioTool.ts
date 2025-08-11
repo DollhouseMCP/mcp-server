@@ -351,47 +351,69 @@ export class SubmitToPortfolioTool {
       ];
 
       // Create the issue using GitHub REST API directly
+      // SECURITY IMPROVEMENT: Add timeout to prevent hanging connections
       const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'Authorization': `Bearer ${params.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'DollhouseMCP/1.0'
-        },
-        body: JSON.stringify({
-          title,
-          body,
-          labels
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        logger.error('GitHub API error creating issue', { 
-          status: response.status, 
-          statusText: response.statusText,
-          error: errorText 
+      
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'Authorization': `Bearer ${params.token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'DollhouseMCP/1.0'
+          },
+          body: JSON.stringify({
+            title,
+            body,
+            labels
+          }),
+          signal: controller.signal
         });
         
-        if (response.status === 404) {
-          logger.error('Collection repository not found or no access');
-        } else if (response.status === 403) {
-          logger.error('Permission denied to create issue in collection repo');
-        } else if (response.status === 401) {
-          logger.error('Authentication failed for collection submission');
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          logger.error('GitHub API error creating issue', { 
+            status: response.status, 
+            statusText: response.statusText,
+            error: errorText 
+          });
+          
+          if (response.status === 404) {
+            logger.error('Collection repository not found or no access');
+          } else if (response.status === 403) {
+            logger.error('Permission denied to create issue in collection repo');
+          } else if (response.status === 401) {
+            logger.error('Authentication failed for collection submission');
+          }
+          return null;
         }
-        return null;
+
+        const data = await response.json();
+        return data.html_url;
+        
+      } catch (fetchError: any) {
+        // Re-throw to outer catch block
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
       }
 
-      const data = await response.json();
-      return data.html_url;
-
     } catch (error: any) {
-      logger.error('Failed to create collection issue', { 
-        error: error.message || error
-      });
+      // Handle timeout specifically
+      if (error.name === 'AbortError') {
+        logger.error('GitHub API request timeout after 30 seconds');
+      } else {
+        logger.error('Failed to create collection issue', { 
+          error: error.message || error
+        });
+      }
       return null;
     }
   }
