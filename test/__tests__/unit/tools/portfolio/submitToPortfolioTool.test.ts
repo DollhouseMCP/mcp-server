@@ -53,7 +53,7 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
     
     // Setup auth manager mock
     mockAuthManager = {
-      getAuthStatus: jest.fn().mockResolvedValue({
+      getAuthStatus: jest.fn<() => Promise<any>>().mockResolvedValue({
         isAuthenticated: true,
         username: 'testuser'
       })
@@ -62,9 +62,9 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
     // Setup portfolio repo manager mock
     mockPortfolioRepoManager = {
       setToken: jest.fn(),
-      checkPortfolioExists: jest.fn().mockResolvedValue(true),
-      createPortfolio: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio'),
-      saveElement: jest.fn().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
+      checkPortfolioExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      createPortfolio: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio'),
+      saveElement: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
     };
     
     // Mock constructors

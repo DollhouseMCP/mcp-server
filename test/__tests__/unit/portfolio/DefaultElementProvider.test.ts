@@ -40,10 +40,11 @@ jest.mock('../../../../src/security/validators/unicodeValidator', () => ({
 class TestableDefaultElementProvider extends DefaultElementProvider {
   private _dataSearchPaths: string[] = [];
   
-  constructor(dataSearchPaths: string[]) {
+  constructor(dataSearchPaths: string[], loadTestData: boolean = true) {
     super({
       customDataPaths: dataSearchPaths,
-      useDefaultPaths: false
+      useDefaultPaths: false,
+      loadTestData: loadTestData  // Enable test data loading for tests
     });
     this._dataSearchPaths = dataSearchPaths;
   }
@@ -378,7 +379,8 @@ describe('DefaultElementProvider', () => {
       // Create provider with custom config
       const provider = new DefaultElementProvider({
         customDataPaths: [customDataDir],
-        useDefaultPaths: false
+        useDefaultPaths: false,
+        loadTestData: true  // Enable test data loading for tests
       });
       
       await provider.populateDefaults(portfolioDir);

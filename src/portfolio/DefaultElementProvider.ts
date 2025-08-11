@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -27,6 +28,18 @@ export const FILE_CONSTANTS = {
   CHUNK_SIZE: 64 * 1024 // 64KB chunks for reading large files
 } as const;
 
+// Development mode detection
+// When running from a git clone, we don't want to auto-load test data
+const IS_DEVELOPMENT_MODE = (() => {
+  try {
+    // Check if we're in a git repository (development mode)
+    const gitDir = path.join(process.cwd(), '.git');
+    return fsSync.existsSync(gitDir);
+  } catch {
+    return false;
+  }
+})();
+
 // Internal constants
 const DATA_DIR_CACHE_KEY = 'dollhouse_data_dir';
 const COPY_RETRY_ATTEMPTS = 3;
@@ -37,6 +50,8 @@ export interface DefaultElementProviderConfig {
   customDataPaths?: string[];
   /** Whether to use default search paths after custom paths */
   useDefaultPaths?: boolean;
+  /** Whether to load test/example data from repository (default: false in dev mode) */
+  loadTestData?: boolean;
 }
 
 export class DefaultElementProvider {
@@ -48,10 +63,39 @@ export class DefaultElementProvider {
   constructor(config?: DefaultElementProviderConfig) {
     const __filename = fileURLToPath(import.meta.url);
     this.__dirname = path.dirname(__filename);
+    
+    // Check environment variable for test data loading
+    const loadTestDataFromEnv = process.env.DOLLHOUSE_LOAD_TEST_DATA === 'true' || 
+                                process.env.DOLLHOUSE_LOAD_TEST_DATA === '1';
+    
     this.config = {
       useDefaultPaths: true,
+      // In development mode, don't load test data unless explicitly enabled
+      loadTestData: loadTestDataFromEnv || 
+                   (!IS_DEVELOPMENT_MODE && (config?.loadTestData ?? true)),
       ...config
     };
+    
+    if (IS_DEVELOPMENT_MODE && !this.config.loadTestData) {
+      logger.info('[DefaultElementProvider] Development mode detected - test data loading disabled');
+      logger.info('[DefaultElementProvider] To enable test data, set DOLLHOUSE_LOAD_TEST_DATA=true');
+    }
+  }
+  
+  /**
+   * Get the current loadTestData configuration value
+   * @returns Whether test data loading is enabled
+   */
+  public get isTestDataLoadingEnabled(): boolean {
+    return this.config.loadTestData ?? false;
+  }
+  
+  /**
+   * Get whether the system is in development mode
+   * @returns Whether running in development mode
+   */
+  public get isDevelopmentMode(): boolean {
+    return IS_DEVELOPMENT_MODE;
   }
   
   /**
@@ -68,11 +112,19 @@ export class DefaultElementProvider {
     
     // Add default paths if enabled
     if (this.config.useDefaultPaths !== false) {
-      paths.push(
+      // Skip development/repository data paths unless test data loading is enabled
+      if (this.config.loadTestData) {
         // Development/Git installation (relative to this file)
-        path.join(this.__dirname, '../../data'),
-        path.join(this.__dirname, '../../../data'),
-        
+        paths.push(
+          path.join(this.__dirname, '../../data'),
+          path.join(this.__dirname, '../../../data'),
+          // Current working directory (last resort)
+          path.join(process.cwd(), 'data')
+        );
+      }
+      
+      // Always include NPM installation paths (these would have production data)
+      paths.push(
         // NPM installations - macOS Homebrew
         '/opt/homebrew/lib/node_modules/@dollhousemcp/mcp-server/data',
         
@@ -85,10 +137,7 @@ export class DefaultElementProvider {
         'C:\\Program Files (x86)\\nodejs\\node_modules\\@dollhousemcp\\mcp-server\\data',
         
         // NPM installations - Windows with nvm
-        path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server', 'data'),
-        
-        // Current working directory (last resort)
-        path.join(process.cwd(), 'data')
+        path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server', 'data')
       );
     }
     
@@ -403,6 +452,21 @@ export class DefaultElementProvider {
    * @param portfolioBaseDir Base directory of the portfolio
    */
   private async performPopulation(portfolioBaseDir: string): Promise<void> {
+    // Check if test data loading is disabled
+    // Note: This check is needed even though constructor sets config, because
+    // config can be overridden after construction
+    if (IS_DEVELOPMENT_MODE && !this.config.loadTestData) {
+      logger.info(
+        '[DefaultElementProvider] Skipping default element population in development mode',
+        { 
+          portfolioBaseDir,
+          reason: 'Test data loading disabled',
+          enableWith: 'Set DOLLHOUSE_LOAD_TEST_DATA=true to enable'
+        }
+      );
+      return;
+    }
+    
     logger.info(
       '[DefaultElementProvider] Starting default element population',
       { portfolioBaseDir }
