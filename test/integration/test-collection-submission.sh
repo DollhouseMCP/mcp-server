@@ -12,9 +12,23 @@ NC='\033[0m' # No Color
 
 # Test configuration
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}"
-TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}"
-GITHUB_USER="${GITHUB_USER:-mickdarling}"
+# Add random suffix to prevent conflicts
+RANDOM_SUFFIX=$(echo $RANDOM | md5sum | head -c 4)
+TEST_PERSONA_MANUAL="Test-Manual-${TIMESTAMP}-${RANDOM_SUFFIX}"
+TEST_PERSONA_AUTO="Test-Auto-${TIMESTAMP}-${RANDOM_SUFFIX}"
+
+# Source the user detection helper
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/detect-github-user.sh"
+
+# Detect GitHub user
+GITHUB_USER=$(detect_github_user)
+if [ -z "$GITHUB_USER" ]; then
+    print_error "Could not detect GitHub username"
+    echo "Please set GITHUB_USER environment variable or authenticate with 'gh auth login'"
+    exit 1
+fi
+
 PORTFOLIO_REPO="dollhouse-portfolio"
 
 # Function to print colored output
@@ -51,6 +65,7 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 print_success "Pre-flight checks passed"
+print_success "Detected GitHub user: ${GITHUB_USER}"
 
 # Test 1: Check GitHub portfolio repository
 print_test "Checking GitHub portfolio repository..."

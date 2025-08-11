@@ -53,14 +53,14 @@ Please test portfolio upload without collection submission:
 ```
 
 **Expected Result:**
-- ✅ Uploaded to https://github.com/mickdarling/dollhouse-portfolio/blob/main/skills/roundtrip-test-skill.md
+- ✅ Uploaded to https://github.com/{your-username}/dollhouse-portfolio/blob/main/skills/roundtrip-test-skill.md
 - ❌ No issue in DollhouseMCP/collection
 - 💡 Message about manual submission option
 
 ### Step 4: Check GitHub Portfolio
 ```
 Please verify the portfolio upload:
-1. Go to https://github.com/mickdarling/dollhouse-portfolio
+1. Go to https://github.com/{your-username}/dollhouse-portfolio
 2. Navigate to skills/roundtrip-test-skill.md
 3. Verify:
    - The file exists
@@ -93,13 +93,13 @@ Please complete the roundtrip with auto-submission:
 Please check the collection issue:
 1. Go to the issue URL from Step 5
 2. Or visit: https://github.com/DollhouseMCP/collection/issues
-3. Find the issue titled "[skills] Add Roundtrip Test Skill by @mickdarling"
+3. Find the issue titled "[skills] Add Roundtrip Test Skill by @{your-username}"
 4. Verify:
    - Title format is correct
    - Labels are applied (contribution, pending-review, skills)
    - Body contains portfolio URL
    - Metadata shows version "1.0.2"
-   - Author is @mickdarling
+   - Author is @{your-username}
 ```
 
 ### Step 7: Test Error Scenarios
@@ -177,7 +177,7 @@ If you're short on time, just test the core functionality:
    (Should upload to portfolio AND create collection issue)
 
 4. Check results:
-   - Portfolio: https://github.com/mickdarling/dollhouse-portfolio
+   - Portfolio: https://github.com/{your-username}/dollhouse-portfolio
    - Collection: https://github.com/DollhouseMCP/collection/issues
 ```
 

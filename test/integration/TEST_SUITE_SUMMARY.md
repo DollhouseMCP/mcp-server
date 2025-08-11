@@ -71,7 +71,7 @@
 
 ## What to Check
 
-### In GitHub Portfolio (`https://github.com/mickdarling/dollhouse-portfolio`)
+### In GitHub Portfolio (`https://github.com/{your-username}/dollhouse-portfolio`)
 - Repository created automatically on first submission
 - Files appear in correct directories (`personas/`, `skills/`, etc.)
 - Commit messages reference the element names
@@ -135,7 +135,7 @@ gh auth login --web  # Re-authenticate
 
 ### Portfolio Not Found
 - Will be created automatically on first submission
-- Check https://github.com/mickdarling/dollhouse-portfolio
+- Check https://github.com/{your-username}/dollhouse-portfolio
 
 ### Collection Issues Not Created
 - Verify auto-submit is enabled
