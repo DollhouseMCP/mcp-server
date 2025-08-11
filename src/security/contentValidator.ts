@@ -59,7 +59,8 @@ export class ContentValidator {
     { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
-    { pattern: /`[^`]+`/g, severity: 'critical', description: 'Backtick command execution' },
+    // REMOVED: Backtick pattern - was causing false positives with markdown code formatting
+    // { pattern: /`[^`]+`/g, severity: 'critical', description: 'Backtick command execution' },
     { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
     { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
     { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
@@ -438,7 +439,9 @@ export class ContentValidator {
       // No frontmatter, just validate content
       const result = this.validateAndSanitize(content);
       if (!result.isValid && result.severity === 'critical') {
-        throw new SecurityError('Critical security threat detected in persona content');
+        // FIX: Include specific patterns that triggered the rejection for debugging
+        const patterns = result.detectedPatterns?.join(', ') || 'unknown patterns';
+        throw new SecurityError(`Critical security threat detected in persona content: ${patterns}`);
       }
       return result.sanitizedContent || content;
     }
@@ -454,7 +457,9 @@ export class ContentValidator {
     // Validate markdown content
     const contentResult = this.validateAndSanitize(markdownContent);
     if (!contentResult.isValid && contentResult.severity === 'critical') {
-      throw new SecurityError('Critical security threat detected in persona content');
+      // FIX: Include specific patterns that triggered the rejection for debugging
+      const patterns = contentResult.detectedPatterns?.join(', ') || 'unknown patterns';
+      throw new SecurityError(`Critical security threat detected in persona content: ${patterns}`);
     }
 
     // Return sanitized content
