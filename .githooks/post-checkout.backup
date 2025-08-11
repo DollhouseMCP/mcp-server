@@ -48,39 +48,6 @@ if [ "$3" != "1" ]; then
     exit 0
 fi
 
-# Check if this is a new branch creation (old ref is 0000000)
-OLD_REF=$1
-NEW_REF=$2
-IS_NEW_BRANCH=false
-if [ "$OLD_REF" = "0000000000000000000000000000000000000000" ]; then
-    IS_NEW_BRANCH=true
-fi
-
-# If it's a new feature branch, check where it was created from
-if [ "$IS_NEW_BRANCH" = "true" ] && [[ "$BRANCH" == feature/* ]]; then
-    # Get the branch we were on before creating this one
-    PREVIOUS_BRANCH=$(git reflog -n 2 --format="%gs" | tail -1 | sed 's/checkout: moving from \(.*\) to .*/\1/')
-    
-    # If created from main, show warning
-    if [ "$PREVIOUS_BRANCH" = "main" ] || [ "$PREVIOUS_BRANCH" = "master" ]; then
-        echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║                    ⚠️  GITFLOW WARNING ⚠️                       ║${NC}"
-        echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  You created a feature branch from MAIN!                        ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  Feature branches should be created from DEVELOP.               ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  To fix this:                                                   ║${NC}"
-        echo -e "${RED}║  1. Delete this branch: ${YELLOW}git branch -D $BRANCH${RED}                 ║${NC}"
-        echo -e "${RED}║  2. Switch to develop: ${YELLOW}git checkout develop${RED}                   ║${NC}"
-        echo -e "${RED}║  3. Create branch again: ${YELLOW}git checkout -b $BRANCH${RED}              ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-    fi
-fi
-
 # Provide helpful messages based on branch
 case "$BRANCH" in
     main|master)
@@ -88,22 +55,12 @@ case "$BRANCH" in
         echo -e "${RED}║              📍 You are now on the MAIN branch                  ║${NC}"
         echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  ⚠️  BE VERY CAREFUL! This is the PRODUCTION branch!            ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  ${YELLOW}❓ Are you supposed to be on main right now?${RED}                  ║${NC}"
+        echo -e "${RED}║  ⚠️  This is the PRODUCTION branch!                             ║${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}║  Remember:                                                      ║${NC}"
-        echo -e "${RED}║  • NEVER commit directly to main                                ║${NC}"
-        echo -e "${RED}║  • Only merge from develop, release/*, or hotfix/*              ║${NC}"
-        echo -e "${RED}║  • All changes must go through PR review                        ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  Valid reasons to be on main:                                   ║${NC}"
-        echo -e "${RED}║  • Creating a hotfix branch                                     ║${NC}"
-        echo -e "${RED}║  • Reviewing merged code                                        ║${NC}"
-        echo -e "${RED}║  • Pulling latest changes                                       ║${NC}"
-        echo -e "${RED}║                                                                  ║${NC}"
-        echo -e "${RED}║  If you're here to create a feature:                            ║${NC}"
-        echo -e "${RED}║  ${YELLOW}➜ git checkout develop${RED}                                        ║${NC}"
+        echo -e "${RED}║  • DO NOT commit directly here                                  ║${NC}"
+        echo -e "${RED}║  • Only merge from release/* or hotfix/* branches               ║${NC}"
+        echo -e "${RED}║  • All changes should go through pull requests                  ║${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
         ;;
