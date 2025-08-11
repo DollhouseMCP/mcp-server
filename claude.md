@@ -14,6 +14,13 @@
 @docs/development/PR_BEST_PRACTICES.md
 @docs/development/SESSION_NOTES_JULY_23_AFTERNOON_ENSEMBLE.md
 
+## GitFlow Guardian Hooks Location 🚨
+
+**IMPORTANT: Git hooks are in `.githooks/` directory, NOT `.git/hooks/`**
+- Configured via: `git config core.hookspath .githooks`
+- Post-checkout hook (`.githooks/post-checkout`) shows colored branch messages
+- See `docs/development/GITFLOW_GUARDIAN_HOOKS_REFERENCE.md` for full details
+
 ## Project Overview
 
 DollhouseMCP is a professional Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files. It allows Claude and other compatible AI assistants to activate and switch between different behavioral personas, with an integrated GitHub-powered marketplace for sharing and monetizing personas.
