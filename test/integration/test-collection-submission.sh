@@ -3,6 +3,7 @@
 # This script verifies the complete workflow from portfolio upload to collection submission
 
 set -e  # Exit on error
+set -u  # Exit on unset variables
 
 # Colors for output
 RED='\033[0;31m'

@@ -2,12 +2,15 @@
 # Cross-platform helper functions for integration tests
 # Ensures compatibility across macOS, Linux, and Windows (Git Bash)
 
+# Note: Not using set -u here as this is sourced by other scripts
+# and needs to handle potentially unset variables gracefully
+
 # Generate a random hex suffix (cross-platform)
 # Uses printf instead of md5sum/md5 for portability
 generate_random_suffix() {
     local length=${1:-4}  # Default to 4 characters
     # Use $RANDOM if available (bash), otherwise use timestamp
-    if [ -n "$RANDOM" ]; then
+    if [ -n "${RANDOM:-}" ]; then
         printf "%0${length}x" $((RANDOM % (16**length)))
     else
         # Fallback for shells without $RANDOM

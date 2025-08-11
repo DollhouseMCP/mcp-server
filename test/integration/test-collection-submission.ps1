@@ -44,9 +44,25 @@ $githubUser = $env:GITHUB_USER
 if (-not $githubUser) {
     try {
         $githubUser = & gh api user --jq .login 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "GitHub CLI command failed"
+        }
     } catch {
-        # Try git config as fallback
-        $githubUser = & git config --global user.name 2>$null
+        Write-Host "GitHub CLI detection failed: $_" -ForegroundColor Yellow
+        Write-Host "Trying git config as fallback..." -ForegroundColor Yellow
+        
+        try {
+            $githubUser = & git config --global github.user 2>$null
+            if (-not $githubUser) {
+                # Try regular user.name as last resort
+                $githubUser = & git config --global user.name 2>$null
+                if ($githubUser) {
+                    Write-Host "Warning: Using git user.name which may not match GitHub username" -ForegroundColor Yellow
+                }
+            }
+        } catch {
+            Write-Host "Git config detection also failed: $_" -ForegroundColor Red
+        }
     }
 }
 

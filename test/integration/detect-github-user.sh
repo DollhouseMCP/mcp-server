@@ -2,13 +2,16 @@
 # Helper script to detect GitHub username for integration tests
 # Can be sourced by other scripts or run standalone
 
+# Exit on unset variables for safety
+set -u
+
 # Function to detect GitHub user
 detect_github_user() {
     local user=""
     
     # First, check if GITHUB_USER environment variable is set
-    if [ -n "$GITHUB_USER" ]; then
-        user="$GITHUB_USER"
+    if [ -n "${GITHUB_USER:-}" ]; then
+        user="${GITHUB_USER:-}"
         echo "Using GITHUB_USER environment variable: $user" >&2
     fi
     
