@@ -1,0 +1,126 @@
+#!/bin/bash
+
+# GitFlow Guardian - PR Creation Wrapper
+# Prevents creating PRs to the wrong branch before they're submitted
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Get current branch
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Parse target branch from arguments
+TARGET_BRANCH=""
+ARGS=("$@")
+for i in "${!ARGS[@]}"; do
+    if [[ "${ARGS[$i]}" == "--base" ]] && [[ $((i+1)) -lt ${#ARGS[@]} ]]; then
+        TARGET_BRANCH="${ARGS[$((i+1))]}"
+        break
+    fi
+done
+
+# If no --base specified, gh pr create defaults to main/master
+if [[ -z "$TARGET_BRANCH" ]]; then
+    # Check default branch
+    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    if [[ -z "$DEFAULT_BRANCH" ]]; then
+        DEFAULT_BRANCH="main"
+    fi
+    TARGET_BRANCH="$DEFAULT_BRANCH"
+fi
+
+# Function to check if branch follows GitFlow patterns
+check_gitflow_compliance() {
+    local source_branch="$1"
+    local target_branch="$2"
+    
+    # Rules for PRs to main
+    if [[ "$target_branch" == "main" ]] || [[ "$target_branch" == "master" ]]; then
+        if [[ "$source_branch" == "develop" ]] || \
+           [[ "$source_branch" =~ ^release/.+ ]] || \
+           [[ "$source_branch" =~ ^hotfix/.+ ]]; then
+            return 0  # Valid
+        else
+            echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║              🚨 GITFLOW VIOLATION DETECTED 🚨                   ║${NC}"
+            echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║  You're trying to create a PR to: ${YELLOW}$target_branch${RED}                      ║${NC}"
+            echo -e "${RED}║  From branch: ${YELLOW}$source_branch${RED}                                          ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║  ${YELLOW}PRs to main must come from:${RED}                                   ║${NC}"
+            echo -e "${RED}║    • develop (for releases)                                     ║${NC}"
+            echo -e "${RED}║    • release/* (for release candidates)                         ║${NC}"
+            echo -e "${RED}║    • hotfix/* (for emergency fixes)                             ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║  ${GREEN}✅ CORRECT ACTION:${RED}                                            ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║  Create your PR to ${GREEN}develop${RED} instead:                            ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║    ${CYAN}gh pr create --base develop${RED}                                 ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}║  Or if this is a hotfix:                                        ║${NC}"
+            echo -e "${RED}║    1. Rename your branch:                                       ║${NC}"
+            echo -e "${RED}║       ${CYAN}git branch -m hotfix/$(echo $source_branch | sed 's/.*\///')${RED}     ║${NC}"
+            echo -e "${RED}║    2. Push the renamed branch                                   ║${NC}"
+            echo -e "${RED}║    3. Create PR from hotfix branch                              ║${NC}"
+            echo -e "${RED}║                                                                  ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+            return 1  # Invalid
+        fi
+    fi
+    
+    # Rules for PRs to develop - almost everything is allowed except main/master
+    if [[ "$target_branch" == "develop" ]]; then
+        if [[ "$source_branch" == "main" ]] || [[ "$source_branch" == "master" ]]; then
+            echo -e "${RED}❌ ERROR: Cannot create PR from main/master to develop${NC}"
+            echo -e "${YELLOW}   This would reverse the GitFlow direction${NC}"
+            return 1
+        fi
+        return 0  # Most branches can PR to develop
+    fi
+    
+    # For other target branches, allow
+    return 0
+}
+
+# Check GitFlow compliance
+if ! check_gitflow_compliance "$CURRENT_BRANCH" "$TARGET_BRANCH"; then
+    echo ""
+    echo -e "${YELLOW}┌─────────────────────────────────────────────────────────────────┐${NC}"
+    echo -e "${YELLOW}│  Override Options:                                              │${NC}"
+    echo -e "${YELLOW}├─────────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "${YELLOW}│  • To force this PR anyway (NOT recommended):                  │${NC}"
+    echo -e "${YELLOW}│    ${RED}GH_FORCE_PR=1 gh pr create $@${YELLOW}                               │${NC}"
+    echo -e "${YELLOW}│                                                                  │${NC}"
+    echo -e "${YELLOW}│  • To use gh directly without checks:                          │${NC}"
+    echo -e "${YELLOW}│    ${RED}command gh pr create $@${YELLOW}                                     │${NC}"
+    echo -e "${YELLOW}└─────────────────────────────────────────────────────────────────┘${NC}"
+    
+    # Check if force flag is set
+    if [[ "$GH_FORCE_PR" == "1" ]]; then
+        echo ""
+        echo -e "${RED}⚠️  WARNING: Forcing PR creation despite GitFlow violation!${NC}"
+        echo -e "${RED}   This PR will likely fail CI checks.${NC}"
+        echo ""
+        # Proceed with the original command
+        command gh "$@"
+    else
+        exit 1
+    fi
+else
+    # GitFlow compliant - show success message and proceed
+    echo -e "${GREEN}✅ GitFlow Check Passed${NC}"
+    echo -e "${GREEN}   Creating PR from ${CYAN}$CURRENT_BRANCH${GREEN} to ${CYAN}$TARGET_BRANCH${NC}"
+    echo ""
+    
+    # Execute the original gh command
+    command gh "$@"
+fi

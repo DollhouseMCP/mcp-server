@@ -11,6 +11,12 @@ GitFlow Guardian is a set of Git hooks that enforce GitFlow best practices and p
 - Forces use of feature branches
 - Provides emergency bypass option (`--no-verify`)
 
+### 🎯 Prevents PRs to Wrong Branches (NEW!)
+- Blocks PR creation from feature/fix branches to `main`
+- Guides you to submit to `develop` instead
+- Shows clear error messages BEFORE the PR is created
+- Provides override option for emergencies
+
 ### 📝 Enforces Branch Naming Conventions
 - Validates branch names follow GitFlow patterns
 - Suggests proper prefixes (feature/, fix/, hotfix/, etc.)
@@ -26,7 +32,11 @@ GitFlow Guardian is a set of Git hooks that enforce GitFlow best practices and p
 ### Quick Setup
 ```bash
 # From repository root
+# Step 1: Set up commit protection
 ./scripts/setup-gitflow-guardian.sh
+
+# Step 2: Set up PR creation protection (NEW!)
+./.githooks/setup-pr-wrapper
 ```
 
 ### Manual Setup
@@ -37,6 +47,10 @@ git config core.hooksPath .githooks
 # Make hooks executable
 chmod +x .githooks/pre-commit
 chmod +x .githooks/post-checkout
+chmod +x .githooks/gh-pr-create-wrapper
+
+# Set up PR protection alias
+./.githooks/setup-pr-wrapper
 ```
 
 ### Verify Installation
@@ -99,6 +113,33 @@ If on a protected branch, the commit is blocked with this message:
 ║  You are attempting to commit directly to: develop              ║
 ║                                                                  ║
 ║  This violates GitFlow best practices!                          ║
+```
+
+### PR Creation Wrapper (NEW!)
+Intercepts `gh pr create` commands to check:
+1. What branch are you creating the PR from?
+2. What branch are you targeting?
+3. Does this follow GitFlow rules?
+
+If creating a PR to the wrong branch, it shows:
+
+```
+╔════════════════════════════════════════════════════════════════╗
+║              🚨 GITFLOW VIOLATION DETECTED 🚨                   ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  You're trying to create a PR to: main                          ║
+║  From branch: fix/your-fix                                      ║
+║                                                                  ║
+║  PRs to main must come from:                                    ║
+║    • develop (for releases)                                     ║
+║    • release/* (for release candidates)                         ║
+║    • hotfix/* (for emergency fixes)                             ║
+║                                                                  ║
+║  ✅ CORRECT ACTION:                                             ║
+║  Create your PR to develop instead:                             ║
+║    gh pr create --base develop                                  ║
+╚════════════════════════════════════════════════════════════════╝
 ```
 
 ### Post-Checkout Hook

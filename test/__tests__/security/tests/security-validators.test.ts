@@ -4,6 +4,7 @@ import { ContentValidator } from '../../../../src/security/contentValidator.js';
 import { PathValidator } from '../../../../src/security/pathValidator.js';
 import { YamlValidator } from '../../../../src/security/yamlValidator.js';
 import { validatePath, sanitizeInput } from '../../../../src/security/InputValidator.js';
+import { SecurityError } from '../../../../src/security/errors.js';
 
 describe('Security Validators Tests', () => {
   beforeAll(() => {
@@ -55,16 +56,10 @@ Content`;
       
       const parser = SecureYamlParser.createSecureMatterParser();
       
-      // Should handle without memory explosion
-      const startMemory = process.memoryUsage().heapUsed;
-      const result = parser.parse(yamlBomb);
-      const endMemory = process.memoryUsage().heapUsed;
-      
-      // Memory increase should be reasonable
-      const memoryIncrease = endMemory - startMemory;
-      expect(memoryIncrease).toBeLessThan(50 * 1024 * 1024); // Less than 50MB
-      
-      expect(result.content.trim()).toBe('Content');
+      // SECURITY FIX #364: YAML bombs should be rejected, not parsed
+      // The enhanced YAML bomb detection now correctly identifies and rejects
+      // this pattern to prevent denial of service attacks
+      expect(() => parser.parse(yamlBomb)).toThrow('Malicious YAML content detected');
     });
   });
   
