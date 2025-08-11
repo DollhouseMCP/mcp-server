@@ -116,7 +116,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^24.0.15",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.0.0",
     "jest": "^30.0.4",
     "ts-jest": "^29.4.0",
     "ts-jest-resolver": "^2.0.1",
