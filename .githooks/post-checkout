@@ -48,6 +48,61 @@ if [ "$3" != "1" ]; then
     exit 0
 fi
 
+# Get the previous and new commit hashes
+PREV_HEAD=$1
+NEW_HEAD=$2
+
+# Function to check if a branch was just created
+is_new_branch() {
+    # Check if the previous HEAD is the same as the current branch's parent
+    # and if we're on a feature branch
+    if [[ "$BRANCH" == feature/* ]] || [[ "$BRANCH" == fix/* ]] || [[ "$BRANCH" == bugfix/* ]]; then
+        # Get the parent branch (where this branch was created from)
+        PARENT_BRANCH=$(git show-branch -a 2>/dev/null | 
+                       grep '\*' | 
+                       grep -v "\[$BRANCH" | 
+                       head -n1 | 
+                       sed 's/.*\[\(.*\)\].*/\1/' | 
+                       sed 's/[\^~].*//')
+        
+        # Alternative method: check if this is the first commit on the branch
+        BRANCH_BASE=$(git merge-base HEAD main 2>/dev/null)
+        DEVELOP_BASE=$(git merge-base HEAD develop 2>/dev/null)
+        
+        # If the branch base is the same as main's HEAD, it was created from main
+        MAIN_HEAD=$(git rev-parse main 2>/dev/null)
+        
+        if [ "$BRANCH_BASE" = "$MAIN_HEAD" ] && [ "$BRANCH_BASE" != "$DEVELOP_BASE" ]; then
+            return 0  # Branch was created from main
+        fi
+    fi
+    return 1  # Not a new branch from main
+}
+
+# Check if this is a new feature branch created from main
+if is_new_branch; then
+    echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                    ⚠️  WARNING ⚠️                                ║${NC}"
+    echo -e "${RED}╠════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  This feature branch appears to be created from MAIN!           ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  Feature branches should be created from DEVELOP:               ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  To fix this:                                                    ║${NC}"
+    echo -e "${RED}║  1. ${YELLOW}git checkout develop${RED}                                        ║${NC}"
+    echo -e "${RED}║  2. ${YELLOW}git checkout -b $BRANCH${RED}             ║${NC}"
+    echo -e "${RED}║  3. Cherry-pick your commits if needed                          ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}║  GitFlow workflow:                                              ║${NC}"
+    echo -e "${RED}║  • feature/* branches → from develop                            ║${NC}"
+    echo -e "${RED}║  • hotfix/* branches → from main                                ║${NC}"
+    echo -e "${RED}║  • release/* branches → from develop                            ║${NC}"
+    echo -e "${RED}║                                                                  ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+fi
+
 # Provide helpful messages based on branch
 case "$BRANCH" in
     main|master)
@@ -57,10 +112,17 @@ case "$BRANCH" in
         echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}║  ⚠️  This is the PRODUCTION branch!                             ║${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  You should rarely need to be on this branch.                   ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
+        echo -e "${RED}║  Common tasks and where to do them:                             ║${NC}"
+        echo -e "${RED}║  • New features → ${GREEN}git checkout develop${RED}                         ║${NC}"
+        echo -e "${RED}║  • Bug fixes → ${GREEN}git checkout develop${RED}                            ║${NC}"
+        echo -e "${RED}║  • Hotfixes → ${YELLOW}git checkout -b hotfix/issue-name${RED}                ║${NC}"
+        echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}║  Remember:                                                      ║${NC}"
         echo -e "${RED}║  • DO NOT commit directly here                                  ║${NC}"
+        echo -e "${RED}║  • DO NOT create feature branches from here                     ║${NC}"
         echo -e "${RED}║  • Only merge from release/* or hotfix/* branches               ║${NC}"
-        echo -e "${RED}║  • All changes should go through pull requests                  ║${NC}"
         echo -e "${RED}║                                                                  ║${NC}"
         echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
         ;;
