@@ -5,6 +5,22 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking Changes
+- **Removed Deprecated Marketplace Aliases** (#548) - Performance improvement
+  - Removed 5 deprecated tool aliases that duplicated collection tools
+  - Tools removed: `browse_marketplace`, `search_marketplace`, `get_marketplace_persona`, `install_persona`, `submit_persona`
+  - **Migration required**: Use `browse_collection`, `search_collection`, `get_collection_content`, `install_content`, `submit_content` instead
+  - Reduces tool count by 5, improving MCP initialization performance
+
+### Security
+- **YAML Bomb Detection** (#364) - Comprehensive protection against denial of service
+  - Added detection for recursive YAML structures
+  - Added circular reference chain detection  
+  - Added excessive alias amplification detection
+  - Prevents memory exhaustion from malicious YAML patterns
+
 ## [1.5.2] - 2025-08-06
 
 ### Added
