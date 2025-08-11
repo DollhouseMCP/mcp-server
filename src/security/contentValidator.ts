@@ -59,8 +59,13 @@ export class ContentValidator {
     { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
-    // REMOVED: Backtick pattern - was causing false positives with markdown code formatting
-    // { pattern: /`[^`]+`/g, severity: 'critical', description: 'Backtick command execution' },
+    // FIX: More targeted backtick pattern - only matches actual shell commands, not markdown formatting
+    // This pattern detects backticks containing known dangerous shell commands but allows npm/node for package management
+    { pattern: /`[^`]*(?:rm\s|cat\s+\/|ls\s+\/|curl\s+[^`]*\||wget\s+[^`]*\||sudo\s|chmod\s+[0-9]|chown\s|bash\s+-c|sh\s+-c|zsh\s+-c|python\s+-c|node\s+-e|eval|exec|passwd|shadow|nc\s|netcat\s|telnet\s|ssh\s)[^`]*`/gi, severity: 'critical', description: 'Shell command in backticks' },
+    // Also detect backticks with particularly dangerous patterns
+    { pattern: /`[^`]*(?:rm\s+-rf|\/etc\/passwd|\/etc\/shadow|\.ssh\/|sudo\s+|>\s*\/dev\/|curl\s+.*\||wget\s+.*\||bash\s+.*\.sh)[^`]*`/gi, severity: 'critical', description: 'Dangerous backtick command' },
+    // Detect scripting language evaluation
+    { pattern: /`[^`]*(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]+`/gi, severity: 'critical', description: 'Script evaluation in backticks' },
     { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
     { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
     { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
