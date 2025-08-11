@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# Setup script for GitFlow PR wrapper
+# This creates an alias that intercepts gh pr create commands
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WRAPPER_PATH="$REPO_ROOT/.githooks/gh-pr-create-wrapper"
+
+echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║          🛡️  GitFlow PR Protection Setup                        ║${NC}"
+echo -e "${BLUE}╠════════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${BLUE}║                                                                  ║${NC}"
+echo -e "${BLUE}║  This will set up protection against creating PRs               ║${NC}"
+echo -e "${BLUE}║  to the wrong branch (e.g., feature → main)                     ║${NC}"
+echo -e "${BLUE}║                                                                  ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+# Check if wrapper exists
+if [[ ! -f "$WRAPPER_PATH" ]]; then
+    echo -e "${YELLOW}❌ Error: Wrapper script not found at $WRAPPER_PATH${NC}"
+    exit 1
+fi
+
+# Create git alias for pr command that uses our wrapper
+echo -e "${GREEN}→ Creating Git alias for 'gh pr create' protection...${NC}"
+
+# Create a git alias that intercepts pr commands
+git config alias.pr "!f() { 
+    if [[ \"\$1\" == \"create\" ]]; then 
+        $WRAPPER_PATH \"\$@\"
+    else 
+        command gh pr \"\$@\"
+    fi
+}; f"
+
+# Also create a shell alias for the current session
+echo -e "${GREEN}→ Creating shell alias for current session...${NC}"
+
+# Detect shell type and add appropriate alias
+if [[ "$SHELL" == *"zsh"* ]]; then
+    SHELL_RC="$HOME/.zshrc"
+elif [[ "$SHELL" == *"bash"* ]]; then
+    SHELL_RC="$HOME/.bashrc"
+else
+    SHELL_RC="$HOME/.profile"
+fi
+
+# Create the alias command
+ALIAS_CMD="alias gh='_gh_wrapper() { if [[ \"\$1\" == \"pr\" ]] && [[ \"\$2\" == \"create\" ]]; then $WRAPPER_PATH \"\$@\"; else command gh \"\$@\"; fi }; _gh_wrapper'"
+
+# Check if alias already exists
+if ! grep -q "_gh_wrapper" "$SHELL_RC" 2>/dev/null; then
+    echo "" >> "$SHELL_RC"
+    echo "# GitFlow PR Protection" >> "$SHELL_RC"
+    echo "$ALIAS_CMD" >> "$SHELL_RC"
+    echo -e "${GREEN}✅ Added alias to $SHELL_RC${NC}"
+else
+    echo -e "${YELLOW}ℹ️  Alias already exists in $SHELL_RC${NC}"
+fi
+
+# Apply alias to current session
+eval "$ALIAS_CMD"
+
+echo ""
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                    ✅ Setup Complete!                           ║${NC}"
+echo -e "${GREEN}╠════════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}║  GitFlow PR Protection is now active!                           ║${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}║  When you run 'gh pr create', it will:                          ║${NC}"
+echo -e "${GREEN}║  • Check if you're creating a PR to the right branch            ║${NC}"
+echo -e "${GREEN}║  • Block PRs from feature/fix branches to main                  ║${NC}"
+echo -e "${GREEN}║  • Guide you to submit to develop instead                       ║${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}║  ${CYAN}Test it:${GREEN}                                                      ║${NC}"
+echo -e "${GREEN}║    gh pr create --base main     ${YELLOW}# Will be blocked${GREEN}              ║${NC}"
+echo -e "${GREEN}║    gh pr create --base develop  ${GREEN}# Will be allowed${GREEN}              ║${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}║  ${CYAN}To bypass (emergency only):${GREEN}                                   ║${NC}"
+echo -e "${GREEN}║    GH_FORCE_PR=1 gh pr create --base main                       ║${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}║  ${CYAN}To disable:${GREEN}                                                    ║${NC}"
+echo -e "${GREEN}║    unalias gh                                                   ║${NC}"
+echo -e "${GREEN}║                                                                  ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "${YELLOW}Note: Restart your terminal or run 'source $SHELL_RC'${NC}"
+echo -e "${YELLOW}      to ensure the alias is loaded in new sessions.${NC}"
