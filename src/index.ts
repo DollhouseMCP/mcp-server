@@ -43,8 +43,11 @@ import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
+import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
+import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
+import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
 
 
@@ -616,7 +619,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const skillList = skills.map(skill => {
             const complexity = skill.metadata.complexity || 'beginner';
             const domains = skill.metadata.domains?.join(', ') || 'general';
-            return `🛠️ ${skill.metadata.name} - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
+            const version = skill.version || skill.metadata.version || '1.0.0';
+            return `🛠️ ${skill.metadata.name} (v${version}) - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
           }).join('\n\n');
           
           return {
@@ -640,7 +644,8 @@ export class DollhouseMCPServer implements IToolHandler {
           
           const templateList = templates.map(template => {
             const variables = template.metadata.variables?.map(v => v.name).join(', ') || 'none';
-            return `📄 ${template.metadata.name} - ${template.metadata.description}\n   Variables: ${variables}`;
+            const version = template.version || template.metadata.version || '1.0.0';
+            return `📄 ${template.metadata.name} (v${version}) - ${template.metadata.description}\n   Variables: ${variables}`;
           }).join('\n\n');
           
           return {
@@ -665,7 +670,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const agentList = agents.map(agent => {
             const specializations = (agent.metadata as any).specializations?.join(', ') || 'general';
             const status = agent.getStatus();
-            return `🤖 ${agent.metadata.name} - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
+            const version = agent.version || agent.metadata.version || '1.0.0';
+            return `🤖 ${agent.metadata.name} (v${version}) - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
           }).join('\n\n');
           
           return {
@@ -1361,17 +1367,28 @@ export class DollhouseMCPServer implements IToolHandler {
         return this.editPersona(name, field, String(value));
       }
       
-      // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      // TYPE SAFETY: Define a common interface for element managers
+      interface ElementManagerBase<T> {
+        find(predicate: (element: T) => boolean): Promise<T | undefined>;
+        save(element: T, filePath: string): Promise<void>;
+      }
+      
+      // Get the appropriate manager based on type with proper typing
+      let manager: ElementManagerBase<Skill | Template | Agent> | null = null;
+      let element: Skill | Template | Agent | undefined;
+      
       switch (type as ElementType) {
         case ElementType.SKILL:
-          manager = this.skillManager;
+          manager = this.skillManager as ElementManagerBase<Skill>;
+          element = await this.skillManager.find((e: Skill) => e.metadata.name === name);
           break;
         case ElementType.TEMPLATE:
-          manager = this.templateManager;
+          manager = this.templateManager as ElementManagerBase<Template>;
+          element = await this.templateManager.find((e: Template) => e.metadata.name === name);
           break;
         case ElementType.AGENT:
-          manager = this.agentManager;
+          manager = this.agentManager as ElementManagerBase<Agent>;
+          element = await this.agentManager.find((e: Agent) => e.metadata.name === name);
           break;
         default:
           return {
@@ -1382,8 +1399,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
       
-      // Find the element
-      const element = await manager!.find((e: any) => e.metadata.name === name);
+      // Check if element was found
       if (!element) {
         return {
           content: [{
@@ -1443,32 +1459,113 @@ export class DollhouseMCPServer implements IToolHandler {
         configurable: true
       });
       
-      // Update version - handle various version formats
-      if (element.version) {
-        const versionParts = element.version.split('.');
-        if (versionParts.length >= 3) {
-          // Standard semver format (e.g., 1.0.0)
-          const patch = parseInt(versionParts[2]) || 0;
-          versionParts[2] = String(patch + 1);
-          element.version = versionParts.join('.');
-        } else if (versionParts.length === 2) {
-          // Two-part version (e.g., 1.0) - add patch version
-          element.version = `${element.version}.1`;
-        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-          // Single number version (e.g., 1) - convert to semver
-          element.version = `${element.version}.0.1`;
-        } else {
-          // Non-standard version - append or replace with standard format
-          element.version = '1.0.1';
+      // VERSION FIX: Handle version field updates differently
+      // If user is directly editing version field, don't auto-increment
+      if (field === 'version' || field === 'metadata.version') {
+        const versionString = String(value);
+        
+        // VERSION VALIDATION: Validate version format
+        // Accept semver (1.0.0), two-part (1.0), or single digit (1)
+        // Also accepts pre-release versions (1.0.0-beta, 1.0.0-alpha.1)
+        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(versionString);
+        if (!isValidVersion) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid version format: '${versionString}'. Please use format like 1.0.0, 1.0, or 1`
+            }]
+          };
+        }
+        
+        // ERROR HANDLING: Wrap version update in try-catch
+        try {
+          // Update both locations to ensure consistency
+          element.version = versionString;
+          if (element.metadata) {
+            element.metadata.version = versionString;
+          }
+        } catch (error) {
+          logger.error(`Failed to update version for ${name}:`, error);
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Failed to update version: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }]
+          };
         }
       } else {
-        // No version - set initial version
-        element.version = '1.0.0';
+        // For other field edits, auto-increment version
+        // VERSION FIX: Update both element.version AND element.metadata.version
+        // Previously: Only element.version was updated, but some managers read from metadata.version
+        // Now: Keep both in sync to ensure version persists correctly
+        
+        // ERROR HANDLING: Wrap auto-increment in try-catch
+        try {
+          if (element.version) {
+            // PRE-RELEASE HANDLING: Check for pre-release versions
+            const preReleaseMatch = element.version.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
+            
+            if (preReleaseMatch) {
+              // Handle pre-release versions (e.g., 1.0.0-beta.1)
+              const baseVersion = preReleaseMatch[1];
+              const preReleaseTag = preReleaseMatch[3];
+              
+              if (preReleaseTag) {
+                // If it has a pre-release tag, increment the pre-release number
+                const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
+                if (preReleaseNumberMatch) {
+                  const preReleaseType = preReleaseNumberMatch[1];
+                  const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+                  element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
+                } else {
+                  // Complex pre-release, just increment patch
+                  const [major, minor, patch] = baseVersion.split('.').map(Number);
+                  element.version = `${major}.${minor}.${patch + 1}`;
+                }
+              } else {
+                // Regular semver, increment patch
+                const [major, minor, patch] = baseVersion.split('.').map(Number);
+                element.version = `${major}.${minor}.${patch + 1}`;
+              }
+            } else {
+              // Handle non-semver versions
+              const versionParts = element.version.split('.');
+              if (versionParts.length >= 3) {
+                // Standard semver format (e.g., 1.0.0)
+                const patch = parseInt(versionParts[2]) || 0;
+                versionParts[2] = String(patch + 1);
+                element.version = versionParts.join('.');
+              } else if (versionParts.length === 2) {
+                // Two-part version (e.g., 1.0) - add patch version
+                element.version = `${element.version}.1`;
+              } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+                // Single number version (e.g., 1) - convert to semver
+                element.version = `${element.version}.0.1`;
+              } else {
+                // Non-standard version - append or replace with standard format
+                element.version = '1.0.1';
+              }
+            }
+          } else {
+            // No version - set initial version
+            element.version = '1.0.0';
+          }
+          
+          // Ensure metadata.version is also updated for managers that use it
+          if (element.metadata) {
+            element.metadata.version = element.version;
+          }
+        } catch (error) {
+          logger.error(`Failed to auto-increment version for ${name}:`, error);
+          // Don't fail the entire operation, just log the error
+          // Version will remain unchanged
+        }
       }
       
       // Save the element - need to determine filename
       const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
-      await manager!.save(element as any, filename);
+      // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
+      await manager!.save(element, filename);
       
       return {
         content: [{
