@@ -1364,17 +1364,28 @@ export class DollhouseMCPServer implements IToolHandler {
         return this.editPersona(name, field, String(value));
       }
       
-      // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      // TYPE SAFETY: Define a common interface for element managers
+      interface ElementManagerBase<T> {
+        find(predicate: (element: T) => boolean): Promise<T | undefined>;
+        save(element: T, filePath: string): Promise<void>;
+      }
+      
+      // Get the appropriate manager based on type with proper typing
+      let manager: ElementManagerBase<Skill | Template | Agent> | null = null;
+      let element: Skill | Template | Agent | undefined;
+      
       switch (type as ElementType) {
         case ElementType.SKILL:
-          manager = this.skillManager;
+          manager = this.skillManager as ElementManagerBase<Skill>;
+          element = await this.skillManager.find((e: Skill) => e.metadata.name === name);
           break;
         case ElementType.TEMPLATE:
-          manager = this.templateManager;
+          manager = this.templateManager as ElementManagerBase<Template>;
+          element = await this.templateManager.find((e: Template) => e.metadata.name === name);
           break;
         case ElementType.AGENT:
-          manager = this.agentManager;
+          manager = this.agentManager as ElementManagerBase<Agent>;
+          element = await this.agentManager.find((e: Agent) => e.metadata.name === name);
           break;
         default:
           return {
@@ -1385,8 +1396,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
       
-      // Find the element
-      const element = await manager!.find((e: any) => e.metadata.name === name);
+      // Check if element was found
       if (!element) {
         return {
           content: [{
@@ -1489,21 +1499,49 @@ export class DollhouseMCPServer implements IToolHandler {
         // ERROR HANDLING: Wrap auto-increment in try-catch
         try {
           if (element.version) {
-            const versionParts = element.version.split('.');
-            if (versionParts.length >= 3) {
-              // Standard semver format (e.g., 1.0.0)
-              const patch = parseInt(versionParts[2]) || 0;
-              versionParts[2] = String(patch + 1);
-              element.version = versionParts.join('.');
-            } else if (versionParts.length === 2) {
-              // Two-part version (e.g., 1.0) - add patch version
-              element.version = `${element.version}.1`;
-            } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-              // Single number version (e.g., 1) - convert to semver
-              element.version = `${element.version}.0.1`;
+            // PRE-RELEASE HANDLING: Check for pre-release versions
+            const preReleaseMatch = element.version.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
+            
+            if (preReleaseMatch) {
+              // Handle pre-release versions (e.g., 1.0.0-beta.1)
+              const baseVersion = preReleaseMatch[1];
+              const preReleaseTag = preReleaseMatch[3];
+              
+              if (preReleaseTag) {
+                // If it has a pre-release tag, increment the pre-release number
+                const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
+                if (preReleaseNumberMatch) {
+                  const preReleaseType = preReleaseNumberMatch[1];
+                  const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+                  element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
+                } else {
+                  // Complex pre-release, just increment patch
+                  const [major, minor, patch] = baseVersion.split('.').map(Number);
+                  element.version = `${major}.${minor}.${patch + 1}`;
+                }
+              } else {
+                // Regular semver, increment patch
+                const [major, minor, patch] = baseVersion.split('.').map(Number);
+                element.version = `${major}.${minor}.${patch + 1}`;
+              }
             } else {
-              // Non-standard version - append or replace with standard format
-              element.version = '1.0.1';
+              // Handle non-semver versions
+              const versionParts = element.version.split('.');
+              if (versionParts.length >= 3) {
+                // Standard semver format (e.g., 1.0.0)
+                const patch = parseInt(versionParts[2]) || 0;
+                versionParts[2] = String(patch + 1);
+                element.version = versionParts.join('.');
+              } else if (versionParts.length === 2) {
+                // Two-part version (e.g., 1.0) - add patch version
+                element.version = `${element.version}.1`;
+              } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+                // Single number version (e.g., 1) - convert to semver
+                element.version = `${element.version}.0.1`;
+              } else {
+                // Non-standard version - append or replace with standard format
+                element.version = '1.0.1';
+              }
             }
           } else {
             // No version - set initial version
@@ -1523,7 +1561,8 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Save the element - need to determine filename
       const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
-      await manager!.save(element as any, filename);
+      // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
+      await manager!.save(element, filename);
       
       return {
         content: [{

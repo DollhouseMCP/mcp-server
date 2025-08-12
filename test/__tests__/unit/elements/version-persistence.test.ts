@@ -193,23 +193,51 @@ describe('Version Persistence', () => {
         { input: '1.0.99', expected: '1.0.100' },
         { input: '1.0', expected: '1.0.1' },
         { input: '1', expected: '1.0.1' },
-        { input: 'invalid', expected: '1.0.1' }
+        { input: 'invalid', expected: '1.0.1' },
+        // Pre-release version tests
+        { input: '1.0.0-beta', expected: '1.0.0-beta.1' },
+        { input: '1.0.0-beta.1', expected: '1.0.0-beta.2' },
+        { input: '1.0.0-alpha.5', expected: '1.0.0-alpha.6' },
+        { input: '2.0.0-rc.1', expected: '2.0.0-rc.2' }
       ];
       
       testCases.forEach(({ input, expected }) => {
         let result: string;
         
-        const versionParts = input.split('.');
-        if (versionParts.length >= 3) {
-          const patch = parseInt(versionParts[2]) || 0;
-          versionParts[2] = String(patch + 1);
-          result = versionParts.join('.');
-        } else if (versionParts.length === 2) {
-          result = `${input}.1`;
-        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-          result = `${input}.0.1`;
+        // Check for pre-release versions
+        const preReleaseMatch = input.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
+        
+        if (preReleaseMatch) {
+          const baseVersion = preReleaseMatch[1];
+          const preReleaseTag = preReleaseMatch[3];
+          
+          if (preReleaseTag) {
+            const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
+            if (preReleaseNumberMatch) {
+              const preReleaseType = preReleaseNumberMatch[1];
+              const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+              result = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
+            } else {
+              const [major, minor, patch] = baseVersion.split('.').map(Number);
+              result = `${major}.${minor}.${patch + 1}`;
+            }
+          } else {
+            const [major, minor, patch] = baseVersion.split('.').map(Number);
+            result = `${major}.${minor}.${patch + 1}`;
+          }
         } else {
-          result = '1.0.1';
+          const versionParts = input.split('.');
+          if (versionParts.length >= 3) {
+            const patch = parseInt(versionParts[2]) || 0;
+            versionParts[2] = String(patch + 1);
+            result = versionParts.join('.');
+          } else if (versionParts.length === 2) {
+            result = `${input}.1`;
+          } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+            result = `${input}.0.1`;
+          } else {
+            result = '1.0.1';
+          }
         }
         
         expect(result).toBe(expected);
