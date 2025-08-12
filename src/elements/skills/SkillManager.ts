@@ -136,6 +136,13 @@ export class SkillManager implements IElementManager<Skill> {
       return acc;
     }, {} as any);
     
+    // VERSION FIX: Include version in the saved metadata
+    // Previously: version was stored in element.version but not saved to YAML
+    // Now: Ensure version is included in the frontmatter
+    if (element.version) {
+      cleanMetadata.version = element.version;
+    }
+    
     const content = matter.stringify(instructions, cleanMetadata);
 
     // CRITICAL FIX: Use atomic file write to prevent corruption

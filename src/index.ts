@@ -616,7 +616,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const skillList = skills.map(skill => {
             const complexity = skill.metadata.complexity || 'beginner';
             const domains = skill.metadata.domains?.join(', ') || 'general';
-            return `🛠️ ${skill.metadata.name} - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
+            const version = skill.version || skill.metadata.version || '1.0.0';
+            return `🛠️ ${skill.metadata.name} (v${version}) - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
           }).join('\n\n');
           
           return {
@@ -640,7 +641,8 @@ export class DollhouseMCPServer implements IToolHandler {
           
           const templateList = templates.map(template => {
             const variables = template.metadata.variables?.map(v => v.name).join(', ') || 'none';
-            return `📄 ${template.metadata.name} - ${template.metadata.description}\n   Variables: ${variables}`;
+            const version = template.version || template.metadata.version || '1.0.0';
+            return `📄 ${template.metadata.name} (v${version}) - ${template.metadata.description}\n   Variables: ${variables}`;
           }).join('\n\n');
           
           return {
@@ -665,7 +667,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const agentList = agents.map(agent => {
             const specializations = (agent.metadata as any).specializations?.join(', ') || 'general';
             const status = agent.getStatus();
-            return `🤖 ${agent.metadata.name} - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
+            const version = agent.version || agent.metadata.version || '1.0.0';
+            return `🤖 ${agent.metadata.name} (v${version}) - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
           }).join('\n\n');
           
           return {
@@ -1443,27 +1446,45 @@ export class DollhouseMCPServer implements IToolHandler {
         configurable: true
       });
       
-      // Update version - handle various version formats
-      if (element.version) {
-        const versionParts = element.version.split('.');
-        if (versionParts.length >= 3) {
-          // Standard semver format (e.g., 1.0.0)
-          const patch = parseInt(versionParts[2]) || 0;
-          versionParts[2] = String(patch + 1);
-          element.version = versionParts.join('.');
-        } else if (versionParts.length === 2) {
-          // Two-part version (e.g., 1.0) - add patch version
-          element.version = `${element.version}.1`;
-        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-          // Single number version (e.g., 1) - convert to semver
-          element.version = `${element.version}.0.1`;
-        } else {
-          // Non-standard version - append or replace with standard format
-          element.version = '1.0.1';
+      // VERSION FIX: Handle version field updates differently
+      // If user is directly editing version field, don't auto-increment
+      if (field === 'version' || field === 'metadata.version') {
+        // Update both locations to ensure consistency
+        element.version = String(value);
+        if (element.metadata) {
+          element.metadata.version = String(value);
         }
       } else {
-        // No version - set initial version
-        element.version = '1.0.0';
+        // For other field edits, auto-increment version
+        // VERSION FIX: Update both element.version AND element.metadata.version
+        // Previously: Only element.version was updated, but some managers read from metadata.version
+        // Now: Keep both in sync to ensure version persists correctly
+        if (element.version) {
+          const versionParts = element.version.split('.');
+          if (versionParts.length >= 3) {
+            // Standard semver format (e.g., 1.0.0)
+            const patch = parseInt(versionParts[2]) || 0;
+            versionParts[2] = String(patch + 1);
+            element.version = versionParts.join('.');
+          } else if (versionParts.length === 2) {
+            // Two-part version (e.g., 1.0) - add patch version
+            element.version = `${element.version}.1`;
+          } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+            // Single number version (e.g., 1) - convert to semver
+            element.version = `${element.version}.0.1`;
+          } else {
+            // Non-standard version - append or replace with standard format
+            element.version = '1.0.1';
+          }
+        } else {
+          // No version - set initial version
+          element.version = '1.0.0';
+        }
+        
+        // Ensure metadata.version is also updated for managers that use it
+        if (element.metadata) {
+          element.metadata.version = element.version;
+        }
       }
       
       // Save the element - need to determine filename
