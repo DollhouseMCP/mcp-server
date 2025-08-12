@@ -1453,7 +1453,8 @@ export class DollhouseMCPServer implements IToolHandler {
         
         // VERSION VALIDATION: Validate version format
         // Accept semver (1.0.0), two-part (1.0), or single digit (1)
-        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?$/.test(versionString);
+        // Also accepts pre-release versions (1.0.0-beta, 1.0.0-alpha.1)
+        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(versionString);
         if (!isValidVersion) {
           return {
             content: [{
