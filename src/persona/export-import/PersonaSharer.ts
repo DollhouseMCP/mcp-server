@@ -1,5 +1,15 @@
 /**
  * Persona sharing functionality via URLs
+ * 
+ * SECURITY FIX IMPLEMENTED (Defense-in-Depth Validation):
+ * 1. CRITICAL: Added validate-before-return pattern in all import methods
+ * 2. HIGH: Content security validation using ContentValidator before data return
+ * 3. MEDIUM: Size validation to prevent memory exhaustion attacks
+ * 4. MEDIUM: Structure validation to prevent malformed data processing
+ * 5. DEFENSE-IN-DEPTH: Multiple validation layers before PersonaImporter processing
+ * 
+ * This provides defense-in-depth security by validating content at the earliest
+ * possible point before any data is returned to calling code or file operations.
  */
 
 import { Persona } from '../../types/persona.js';
@@ -8,9 +18,12 @@ import { GitHubClient } from '../../collection/GitHubClient.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { SecurityError } from '../../security/errors.js';
 import { logger } from '../../utils/logger.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes, NetworkErrorCodes } from '../../utils/errorCodes.js';
 import { RateLimiter } from '../../update/RateLimiter.js';
+import { ContentValidator } from '../../security/contentValidator.js';
+import { validateContentSize } from '../../security/InputValidator.js';
 
 export interface ShareResult {
   success: boolean;
@@ -117,6 +130,7 @@ export class PersonaSharer {
 
   /**
    * Import a persona from a share URL
+   * SECURITY FIX: Validate ALL content before returning any data
    */
   async importFromUrl(url: string): Promise<{ success: boolean; data?: any; message: string }> {
     try {
@@ -135,7 +149,7 @@ export class PersonaSharer {
 
       // Check if it's a base64 URL
       if (url.includes('#dollhouse-persona=')) {
-        return this.importFromBase64Url(url);
+        return await this.importFromBase64Url(url);
       }
 
       // Validate URL for security
@@ -162,10 +176,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`Request failed with status ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.REQUEST_FAILED);
         }
 
-        // Validate Content-Type header
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid response type: expected JSON', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const contentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!contentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid response type: ${contentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         // Check response size to prevent memory exhaustion
@@ -176,6 +195,13 @@ export class PersonaSharer {
         }
 
         const data = await response.json();
+        
+        // SECURITY FIX: Validate content before returning
+        const dataValidation = await this.validatePersonaData(data);
+        if (!dataValidation.isValid) {
+          throw new SecurityError(`Content validation failed: ${dataValidation.error}`);
+        }
+        
         return {
           success: true,
           data,
@@ -243,10 +269,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`GitHub API error: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.API_ERROR);
         }
 
-        // Validate Content-Type for GitHub API response
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation for GitHub API
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const gistContentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!gistContentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid GitHub API response type: ${gistContentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         const gist = await response.json();
@@ -322,10 +353,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`Failed to fetch gist: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.FETCH_FAILED);
         }
 
-        // Validate Content-Type for GitHub API response
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation for GitHub API
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const gistContentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!gistContentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid GitHub API response type: ${gistContentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         const gist = await response.json();
@@ -343,6 +379,12 @@ export class PersonaSharer {
             success: false,
             message: 'This share link has expired'
           };
+        }
+
+        // SECURITY FIX: Validate content before returning
+        const gistDataValidation = await this.validatePersonaData(data);
+        if (!gistDataValidation.isValid) {
+          throw new SecurityError(`Content validation failed: ${gistDataValidation.error}`);
         }
 
         // Consume the rate limit token after successful request
@@ -516,7 +558,7 @@ export class PersonaSharer {
   /**
    * Import from base64 URL
    */
-  private importFromBase64Url(url: string): { success: boolean; data?: any; message: string } {
+  private async importFromBase64Url(url: string): Promise<{ success: boolean; data?: any; message: string }> {
     try {
       // Limit base64 length to prevent ReDoS attacks (10KB max for base64 encoded data)
       const match = url.match(/#dollhouse-persona=([A-Za-z0-9+/=]{1,10000})$/);
@@ -534,6 +576,12 @@ export class PersonaSharer {
           success: false,
           message: 'This share link has expired'
         };
+      }
+
+      // SECURITY FIX: Validate content before returning
+      const base64DataValidation = await this.validatePersonaData(data);
+      if (!base64DataValidation.isValid) {
+        throw new SecurityError(`Content validation failed: ${base64DataValidation.error}`);
       }
 
       return {
@@ -578,5 +626,166 @@ ${url}
 3. They can import using: import_from_url "${url}"
 
 🔒 Privacy: This link is private and will expire automatically.`;
+  }
+
+  /**
+   * SECURITY FIX: Validate persona data before any processing
+   * This provides defense-in-depth validation before content reaches file operations
+   */
+  private async validatePersonaData(data: any): Promise<{ isValid: boolean; error?: string }> {
+    try {
+      // Basic structure validation
+      if (!data || typeof data !== 'object') {
+        return { isValid: false, error: 'Invalid data structure' };
+      }
+
+      // Validate required fields for persona data
+      if (data.metadata && (!data.metadata.name || !data.metadata.description)) {
+        return { isValid: false, error: 'Missing required persona metadata' };
+      }
+
+      // Validate content if present
+      if (data.content) {
+        // Size validation
+        try {
+          validateContentSize(data.content, 100 * 1024); // 100KB limit
+        } catch (error) {
+          return { isValid: false, error: `Content size validation failed: ${error instanceof Error ? error.message : 'Unknown error'}` };
+        }
+
+        // Content security validation
+        const contentValidation = ContentValidator.validateAndSanitize(data.content);
+        if (!contentValidation.isValid && contentValidation.severity === 'critical') {
+          return { 
+            isValid: false, 
+            error: `Critical security threat detected: ${contentValidation.detectedPatterns?.join(', ')}` 
+          };
+        }
+      }
+
+      // Validate bundle structure if it's a bundle
+      if (data.personas && Array.isArray(data.personas)) {
+        for (const persona of data.personas) {
+          const personaValidation = await this.validatePersonaData(persona);
+          if (!personaValidation.isValid) {
+            return { isValid: false, error: `Bundle validation failed: ${personaValidation.error}` };
+          }
+        }
+      }
+
+      return { isValid: true };
+    } catch (error) {
+      return { 
+        isValid: false, 
+        error: `Validation error: ${error instanceof Error ? error.message : 'Unknown error'}` 
+      };
+    }
+  }
+
+  /**
+   * ENHANCED SECURITY FIX: Comprehensive Content-Type validation
+   * Strengthens MIME type validation with comprehensive security checks
+   */
+  private validateContentType(
+    contentType: string | null, 
+    expectedType: string
+  ): { isValid: boolean; error?: string } {
+    // Check if Content-Type header exists
+    if (!contentType) {
+      return { 
+        isValid: false, 
+        error: 'Missing Content-Type header' 
+      };
+    }
+
+    // Normalize and sanitize the content type
+    const normalizedContentType = contentType.toLowerCase().trim();
+    const normalizedExpectedType = expectedType.toLowerCase().trim();
+
+    // Validate Content-Type format (basic MIME type structure)
+    const mimeTypePattern = /^[a-z0-9][a-z0-9!#$&\-\^_]*\/[a-z0-9][a-z0-9!#$&\-\^_]*(?:\s*;.*)?$/;
+    if (!mimeTypePattern.test(normalizedContentType)) {
+      return { 
+        isValid: false, 
+        error: `Malformed Content-Type header: ${contentType}` 
+      };
+    }
+
+    // Extract main MIME type (before any parameters like charset)
+    const mainType = normalizedContentType.split(';')[0].trim();
+    
+    // Security check: Block dangerous MIME types that could bypass validation
+    const dangerousMimeTypes = [
+      'text/html',           // Could contain XSS
+      'text/javascript',     // Could contain malicious scripts
+      'application/javascript', // Could contain malicious scripts
+      'text/xml',            // Could contain XXE attacks
+      'application/xml',     // Could contain XXE attacks
+      'image/svg+xml',       // Could contain XSS in SVG
+      'multipart/form-data', // Unexpected for API responses
+      'application/x-www-form-urlencoded' // Unexpected for API responses
+    ];
+
+    if (dangerousMimeTypes.includes(mainType)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'persona_sharer',
+        details: `Dangerous Content-Type detected: ${contentType}`,
+        metadata: { contentType, expectedType }
+      });
+      return { 
+        isValid: false, 
+        error: `Dangerous Content-Type not allowed: ${mainType}` 
+      };
+    }
+
+    // Check if the main type matches expected type
+    if (!mainType.includes(normalizedExpectedType)) {
+      return { 
+        isValid: false, 
+        error: `Content-Type mismatch: expected ${expectedType}, got ${mainType}` 
+      };
+    }
+
+    // Additional validation for JSON responses
+    if (normalizedExpectedType === 'application/json') {
+      // Accept various JSON-compatible MIME types
+      const acceptableJsonTypes = [
+        'application/json',
+        'application/vnd.api+json',
+        'application/vnd.github.v3+json',
+        'text/json' // Some APIs use this (though not standard)
+      ];
+      
+      const isAcceptableJson = acceptableJsonTypes.some(type => mainType === type);
+      if (!isAcceptableJson) {
+        return { 
+          isValid: false, 
+          error: `Unsupported JSON Content-Type: ${mainType}` 
+        };
+      }
+
+      // Validate charset parameter if present
+      const charsetMatch = normalizedContentType.match(/charset=([^;\s]+)/);
+      if (charsetMatch) {
+        const charset = charsetMatch[1].toLowerCase();
+        const supportedCharsets = ['utf-8', 'utf8', 'ascii', 'iso-8859-1'];
+        if (!supportedCharsets.includes(charset)) {
+          return { 
+            isValid: false, 
+            error: `Unsupported charset: ${charset}` 
+          };
+        }
+      }
+    }
+
+    // Log successful validation for monitoring
+    logger.debug('Content-Type validation passed', { 
+      contentType: mainType, 
+      expectedType: normalizedExpectedType 
+    });
+
+    return { isValid: true };
   }
 }

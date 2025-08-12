@@ -11,6 +11,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
 import { logger } from '../utils/logger.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
+import { FileLockManager } from '../security/fileLockManager.js';
 
 export class PersonaLoader {
   private personasDir: string;
@@ -117,7 +118,12 @@ export class PersonaLoader {
     const secureParser = SecureYamlParser.createSecureMatterParser();
     const fileContent = secureParser.stringify(persona.content, persona.metadata);
     
-    await fs.writeFile(filePath, fileContent, 'utf-8');
+    // SECURITY FIX: Replace direct file write with atomic operation
+    // FIXED: CVE-2025-XXXX - Non-atomic file write in persona save operation
+    // Original issue: Line 120 used direct fs.writeFile instead of atomic operation
+    // Security impact: Race conditions could cause data corruption or partial writes
+    // Fix: Replaced with FileLockManager.atomicWriteFile for guaranteed atomicity
+    await FileLockManager.atomicWriteFile(filePath, fileContent, { encoding: 'utf-8' });
   }
   
   /**

@@ -12,8 +12,22 @@ jest.mock('../../../src/utils/logger.js', () => ({
   logger: {
     info: jest.fn(),
     error: jest.fn(),
-    warn: jest.fn()
+    warn: jest.fn(),
+    debug: jest.fn()
   }
+}));
+
+jest.mock('../../../src/security/contentValidator.js', () => ({
+  ContentValidator: {
+    validateAndSanitize: jest.fn().mockReturnValue({
+      isValid: true,
+      severity: 'low'
+    })
+  }
+}));
+
+jest.mock('../../../src/security/InputValidator.js', () => ({
+  validateContentSize: jest.fn()
 }));
 
 // Mock fetch
@@ -212,7 +226,7 @@ describe('PersonaSharer', () => {
         files: {
           'persona.json': {
             content: JSON.stringify({
-              metadata: { name: 'Test' },
+              metadata: { name: 'Test', description: 'Test persona' },
               content: 'Test content'
             })
           }
@@ -244,7 +258,7 @@ describe('PersonaSharer', () => {
 
     it('should import from base64 URL', async () => {
       const personaData = {
-        metadata: { name: 'Test' },
+        metadata: { name: 'Test', description: 'Test persona' },
         content: 'Test content'
       };
       
@@ -286,7 +300,7 @@ describe('PersonaSharer', () => {
 
     it('should handle expired gist shares', async () => {
       const expiredPersonaData = {
-        metadata: { name: 'Test' },
+        metadata: { name: 'Test', description: 'Test persona' },
         content: 'Test content',
         expiresAt: new Date(Date.now() - 86400000).toISOString() // Expired yesterday
       };
@@ -327,7 +341,7 @@ describe('PersonaSharer', () => {
 
     it('should parse JSON from direct URL', async () => {
       const personaData = {
-        metadata: { name: 'Test' },
+        metadata: { name: 'Test', description: 'Test persona' },
         content: 'Test content'
       };
       
@@ -400,7 +414,7 @@ describe('PersonaSharer', () => {
           headers: {
             get: jest.fn().mockReturnValue('application/json')
           },
-          json: () => Promise.resolve({ metadata: {}, content: '' })
+          json: () => Promise.resolve({ metadata: { name: 'Test', description: 'Test persona' }, content: 'Test content' })
         };
         
         mockFetch.mockResolvedValueOnce(mockResponse as any);
