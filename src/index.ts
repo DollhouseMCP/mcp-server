@@ -1449,41 +1449,74 @@ export class DollhouseMCPServer implements IToolHandler {
       // VERSION FIX: Handle version field updates differently
       // If user is directly editing version field, don't auto-increment
       if (field === 'version' || field === 'metadata.version') {
-        // Update both locations to ensure consistency
-        element.version = String(value);
-        if (element.metadata) {
-          element.metadata.version = String(value);
+        const versionString = String(value);
+        
+        // VERSION VALIDATION: Validate version format
+        // Accept semver (1.0.0), two-part (1.0), or single digit (1)
+        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?$/.test(versionString);
+        if (!isValidVersion) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid version format: '${versionString}'. Please use format like 1.0.0, 1.0, or 1`
+            }]
+          };
+        }
+        
+        // ERROR HANDLING: Wrap version update in try-catch
+        try {
+          // Update both locations to ensure consistency
+          element.version = versionString;
+          if (element.metadata) {
+            element.metadata.version = versionString;
+          }
+        } catch (error) {
+          logger.error(`Failed to update version for ${name}:`, error);
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Failed to update version: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }]
+          };
         }
       } else {
         // For other field edits, auto-increment version
         // VERSION FIX: Update both element.version AND element.metadata.version
         // Previously: Only element.version was updated, but some managers read from metadata.version
         // Now: Keep both in sync to ensure version persists correctly
-        if (element.version) {
-          const versionParts = element.version.split('.');
-          if (versionParts.length >= 3) {
-            // Standard semver format (e.g., 1.0.0)
-            const patch = parseInt(versionParts[2]) || 0;
-            versionParts[2] = String(patch + 1);
-            element.version = versionParts.join('.');
-          } else if (versionParts.length === 2) {
-            // Two-part version (e.g., 1.0) - add patch version
-            element.version = `${element.version}.1`;
-          } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-            // Single number version (e.g., 1) - convert to semver
-            element.version = `${element.version}.0.1`;
-          } else {
-            // Non-standard version - append or replace with standard format
-            element.version = '1.0.1';
-          }
-        } else {
-          // No version - set initial version
-          element.version = '1.0.0';
-        }
         
-        // Ensure metadata.version is also updated for managers that use it
-        if (element.metadata) {
-          element.metadata.version = element.version;
+        // ERROR HANDLING: Wrap auto-increment in try-catch
+        try {
+          if (element.version) {
+            const versionParts = element.version.split('.');
+            if (versionParts.length >= 3) {
+              // Standard semver format (e.g., 1.0.0)
+              const patch = parseInt(versionParts[2]) || 0;
+              versionParts[2] = String(patch + 1);
+              element.version = versionParts.join('.');
+            } else if (versionParts.length === 2) {
+              // Two-part version (e.g., 1.0) - add patch version
+              element.version = `${element.version}.1`;
+            } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+              // Single number version (e.g., 1) - convert to semver
+              element.version = `${element.version}.0.1`;
+            } else {
+              // Non-standard version - append or replace with standard format
+              element.version = '1.0.1';
+            }
+          } else {
+            // No version - set initial version
+            element.version = '1.0.0';
+          }
+          
+          // Ensure metadata.version is also updated for managers that use it
+          if (element.metadata) {
+            element.metadata.version = element.version;
+          }
+        } catch (error) {
+          logger.error(`Failed to auto-increment version for ${name}:`, error);
+          // Don't fail the entire operation, just log the error
+          // Version will remain unchanged
         }
       }
       
