@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface MigrationResult {
   success: boolean;
@@ -57,12 +58,30 @@ export class MigrationManager {
       
       logger.info('[MigrationManager] Starting migration from legacy personas to portfolio structure');
       
+      // SECURITY FIX: DMCP-SEC-006 - Add security audit logging
+      SecurityMonitor.logSecurityEvent({
+        type: 'PORTFOLIO_INITIALIZATION',
+        severity: 'LOW',
+        source: 'migration_manager',
+        details: 'Starting migration from legacy personas to portfolio structure',
+        metadata: { backup: !!options?.backup }
+      });
+      
       // Create backup if requested
       if (options?.backup) {
         const backupPath = await this.createBackup();
         result.backedUp = true;
         result.backupPath = backupPath;
         logger.info(`[MigrationManager] Created backup at: ${backupPath}`);
+        
+        // SECURITY FIX: DMCP-SEC-006 - Log backup creation for audit trail
+        SecurityMonitor.logSecurityEvent({
+          type: 'FILE_COPIED',
+          severity: 'LOW',
+          source: 'migration_manager',
+          details: `Created backup during migration: ${backupPath}`,
+          metadata: { backupPath, operation: 'migration_backup' }
+        });
       }
       
       // Initialize portfolio structure
@@ -80,17 +99,53 @@ export class MigrationManager {
         try {
           await this.migratePersona(file);
           result.migratedCount++;
+          
+          // SECURITY FIX: DMCP-SEC-006 - Log each successful migration for audit trail
+          SecurityMonitor.logSecurityEvent({
+            type: 'FILE_COPIED',
+            severity: 'LOW',
+            source: 'migration_manager',
+            details: `Successfully migrated persona: ${file}`,
+            metadata: { filename: file, operation: 'persona_migration' }
+          });
         } catch (error) {
           const errorMsg = `Failed to migrate ${file}: ${error instanceof Error ? error.message : String(error)}`;
           logger.error(`[MigrationManager] ${errorMsg}`);
           result.errors.push(errorMsg);
           result.success = false;
+          
+          // SECURITY FIX: DMCP-SEC-006 - Log individual migration failures for audit trail
+          SecurityMonitor.logSecurityEvent({
+            type: 'FILE_COPIED',
+            severity: 'MEDIUM',
+            source: 'migration_manager',
+            details: `Failed to migrate persona: ${errorMsg}`,
+            metadata: { 
+              filename: file, 
+              operation: 'persona_migration_failed',
+              errorType: error instanceof Error ? error.name : 'unknown'
+            }
+          });
         }
       }
       
       // If all migrations successful, optionally clean up legacy directory
       if (result.success && result.migratedCount > 0) {
         logger.info(`[MigrationManager] Successfully migrated ${result.migratedCount} personas`);
+        
+        // SECURITY FIX: DMCP-SEC-006 - Log successful migration completion for audit trail
+        SecurityMonitor.logSecurityEvent({
+          type: 'PORTFOLIO_POPULATED',
+          severity: 'LOW',
+          source: 'migration_manager',
+          details: `Migration completed successfully: ${result.migratedCount} personas migrated`,
+          metadata: { 
+            migratedCount: result.migratedCount, 
+            backedUp: result.backedUp,
+            backupPath: result.backupPath
+          }
+        });
+        
         // Note: We don't automatically delete the legacy directory
         // User should manually remove it after confirming migration success
       }
@@ -99,6 +154,19 @@ export class MigrationManager {
       result.success = false;
       const errorMsg = `Migration failed: ${error instanceof Error ? error.message : String(error)}`;
       result.errors.push(errorMsg);
+      
+      // SECURITY FIX: DMCP-SEC-006 - Log migration failures for security audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'DIRECTORY_MIGRATION',
+        severity: 'HIGH',
+        source: 'migration_manager',
+        details: `Migration failed: ${errorMsg}`,
+        metadata: { 
+          errorType: error instanceof Error ? error.name : 'unknown',
+          migratedCount: result.migratedCount,
+          errorCount: result.errors.length
+        }
+      });
       
       // Log with full error details including stack trace
       if (error instanceof Error) {
@@ -129,6 +197,19 @@ export class MigrationManager {
     
     if (!filenameValidation.isValid) {
       logger.warn(`[MigrationManager] Filename has Unicode issues: ${filenameValidation.detectedIssues?.join(', ')}`);
+      
+      // SECURITY FIX: DMCP-SEC-006 - Log Unicode issues for security audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'migration_manager',
+        details: `Unicode issues detected in filename during migration: ${filenameValidation.detectedIssues?.join(', ')}`,
+        metadata: { 
+          originalFilename: filename,
+          normalizedFilename,
+          detectedIssues: filenameValidation.detectedIssues
+        }
+      });
     }
     
     const legacyPath = path.join(this.portfolioManager.getLegacyPersonasDir(), filename);
@@ -143,6 +224,19 @@ export class MigrationManager {
     
     if (!contentValidation.isValid) {
       logger.warn(`[MigrationManager] Content has Unicode issues in ${filename}: ${contentValidation.detectedIssues?.join(', ')}`);
+      
+      // SECURITY FIX: DMCP-SEC-006 - Log Unicode content issues for security audit trail
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'migration_manager',
+        details: `Unicode issues detected in content during migration: ${contentValidation.detectedIssues?.join(', ')}`,
+        metadata: { 
+          filename,
+          detectedIssues: contentValidation.detectedIssues,
+          contentLength: content.length
+        }
+      });
     }
     
     // SECURITY FIX: Add comprehensive content validation before write
@@ -165,6 +259,23 @@ export class MigrationManager {
     // Fix: Replaced with FileLockManager.atomicWriteFile for guaranteed atomicity
     await FileLockManager.atomicWriteFile(newPath, validatedContent, { encoding: 'utf-8' });
     
+    // SECURITY FIX: DMCP-SEC-006 - Log file operations for security audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_COPIED',
+      severity: 'LOW',
+      source: 'migration_manager',
+      details: `Persona file migrated with security validation: ${normalizedFilename}`,
+      metadata: { 
+        originalFilename: filename,
+        normalizedFilename,
+        sourcePath: legacyPath,
+        destinationPath: newPath,
+        contentLength: validatedContent.length,
+        unicodeNormalized: normalizedFilename !== filename,
+        unicodeIssues: !contentValidation.isValid
+      }
+    });
+    
     logger.debug(`[MigrationManager] Migrated: ${filename}`);
   }
   
@@ -181,6 +292,8 @@ export class MigrationManager {
     
     // Copy all files
     const files = await fs.readdir(legacyDir);
+    let copiedCount = 0;
+    
     for (const file of files) {
       const srcPath = path.join(legacyDir, file);
       const destPath = path.join(backupDir, file);
@@ -188,8 +301,23 @@ export class MigrationManager {
       const stats = await fs.stat(srcPath);
       if (stats.isFile()) {
         await fs.copyFile(srcPath, destPath);
+        copiedCount++;
       }
     }
+    
+    // SECURITY FIX: DMCP-SEC-006 - Log backup operation details for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_COPIED',
+      severity: 'LOW',
+      source: 'migration_manager',
+      details: `Backup created: ${copiedCount} files copied to ${backupDir}`,
+      metadata: { 
+        backupDir,
+        legacyDir,
+        filesCopied: copiedCount,
+        operation: 'backup_creation'
+      }
+    });
     
     return backupDir;
   }

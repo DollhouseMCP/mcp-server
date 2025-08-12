@@ -18,6 +18,7 @@ import { GitHubClient } from '../../collection/GitHubClient.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { SecurityError } from '../../security/errors.js';
 import { logger } from '../../utils/logger.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes, NetworkErrorCodes } from '../../utils/errorCodes.js';
 import { RateLimiter } from '../../update/RateLimiter.js';
@@ -175,10 +176,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`Request failed with status ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.REQUEST_FAILED);
         }
 
-        // Validate Content-Type header
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid response type: expected JSON', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const contentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!contentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid response type: ${contentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         // Check response size to prevent memory exhaustion
@@ -191,9 +197,9 @@ export class PersonaSharer {
         const data = await response.json();
         
         // SECURITY FIX: Validate content before returning
-        const validationResult = await this.validatePersonaData(data);
-        if (!validationResult.isValid) {
-          throw new SecurityError(`Content validation failed: ${validationResult.error}`);
+        const dataValidation = await this.validatePersonaData(data);
+        if (!dataValidation.isValid) {
+          throw new SecurityError(`Content validation failed: ${dataValidation.error}`);
         }
         
         return {
@@ -263,10 +269,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`GitHub API error: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.API_ERROR);
         }
 
-        // Validate Content-Type for GitHub API response
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation for GitHub API
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const gistContentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!gistContentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid GitHub API response type: ${gistContentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         const gist = await response.json();
@@ -342,10 +353,15 @@ export class PersonaSharer {
           throw ErrorHandler.createError(`Failed to fetch gist: ${response.status}`, ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.FETCH_FAILED);
         }
 
-        // Validate Content-Type for GitHub API response
+        // ENHANCED SECURITY FIX: Comprehensive Content-Type validation for GitHub API
         const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.toLowerCase().includes('application/json')) {
-          throw ErrorHandler.createError('Invalid GitHub API response type', ErrorCategory.NETWORK_ERROR, NetworkErrorCodes.INVALID_RESPONSE);
+        const gistContentTypeValidation = this.validateContentType(contentType, 'application/json');
+        if (!gistContentTypeValidation.isValid) {
+          throw ErrorHandler.createError(
+            `Invalid GitHub API response type: ${gistContentTypeValidation.error}`, 
+            ErrorCategory.NETWORK_ERROR, 
+            NetworkErrorCodes.INVALID_RESPONSE
+          );
         }
 
         const gist = await response.json();
@@ -366,9 +382,9 @@ export class PersonaSharer {
         }
 
         // SECURITY FIX: Validate content before returning
-        const validationResult = await this.validatePersonaData(data);
-        if (!validationResult.isValid) {
-          throw new SecurityError(`Content validation failed: ${validationResult.error}`);
+        const gistDataValidation = await this.validatePersonaData(data);
+        if (!gistDataValidation.isValid) {
+          throw new SecurityError(`Content validation failed: ${gistDataValidation.error}`);
         }
 
         // Consume the rate limit token after successful request
@@ -563,9 +579,9 @@ export class PersonaSharer {
       }
 
       // SECURITY FIX: Validate content before returning
-      const validationResult = await this.validatePersonaData(data);
-      if (!validationResult.isValid) {
-        throw new SecurityError(`Content validation failed: ${validationResult.error}`);
+      const base64DataValidation = await this.validatePersonaData(data);
+      if (!base64DataValidation.isValid) {
+        throw new SecurityError(`Content validation failed: ${base64DataValidation.error}`);
       }
 
       return {
@@ -664,5 +680,112 @@ ${url}
         error: `Validation error: ${error instanceof Error ? error.message : 'Unknown error'}` 
       };
     }
+  }
+
+  /**
+   * ENHANCED SECURITY FIX: Comprehensive Content-Type validation
+   * Strengthens MIME type validation with comprehensive security checks
+   */
+  private validateContentType(
+    contentType: string | null, 
+    expectedType: string
+  ): { isValid: boolean; error?: string } {
+    // Check if Content-Type header exists
+    if (!contentType) {
+      return { 
+        isValid: false, 
+        error: 'Missing Content-Type header' 
+      };
+    }
+
+    // Normalize and sanitize the content type
+    const normalizedContentType = contentType.toLowerCase().trim();
+    const normalizedExpectedType = expectedType.toLowerCase().trim();
+
+    // Validate Content-Type format (basic MIME type structure)
+    const mimeTypePattern = /^[a-z0-9][a-z0-9!#$&\-\^_]*\/[a-z0-9][a-z0-9!#$&\-\^_]*(?:\s*;.*)?$/;
+    if (!mimeTypePattern.test(normalizedContentType)) {
+      return { 
+        isValid: false, 
+        error: `Malformed Content-Type header: ${contentType}` 
+      };
+    }
+
+    // Extract main MIME type (before any parameters like charset)
+    const mainType = normalizedContentType.split(';')[0].trim();
+    
+    // Security check: Block dangerous MIME types that could bypass validation
+    const dangerousMimeTypes = [
+      'text/html',           // Could contain XSS
+      'text/javascript',     // Could contain malicious scripts
+      'application/javascript', // Could contain malicious scripts
+      'text/xml',            // Could contain XXE attacks
+      'application/xml',     // Could contain XXE attacks
+      'image/svg+xml',       // Could contain XSS in SVG
+      'multipart/form-data', // Unexpected for API responses
+      'application/x-www-form-urlencoded' // Unexpected for API responses
+    ];
+
+    if (dangerousMimeTypes.includes(mainType)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'persona_sharer',
+        details: `Dangerous Content-Type detected: ${contentType}`,
+        metadata: { contentType, expectedType }
+      });
+      return { 
+        isValid: false, 
+        error: `Dangerous Content-Type not allowed: ${mainType}` 
+      };
+    }
+
+    // Check if the main type matches expected type
+    if (!mainType.includes(normalizedExpectedType)) {
+      return { 
+        isValid: false, 
+        error: `Content-Type mismatch: expected ${expectedType}, got ${mainType}` 
+      };
+    }
+
+    // Additional validation for JSON responses
+    if (normalizedExpectedType === 'application/json') {
+      // Accept various JSON-compatible MIME types
+      const acceptableJsonTypes = [
+        'application/json',
+        'application/vnd.api+json',
+        'application/vnd.github.v3+json',
+        'text/json' // Some APIs use this (though not standard)
+      ];
+      
+      const isAcceptableJson = acceptableJsonTypes.some(type => mainType === type);
+      if (!isAcceptableJson) {
+        return { 
+          isValid: false, 
+          error: `Unsupported JSON Content-Type: ${mainType}` 
+        };
+      }
+
+      // Validate charset parameter if present
+      const charsetMatch = normalizedContentType.match(/charset=([^;\s]+)/);
+      if (charsetMatch) {
+        const charset = charsetMatch[1].toLowerCase();
+        const supportedCharsets = ['utf-8', 'utf8', 'ascii', 'iso-8859-1'];
+        if (!supportedCharsets.includes(charset)) {
+          return { 
+            isValid: false, 
+            error: `Unsupported charset: ${charset}` 
+          };
+        }
+      }
+    }
+
+    // Log successful validation for monitoring
+    logger.debug('Content-Type validation passed', { 
+      contentType: mainType, 
+      expectedType: normalizedExpectedType 
+    });
+
+    return { isValid: true };
   }
 }

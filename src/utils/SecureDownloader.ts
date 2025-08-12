@@ -68,6 +68,8 @@ import { ContentValidator as SecurityContentValidator } from '../security/conten
 import { PathValidator } from '../security/pathValidator.js';
 import { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { RateLimiter } from '../update/RateLimiter.js';
 import { logger } from './logger.js';
 
 /**
@@ -110,6 +112,8 @@ export interface DownloadOptions {
   expectedContentType?: string;
   /** Custom HTTP headers */
   headers?: Record<string, string>;
+  /** Expected SHA-256 checksum for integrity validation */
+  expectedChecksum?: string;
 }
 
 /**
@@ -176,15 +180,31 @@ export class SecureDownloader {
   private readonly defaultTimeout: number;
   private readonly defaultMaxSize: number;
   private readonly tempDir: string;
+  private readonly globalRateLimiter: RateLimiter;
+  private readonly urlRateLimiters: Map<string, RateLimiter>;
 
   constructor(options?: {
     defaultTimeout?: number;
     defaultMaxSize?: number;
     tempDir?: string;
+    rateLimitOptions?: {
+      maxRequestsPerUrl?: number;
+      maxGlobalRequests?: number;
+      windowMs?: number;
+    };
   }) {
     this.defaultTimeout = options?.defaultTimeout || 30000; // 30 seconds
     this.defaultMaxSize = options?.defaultMaxSize || SECURITY_LIMITS.MAX_FILE_SIZE;
     this.tempDir = options?.tempDir || '.tmp';
+    
+    // Initialize rate limiters
+    const rateLimitConfig = options?.rateLimitOptions || {};
+    this.globalRateLimiter = new RateLimiter({
+      maxRequests: rateLimitConfig.maxGlobalRequests || 100, // 100 downloads per hour globally
+      windowMs: rateLimitConfig.windowMs || 60 * 60 * 1000, // 1 hour
+      minDelayMs: 1000 // Minimum 1 second between requests
+    });
+    this.urlRateLimiters = new Map();
   }
 
   /**
@@ -223,10 +243,18 @@ export class SecureDownloader {
         // File doesn't exist, proceed with download
       }
 
-      // STEP 1: Download content to memory (no disk operations yet)
+      // STEP 1: Check rate limits before download
+      await this.checkRateLimit(url);
+
+      // STEP 2: Download content to memory (no disk operations yet)
       const content = await this.downloadToMemory(url, options);
 
-      // STEP 2: All validation is complete, now write atomically
+      // STEP 3: Validate checksum if provided
+      if (options.expectedChecksum) {
+        await this.validateChecksum(content, options.expectedChecksum);
+      }
+
+      // STEP 4: All validation is complete, now write atomically
       const useAtomic = options.atomic !== false; // Default to true
       if (useAtomic) {
         await this.atomicWriteFile(validatedPath, content);
@@ -293,15 +321,23 @@ export class SecureDownloader {
       // SECURITY: Validate URL format
       this.validateUrl(url);
 
-      // STEP 1: Fetch content with size and timeout protection
+      // STEP 1: Check rate limits before download
+      await this.checkRateLimit(url);
+
+      // STEP 2: Fetch content with size and timeout protection
       const content = await this.fetchWithLimits(url, maxSize, timeout, options.headers);
 
-      // STEP 2: Validate content type if specified
+      // STEP 3: Validate content type if specified
       if (options.expectedContentType) {
         await this.validateContentType(content, options.expectedContentType);
       }
 
-      // STEP 3: Run built-in security validation
+      // STEP 4: Validate checksum if provided
+      if (options.expectedChecksum) {
+        await this.validateChecksum(content, options.expectedChecksum);
+      }
+
+      // STEP 5: Run built-in security validation
       const securityResult = SecurityContentValidator.validateAndSanitize(content);
       if (!securityResult.isValid && securityResult.severity === 'critical') {
         throw DownloadError.securityError(
@@ -309,7 +345,7 @@ export class SecureDownloader {
         );
       }
 
-      // STEP 4: Run custom validator if provided
+      // STEP 6: Run custom validator if provided
       if (options.validator) {
         logger.debug('Running custom content validation');
         const validationResult = await options.validator(content);
@@ -353,6 +389,9 @@ export class SecureDownloader {
     logger.debug(`Starting streaming download from ${url} to ${destinationPath}`);
 
     try {
+      // SECURITY: Check rate limits before download
+      await this.checkRateLimit(url);
+
       // SECURITY: Validate URL and destination path
       this.validateUrl(url);
       const validatedPath = await this.validateDestinationPath(destinationPath);
@@ -507,12 +546,29 @@ export class SecureDownloader {
   }
 
   /**
-   * Validate URL format and security
+   * Validate URL format and security with Unicode normalization
    */
   private validateUrl(url: string): void {
     if (!url || typeof url !== 'string') {
       throw DownloadError.validationError('URL must be a non-empty string');
     }
+
+    // SECURITY FIX: DMCP-SEC-004 - Unicode normalization on user input
+    const unicodeValidation = UnicodeValidator.normalize(url);
+    const normalizedUrl = unicodeValidation.normalizedContent;
+    
+    if (!unicodeValidation.isValid) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'secure_downloader',
+        details: `URL contains suspicious Unicode patterns: ${unicodeValidation.detectedIssues?.join(', ')}`,
+        metadata: { originalUrl: url, normalizedUrl }
+      });
+    }
+    
+    // Use normalized URL for further validation
+    url = normalizedUrl;
 
     let parsedUrl: URL;
     try {
@@ -707,6 +763,91 @@ export class SecureDownloader {
     await fs.mkdir(tempDir, { recursive: true });
     
     return path.join(tempDir, `${basename}.${random}.tmp`);
+  }
+
+  /**
+   * Check rate limits for downloads
+   */
+  private async checkRateLimit(url: string): Promise<void> {
+    // Check global rate limit
+    const globalStatus = this.globalRateLimiter.checkLimit();
+    if (!globalStatus.allowed) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'secure_downloader',
+        details: `Global download rate limit exceeded. Retry after ${globalStatus.retryAfterMs}ms`,
+        metadata: { url, retryAfterMs: globalStatus.retryAfterMs }
+      });
+      throw DownloadError.securityError(
+        `Download rate limit exceeded. Please retry after ${Math.ceil(globalStatus.retryAfterMs! / 1000)} seconds`
+      );
+    }
+
+    // Check per-URL rate limit
+    const parsedUrl = new URL(url);
+    const urlKey = `${parsedUrl.hostname}:${parsedUrl.port || (parsedUrl.protocol === 'https:' ? '443' : '80')}`;
+    
+    if (!this.urlRateLimiters.has(urlKey)) {
+      this.urlRateLimiters.set(urlKey, new RateLimiter({
+        maxRequests: 10, // 10 requests per hour per URL
+        windowMs: 60 * 60 * 1000,
+        minDelayMs: 5000 // 5 second minimum delay between requests to same URL
+      }));
+    }
+    
+    const urlLimiter = this.urlRateLimiters.get(urlKey)!;
+    const urlStatus = urlLimiter.checkLimit();
+    if (!urlStatus.allowed) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'secure_downloader',
+        details: `Per-URL download rate limit exceeded for ${urlKey}. Retry after ${urlStatus.retryAfterMs}ms`,
+        metadata: { url, urlKey, retryAfterMs: urlStatus.retryAfterMs }
+      });
+      throw DownloadError.securityError(
+        `Too many requests to ${urlKey}. Please retry after ${Math.ceil(urlStatus.retryAfterMs! / 1000)} seconds`
+      );
+    }
+
+    // Consume rate limit tokens
+    this.globalRateLimiter.consumeToken();
+    urlLimiter.consumeToken();
+  }
+
+  /**
+   * Validate content checksum for integrity verification
+   */
+  private async validateChecksum(content: string, expectedChecksum: string): Promise<void> {
+    const normalizedExpected = expectedChecksum.toLowerCase().trim();
+    
+    // Validate checksum format (SHA-256 should be 64 hex characters)
+    if (!/^[a-f0-9]{64}$/.test(normalizedExpected)) {
+      throw DownloadError.validationError('Invalid checksum format. Expected SHA-256 (64 hex characters)');
+    }
+
+    const contentBuffer = Buffer.from(content, 'utf-8');
+    const actualChecksum = createHash('sha256').update(contentBuffer).digest('hex');
+    
+    if (actualChecksum !== normalizedExpected) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'secure_downloader',
+        details: `Checksum mismatch detected - possible content tampering`,
+        metadata: { 
+          expectedChecksum: normalizedExpected,
+          actualChecksum,
+          contentLength: content.length
+        }
+      });
+      throw DownloadError.securityError(
+        `Content checksum verification failed. Expected: ${normalizedExpected}, Got: ${actualChecksum}`
+      );
+    }
+
+    logger.debug(`Checksum validation passed: ${actualChecksum}`);
   }
 
   /**
