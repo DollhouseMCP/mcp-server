@@ -43,8 +43,11 @@ import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
+import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
+import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
+import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
 
 
