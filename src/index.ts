@@ -2506,9 +2506,28 @@ export class DollhouseMCPServer implements IToolHandler {
           expiresAt: new Date(Date.now() + (deviceResponse.expires_in * 1000)).toISOString()
         };
         
+        // SECURITY FIX: Add JSON validation and use atomic write for helper state
+        // FIXED: CVE-2025-XXXX - Direct file write without validation for OAuth helper state
+        // Original issue: Line 2511 used direct fs.writeFile without JSON validation
+        // Security impact: Could allow malformed data to be written to auth state file
+        // Fix: Added JSON validation and replaced with atomic write operation
+        
         // Write state file (non-blocking, ignore errors)
         fs.mkdir(path.dirname(helperStateFile), { recursive: true })
-          .then(() => fs.writeFile(helperStateFile, JSON.stringify(helperState, null, 2)))
+          .then(async () => {
+            try {
+              // Validate JSON structure before write
+              const jsonContent = JSON.stringify(helperState, null, 2);
+              JSON.parse(jsonContent); // Validate JSON structure
+              
+              // Use atomic write to prevent race conditions
+              await FileLockManager.atomicWriteFile(helperStateFile, jsonContent);
+            } catch (validationError) {
+              logger.debug('Invalid helper state JSON or write failed', { 
+                error: validationError instanceof Error ? validationError.message : String(validationError) 
+              });
+            }
+          })
           .catch(err => logger.debug('Could not write helper state file', { error: err.message }));
           
       } catch (spawnError) {

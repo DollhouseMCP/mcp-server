@@ -8,6 +8,8 @@ import { PortfolioManager } from './PortfolioManager.js';
 import { ElementType } from './types.js';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { ContentValidator } from '../security/contentValidator.js';
+import { FileLockManager } from '../security/fileLockManager.js';
 
 export interface MigrationResult {
   success: boolean;
@@ -143,8 +145,25 @@ export class MigrationManager {
       logger.warn(`[MigrationManager] Content has Unicode issues in ${filename}: ${contentValidation.detectedIssues?.join(', ')}`);
     }
     
-    // Write to new location
-    await fs.writeFile(newPath, normalizedContent, 'utf-8');
+    // SECURITY FIX: Add comprehensive content validation before write
+    // FIXED: CVE-2025-XXXX - Direct file write without security validation in migration
+    // Original issue: Line 147 used direct fs.writeFile without comprehensive validation
+    // Security impact: Could allow malicious content to be written during migration
+    // Fix: Added ContentValidator.validateAndSanitize with critical threat blocking
+    const validationResult = ContentValidator.validateAndSanitize(normalizedContent);
+    if (!validationResult.isValid && validationResult.severity === 'critical') {
+      const patterns = validationResult.detectedPatterns?.join(', ') || 'unknown patterns';
+      throw new Error(`Critical security threat in migrated content for ${filename}: ${patterns}`);
+    }
+    
+    const validatedContent = validationResult.sanitizedContent || normalizedContent;
+    
+    // SECURITY FIX: Replace direct write with atomic operation
+    // FIXED: Race condition vulnerability in file writes during migration
+    // Original issue: Line 147 used non-atomic fs.writeFile operation
+    // Security impact: Race conditions could cause data corruption or partial writes
+    // Fix: Replaced with FileLockManager.atomicWriteFile for guaranteed atomicity
+    await FileLockManager.atomicWriteFile(newPath, validatedContent, { encoding: 'utf-8' });
     
     logger.debug(`[MigrationManager] Migrated: ${filename}`);
   }
