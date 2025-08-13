@@ -5,8 +5,35 @@
 import { ToolDefinition } from './ToolRegistry.js';
 import { IToolHandler } from '../types.js';
 
-export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
-  const tools: Array<{ tool: ToolDefinition; handler: any }> = [
+// Portfolio tool argument interfaces
+interface PortfolioStatusArgs {
+  username?: string;
+}
+
+interface InitPortfolioArgs {
+  repository_name?: string;
+  private?: boolean;
+  description?: string;
+}
+
+interface PortfolioConfigArgs {
+  auto_sync?: boolean;
+  default_visibility?: 'public' | 'private';
+  auto_submit?: boolean;
+  repository_name?: string;
+}
+
+interface SyncPortfolioArgs {
+  direction?: 'push' | 'pull' | 'both';
+  force?: boolean;
+  dry_run?: boolean;
+}
+
+// Tool handler function type
+type ToolHandler<T> = (args: T) => Promise<any>;
+
+export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
+  const tools: Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> = [
     {
       tool: {
         name: "portfolio_status",
@@ -21,7 +48,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
           },
         },
       },
-      handler: (args: any) => server.portfolioStatus(args?.username)
+      handler: (args: PortfolioStatusArgs) => server.portfolioStatus(args?.username)
     },
     {
       tool: {
@@ -45,7 +72,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
           },
         },
       },
-      handler: (args: any) => server.initPortfolio({
+      handler: (args: InitPortfolioArgs) => server.initPortfolio({
         repositoryName: args?.repository_name,
         private: args?.private,
         description: args?.description
@@ -78,7 +105,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
           },
         },
       },
-      handler: (args: any) => server.portfolioConfig({
+      handler: (args: PortfolioConfigArgs) => server.portfolioConfig({
         autoSync: args?.auto_sync,
         defaultVisibility: args?.default_visibility,
         autoSubmit: args?.auto_submit,
@@ -108,7 +135,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
           },
         },
       },
-      handler: (args: any) => server.syncPortfolio({
+      handler: (args: SyncPortfolioArgs) => server.syncPortfolio({
         direction: args?.direction || 'push',
         force: args?.force || false,
         dryRun: args?.dry_run || false

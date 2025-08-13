@@ -3868,6 +3868,20 @@ Placeholders for custom format:
    */
   async portfolioStatus(username?: string) {
     try {
+      // Validate username parameter if provided
+      if (username && typeof username === 'string') {
+        try {
+          validateUsername(username);
+        } catch (error) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid username: ${error instanceof Error ? error.message : 'Validation failed'}`
+            }]
+          };
+        }
+      }
+
       // Get current user if username not provided
       let targetUsername = username;
       if (!targetUsername) {
@@ -4090,19 +4104,37 @@ Placeholders for custom format:
       if (options.dryRun) {
         // Show what would be synced
         const localPortfolioManager = PortfolioManager.getInstance();
-        const [personas, skills, templates, agents] = await Promise.all([
-          this.getElementsList('personas'),
-          this.getElementsList('skills'),
-          this.getElementsList('templates'),
-          this.getElementsList('agents')
-        ]);
+        
+        const elementTypeCounts: Record<string, number | string> = {};
+        const elementTypeErrors: string[] = [];
+        
+        // Get element counts with better error handling
+        for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
+          try {
+            const elements = await this.getElementsList(elementType);
+            elementTypeCounts[elementType] = elements.length;
+          } catch (error: any) {
+            elementTypeCounts[elementType] = 'ERROR';
+            elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
+          }
+        }
 
         let dryRunText = `${this.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
         dryRunText += `📤 **Elements to sync** (${options.direction}):\n`;
-        dryRunText += `  • Personas: ${personas.length}\n`;
-        dryRunText += `  • Skills: ${skills.length}\n`;
-        dryRunText += `  • Templates: ${templates.length}\n`;
-        dryRunText += `  • Agents: ${agents.length}\n\n`;
+        dryRunText += `  • Personas: ${elementTypeCounts.personas}\n`;
+        dryRunText += `  • Skills: ${elementTypeCounts.skills}\n`;
+        dryRunText += `  • Templates: ${elementTypeCounts.templates}\n`;
+        dryRunText += `  • Agents: ${elementTypeCounts.agents}\n\n`;
+        
+        // Include any errors encountered during dry run
+        if (elementTypeErrors.length > 0) {
+          dryRunText += `⚠️ **Errors found during preview:**\n`;
+          for (const error of elementTypeErrors) {
+            dryRunText += `  • ${error}\n`;
+          }
+          dryRunText += `\n`;
+        }
+        
         dryRunText += `🎯 **Target**: https://github.com/${username}/dollhouse-portfolio\n`;
         dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
 
@@ -4121,28 +4153,70 @@ Placeholders for custom format:
 
         // Get all local elements
         const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
+        const failedElements: Array<{type: string, name: string, error: string}> = [];
         
         for (const elementType of elementTypes) {
-          const elements = await this.getElementsList(elementType);
-          
-          for (const elementName of elements) {
-            try {
-              // Load element and save to portfolio
-              const element = await this.loadElementByType(elementName, elementType);
-              if (element) {
-                await portfolioManager.saveElement(element, true); // Explicit consent
-                syncCount++;
+          try {
+            const elements = await this.getElementsList(elementType);
+            
+            for (const elementName of elements) {
+              try {
+                // Load element and save to portfolio
+                const element = await this.loadElementByType(elementName, elementType);
+                if (element) {
+                  await portfolioManager.saveElement(element, true); // Explicit consent
+                  syncCount++;
+                  logger.debug(`Successfully synced ${elementType}/${elementName}`);
+                } else {
+                  failedElements.push({
+                    type: elementType,
+                    name: elementName,
+                    error: 'Element loaded as null/undefined'
+                  });
+                }
+              } catch (elementError: any) {
+                const errorMessage = elementError.message || 'Unknown error during element sync';
+                failedElements.push({
+                  type: elementType,
+                  name: elementName,
+                  error: errorMessage
+                });
+                logger.warn(`Failed to sync ${elementType}/${elementName}`, { error: errorMessage });
               }
-            } catch (error) {
-              logger.debug(`Failed to sync ${elementType}/${elementName}:`, error);
             }
+          } catch (listError: any) {
+            // Handle errors in getting the elements list for this type
+            const errorMessage = listError.message || 'Failed to get elements list';
+            failedElements.push({
+              type: elementType,
+              name: 'ALL',
+              error: `Failed to list ${elementType}: ${errorMessage}`
+            });
+            logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
           }
         }
 
         syncText += `✅ **Sync Complete!**\n`;
         syncText += `📤 Uploaded: ${syncCount} elements\n`;
+        
+        // Include failed elements information if any
+        if (failedElements.length > 0) {
+          syncText += `⚠️ **Failed**: ${failedElements.length} elements\n\n`;
+          syncText += `**Failed Elements:**\n`;
+          for (const failed of failedElements) {
+            if (failed.name === 'ALL') {
+              syncText += `  • ${failed.type}: ${failed.error}\n`;
+            } else {
+              syncText += `  • ${failed.type}/${failed.name}: ${failed.error}\n`;
+            }
+          }
+          syncText += `\n`;
+        } else {
+          syncText += `🎉 All elements synced successfully!\n\n`;
+        }
+        
         syncText += `🔗 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
-        syncText += `🎉 Your elements are now available on GitHub!`;
+        syncText += `Your elements are now available on GitHub!`;
 
         return {
           content: [{
@@ -4183,6 +4257,14 @@ Placeholders for custom format:
    */
   private async countElementsInDir(dirPath: string): Promise<number> {
     try {
+      // Validate the directory path for security
+      try {
+        await PathValidator.validatePersonaPath(dirPath);
+      } catch (pathError) {
+        logger.warn('Invalid directory path in countElementsInDir', { dirPath, error: pathError });
+        return 0;
+      }
+
       await fs.access(dirPath);
       const files = await fs.readdir(dirPath);
       return files.filter(file => file.endsWith('.json')).length;
@@ -4213,17 +4295,44 @@ Placeholders for custom format:
           elementTypeEnum = ElementType.AGENT;
           break;
         default:
-          return [];
+          // Instead of silently returning empty array, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
       }
 
       const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
+      
+      // Validate the directory path for security
+      try {
+        await PathValidator.validatePersonaPath(dirPath);
+      } catch (pathError) {
+        logger.warn('Invalid directory path in getElementsList', { dirPath, elementType, error: pathError });
+        return [];
+      }
+
       await fs.access(dirPath);
       const files = await fs.readdir(dirPath);
       return files
         .filter(file => file.endsWith('.json'))
         .map(file => file.replace('.json', ''));
-    } catch (error) {
-      return [];
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // For file system errors, provide context about the operation
+      const errorMessage = error.code === 'ENOENT' 
+        ? `Element directory not found for type '${elementType}'. Directory may not exist yet.`
+        : `Failed to read elements directory for type '${elementType}': ${error.message || 'Unknown file system error'}`;
+      
+      logger.warn('Error in getElementsList', { 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
     }
   }
 
@@ -4249,15 +4358,40 @@ Placeholders for custom format:
           elementTypeEnum = ElementType.AGENT;
           break;
         default:
-          return null;
+          // Instead of silently returning null, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
       }
 
       const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
       const filePath = path.join(dirPath, `${elementName}.json`);
       const content = await fs.readFile(filePath, 'utf-8');
       return JSON.parse(content);
-    } catch (error) {
-      return null;
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // Provide specific error messages for common file system errors
+      let errorMessage: string;
+      
+      if (error.code === 'ENOENT') {
+        errorMessage = `Element '${elementName}' not found in ${elementType}. File does not exist.`;
+      } else if (error instanceof SyntaxError) {
+        errorMessage = `Element '${elementName}' in ${elementType} contains invalid JSON: ${error.message}`;
+      } else {
+        errorMessage = `Failed to load element '${elementName}' from ${elementType}: ${error.message || 'Unknown error'}`;
+      }
+      
+      logger.warn('Error in loadElementByType', { 
+        elementName, 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
     }
   }
 
