@@ -109,7 +109,28 @@ export class PortfolioRepoManager {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.message || `GitHub API error: ${response.status}`);
+      // Provide more specific error messages for common status codes
+      let errorMessage = data.message || `GitHub API error: ${response.status}`;
+      
+      switch (response.status) {
+        case 422:
+          // Validation failed - often means repository already exists
+          errorMessage = `Repository validation failed: ${data.message || 'name already exists on this account'}`;
+          break;
+        case 401:
+          errorMessage = 'GitHub authentication failed. Please check your token.';
+          break;
+        case 403:
+          errorMessage = `GitHub API access forbidden: ${data.message || 'insufficient permissions or rate limit exceeded'}`;
+          break;
+        case 500:
+          errorMessage = 'GitHub API server error. Please try again later.';
+          break;
+        default:
+          errorMessage = `GitHub API error (${response.status}): ${data.message || 'Unknown error'}`;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     return data;
@@ -192,9 +213,29 @@ export class PortfolioRepoManager {
       await this.generatePortfolioStructure(normalizedUsername);
 
       return repo.html_url;
-    } catch (error) {
+    } catch (error: any) {
+      // Handle race condition: if repository was created between our check and creation attempt
+      if (error.message && error.message.includes('name already exists')) {
+        logger.info(`Portfolio repository already exists for ${normalizedUsername} (race condition handled)`);
+        
+        // Re-check for the existing repository and return its URL
+        try {
+          const existingRepo = await this.githubRequest(
+            `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+          );
+          if (existingRepo && existingRepo.html_url) {
+            return existingRepo.html_url;
+          }
+        } catch (recheckError) {
+          ErrorHandler.logError('PortfolioRepoManager.recheckExistingRepo', recheckError, { username: normalizedUsername });
+        }
+        
+        // If we can't get the existing repo, throw a more specific error
+        throw new Error(`Portfolio repository already exists for ${normalizedUsername}. Please check your GitHub account.`);
+      }
+      
       ErrorHandler.logError('PortfolioRepoManager.createPortfolioRepo', error, { username: normalizedUsername });
-      throw ErrorHandler.wrapError(error, 'Failed to create portfolio repository', ErrorCategory.NETWORK_ERROR);
+      throw ErrorHandler.wrapError(error, `Failed to create portfolio repository for ${normalizedUsername}. ${error.message || 'Unknown error occurred.'}`, ErrorCategory.NETWORK_ERROR);
     }
   }
 
