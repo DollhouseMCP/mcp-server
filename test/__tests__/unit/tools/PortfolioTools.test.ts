@@ -92,7 +92,8 @@ describe('PortfolioTools', () => {
       authenticate: jest.fn(),
       getToken: jest.fn()
     };
-    (GitHubAuthManager as jest.Mock).mockImplementation(() => mockGitHubAuthManager);
+    // TypeScript requires double type assertion to cast constructor to jest.Mock
+    (GitHubAuthManager as unknown as jest.Mock).mockImplementation(() => mockGitHubAuthManager);
 
     // Setup portfolio repo manager mock
     mockPortfolioRepoManager = {
@@ -101,7 +102,8 @@ describe('PortfolioTools', () => {
       syncRepository: jest.fn(),
       checkElementCount: jest.fn()
     };
-    (PortfolioRepoManager as jest.Mock).mockImplementation(() => mockPortfolioRepoManager);
+    // TypeScript requires double type assertion to cast constructor to jest.Mock
+    (PortfolioRepoManager as unknown as jest.Mock).mockImplementation(() => mockPortfolioRepoManager);
 
     // Setup config manager mock
     mockConfigManager = {
