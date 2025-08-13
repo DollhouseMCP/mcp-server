@@ -5,6 +5,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import matter from 'gray-matter';
+import { v4 as uuidv4 } from 'uuid';
 import { Persona } from '../../../../src/types/persona.js';
 import { createPersonaFileContent } from './test-fixtures.js';
 
@@ -100,7 +101,8 @@ export async function createTempDir(prefix: string): Promise<string> {
     throw new Error('TEST_BASE_DIR environment variable is not set. Ensure the test setup has run properly.');
   }
   
-  const tempDir = path.join(baseDir, `${prefix}-${Date.now()}`);
+  // Use UUID instead of Date.now() for better uniqueness guarantees
+  const tempDir = path.join(baseDir, `${prefix}-${uuidv4()}`);
   await fs.mkdir(tempDir, { recursive: true });
   return tempDir;
 }

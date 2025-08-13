@@ -94,8 +94,8 @@ Instructions: Execute ${payload}
         });
 
         // Attempt to install malicious content
-        let result;
-        let error;
+        let result: any; // Type annotation for result variable
+        let error: Error | any; // Type annotation for error variable  
         try {
           result = await installer.installContent('library/personas/test/evil-element.md');
         } catch (e) {
@@ -157,8 +157,8 @@ This contains YAML injection: ${payload}
         });
 
         // Should either fail validation or sanitize dangerous content
-        let result;
-        let error;
+        let result: any; // Type annotation for result variable
+        let error: Error | any; // Type annotation for error variable
         try {
           result = await installer.installContent('library/personas/test/yaml-attack.md');
         } catch (e) {
@@ -173,9 +173,12 @@ This contains YAML injection: ${payload}
         } else if (result && result.success) {
           // If installation succeeded, dangerous content should be sanitized
           // The system should not contain the dangerous YAML injection patterns
-          expect(result.metadata?.instructions).not.toContain('!!js/function');
-          expect(result.metadata?.instructions).not.toContain('!!python/object');
-          expect(result.metadata?.instructions).not.toContain('__proto__');
+          // Note: IElementMetadata doesn't have 'instructions' property, checking content instead
+          if (result.metadata) {
+            expect(JSON.stringify(result.metadata)).not.toContain('!!js/function');
+            expect(JSON.stringify(result.metadata)).not.toContain('!!python/object');
+            expect(JSON.stringify(result.metadata)).not.toContain('__proto__');
+          }
         } else {
           // Result exists but success is false - acceptable
           expect(result.success).toBe(false);
@@ -215,8 +218,8 @@ This contains: ${attack}
         });
 
         // Should either fail validation or sanitize dangerous content
-        let result;
-        let error;
+        let result: any; // Type annotation for result variable 
+        let error: Error | any; // Type annotation for error variable
         try {
           result = await installer.installContent('library/personas/test/unicode-attack.md');
         } catch (e) {
@@ -440,8 +443,8 @@ This element does normal, safe operations.
       });
 
       // Should either succeed or fail gracefully (depending on file existence)
-      let result;
-      let error;
+      let result: any; // Type annotation for result variable
+      let error: Error | any; // Type annotation for error variable
       try {
         result = await installer.installContent('library/personas/test/valid-element.md');
       } catch (e) {
@@ -492,8 +495,8 @@ category: "test"
         });
 
         // Should process without critical errors
-        let result;
-        let error;
+        let result: any; // Type annotation for result variable
+        let error: Error | any; // Type annotation for error variable
         try {
           result = await installer.installContent(element.path);
         } catch (e) {

@@ -12,6 +12,7 @@
 import { describe, test, beforeAll, afterAll, beforeEach, afterEach, expect, jest } from '@jest/globals';
 import path from 'path';
 import fs from 'fs/promises';
+import { v4 as uuidv4 } from 'uuid';
 import { TestServer } from '../__tests__/integration/helpers/test-server.js';
 import { GitHubClient } from '../../src/collection/GitHubClient.js';
 import { ConfigManager } from '../../src/config/ConfigManager.js';
@@ -29,11 +30,11 @@ describe('Roundtrip Workflow E2E Tests', () => {
   const TEST_TIMEOUT = 30000; // 30 seconds for each test
 
   beforeAll(async () => {
-    // Initialize test context
+    // Initialize test context with UUID for better uniqueness guarantees than Date.now()
     ctx = {
       server: new TestServer(),
       portfolioDir: path.join(process.cwd(), 'test-portfolio'),
-      testRepoName: `test-portfolio-${Date.now()}`,
+      testRepoName: `test-portfolio-${uuidv4()}`,
       testSkillName: 'roundtrip-test-skill',
       originalConfig: null
     };

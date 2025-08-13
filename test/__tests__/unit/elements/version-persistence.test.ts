@@ -36,9 +36,9 @@ describe('Version Persistence', () => {
     await fs.mkdir(templatesDir, { recursive: true });
     await fs.mkdir(agentsDir, { recursive: true });
     
-    // Initialize managers
-    skillManager = new SkillManager(skillsDir);
-    templateManager = new TemplateManager(templatesDir);
+    // Initialize managers - they now use PortfolioManager.getInstance() internally
+    skillManager = new SkillManager();
+    templateManager = new TemplateManager();
     agentManager = new AgentManager(agentsDir);
   });
 
