@@ -17,6 +17,39 @@
  */
 
 import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import type { IToolHandler } from '../../../../src/server/types.js';
+
+// Type definitions for mocks - using Partial<IToolHandler> to avoid interface mismatch
+type MockServer = Partial<IToolHandler> & {
+  portfolioStatus: jest.MockedFunction<(username?: string) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  initPortfolio: jest.MockedFunction<(options: { repositoryName?: string; private?: boolean; description?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  portfolioConfig: jest.MockedFunction<(options: { autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  syncPortfolio: jest.MockedFunction<(options: { direction: string; force: boolean; dryRun: boolean }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  getPersonaIndicator: jest.MockedFunction<() => string>;
+};
+
+interface MockGitHubAuthManager {
+  getAuthStatus: jest.MockedFunction<() => Promise<{ isAuthenticated: boolean; username: string; token: string }>>;
+  authenticate: jest.MockedFunction<() => Promise<void>>;
+  getToken: jest.MockedFunction<() => Promise<string>>;
+}
+
+interface MockPortfolioRepoManager {
+  initializeRepository: jest.MockedFunction<() => Promise<void>>;
+  getRepositoryStatus: jest.MockedFunction<() => Promise<object>>;
+  syncRepository: jest.MockedFunction<() => Promise<void>>;
+  checkElementCount: jest.MockedFunction<() => Promise<number>>;
+}
+
+interface MockConfigManager {
+  loadConfig: jest.MockedFunction<() => Promise<void>>;
+  getConfig: jest.MockedFunction<() => object>;
+  setConfig: jest.MockedFunction<(key: string, value: unknown) => void>;
+  saveConfig: jest.MockedFunction<() => Promise<void>>;
+}
+
+// Use 'any' types for test variables to avoid strict typing issues in CI
+type PortfolioTool = any;
 
 // Mock all dependencies before importing
 jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
@@ -69,11 +102,11 @@ global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 const { getPortfolioTools } = await import('../../../../src/server/tools/PortfolioTools.js');
 
 describe('PortfolioTools', () => {
-  let mockServer: any;
-  let mockGitHubAuthManager: any;
-  let mockPortfolioRepoManager: any;
-  let mockConfigManager: any;
-  let mockValidateUsername: jest.MockedFunction<any>;
+  let mockServer: MockServer;
+  let mockGitHubAuthManager: MockGitHubAuthManager;
+  let mockPortfolioRepoManager: MockPortfolioRepoManager;
+  let mockConfigManager: MockConfigManager;
+  let mockValidateUsername: jest.MockedFunction<(username: string) => string>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -84,7 +117,7 @@ describe('PortfolioTools', () => {
     const { ConfigManager } = await import('../../../../src/config/ConfigManager.js');
     const { validateUsername } = await import('../../../../src/security/InputValidator.js');
 
-    mockValidateUsername = validateUsername as jest.MockedFunction<any>;
+    mockValidateUsername = validateUsername as jest.MockedFunction<(username: string) => string>;
 
     // Setup auth manager mock
     mockGitHubAuthManager = {
@@ -92,7 +125,8 @@ describe('PortfolioTools', () => {
       authenticate: jest.fn(),
       getToken: jest.fn()
     };
-    (GitHubAuthManager as jest.Mock).mockImplementation(() => mockGitHubAuthManager);
+    // TypeScript requires double type assertion to cast constructor to jest.Mock
+    (GitHubAuthManager as unknown as jest.Mock).mockImplementation(() => mockGitHubAuthManager);
 
     // Setup portfolio repo manager mock
     mockPortfolioRepoManager = {
@@ -101,7 +135,8 @@ describe('PortfolioTools', () => {
       syncRepository: jest.fn(),
       checkElementCount: jest.fn()
     };
-    (PortfolioRepoManager as jest.Mock).mockImplementation(() => mockPortfolioRepoManager);
+    // TypeScript requires double type assertion to cast constructor to jest.Mock
+    (PortfolioRepoManager as unknown as jest.Mock).mockImplementation(() => mockPortfolioRepoManager);
 
     // Setup config manager mock
     mockConfigManager = {
@@ -138,7 +173,7 @@ describe('PortfolioTools', () => {
 
   describe('Tool Structure', () => {
     it('should return all 4 portfolio tools', () => {
-      const tools = getPortfolioTools(mockServer);
+      const tools = getPortfolioTools(mockServer as IToolHandler);
       expect(tools).toHaveLength(4);
       
       const toolNames = tools.map(t => t.tool.name);
@@ -149,7 +184,7 @@ describe('PortfolioTools', () => {
     });
 
     it('should have valid tool definitions with proper schemas', () => {
-      const tools = getPortfolioTools(mockServer);
+      const tools = getPortfolioTools(mockServer as IToolHandler);
       
       tools.forEach(({ tool }) => {
         expect(tool.name).toBeTruthy();
@@ -161,7 +196,7 @@ describe('PortfolioTools', () => {
     });
 
     it('should have handler functions for each tool', () => {
-      const tools = getPortfolioTools(mockServer);
+      const tools = getPortfolioTools(mockServer as IToolHandler);
       
       tools.forEach(({ handler }) => {
         expect(typeof handler).toBe('function');
@@ -170,11 +205,12 @@ describe('PortfolioTools', () => {
   });
 
   describe('portfolio_status Tool', () => {
-    let portfolioStatusTool: any;
+    let portfolioStatusTool: PortfolioTool;
 
     beforeEach(() => {
-      const tools = getPortfolioTools(mockServer);
-      portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+      const tools = getPortfolioTools(mockServer as IToolHandler);
+      portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status')!;
+      if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -249,8 +285,8 @@ describe('PortfolioTools', () => {
         ];
 
         for (const username of invalidInputs) {
-          await portfolioStatusTool.handler({ username });
-          expect(mockServer.portfolioStatus).toHaveBeenCalledWith(username);
+          await portfolioStatusTool.handler({ username: username as any });
+          expect(mockServer.portfolioStatus).toHaveBeenCalledWith(username as any);
         }
       });
     });
@@ -261,18 +297,19 @@ describe('PortfolioTools', () => {
         
         expect(schema.type).toBe('object');
         expect(schema.properties.username).toBeDefined();
-        expect(schema.properties.username.type).toBe('string');
-        expect(schema.properties.username.description).toBeTruthy();
+        expect((schema.properties.username as any).type).toBe('string');
+        expect((schema.properties.username as any).description).toBeTruthy();
       });
     });
   });
 
   describe('init_portfolio Tool', () => {
-    let initPortfolioTool: any;
+    let initPortfolioTool: PortfolioTool;
 
     beforeEach(() => {
-      const tools = getPortfolioTools(mockServer);
-      initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+      const tools = getPortfolioTools(mockServer as IToolHandler);
+      initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio')!;
+      if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -397,10 +434,10 @@ describe('PortfolioTools', () => {
         ];
 
         for (const private_val of invalidPrivateValues) {
-          await initPortfolioTool.handler({ private: private_val });
+          await initPortfolioTool.handler({ private: private_val as any });
           expect(mockServer.initPortfolio).toHaveBeenCalledWith({
             repositoryName: undefined,
-            private: private_val,
+            private: private_val as any,
             description: undefined
           });
         }
@@ -413,21 +450,22 @@ describe('PortfolioTools', () => {
         
         expect(schema.type).toBe('object');
         expect(schema.properties.repository_name).toBeDefined();
-        expect(schema.properties.repository_name.type).toBe('string');
+        expect((schema.properties.repository_name as any).type).toBe('string');
         expect(schema.properties.private).toBeDefined();
-        expect(schema.properties.private.type).toBe('boolean');
+        expect((schema.properties.private as any).type).toBe('boolean');
         expect(schema.properties.description).toBeDefined();
-        expect(schema.properties.description.type).toBe('string');
+        expect((schema.properties.description as any).type).toBe('string');
       });
     });
   });
 
   describe('portfolio_config Tool', () => {
-    let portfolioConfigTool: any;
+    let portfolioConfigTool: PortfolioTool;
 
     beforeEach(() => {
-      const tools = getPortfolioTools(mockServer);
-      portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+      const tools = getPortfolioTools(mockServer as IToolHandler);
+      portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config')!;
+      if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -510,10 +548,10 @@ describe('PortfolioTools', () => {
         ];
 
         for (const default_visibility of invalidVisibilities) {
-          await portfolioConfigTool.handler({ default_visibility });
+          await portfolioConfigTool.handler({ default_visibility: default_visibility as any });
           expect(mockServer.portfolioConfig).toHaveBeenCalledWith({
             autoSync: undefined,
-            defaultVisibility: default_visibility,
+            defaultVisibility: default_visibility as any,
             autoSubmit: undefined,
             repositoryName: undefined
           });
@@ -532,19 +570,19 @@ describe('PortfolioTools', () => {
         ];
 
         for (const value of invalidBooleans) {
-          await portfolioConfigTool.handler({ auto_sync: value });
+          await portfolioConfigTool.handler({ auto_sync: value as any });
           expect(mockServer.portfolioConfig).toHaveBeenCalledWith({
-            autoSync: value,
+            autoSync: value as any,
             defaultVisibility: undefined,
             autoSubmit: undefined,
             repositoryName: undefined
           });
 
-          await portfolioConfigTool.handler({ auto_submit: value });
+          await portfolioConfigTool.handler({ auto_submit: value as any });
           expect(mockServer.portfolioConfig).toHaveBeenCalledWith({
             autoSync: undefined,
             defaultVisibility: undefined,
-            autoSubmit: value,
+            autoSubmit: value as any,
             repositoryName: undefined
           });
         }
@@ -579,27 +617,28 @@ describe('PortfolioTools', () => {
         
         expect(schema.type).toBe('object');
         expect(schema.properties.auto_sync).toBeDefined();
-        expect(schema.properties.auto_sync.type).toBe('boolean');
+        expect((schema.properties.auto_sync as any).type).toBe('boolean');
         
         expect(schema.properties.default_visibility).toBeDefined();
-        expect(schema.properties.default_visibility.type).toBe('string');
-        expect(schema.properties.default_visibility.enum).toEqual(['public', 'private']);
+        expect((schema.properties.default_visibility as any).type).toBe('string');
+        expect((schema.properties.default_visibility as any).enum).toEqual(['public', 'private']);
         
         expect(schema.properties.auto_submit).toBeDefined();
-        expect(schema.properties.auto_submit.type).toBe('boolean');
+        expect((schema.properties.auto_submit as any).type).toBe('boolean');
         
         expect(schema.properties.repository_name).toBeDefined();
-        expect(schema.properties.repository_name.type).toBe('string');
+        expect((schema.properties.repository_name as any).type).toBe('string');
       });
     });
   });
 
   describe('sync_portfolio Tool', () => {
-    let syncPortfolioTool: any;
+    let syncPortfolioTool: PortfolioTool;
 
     beforeEach(() => {
-      const tools = getPortfolioTools(mockServer);
-      syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio');
+      const tools = getPortfolioTools(mockServer as IToolHandler);
+      syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio')!;
+      if (!syncPortfolioTool) throw new Error('sync_portfolio tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -692,9 +731,9 @@ describe('PortfolioTools', () => {
         ];
 
         for (const direction of invalidDirections) {
-          await syncPortfolioTool.handler({ direction });
+          await syncPortfolioTool.handler({ direction: direction as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
-            direction: direction || 'push', // falls back to default if falsy
+            direction: (direction as any) || 'push', // falls back to default if falsy
             force: false,
             dryRun: false
           });
@@ -713,18 +752,18 @@ describe('PortfolioTools', () => {
         ];
 
         for (const value of invalidBooleans) {
-          await syncPortfolioTool.handler({ force: value });
+          await syncPortfolioTool.handler({ force: value as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: 'push',
-            force: value || false, // coerced to boolean
+            force: (value as any) || false, // coerced to boolean
             dryRun: false
           });
 
-          await syncPortfolioTool.handler({ dry_run: value });
+          await syncPortfolioTool.handler({ dry_run: value as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: 'push',
             force: false,
-            dryRun: value || false // coerced to boolean
+            dryRun: (value as any) || false // coerced to boolean
           });
         }
       });
@@ -751,14 +790,14 @@ describe('PortfolioTools', () => {
         expect(schema.type).toBe('object');
         
         expect(schema.properties.direction).toBeDefined();
-        expect(schema.properties.direction.type).toBe('string');
-        expect(schema.properties.direction.enum).toEqual(['push', 'pull', 'both']);
+        expect((schema.properties.direction as any).type).toBe('string');
+        expect((schema.properties.direction as any).enum).toEqual(['push', 'pull', 'both']);
         
         expect(schema.properties.force).toBeDefined();
-        expect(schema.properties.force.type).toBe('boolean');
+        expect((schema.properties.force as any).type).toBe('boolean');
         
         expect(schema.properties.dry_run).toBeDefined();
-        expect(schema.properties.dry_run.type).toBe('boolean');
+        expect((schema.properties.dry_run as any).type).toBe('boolean');
       });
     });
 
@@ -778,7 +817,7 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle empty string values', async () => {
-        await syncPortfolioTool.handler({ direction: '' });
+        await syncPortfolioTool.handler({ direction: '' as any });
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'push', // fallback to default
@@ -792,8 +831,9 @@ describe('PortfolioTools', () => {
   describe('Error Scenarios', () => {
     describe('Server Method Failures', () => {
       it('should handle portfolioStatus method errors', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status')!;
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         mockServer.portfolioStatus.mockRejectedValue(new Error('API Error'));
 
@@ -802,8 +842,9 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle initPortfolio method errors', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio')!;
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         mockServer.initPortfolio.mockRejectedValue(new Error('Repository creation failed'));
 
@@ -812,8 +853,9 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle portfolioConfig method errors', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config')!;
+        if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
 
         mockServer.portfolioConfig.mockRejectedValue(new Error('Config save failed'));
 
@@ -822,8 +864,9 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle syncPortfolio method errors', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio')!;
+        if (!syncPortfolioTool) throw new Error('sync_portfolio tool not found');
 
         mockServer.syncPortfolio.mockRejectedValue(new Error('Sync failed'));
 
@@ -836,8 +879,9 @@ describe('PortfolioTools', () => {
   describe('Security Tests', () => {
     describe('Parameter Injection Attempts', () => {
       it('should handle command injection attempts in usernames', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status')!;
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         const injectionAttempts = [
           'user; rm -rf /',
@@ -861,8 +905,9 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle XSS attempts in repository names and descriptions', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio')!;
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         const xssAttempts = [
           '<script>alert("XSS")</script>',
@@ -898,8 +943,9 @@ describe('PortfolioTools', () => {
 
     describe('Unicode and Encoding Attacks', () => {
       it('should handle unicode normalization attacks', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status')!;
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         const unicodeAttacks = [
           'user\u0000', // null byte
@@ -926,8 +972,9 @@ describe('PortfolioTools', () => {
 
     describe('Large Input Handling', () => {
       it('should handle very large input strings', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio')!;
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         const largeString = 'a'.repeat(100000); // 100KB string
 
@@ -948,8 +995,9 @@ describe('PortfolioTools', () => {
       });
 
       it('should handle deeply nested object attempts', async () => {
-        const tools = getPortfolioTools(mockServer);
-        const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+        const tools = getPortfolioTools(mockServer as IToolHandler);
+        const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config')!;
+        if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
 
         // Attempt to pass deeply nested objects as parameters
         const deepObject = { deeply: { nested: { object: { value: true } } } };
@@ -958,10 +1006,10 @@ describe('PortfolioTools', () => {
           content: [{ type: 'text', text: 'Config updated' }]
         });
 
-        await portfolioConfigTool.handler({ auto_sync: deepObject });
+        await portfolioConfigTool.handler({ auto_sync: deepObject as any });
 
         expect(mockServer.portfolioConfig).toHaveBeenCalledWith({
-          autoSync: deepObject,
+          autoSync: deepObject as any,
           defaultVisibility: undefined,
           autoSubmit: undefined,
           repositoryName: undefined
@@ -972,7 +1020,7 @@ describe('PortfolioTools', () => {
 
   describe('Response Format Validation', () => {
     it('should validate that server methods return properly formatted responses', async () => {
-      const tools = getPortfolioTools(mockServer);
+      const tools = getPortfolioTools(mockServer as IToolHandler);
 
       const expectedResponseFormat = {
         content: expect.arrayContaining([

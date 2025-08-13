@@ -47,7 +47,30 @@ export class SecureYamlParser {
     price: (v) => typeof v === 'string' && (v === 'free' || /^\$\d+\.\d{2}$/.test(v)),
     ai_generated: (v) => typeof v === 'boolean' || v === 'true' || v === 'false',
     generation_method: (v) => ['human', 'ChatGPT', 'Claude', 'hybrid'].includes(v),
-    created_date: (v) => typeof v === 'string' && !isNaN(Date.parse(v)),
+    created_date: (v) => {
+      if (typeof v !== 'string') return false;
+      
+      // More flexible date validation - accept common formats
+      // ISO8601, US format, European format, simple dates
+      const datePatterns = [
+        /^\d{4}-\d{2}-\d{2}$/, // YYYY-MM-DD
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, // ISO8601 with time
+        /^\d{1,2}\/\d{1,2}\/\d{4}$/, // MM/DD/YYYY or M/D/YYYY
+        /^\d{1,2}-\d{1,2}-\d{4}$/, // MM-DD-YYYY or M-D-YYYY
+        /^\d{1,2}\.\d{1,2}\.\d{4}$/, // DD.MM.YYYY (European)
+        /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}$/i // Month DD, YYYY
+      ];
+      
+      // Check if it matches common patterns first
+      const matchesPattern = datePatterns.some(pattern => pattern.test(v.trim()));
+      if (!matchesPattern) {
+        // Fall back to Date.parse for other formats, but be more lenient
+        const parsed = Date.parse(v);
+        return !isNaN(parsed) && parsed > 0; // Ensure it's a valid positive timestamp
+      }
+      
+      return true;
+    },
     triggers: (v) => Array.isArray(v) && v.every(t => typeof t === 'string' && t.length <= 50),
     content_flags: (v) => Array.isArray(v) && v.every(f => typeof f === 'string' && f.length <= 50)
   };

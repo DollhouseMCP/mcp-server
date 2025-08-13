@@ -42,7 +42,13 @@
     "security:audit": "tsx scripts/run-security-audit.ts",
     "security:audit:json": "tsx scripts/run-security-audit.ts --json",
     "security:audit:verbose": "tsx scripts/run-security-audit.ts --verbose",
-    "pre-commit": "npm run security:rapid && npm audit --audit-level=high"
+    "pre-commit": "npm run security:rapid && npm audit --audit-level=high",
+    "test:e2e": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs",
+    "test:e2e:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs --watch",
+    "test:e2e:verbose": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs --verbose",
+    "test:roundtrip": "npm run test:e2e",
+    "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
+    "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup"
   },
   "keywords": [
     "mcp",

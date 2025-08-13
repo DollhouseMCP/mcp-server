@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * CI Environment Tests - Issue #92
@@ -235,8 +236,8 @@ describe('CI Environment Tests', () => {
         // In CI, BackupManager should use temporary directories
         const { BackupManager } = await import('../../src/update/BackupManager.js');
         
-        // Create a test directory in tmp
-        const testDir = path.join(os.tmpdir(), 'backup-ci-test-' + Date.now());
+        // Create a test directory in tmp with UUID for better uniqueness guarantees
+        const testDir = path.join(os.tmpdir(), 'backup-ci-test-' + uuidv4());
         await fs.mkdir(testDir, { recursive: true });
         
         try {
@@ -255,8 +256,8 @@ describe('CI Environment Tests', () => {
       if (isCI) {
         const { UpdateManager } = await import('../../src/update/UpdateManager.js');
         
-        // Create a test directory
-        const testDir = path.join(os.tmpdir(), 'update-ci-test-' + Date.now());
+        // Create a test directory with UUID for better uniqueness guarantees
+        const testDir = path.join(os.tmpdir(), 'update-ci-test-' + uuidv4());
         await fs.mkdir(testDir, { recursive: true });
         
         // Create a minimal package.json

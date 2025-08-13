@@ -164,6 +164,23 @@ export class ConfigManager {
   }
 
   /**
+   * Get a copy of the current configuration
+   * @returns A defensive copy of the configuration object
+   */
+  public getConfig(): ConfigData {
+    return { ...this.config };
+  }
+
+  /**
+   * Update the entire configuration
+   * @param newConfig The new configuration to set
+   */
+  public async updateConfig(newConfig: ConfigData): Promise<void> {
+    this.config = { ...newConfig };
+    await this.saveConfig();
+  }
+
+  /**
    * Validate GitHub OAuth client ID format
    * Client IDs start with "Ov23li" followed by at least 14 alphanumeric characters
    * 

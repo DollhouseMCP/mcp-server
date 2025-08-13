@@ -1,9 +1,13 @@
 #!/bin/bash
 
 # Roundtrip Workflow Test Script
+# Enhanced version with comprehensive testing capabilities
 # Tests: Collection → Local → Modified → Portfolio → Collection
 
 set -e  # Exit on error
+
+# Version of this test script
+TEST_SCRIPT_VERSION="2.0.0"
 
 # Colors for output
 RED='\033[0;31m'
