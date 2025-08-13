@@ -56,12 +56,16 @@ npm install -g @dollhousemcp/mcp-server
 
 Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas` to get started.
 
+> **🎯 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
+
 ## ✨ Key Features
 
 | Feature | Description |
 |---------|-------------|
 | 🎭 **49 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
+| 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
+| 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
@@ -96,6 +100,18 @@ Use these new generic tools to manage any element type in your portfolio:
 - **`deactivate_element`** - Deactivate specific customizations
 - **`get_element_details`** - Examine element configuration and metadata
 - **`reload_elements`** - Refresh portfolio from filesystem
+
+### GitHub Portfolio Integration (NEW!)
+
+Manage your portfolio on GitHub for sharing and collaboration:
+
+- **`portfolio_status`** - Check your GitHub portfolio repository status
+- **`init_portfolio`** - Create a new GitHub portfolio repository
+- **`portfolio_config`** - Configure sync and submission settings
+- **`sync_portfolio`** - Synchronize local and GitHub repositories
+- **`submit_content`** - Upload elements to your GitHub portfolio
+
+> **📘 Getting Started**: New to portfolios? Follow our [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md) for step-by-step instructions.
 
 ### Specialized Element Tools
 
@@ -1058,12 +1074,21 @@ If you upgraded from v1.4.2, the server will automatically migrate your director
 
 ## 📚 Documentation
 
+### User Guides (START HERE!)
+- **[🎯 Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md)** - Complete workflow: discover → customize → share
+- **[📁 Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md)** - Set up your GitHub portfolio step-by-step  
+- **[🔧 Troubleshooting Guide](docs/guides/TROUBLESHOOTING_ROUNDTRIP.md)** - Solutions for common workflow issues
+
 ### Element System Documentation
 - **[Element Architecture](docs/ELEMENT_ARCHITECTURE.md)** - System design and core concepts
 - **[Element Types Reference](docs/ELEMENT_TYPES.md)** - Detailed guide for all element types
 - **[Developer Guide](docs/ELEMENT_DEVELOPER_GUIDE.md)** - How to create new element types
 - **[API Reference](docs/API_REFERENCE.md)** - Complete MCP tool documentation
 - **[Migration Guide](docs/MIGRATION_TO_PORTFOLIO.md)** - Upgrading from personas-only
+
+### Setup & Configuration
+- **[OAuth Setup Guide](docs/setup/OAUTH_SETUP.md)** - GitHub authentication configuration
+- **[Anonymous Submission Guide](docs/ANONYMOUS_SUBMISSION_GUIDE.md)** - Use without GitHub authentication
 
 ### Additional Resources
 - **[Security Guidelines](docs/SECURITY.md)** - Security best practices
