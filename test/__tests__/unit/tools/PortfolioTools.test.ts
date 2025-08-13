@@ -175,6 +175,7 @@ describe('PortfolioTools', () => {
     beforeEach(() => {
       const tools = getPortfolioTools(mockServer);
       portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+      if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -273,6 +274,7 @@ describe('PortfolioTools', () => {
     beforeEach(() => {
       const tools = getPortfolioTools(mockServer);
       initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+      if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -428,6 +430,7 @@ describe('PortfolioTools', () => {
     beforeEach(() => {
       const tools = getPortfolioTools(mockServer);
       portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+      if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -600,6 +603,7 @@ describe('PortfolioTools', () => {
     beforeEach(() => {
       const tools = getPortfolioTools(mockServer);
       syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio');
+      if (!syncPortfolioTool) throw new Error('sync_portfolio tool not found');
     });
 
     describe('Success Scenarios', () => {
@@ -794,6 +798,7 @@ describe('PortfolioTools', () => {
       it('should handle portfolioStatus method errors', async () => {
         const tools = getPortfolioTools(mockServer);
         const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         mockServer.portfolioStatus.mockRejectedValue(new Error('API Error'));
 
@@ -804,6 +809,7 @@ describe('PortfolioTools', () => {
       it('should handle initPortfolio method errors', async () => {
         const tools = getPortfolioTools(mockServer);
         const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         mockServer.initPortfolio.mockRejectedValue(new Error('Repository creation failed'));
 
@@ -814,6 +820,7 @@ describe('PortfolioTools', () => {
       it('should handle portfolioConfig method errors', async () => {
         const tools = getPortfolioTools(mockServer);
         const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+        if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
 
         mockServer.portfolioConfig.mockRejectedValue(new Error('Config save failed'));
 
@@ -824,6 +831,7 @@ describe('PortfolioTools', () => {
       it('should handle syncPortfolio method errors', async () => {
         const tools = getPortfolioTools(mockServer);
         const syncPortfolioTool = tools.find(t => t.tool.name === 'sync_portfolio');
+        if (!syncPortfolioTool) throw new Error('sync_portfolio tool not found');
 
         mockServer.syncPortfolio.mockRejectedValue(new Error('Sync failed'));
 
@@ -838,6 +846,7 @@ describe('PortfolioTools', () => {
       it('should handle command injection attempts in usernames', async () => {
         const tools = getPortfolioTools(mockServer);
         const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         const injectionAttempts = [
           'user; rm -rf /',
@@ -863,6 +872,7 @@ describe('PortfolioTools', () => {
       it('should handle XSS attempts in repository names and descriptions', async () => {
         const tools = getPortfolioTools(mockServer);
         const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         const xssAttempts = [
           '<script>alert("XSS")</script>',
@@ -900,6 +910,7 @@ describe('PortfolioTools', () => {
       it('should handle unicode normalization attacks', async () => {
         const tools = getPortfolioTools(mockServer);
         const portfolioStatusTool = tools.find(t => t.tool.name === 'portfolio_status');
+        if (!portfolioStatusTool) throw new Error('portfolio_status tool not found');
 
         const unicodeAttacks = [
           'user\u0000', // null byte
@@ -928,6 +939,7 @@ describe('PortfolioTools', () => {
       it('should handle very large input strings', async () => {
         const tools = getPortfolioTools(mockServer);
         const initPortfolioTool = tools.find(t => t.tool.name === 'init_portfolio');
+        if (!initPortfolioTool) throw new Error('init_portfolio tool not found');
 
         const largeString = 'a'.repeat(100000); // 100KB string
 
@@ -950,6 +962,7 @@ describe('PortfolioTools', () => {
       it('should handle deeply nested object attempts', async () => {
         const tools = getPortfolioTools(mockServer);
         const portfolioConfigTool = tools.find(t => t.tool.name === 'portfolio_config');
+        if (!portfolioConfigTool) throw new Error('portfolio_config tool not found');
 
         // Attempt to pass deeply nested objects as parameters
         const deepObject = { deeply: { nested: { object: { value: true } } } };
