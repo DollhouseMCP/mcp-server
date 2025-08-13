@@ -68,4 +68,10 @@ export interface IToolHandler {
   importPersona(source: string, overwrite?: boolean): Promise<any>;
   sharePersona(persona: string, expiryDays?: number): Promise<any>;
   importFromUrl(url: string, overwrite?: boolean): Promise<any>;
+  
+  // Portfolio tools
+  portfolioStatus(username?: string): Promise<any>;
+  initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}): Promise<any>;
+  portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): Promise<any>;
+  syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}): Promise<any>;
 }
