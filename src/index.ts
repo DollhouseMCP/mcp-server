@@ -3859,6 +3859,542 @@ Placeholders for custom format:
     }
   }
 
+  /**
+   * Portfolio management methods
+   */
+
+  /**
+   * Check portfolio status including repository existence and sync information
+   */
+  async portfolioStatus(username?: string) {
+    try {
+      // Validate username parameter if provided
+      if (username && typeof username === 'string') {
+        try {
+          validateUsername(username);
+        } catch (error) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid username: ${error instanceof Error ? error.message : 'Validation failed'}`
+            }]
+          };
+        }
+      }
+
+      // Get current user if username not provided
+      let targetUsername = username;
+      if (!targetUsername) {
+        const authStatus = await this.githubAuthManager.getAuthStatus();
+        if (!authStatus.isAuthenticated || !authStatus.username) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+            }]
+          };
+        }
+        targetUsername = authStatus.username;
+      }
+
+      // Check if portfolio exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      const portfolioExists = await portfolioManager.checkPortfolioExists(targetUsername);
+
+      let statusText = `${this.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
+
+      if (portfolioExists) {
+        statusText += `✅ **Repository**: dollhouse-portfolio exists\n`;
+        statusText += `🔗 **URL**: https://github.com/${targetUsername}/dollhouse-portfolio\n\n`;
+        
+        // Get local elements count
+        const localPortfolioManager = PortfolioManager.getInstance();
+        const personasPath = localPortfolioManager.getElementDir(ElementType.PERSONA);
+        const skillsPath = localPortfolioManager.getElementDir(ElementType.SKILL);
+        const templatesPath = localPortfolioManager.getElementDir(ElementType.TEMPLATE);
+        const agentsPath = localPortfolioManager.getElementDir(ElementType.AGENT);
+
+        const [personas, skills, templates, agents] = await Promise.all([
+          this.countElementsInDir(personasPath),
+          this.countElementsInDir(skillsPath),
+          this.countElementsInDir(templatesPath),
+          this.countElementsInDir(agentsPath)
+        ]);
+
+        const totalElements = personas + skills + templates + agents;
+        statusText += `📈 **Local Elements**:\n`;
+        statusText += `  • Personas: ${personas}\n`;
+        statusText += `  • Skills: ${skills}\n`;
+        statusText += `  • Templates: ${templates}\n`;
+        statusText += `  • Agents: ${agents}\n`;
+        statusText += `  • **Total**: ${totalElements}\n\n`;
+
+        statusText += `🔄 **Sync Status**: Use sync_portfolio to update GitHub\n`;
+      } else {
+        statusText += `❌ **Repository**: No portfolio found\n`;
+        statusText += `💡 **Next Step**: Use init_portfolio to create one\n\n`;
+        
+        statusText += `📝 **What you'll get**:\n`;
+        statusText += `  • GitHub repository for your elements\n`;
+        statusText += `  • Organized folder structure\n`;
+        statusText += `  • README with usage instructions\n`;
+        statusText += `  • Easy sharing and backup\n`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to check portfolio status: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Initialize a new GitHub portfolio repository
+   */
+  async initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}) {
+    try {
+      // Check authentication
+      const authStatus = await this.githubAuthManager.getAuthStatus();
+      if (!authStatus.isAuthenticated || !authStatus.username) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+          }]
+        };
+      }
+
+      const username = authStatus.username;
+
+      // Check if portfolio already exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
+
+      if (portfolioExists) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/dollhouse-portfolio\n\nUse portfolio_status to see details or sync_portfolio to update it.`
+          }]
+        };
+      }
+
+      // Create portfolio with explicit consent
+      const portfolioUrl = await portfolioManager.createPortfolio(username, true);
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
+                `✅ **Repository**: https://github.com/${username}/dollhouse-portfolio\n` +
+                `📁 **Structure**: Organized folders for all element types\n` +
+                `📝 **README**: Usage instructions included\n` +
+                `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
+                `Your portfolio is ready for sharing your DollhouseMCP creations!`
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to initialize portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Configure portfolio settings
+   */
+  async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+    try {
+      const configManager = ConfigManager.getInstance();
+      await configManager.loadConfig();
+
+      let statusText = `${this.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
+
+      // Update settings if provided
+      if (options.autoSync !== undefined) {
+        // This would be implemented when auto-sync feature is added
+        statusText += `🔄 Auto-sync: ${options.autoSync ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
+      }
+
+      if (options.defaultVisibility) {
+        statusText += `🔒 Default visibility: ${options.defaultVisibility}\n`;
+      }
+
+      if (options.autoSubmit !== undefined) {
+        // Note: Auto-submit configuration would be implemented here
+        // For now, we'll just show the status
+        statusText += `📤 Auto-submit to collection: ${options.autoSubmit ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
+      }
+
+      if (options.repositoryName) {
+        statusText += `📁 Repository name: ${options.repositoryName} (Custom names coming soon)\n`;
+      }
+
+      // Show current configuration
+      statusText += `\n📋 **Current Settings**:\n`;
+      statusText += `  • Auto-submit: Disabled (Coming soon)\n`;
+      statusText += `  • Repository name: dollhouse-portfolio (default)\n`;
+      statusText += `  • Default visibility: public\n`;
+
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to configure portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Sync portfolio with GitHub
+   */
+  async syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}) {
+    try {
+      // Check authentication
+      const authStatus = await this.githubAuthManager.getAuthStatus();
+      if (!authStatus.isAuthenticated || !authStatus.username) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+          }]
+        };
+      }
+
+      const username = authStatus.username;
+
+      // Check if portfolio exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
+
+      if (!portfolioExists) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ No portfolio found. Use init_portfolio to create one first.`
+          }]
+        };
+      }
+
+      if (options.dryRun) {
+        // Show what would be synced
+        const localPortfolioManager = PortfolioManager.getInstance();
+        
+        const elementTypeCounts: Record<string, number | string> = {};
+        const elementTypeErrors: string[] = [];
+        
+        // Get element counts with better error handling
+        for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
+          try {
+            const elements = await this.getElementsList(elementType);
+            elementTypeCounts[elementType] = elements.length;
+          } catch (error: any) {
+            elementTypeCounts[elementType] = 'ERROR';
+            elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
+          }
+        }
+
+        let dryRunText = `${this.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
+        dryRunText += `📤 **Elements to sync** (${options.direction}):\n`;
+        dryRunText += `  • Personas: ${elementTypeCounts.personas}\n`;
+        dryRunText += `  • Skills: ${elementTypeCounts.skills}\n`;
+        dryRunText += `  • Templates: ${elementTypeCounts.templates}\n`;
+        dryRunText += `  • Agents: ${elementTypeCounts.agents}\n\n`;
+        
+        // Include any errors encountered during dry run
+        if (elementTypeErrors.length > 0) {
+          dryRunText += `⚠️ **Errors found during preview:**\n`;
+          for (const error of elementTypeErrors) {
+            dryRunText += `  • ${error}\n`;
+          }
+          dryRunText += `\n`;
+        }
+        
+        dryRunText += `🎯 **Target**: https://github.com/${username}/dollhouse-portfolio\n`;
+        dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
+
+        return {
+          content: [{
+            type: "text",
+            text: dryRunText
+          }]
+        };
+      }
+
+      // For now, implement basic push functionality
+      if (options.direction === 'push' || options.direction === 'both') {
+        let syncCount = 0;
+        let syncText = `${this.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`;
+
+        // Get all local elements
+        const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
+        const failedElements: Array<{type: string, name: string, error: string}> = [];
+        
+        for (const elementType of elementTypes) {
+          try {
+            const elements = await this.getElementsList(elementType);
+            
+            for (const elementName of elements) {
+              try {
+                // Load element and save to portfolio
+                const element = await this.loadElementByType(elementName, elementType);
+                if (element) {
+                  await portfolioManager.saveElement(element, true); // Explicit consent
+                  syncCount++;
+                  logger.debug(`Successfully synced ${elementType}/${elementName}`);
+                } else {
+                  failedElements.push({
+                    type: elementType,
+                    name: elementName,
+                    error: 'Element loaded as null/undefined'
+                  });
+                }
+              } catch (elementError: any) {
+                const errorMessage = elementError.message || 'Unknown error during element sync';
+                failedElements.push({
+                  type: elementType,
+                  name: elementName,
+                  error: errorMessage
+                });
+                logger.warn(`Failed to sync ${elementType}/${elementName}`, { error: errorMessage });
+              }
+            }
+          } catch (listError: any) {
+            // Handle errors in getting the elements list for this type
+            const errorMessage = listError.message || 'Failed to get elements list';
+            failedElements.push({
+              type: elementType,
+              name: 'ALL',
+              error: `Failed to list ${elementType}: ${errorMessage}`
+            });
+            logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
+          }
+        }
+
+        syncText += `✅ **Sync Complete!**\n`;
+        syncText += `📤 Uploaded: ${syncCount} elements\n`;
+        
+        // Include failed elements information if any
+        if (failedElements.length > 0) {
+          syncText += `⚠️ **Failed**: ${failedElements.length} elements\n\n`;
+          syncText += `**Failed Elements:**\n`;
+          for (const failed of failedElements) {
+            if (failed.name === 'ALL') {
+              syncText += `  • ${failed.type}: ${failed.error}\n`;
+            } else {
+              syncText += `  • ${failed.type}/${failed.name}: ${failed.error}\n`;
+            }
+          }
+          syncText += `\n`;
+        } else {
+          syncText += `🎉 All elements synced successfully!\n\n`;
+        }
+        
+        syncText += `🔗 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        syncText += `Your elements are now available on GitHub!`;
+
+        return {
+          content: [{
+            type: "text",
+            text: syncText
+          }]
+        };
+      }
+
+      if (options.direction === 'pull') {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ Pull sync is coming soon. Currently only push sync is supported.`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Invalid sync direction. Use 'push', 'pull', or 'both'.`
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to sync portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Helper method to count elements in a directory
+   */
+  private async countElementsInDir(dirPath: string): Promise<number> {
+    try {
+      // Validate the directory path for security
+      try {
+        await PathValidator.validatePersonaPath(dirPath);
+      } catch (pathError) {
+        logger.warn('Invalid directory path in countElementsInDir', { dirPath, error: pathError });
+        return 0;
+      }
+
+      await fs.access(dirPath);
+      const files = await fs.readdir(dirPath);
+      return files.filter(file => file.endsWith('.json')).length;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * Helper method to get list of elements by type
+   */
+  private async getElementsList(elementType: string): Promise<string[]> {
+    try {
+      const localPortfolioManager = PortfolioManager.getInstance();
+      let elementTypeEnum: ElementType;
+      
+      switch (elementType) {
+        case 'personas':
+          elementTypeEnum = ElementType.PERSONA;
+          break;
+        case 'skills':
+          elementTypeEnum = ElementType.SKILL;
+          break;
+        case 'templates':
+          elementTypeEnum = ElementType.TEMPLATE;
+          break;
+        case 'agents':
+          elementTypeEnum = ElementType.AGENT;
+          break;
+        default:
+          // Instead of silently returning empty array, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
+      }
+
+      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
+      
+      // Validate the directory path for security
+      try {
+        await PathValidator.validatePersonaPath(dirPath);
+      } catch (pathError) {
+        logger.warn('Invalid directory path in getElementsList', { dirPath, elementType, error: pathError });
+        return [];
+      }
+
+      await fs.access(dirPath);
+      const files = await fs.readdir(dirPath);
+      return files
+        .filter(file => file.endsWith('.json'))
+        .map(file => file.replace('.json', ''));
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // For file system errors, provide context about the operation
+      const errorMessage = error.code === 'ENOENT' 
+        ? `Element directory not found for type '${elementType}'. Directory may not exist yet.`
+        : `Failed to read elements directory for type '${elementType}': ${error.message || 'Unknown file system error'}`;
+      
+      logger.warn('Error in getElementsList', { 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
+    }
+  }
+
+  /**
+   * Helper method to load element by type
+   */
+  private async loadElementByType(elementName: string, elementType: string): Promise<any> {
+    try {
+      const localPortfolioManager = PortfolioManager.getInstance();
+      let elementTypeEnum: ElementType;
+      
+      switch (elementType) {
+        case 'personas':
+          elementTypeEnum = ElementType.PERSONA;
+          break;
+        case 'skills':
+          elementTypeEnum = ElementType.SKILL;
+          break;
+        case 'templates':
+          elementTypeEnum = ElementType.TEMPLATE;
+          break;
+        case 'agents':
+          elementTypeEnum = ElementType.AGENT;
+          break;
+        default:
+          // Instead of silently returning null, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
+      }
+
+      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
+      const filePath = path.join(dirPath, `${elementName}.json`);
+      const content = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(content);
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // Provide specific error messages for common file system errors
+      let errorMessage: string;
+      
+      if (error.code === 'ENOENT') {
+        errorMessage = `Element '${elementName}' not found in ${elementType}. File does not exist.`;
+      } else if (error instanceof SyntaxError) {
+        errorMessage = `Element '${elementName}' in ${elementType} contains invalid JSON: ${error.message}`;
+      } else {
+        errorMessage = `Failed to load element '${elementName}' from ${elementType}: ${error.message || 'Unknown error'}`;
+      }
+      
+      logger.warn('Error in loadElementByType', { 
+        elementName, 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
+    }
+  }
+
   async run() {
     const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");

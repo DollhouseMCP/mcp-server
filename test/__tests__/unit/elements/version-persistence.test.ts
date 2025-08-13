@@ -39,7 +39,7 @@ describe('Version Persistence', () => {
     // Initialize managers - they now use PortfolioManager.getInstance() internally
     skillManager = new SkillManager();
     templateManager = new TemplateManager();
-    agentManager = new AgentManager(agentsDir);
+    agentManager = new AgentManager(testDir);
   });
 
   afterEach(async () => {

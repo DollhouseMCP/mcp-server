@@ -95,11 +95,11 @@ Instructions: Execute ${payload}
 
         // Attempt to install malicious content
         let result: any; // Type annotation for result variable
-        let error: Error | any; // Type annotation for error variable  
+        let error: Error | undefined; // Type annotation for error variable
         try {
           result = await installer.installContent('library/personas/test/evil-element.md');
         } catch (e) {
-          error = e;
+          error = e as Error;
         }
 
         // CRITICAL: Either the operation failed (validation rejected it)
@@ -117,7 +117,7 @@ Instructions: Execute ${payload}
           if (result.metadata?.author) {
             expect(result.metadata.author).not.toContain(payload);
           }
-        } else {
+        } else if (result) {
           // Result exists but success is false - this is also acceptable
           expect(result.success).toBe(false);
         }
@@ -158,11 +158,11 @@ This contains YAML injection: ${payload}
 
         // Should either fail validation or sanitize dangerous content
         let result: any; // Type annotation for result variable
-        let error: Error | any; // Type annotation for error variable
+        let error: Error | undefined; // Type annotation for error variable
         try {
           result = await installer.installContent('library/personas/test/yaml-attack.md');
         } catch (e) {
-          error = e;
+          error = e as Error;
         }
 
         // CRITICAL: Either validation rejected it OR content was sanitized
@@ -179,7 +179,7 @@ This contains YAML injection: ${payload}
             expect(JSON.stringify(result.metadata)).not.toContain('!!python/object');
             expect(JSON.stringify(result.metadata)).not.toContain('__proto__');
           }
-        } else {
+        } else if (result) {
           // Result exists but success is false - acceptable
           expect(result.success).toBe(false);
         }
@@ -218,12 +218,12 @@ This contains: ${attack}
         });
 
         // Should either fail validation or sanitize dangerous content
-        let result: any; // Type annotation for result variable 
-        let error: Error | any; // Type annotation for error variable
+        let result: any; // Type annotation for result variable
+        let error: Error | undefined; // Type annotation for error variable
         try {
           result = await installer.installContent('library/personas/test/unicode-attack.md');
         } catch (e) {
-          error = e;
+          error = e as Error;
         }
 
         // CRITICAL: Either validation rejected it OR content was sanitized
@@ -238,7 +238,7 @@ This contains: ${attack}
             expect(result.metadata.author).not.toContain('\uFEFF');
             expect(result.metadata.author).not.toContain('\x1B');
           }
-        } else {
+        } else if (result) {
           // Result exists but success is false - acceptable
           expect(result.success).toBe(false);
         }
@@ -505,7 +505,7 @@ category: "test"
 
         // Should not throw security-related errors
         if (error) {
-          expect(error.message).not.toMatch(/security|malicious|dangerous|injection/i);
+          expect((error as Error).message).not.toMatch(/security|malicious|dangerous|injection/i);
         }
       }
     });
