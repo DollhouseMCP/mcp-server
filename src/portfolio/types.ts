@@ -17,5 +17,14 @@ export interface PortfolioConfig {
   migrateExisting?: boolean;
 }
 
+// GitHub Portfolio Indexer types
+export interface GitHubPortfolioConfig {
+  enableGitHubIndexing?: boolean;
+  refreshIntervalMs?: number;
+  maxCacheSize?: number;
+  useGraphQL?: boolean;
+  fetchMetadata?: boolean;
+}
+
 // Re-export for convenience
 export { PortfolioConfig as PortfolioConfiguration };

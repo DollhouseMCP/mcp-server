@@ -13,6 +13,7 @@ import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
+import { PortfolioIndexManager } from '../../portfolio/PortfolioIndexManager.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -477,13 +478,34 @@ export class SubmitToPortfolioTool {
 
   private async findLocalContent(name: string, type: ElementType): Promise<string | null> {
     try {
-      // Get the portfolio directory for this element type
+      // METADATA INDEX FIX: Use portfolio index for fast metadata-based lookups
+      // This solves the critical issue where "Safe Roundtrip Tester" couldn't be found
+      // because findLocalContent only searched filenames, not metadata names
+      const indexManager = PortfolioIndexManager.getInstance();
+      
+      const indexEntry = await indexManager.findByName(name, { 
+        elementType: type,
+        fuzzyMatch: true 
+      });
+      
+      if (indexEntry) {
+        logger.debug('Found content via metadata index', { 
+          searchName: name, 
+          metadataName: indexEntry.metadata.name,
+          filename: indexEntry.filename,
+          filePath: indexEntry.filePath,
+          type 
+        });
+        return indexEntry.filePath;
+      }
+      
+      // FALLBACK: Use original file discovery if index lookup fails
+      // This maintains backward compatibility and handles edge cases
+      logger.debug('Index lookup failed, falling back to file discovery', { name, type });
+      
       const portfolioManager = PortfolioManager.getInstance();
       const portfolioDir = portfolioManager.getElementDir(type);
       
-      // PERFORMANCE FIX #3: Use optimized file discovery utility
-      // Previously: Multiple file checks with for loop and readdir
-      // Now: Single optimized operation with caching (50% faster)
       const file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
         extensions: ['.md', '.json', '.yaml', '.yml'],
         partialMatch: true,
@@ -491,10 +513,13 @@ export class SubmitToPortfolioTool {
       });
       
       if (file) {
-        logger.debug('Found local content file', { name, type, file });
+        logger.debug('Found local content file via fallback', { name, type, file });
+        return file;
       }
       
-      return file;
+      logger.debug('No content found', { name, type });
+      return null;
+      
     } catch (error) {
       logger.error('Error finding local content', {
         name,

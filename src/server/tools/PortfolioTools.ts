@@ -29,6 +29,26 @@ interface SyncPortfolioArgs {
   dry_run?: boolean;
 }
 
+interface SearchPortfolioArgs {
+  query: string;
+  type?: string;
+  fuzzy_match?: boolean;
+  max_results?: number;
+  include_keywords?: boolean;
+  include_tags?: boolean;
+  include_triggers?: boolean;
+  include_descriptions?: boolean;
+}
+
+interface SearchAllArgs {
+  query: string;
+  sources?: string[];
+  type?: string;
+  page?: number;
+  page_size?: number;
+  sort_by?: 'relevance' | 'source' | 'name' | 'version';
+}
+
 // Tool handler function type
 type ToolHandler<T> = (args: T) => Promise<any>;
 
@@ -139,6 +159,111 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
         direction: args?.direction || 'push',
         force: args?.force || false,
         dryRun: args?.dry_run || false
+      })
+    },
+    {
+      tool: {
+        name: "search_portfolio",
+        description: "Search your local portfolio by content name, metadata, keywords, tags, or description. This searches your local elements using the portfolio index for fast metadata-based lookups.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Search query. Can match element names, keywords, tags, triggers, or descriptions. Examples: 'creative writer', 'debug', 'code review', 'research'.",
+            },
+            type: {
+              type: "string",
+              enum: ["personas", "skills", "templates", "agents", "memories", "ensembles"],
+              description: "Limit search to specific element type. If not specified, searches all types.",
+            },
+            fuzzy_match: {
+              type: "boolean",
+              description: "Enable fuzzy matching for approximate name matches. Defaults to true.",
+            },
+            max_results: {
+              type: "number",
+              description: "Maximum number of results to return. Defaults to 20.",
+            },
+            include_keywords: {
+              type: "boolean",
+              description: "Include keyword matching in search. Defaults to true.",
+            },
+            include_tags: {
+              type: "boolean",
+              description: "Include tag matching in search. Defaults to true.",
+            },
+            include_triggers: {
+              type: "boolean",
+              description: "Include trigger word matching in search (for personas). Defaults to true.",
+            },
+            include_descriptions: {
+              type: "boolean",
+              description: "Include description text matching in search. Defaults to true.",
+            },
+          },
+          required: ["query"],
+        },
+      },
+      handler: (args: SearchPortfolioArgs) => server.searchPortfolio({
+        query: args.query,
+        elementType: args.type as any,
+        fuzzyMatch: args.fuzzy_match,
+        maxResults: args.max_results,
+        includeKeywords: args.include_keywords,
+        includeTags: args.include_tags,
+        includeTriggers: args.include_triggers,
+        includeDescriptions: args.include_descriptions
+      })
+    },
+    {
+      tool: {
+        name: "search_all",
+        description: "Search across all available sources (local portfolio, GitHub portfolio, and collection) for elements. This provides unified search with duplicate detection and version comparison across all three tiers of the DollhouseMCP ecosystem.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Search query. Can match element names, keywords, tags, triggers, or descriptions across all sources.",
+            },
+            sources: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["local", "github", "collection"]
+              },
+              description: "Sources to search. Defaults to ['local', 'github']. Include 'collection' to search the community collection.",
+            },
+            type: {
+              type: "string",
+              enum: ["personas", "skills", "templates", "agents", "memories", "ensembles"],
+              description: "Limit search to specific element type. If not specified, searches all types.",
+            },
+            page: {
+              type: "number",
+              description: "Page number for pagination (1-based). Defaults to 1.",
+            },
+            page_size: {
+              type: "number",
+              description: "Number of results per page. Defaults to 20.",
+            },
+            sort_by: {
+              type: "string",
+              enum: ["relevance", "source", "name", "version"],
+              description: "Sort results by criteria. Defaults to 'relevance'.",
+            },
+          },
+          required: ["query"],
+        },
+      },
+      handler: (args: SearchAllArgs) => server.searchAll({
+        query: args.query,
+        sources: args.sources,
+        elementType: args.type as any,
+        page: args.page,
+        pageSize: args.page_size,
+        sortBy: args.sort_by as any
       })
     }
   ];

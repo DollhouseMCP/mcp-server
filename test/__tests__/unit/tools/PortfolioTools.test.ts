@@ -153,6 +153,8 @@ describe('PortfolioTools', () => {
       initPortfolio: jest.fn(),
       portfolioConfig: jest.fn(),
       syncPortfolio: jest.fn(),
+      searchPortfolio: jest.fn(),
+      searchAll: jest.fn(),
       getPersonaIndicator: jest.fn(() => '[TEST] ')
     };
 
@@ -172,15 +174,17 @@ describe('PortfolioTools', () => {
   });
 
   describe('Tool Structure', () => {
-    it('should return all 4 portfolio tools', () => {
+    it('should return all 6 portfolio tools', () => {
       const tools = getPortfolioTools(mockServer as IToolHandler);
-      expect(tools).toHaveLength(4);
+      expect(tools).toHaveLength(6);
       
       const toolNames = tools.map(t => t.tool.name);
       expect(toolNames).toContain('portfolio_status');
       expect(toolNames).toContain('init_portfolio');
       expect(toolNames).toContain('portfolio_config');
       expect(toolNames).toContain('sync_portfolio');
+      expect(toolNames).toContain('search_portfolio');
+      expect(toolNames).toContain('search_all');
     });
 
     it('should have valid tool definitions with proper schemas', () => {
@@ -1046,6 +1050,14 @@ describe('PortfolioTools', () => {
 
       mockServer.syncPortfolio.mockResolvedValue({
         content: [{ type: 'text', text: 'Sync response' }]
+      });
+
+      mockServer.searchPortfolio.mockResolvedValue({
+        content: [{ type: 'text', text: 'Search response' }]
+      });
+
+      mockServer.searchAll.mockResolvedValue({
+        content: [{ type: 'text', text: 'Search all response' }]
       });
 
       for (const { tool, handler } of tools) {
