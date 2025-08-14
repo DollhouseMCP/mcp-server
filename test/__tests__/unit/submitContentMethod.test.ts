@@ -264,8 +264,8 @@ describe('submitContent method improvements', () => {
       // All should be rejected but handled gracefully
       expect(results.every(r => r.status === 'rejected')).toBe(true);
       
-      // Should fall back to default (persona)
-      const defaultType = 'personas';
+      // Should NOT fall back to default - this was the critical fix
+      // The system should now return an error or ask user to specify type
       let selectedType = undefined;
       
       for (const result of results) {
@@ -275,10 +275,10 @@ describe('submitContent method improvements', () => {
         }
       }
       
-      // No match found, should use default
+      // No match found, should NOT default to any type
       expect(selectedType).toBeUndefined();
-      const finalType = selectedType || defaultType;
-      expect(finalType).toBe('personas');
+      // The fix ensures we don't default to personas
+      // Instead, the system will return an error message asking for --type parameter
     });
     
     it('should handle empty search results', async () => {
@@ -294,7 +294,8 @@ describe('submitContent method improvements', () => {
       expect(results.every(r => r.status === 'fulfilled')).toBe(true);
       expect(results.every(r => (r as any).value === null)).toBe(true);
       
-      // Should fall back to default
+      // Should NOT fall back to default - this was the critical fix
+      // The system will return an error message listing available types
       const match = results.find(r => 
         r.status === 'fulfilled' && r.value && (r.value as any).file
       );

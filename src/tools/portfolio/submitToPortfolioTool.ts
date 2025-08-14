@@ -49,6 +49,16 @@ export interface SubmitToPortfolioResult {
   error?: string;
 }
 
+export interface ElementDetectionMatch {
+  type: ElementType;
+  path: string;
+}
+
+export interface ElementDetectionResult {
+  found: boolean;
+  matches: ElementDetectionMatch[];
+}
+
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
@@ -96,15 +106,62 @@ export class SubmitToPortfolioTool {
         };
       }
 
-      // 2. Find content locally
-      const elementType = params.type || ElementType.PERSONA;
-      const localPath = await this.findLocalContent(safeName, elementType);
-      if (!localPath) {
-        return {
-          success: false,
-          message: `Could not find ${elementType} named "${params.name}" in local portfolio`,
-          error: 'CONTENT_NOT_FOUND'
-        };
+      // 2. Find content locally with smart type detection
+      let elementType = params.type;
+      let localPath: string | null = null;
+      
+      if (elementType) {
+        // Type explicitly provided - search in that specific directory only
+        localPath = await this.findLocalContent(safeName, elementType);
+        if (!localPath) {
+          return {
+            success: false,
+            message: `Could not find ${elementType} named "${params.name}" in local portfolio`,
+            error: 'CONTENT_NOT_FOUND'
+          };
+        }
+      } else {
+        // CRITICAL FIX: No type provided - implement smart detection across ALL element types
+        // This prevents the previous hardcoded default to PERSONA and enables proper type detection
+        const detectionResult = await this.detectElementType(safeName);
+        
+        if (!detectionResult.found) {
+          // Content not found in any element directory - provide helpful guidance
+          const availableTypes = Object.values(ElementType).join(', ');
+          return {
+            success: false,
+            message: `Content "${params.name}" not found in portfolio.\n\n` +
+                    `Searched in all element types: ${availableTypes}\n\n` +
+                    `To resolve this:\n` +
+                    `1. Verify the content name/filename is correct\n` +
+                    `2. Check if the content exists using the list_portfolio tool\n` +
+                    `3. If submitting a specific type, use the --type parameter\n\n` +
+                    `Note: The system no longer defaults to any element type to prevent incorrect submissions.`,
+            error: 'CONTENT_NOT_FOUND'
+          };
+        }
+        
+        if (detectionResult.matches.length > 1) {
+          // Multiple matches found - ask user to specify type
+          const matchDetails = detectionResult.matches.map(m => `- ${m.type}: ${m.path}`).join('\n');
+          return {
+            success: false,
+            message: `Content "${params.name}" found in multiple element types:\n\n${matchDetails}\n\n` +
+                    `Please specify the element type using the --type parameter to avoid ambiguity.`,
+            error: 'MULTIPLE_MATCHES_FOUND'
+          };
+        }
+        
+        // Single match found - use it
+        const match = detectionResult.matches[0];
+        elementType = match.type;
+        localPath = match.path;
+        
+        logger.info(`Smart detection: Found "${safeName}" as ${elementType}`, { 
+          name: safeName,
+          detectedType: elementType,
+          path: localPath
+        });
       }
 
       // 3. Validate file size before reading
@@ -445,6 +502,75 @@ export class SubmitToPortfolioTool {
         error: error instanceof Error ? error.message : String(error)
       });
       return null;
+    }
+  }
+
+  /**
+   * Smart element type detection - searches across ALL element types for content
+   * This replaces the previous hardcoded default to PERSONA and enables proper type detection
+   * 
+   * @param name The content name to search for
+   * @returns Detection result with found matches across all element types
+   */
+  private async detectElementType(name: string): Promise<ElementDetectionResult> {
+    try {
+      // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+      // This dynamically handles ALL element types from the ElementType enum
+      // If new element types are added, this code automatically searches them
+      const searchPromises = Object.values(ElementType).map(async (type) => {
+        try {
+          const filePath = await this.findLocalContent(name, type);
+          if (filePath) {
+            return { type: type as ElementType, path: filePath };
+          }
+          return null;
+        } catch (error: any) {
+          // Log unexpected errors but continue search
+          if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+            logger.warn(`Unexpected error searching ${type} directory for content detection`, { 
+              name,
+              type,
+              error: error?.message || String(error),
+              code: error?.code 
+            });
+          }
+          return null;
+        }
+      });
+
+      // Wait for all searches to complete
+      const searchResults = await Promise.allSettled(searchPromises);
+      const matches: ElementDetectionMatch[] = [];
+
+      // Collect all successful matches
+      for (const result of searchResults) {
+        if (result.status === 'fulfilled' && result.value) {
+          matches.push(result.value);
+        }
+      }
+
+      logger.debug(`Element type detection completed`, { 
+        name, 
+        totalMatches: matches.length,
+        matchedTypes: matches.map(m => m.type)
+      });
+
+      return {
+        found: matches.length > 0,
+        matches
+      };
+
+    } catch (error) {
+      logger.error('Error in element type detection', {
+        name,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      
+      // Return empty result on detection failure
+      return {
+        found: false,
+        matches: []
+      };
     }
   }
 }

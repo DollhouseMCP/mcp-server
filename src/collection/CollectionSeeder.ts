@@ -202,6 +202,44 @@ export class CollectionSeeder {
         path: 'library/ensembles/security-analysis-team.md',
         sha: 'seed-data',
         last_modified: new Date().toISOString()
+      },
+      
+      // Test Elements for E2E Testing
+      {
+        name: 'safe-roundtrip-tester.md',
+        path: 'library/skills/safe-roundtrip-tester.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
+      },
+      {
+        name: 'roundtrip-test-skill.md',
+        path: 'library/skills/roundtrip-test-skill.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
+      },
+      {
+        name: 'test-validator.md',
+        path: 'library/skills/test-validator.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
+      },
+      {
+        name: 'sample-skill.md',
+        path: 'library/skills/sample-skill.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
+      },
+      {
+        name: 'test-element.md',
+        path: 'library/agents/test-element.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
+      },
+      {
+        name: 'testing-framework.md',
+        path: 'library/templates/testing-framework.md',
+        sha: 'seed-data',
+        last_modified: new Date().toISOString()
       }
     ];
     
