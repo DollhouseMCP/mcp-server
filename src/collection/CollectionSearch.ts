@@ -6,7 +6,7 @@ import { GitHubClient } from './GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
-import { normalizeSearchTerm, validateSearchQuery } from '../utils/searchUtils.js';
+import { normalizeSearchTerm, validateSearchQuery, isSearchMatch, debugNormalization } from '../utils/searchUtils.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 export class CollectionSearch {
@@ -24,10 +24,14 @@ export class CollectionSearch {
    * Falls back to cached data when GitHub API is not available or not authenticated
    */
   async searchCollection(query: string): Promise<any[]> {
+    logger.debug(`CollectionSearch.searchCollection called with query: "${query}"`);
+    
     // Validate search query for security
     try {
       validateSearchQuery(query, 1000);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Search query validation failed:', { query, error: errorMessage });
       ErrorHandler.logError('CollectionSearch.search.validateQuery', error, { query });
       return [];
     }
@@ -35,6 +39,7 @@ export class CollectionSearch {
     try {
       // First, try GitHub API search if authenticated
       const searchUrl = `${this.searchBaseUrl}?q=${encodeURIComponent(query)}+repo:DollhouseMCP/collection+path:library+extension:md`;
+      logger.debug(`Attempting GitHub API search with URL: ${searchUrl}`);
       const data = await this.githubClient.fetchFromGitHub(searchUrl, false); // Don't require auth for search
       
       if (data.items && Array.isArray(data.items)) {
@@ -46,8 +51,11 @@ export class CollectionSearch {
         return data.items;
       }
       
+      logger.debug('GitHub API search returned no items, falling back to cache');
       return [];
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug(`GitHub API search failed: ${errorMessage}. Falling back to cached search.`);
       ErrorHandler.logError('CollectionSearch.search.githubApi', error, { query });
       
       // Fallback to cached search
@@ -59,6 +67,8 @@ export class CollectionSearch {
    * Search cached collection items
    */
   private async searchFromCache(query: string): Promise<any[]> {
+    logger.debug(`Searching cache for query: "${query}"`);
+    
     try {
       // Try to load from cache first
       const cachedItems = await this.collectionCache.searchCache(query);
@@ -68,18 +78,28 @@ export class CollectionSearch {
         return this.convertCacheItemsToGitHubFormat(cachedItems);
       }
       
+      logger.debug('Cache search returned no results, trying seed data');
+      
       // If cache is empty or no results, use seed data
       const seedItems = this.searchSeedData(query);
       if (seedItems.length > 0) {
         logger.debug(`Found ${seedItems.length} items from seed data`);
         // Save seed data to cache for future use
-        await this.collectionCache.saveCache(CollectionSeeder.getSeedData());
+        try {
+          await this.collectionCache.saveCache(CollectionSeeder.getSeedData());
+          logger.debug('Saved seed data to cache');
+        } catch (cacheError) {
+          const cacheErrorMessage = cacheError instanceof Error ? cacheError.message : String(cacheError);
+          logger.debug(`Failed to save seed data to cache: ${cacheErrorMessage}`);
+        }
         return this.convertCacheItemsToGitHubFormat(seedItems);
       }
       
       logger.debug('No items found in cache or seed data');
       return [];
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug(`Cache search failed: ${errorMessage}`);
       ErrorHandler.logError('CollectionSearch.search.cache', error, { query });
       
       // Last resort: search seed data without cache
@@ -94,15 +114,58 @@ export class CollectionSearch {
    */
   private searchSeedData(query: string): CollectionItem[] {
     const seedData = CollectionSeeder.getSeedData();
-    const normalizedQuery = normalizeSearchTerm(query);
+    const normDebug = debugNormalization(query);
+    logger.debug(`Searching seed data - Original: "${normDebug.original}", Normalized: "${normDebug.normalized}", Partial: "${normDebug.partialMatch}"`);
+    logger.debug(`Searching against ${seedData.length} seed items`);
     
-    return seedData.filter(item => {
-      const normalizedName = normalizeSearchTerm(item.name);
-      const normalizedPath = normalizeSearchTerm(item.path);
+    const matches = seedData.filter(item => {
+      // Use the improved matching function that tries multiple strategies
+      const nameMatches = isSearchMatch(query, item.name);
+      const pathMatches = isSearchMatch(query, item.path);
       
-      return normalizedName.includes(normalizedQuery) || 
-             normalizedPath.includes(normalizedQuery);
+      const isMatch = nameMatches || pathMatches;
+      
+      if (isMatch) {
+        logger.debug(`✓ Match found: ${item.name} (${item.path}) matches query "${query}"`);
+      }
+      
+      return isMatch;
     });
+    
+    // If no matches found, let's debug what we have
+    if (matches.length === 0) {
+      logger.debug('No matches found. Available seed data:');
+      seedData.slice(0, 10).forEach(item => {
+        logger.debug(`  - ${item.name} (${item.path})`);
+      });
+      if (seedData.length > 10) {
+        logger.debug(`  ... and ${seedData.length - 10} more items`);
+      }
+    }
+    
+    logger.debug(`Found ${matches.length} matches in seed data`);
+    return matches;
+  }
+  
+  /**
+   * Fuzzy matching algorithm for partial string matches
+   */
+  private fuzzyMatch(term: string, target: string): boolean {
+    // Simple fuzzy matching: check if all characters of term appear in order in target
+    if (term.length === 0) return true;
+    if (target.length === 0) return false;
+    
+    let termIndex = 0;
+    let targetIndex = 0;
+    
+    while (termIndex < term.length && targetIndex < target.length) {
+      if (term[termIndex] === target[targetIndex]) {
+        termIndex++;
+      }
+      targetIndex++;
+    }
+    
+    return termIndex === term.length;
   }
   
   

@@ -1740,7 +1740,7 @@ export class DollhouseMCPServer implements IToolHandler {
               return {
                 content: [{
                   type: "text",
-                  text: `❌ Persona '${name}' not found`
+                  text: `❌ ${type.charAt(0).toUpperCase() + type.slice(1)} '${name}' not found`
                 }]
               };
             }
@@ -2137,13 +2137,31 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     }
     
-    // If not found in any element directory, default to persona for backward compatibility
+    // CRITICAL FIX: Never default to any element type when content is not found
+    // This prevents incorrect submissions and forces proper type detection or user specification
     if (!elementType) {
-      elementType = ElementType.PERSONA;
-      logger.info(`Content "${contentIdentifier}" not found in any portfolio directory, defaulting to ${elementType}`, { 
+      // Content not found in any element directory - provide helpful error with suggestions
+      const availableTypes = Object.values(ElementType).join(', ');
+      logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, { 
         contentIdentifier,
         searchedTypes: Object.values(ElementType) 
       });
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `❌ Content "${contentIdentifier}" not found in portfolio.\n\n` +
+                  `**Searched in all element types:** ${availableTypes}\n\n` +
+                  `**To resolve this issue:**\n` +
+                  `1. Check if the content exists in your portfolio\n` +
+                  `2. Verify the content name/filename is correct\n` +
+                  `3. If the content is in a specific type directory, try using the exact filename\n` +
+                  `4. Use the \`list_portfolio\` tool to see all available content\n\n` +
+                  `**Note:** The system no longer defaults to any element type to prevent incorrect submissions.`,
+          },
+        ],
+      };
     }
     
     // Execute the submission with the detected element type
@@ -4257,17 +4275,20 @@ Placeholders for custom format:
    */
   private async countElementsInDir(dirPath: string): Promise<number> {
     try {
-      // Validate the directory path for security
-      try {
-        await PathValidator.validatePersonaPath(dirPath);
-      } catch (pathError) {
-        logger.warn('Invalid directory path in countElementsInDir', { dirPath, error: pathError });
-        return 0;
-      }
-
+      // Check if directory exists and is accessible
       await fs.access(dirPath);
       const files = await fs.readdir(dirPath);
-      return files.filter(file => file.endsWith('.json')).length;
+      
+      // Count all element files (.md, .json, .yaml) to support all element types
+      // - Personas: .md files
+      // - Skills: .md files  
+      // - Templates: .md or .yaml files
+      // - Agents: .md files
+      return files.filter(file => 
+        file.endsWith('.md') || 
+        file.endsWith('.json') || 
+        file.endsWith('.yaml')
+      ).length;
     } catch (error) {
       return 0;
     }
@@ -4302,19 +4323,24 @@ Placeholders for custom format:
 
       const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
       
-      // Validate the directory path for security
-      try {
-        await PathValidator.validatePersonaPath(dirPath);
-      } catch (pathError) {
-        logger.warn('Invalid directory path in getElementsList', { dirPath, elementType, error: pathError });
-        return [];
-      }
-
+      // Check if directory exists and is accessible
       await fs.access(dirPath);
       const files = await fs.readdir(dirPath);
+      
+      // Filter and extract names for all element file types
+      // - Personas: .md files
+      // - Skills: .md files  
+      // - Templates: .md or .yaml files
+      // - Agents: .md files
       return files
-        .filter(file => file.endsWith('.json'))
-        .map(file => file.replace('.json', ''));
+        .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
+        .map(file => {
+          // Remove file extension to get element name
+          if (file.endsWith('.md')) return file.replace('.md', '');
+          if (file.endsWith('.json')) return file.replace('.json', '');
+          if (file.endsWith('.yaml')) return file.replace('.yaml', '');
+          return file;
+        });
     } catch (error: any) {
       // Check if this is our validation error for invalid element types
       if (error.message && error.message.includes('Invalid element type:')) {
