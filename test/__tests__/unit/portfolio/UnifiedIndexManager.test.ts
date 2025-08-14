@@ -9,8 +9,16 @@ import { GitHubPortfolioIndexer, GitHubIndexEntry, GitHubPortfolioIndex } from '
 import { ElementType } from '../../../../src/portfolio/types.js';
 
 // Mock dependencies
-jest.mock('../../../../src/portfolio/PortfolioIndexManager.js');
-jest.mock('../../../../src/portfolio/GitHubPortfolioIndexer.js');
+jest.mock('../../../../src/portfolio/PortfolioIndexManager.js', () => ({
+  PortfolioIndexManager: {
+    getInstance: jest.fn()
+  }
+}));
+jest.mock('../../../../src/portfolio/GitHubPortfolioIndexer.js', () => ({
+  GitHubPortfolioIndexer: {
+    getInstance: jest.fn()
+  }
+}));
 
 describe('UnifiedIndexManager', () => {
   let unifiedManager: UnifiedIndexManager;
@@ -38,8 +46,10 @@ describe('UnifiedIndexManager', () => {
     } as any;
 
     // Mock the getInstance methods
-    jest.mocked(PortfolioIndexManager.getInstance).mockReturnValue(mockLocalIndexManager);
-    jest.mocked(GitHubPortfolioIndexer.getInstance).mockReturnValue(mockGitHubIndexer);
+    const MockedPortfolioIndexManager = PortfolioIndexManager as jest.Mocked<typeof PortfolioIndexManager>;
+    const MockedGitHubPortfolioIndexer = GitHubPortfolioIndexer as jest.Mocked<typeof GitHubPortfolioIndexer>;
+    MockedPortfolioIndexManager.getInstance.mockReturnValue(mockLocalIndexManager);
+    MockedGitHubPortfolioIndexer.getInstance.mockReturnValue(mockGitHubIndexer);
 
     // Create unified manager
     unifiedManager = UnifiedIndexManager.getInstance();
@@ -94,7 +104,7 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search('test persona');
+      const results = await unifiedManager.search({ query: 'test persona' });
 
       expect(results).toHaveLength(2);
       expect(results[0].source).toBe('local');
@@ -125,7 +135,7 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockRejectedValue(new Error('Local search failed'));
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search('test persona');
+      const results = await unifiedManager.search({ query: 'test persona' });
 
       expect(results).toHaveLength(1);
       expect(results[0].source).toBe('github');
@@ -147,7 +157,7 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockRejectedValue(new Error('GitHub search failed'));
 
-      const results = await unifiedManager.search('test persona');
+      const results = await unifiedManager.search({ query: 'test persona' });
 
       expect(results).toHaveLength(1);
       expect(results[0].source).toBe('local');
@@ -187,7 +197,7 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search('test persona');
+      const results = await unifiedManager.search({ query: 'test persona' });
 
       expect(results).toHaveLength(1); // Deduplicated
       expect(results[0].source).toBe('local'); // Local has priority
@@ -227,7 +237,7 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search('persona');
+      const results = await unifiedManager.search({ query: 'persona' });
 
       expect(results).toHaveLength(2);
       // First result should have higher score (GitHub score is multiplied by 0.9, but starts higher)

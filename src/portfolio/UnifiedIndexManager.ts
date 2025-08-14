@@ -22,6 +22,7 @@ import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { LRUCache, CacheFactory } from '../cache/LRUCache.js';
 import { PerformanceMonitor, SearchMetrics } from '../utils/PerformanceMonitor.js';
 import { IndexEntry as CollectionIndexEntry, CollectionIndex } from '../types/collection.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -228,18 +229,28 @@ export class UnifiedIndexManager {
     const memoryBefore = process.memoryUsage().heapUsed;
     const { query, includeLocal = true, includeGitHub = true, includeCollection = false } = searchOptions;
     
-    logger.debug('Starting optimized unified portfolio search', searchOptions);
+    // Normalize query to prevent Unicode-based attacks
+    const validationResult = UnicodeValidator.normalize(query);
+    const normalizedQuery = validationResult.normalizedContent;
     
-    // Check cache first
-    const cacheKey = this.createCacheKey(searchOptions);
+    // Use normalized query in all subsequent operations
+    const normalizedSearchOptions = {
+      ...searchOptions,
+      query: normalizedQuery
+    };
+    
+    logger.debug('Starting optimized unified portfolio search', normalizedSearchOptions);
+    
+    // Check cache first (use normalized search options)
+    const cacheKey = this.createCacheKey(normalizedSearchOptions);
     const cached = this.resultCache.get(cacheKey);
     if (cached) {
       const duration = Date.now() - startTime;
       this.recordSearchMetrics({
-        query,
+        query: normalizedQuery,
         duration,
         resultCount: cached.length,
-        sources: this.getEnabledSources(searchOptions),
+        sources: this.getEnabledSources(normalizedSearchOptions),
         cacheHit: true,
         memoryBefore,
         memoryAfter: process.memoryUsage().heapUsed,
@@ -251,13 +262,13 @@ export class UnifiedIndexManager {
     
     try {
       // Use streaming search for better performance with large result sets
-      if (searchOptions.streamResults) {
-        return await this.streamSearch(searchOptions);
+      if (normalizedSearchOptions.streamResults) {
+        return await this.streamSearch(normalizedSearchOptions);
       }
       
       // Lazy loading: Only load indices when needed
       const searchPromises: Promise<UnifiedSearchResult[]>[] = [];
-      const enabledSources = this.getEnabledSources(searchOptions);
+      const enabledSources = this.getEnabledSources(normalizedSearchOptions);
       
       // Limit concurrent source searches for memory efficiency
       const concurrentLimit = Math.min(this.MAX_CONCURRENT_SOURCES, enabledSources.length);
@@ -269,7 +280,7 @@ export class UnifiedIndexManager {
       // Process sources in batches to control memory usage
       for (const batch of sourceBatches) {
         const batchPromises = batch.map(source => 
-          this.searchWithFallback(source as 'local' | 'github' | 'collection', query, searchOptions)
+          this.searchWithFallback(source as 'local' | 'github' | 'collection', normalizedQuery, normalizedSearchOptions)
         );
         
         const batchResults = await Promise.allSettled(batchPromises);
@@ -297,10 +308,10 @@ export class UnifiedIndexManager {
       }
       
       // Apply advanced processing with memory-efficient batching
-      const processedResults = await this.processSearchResultsOptimized(allResults, searchOptions);
+      const processedResults = await this.processSearchResultsOptimized(allResults, normalizedSearchOptions);
       
       // Apply pagination
-      const paginatedResults = this.applyPagination(processedResults, searchOptions);
+      const paginatedResults = this.applyPagination(processedResults, normalizedSearchOptions);
       
       // Cache results with memory limit check
       if (paginatedResults.length < 1000) { // Don't cache very large result sets
@@ -311,7 +322,7 @@ export class UnifiedIndexManager {
       const memoryAfter = process.memoryUsage().heapUsed;
       
       this.recordSearchMetrics({
-        query,
+        query: normalizedQuery,
         duration,
         resultCount: paginatedResults.length,
         sources: enabledSources,
@@ -322,7 +333,7 @@ export class UnifiedIndexManager {
       });
       
       logger.info('Optimized unified portfolio search completed', {
-        query: query.substring(0, 50),
+        query: normalizedQuery.substring(0, 50),
         sources: { ...sourceCount, total: allResults.length },
         finalResults: paginatedResults.length,
         duration: `${duration}ms`,
@@ -333,7 +344,7 @@ export class UnifiedIndexManager {
       
     } catch (error) {
       const duration = Date.now() - startTime;
-      ErrorHandler.logError('UnifiedIndexManager.search', error, { query: searchOptions, duration });
+      ErrorHandler.logError('UnifiedIndexManager.search', error, { query: normalizedSearchOptions, duration });
       throw ErrorHandler.wrapError(error, 'Failed to perform unified portfolio search', ErrorCategory.SYSTEM_ERROR);
     }
   }

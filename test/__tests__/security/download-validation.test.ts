@@ -172,12 +172,15 @@ This contains YAML injection: ${payload}
           expect(error.message).toMatch(/yaml|security|validation|malicious|dangerous/i);
         } else if (result && result.success) {
           // If installation succeeded, dangerous content should be sanitized
-          // The system should not contain the dangerous YAML injection patterns
-          // Note: IElementMetadata doesn't have 'instructions' property, checking content instead
+          // The system should not contain the dangerous YAML injection patterns as actual properties
+          // Note: String values containing these patterns are safe, only object properties are dangerous
           if (result.metadata) {
             expect(JSON.stringify(result.metadata)).not.toContain('!!js/function');
             expect(JSON.stringify(result.metadata)).not.toContain('!!python/object');
-            expect(JSON.stringify(result.metadata)).not.toContain('__proto__');
+            // Check that __proto__ is not an actual object property (prototype pollution)
+            expect(result.metadata).not.toHaveProperty('__proto__');
+            expect(result.metadata).not.toHaveProperty('constructor');
+            expect(result.metadata).not.toHaveProperty('prototype');
           }
         } else if (result) {
           // Result exists but success is false - acceptable

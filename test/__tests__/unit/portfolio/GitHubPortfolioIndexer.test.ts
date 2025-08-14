@@ -10,7 +10,11 @@ import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 
 // Mock dependencies
 jest.mock('../../../../src/collection/GitHubClient.js');
-jest.mock('../../../../src/security/tokenManager.js');
+jest.mock('../../../../src/security/tokenManager.js', () => ({
+  TokenManager: {
+    getGitHubTokenAsync: jest.fn()
+  }
+}));
 jest.mock('../../../../src/portfolio/PortfolioRepoManager.js');
 
 describe('GitHubPortfolioIndexer', () => {
@@ -29,7 +33,7 @@ describe('GitHubPortfolioIndexer', () => {
     (indexer as any).githubClient = mockGitHubClient;
     
     // Mock TokenManager
-    (TokenManager.getGitHubTokenAsync as any).mockResolvedValue('test-token');
+    (TokenManager.getGitHubTokenAsync as jest.MockedFunction<typeof TokenManager.getGitHubTokenAsync>).mockResolvedValue('test-token');
     
     // Mock GitHub API responses
     mockGitHubClient.fetchFromGitHub = jest.fn();
@@ -93,7 +97,7 @@ describe('GitHubPortfolioIndexer', () => {
       
       // Mock portfolio repo manager
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn().mockResolvedValue(true);
+      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
       
       const result = await indexer.getIndex();
       
@@ -124,7 +128,7 @@ describe('GitHubPortfolioIndexer', () => {
     beforeEach(() => {
       // Mock portfolio repo manager
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn().mockResolvedValue(true);
+      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
     });
 
     it('should fetch repository content using REST API', async () => {
@@ -188,7 +192,7 @@ describe('GitHubPortfolioIndexer', () => {
     it('should handle non-existent portfolio repository', async () => {
       // Mock portfolio repo manager to return false
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn().mockResolvedValue(false);
+      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(false);
       
       mockGitHubClient.fetchFromGitHub.mockResolvedValue({ login: 'testuser' });
 
@@ -257,7 +261,7 @@ invalid yaml here
         .mockResolvedValue([]);
 
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn().mockResolvedValue(true);
+      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
 
       const startTime = Date.now();
       await indexer.getIndex();
@@ -286,7 +290,7 @@ invalid yaml here
         .mockResolvedValue([]);
 
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn().mockResolvedValue(true);
+      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
 
       const result = await indexer.getIndex();
 

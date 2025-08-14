@@ -25,6 +25,8 @@ type MockServer = Partial<IToolHandler> & {
   initPortfolio: jest.MockedFunction<(options: { repositoryName?: string; private?: boolean; description?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   portfolioConfig: jest.MockedFunction<(options: { autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   syncPortfolio: jest.MockedFunction<(options: { direction: string; force: boolean; dryRun: boolean }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  searchPortfolio: jest.MockedFunction<(options: any) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  searchAll: jest.MockedFunction<(options: any) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   getPersonaIndicator: jest.MockedFunction<() => string>;
 };
 

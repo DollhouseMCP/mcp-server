@@ -4,6 +4,7 @@
  */
 
 import { logger } from './logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface PerformanceMetrics {
   searchTimes: number[];
@@ -127,18 +128,25 @@ export class PerformanceMonitor {
       return;
     }
 
-    this.searchMetrics.push(metrics);
+    // Normalize query string to prevent Unicode-based attacks
+    const validationResult = UnicodeValidator.normalize(metrics.query);
+    const normalizedMetrics = {
+      ...metrics,
+      query: validationResult.normalizedContent
+    };
 
-    // Check if it's a slow query
-    if (metrics.duration > this.slowQueryThreshold) {
+    this.searchMetrics.push(normalizedMetrics);
+
+    // Check if it's a slow query (use normalized metrics)
+    if (normalizedMetrics.duration > this.slowQueryThreshold) {
       this.recordSlowQuery({
-        query: metrics.query,
-        duration: metrics.duration,
+        query: normalizedMetrics.query,
+        duration: normalizedMetrics.duration,
         threshold: this.slowQueryThreshold,
-        sources: metrics.sources,
-        resultCount: metrics.resultCount,
-        memoryUsage: metrics.memoryAfter,
-        timestamp: metrics.timestamp
+        sources: normalizedMetrics.sources,
+        resultCount: normalizedMetrics.resultCount,
+        memoryUsage: normalizedMetrics.memoryAfter,
+        timestamp: normalizedMetrics.timestamp
       });
     }
 
@@ -147,13 +155,13 @@ export class PerformanceMonitor {
       this.searchMetrics = this.searchMetrics.slice(-this.maxMetricsHistory);
     }
 
-    // Log significant performance events
-    if (metrics.duration > this.slowQueryThreshold * 2) {
+    // Log significant performance events (use normalized metrics)
+    if (normalizedMetrics.duration > this.slowQueryThreshold * 2) {
       logger.warn('Very slow search detected', {
-        query: metrics.query.substring(0, 50),
-        duration: metrics.duration,
-        resultCount: metrics.resultCount,
-        sources: metrics.sources
+        query: normalizedMetrics.query.substring(0, 50),
+        duration: normalizedMetrics.duration,
+        resultCount: normalizedMetrics.resultCount,
+        sources: normalizedMetrics.sources
       });
     }
   }
@@ -166,12 +174,16 @@ export class PerformanceMonitor {
       return;
     }
 
-    this.cacheMetrics.set(cacheName, stats);
+    // Normalize cache name to prevent Unicode-based attacks
+    const validationResult = UnicodeValidator.normalize(cacheName);
+    const normalizedCacheName = validationResult.normalizedContent;
 
-    // Log cache performance warnings
+    this.cacheMetrics.set(normalizedCacheName, stats);
+
+    // Log cache performance warnings (use normalized cache name)
     if (stats.hitRate < 0.5) {
       logger.warn('Low cache hit rate detected', {
-        cache: cacheName,
+        cache: normalizedCacheName,
         hitRate: stats.hitRate,
         totalOperations: stats.totalHits + stats.totalMisses
       });
