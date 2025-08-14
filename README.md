@@ -113,6 +113,29 @@ Manage your portfolio on GitHub for sharing and collaboration:
 
 > **📘 Getting Started**: New to portfolios? Follow our [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md) for step-by-step instructions.
 
+### Smart Element Detection
+
+DollhouseMCP automatically detects element types when submitting content, eliminating the need to manually specify types:
+
+```bash
+# System automatically detects whether this is a persona, skill, template, etc.
+submit_content name="code-review"
+```
+
+**Key Features:**
+- **Automatic Type Detection**: Searches all element directories simultaneously
+- **Fuzzy Matching**: Finds content with partial names or different extensions  
+- **Clear Error Messages**: Provides actionable guidance when content isn't found
+- **No More Mistakes**: Prevents accidentally submitting content as wrong element type
+
+**Example Output:**
+```
+✅ Smart detection: Found "code-review" as SKILL
+✅ Successfully uploaded code-review to your GitHub portfolio!
+```
+
+> **📖 Learn More**: See our [Element Detection Guide](docs/guides/ELEMENT_DETECTION_GUIDE.md) for detailed usage examples and troubleshooting tips.
+
 ### Specialized Element Tools
 
 Some portfolio elements have specialized operations:
