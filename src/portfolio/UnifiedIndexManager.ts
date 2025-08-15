@@ -243,7 +243,7 @@ export class UnifiedIndexManager {
     // SECURITY FIX (DMCP-SEC-006): Add audit logging for security monitoring
     // Log unified search operations for security audit trail
     SecurityMonitor.logSecurityEvent({
-      type: 'UNIFIED_SEARCH',
+      type: 'PORTFOLIO_FETCH_SUCCESS',
       severity: 'LOW',
       source: 'UnifiedIndexManager.search',
       details: `Unified search performed with query length: ${normalizedQuery.length}, sources: ${JSON.stringify({
