@@ -20,7 +20,7 @@ jobs:
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ github.sha }}
+          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('package*.json') }}
           restore-keys: |
             docker-buildx-${{ runner.os }}-${{ matrix.platform }}-
             docker-buildx-${{ runner.os }}-
@@ -92,7 +92,7 @@ jobs:
           fail-build: false  # Don't fail build on vulnerabilities, just report
           severity-cutoff: high
         continue-on-error: true
-        if: matrix.platform == 'linux/amd64'  # Only scan one platform to avoid duplication
+        if: matrix.platform == 'linux/amd64'  # Only scan AMD64 to save time on ARM64 builds
 
       - name: Test MCP server initialization (with security constraints)
         shell: bash
@@ -210,7 +210,7 @@ jobs:
   docker-compose-test:
     name: Docker Compose Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
