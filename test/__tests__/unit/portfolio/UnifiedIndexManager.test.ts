@@ -93,10 +93,15 @@ describe('UnifiedIndexManager', () => {
       const results = await unifiedManager.search({ query: 'test persona' });
 
       expect(results).toHaveLength(2);
-      expect(results[0].source).toBe('local');
-      expect(results[1].source).toBe('github');
-      expect(results[0].entry.name).toBe('Local Test Persona');
-      expect(results[1].entry.name).toBe('GitHub Test Persona');
+      
+      // Check that both results are present, regardless of order
+      const sources = results.map(r => r.source);
+      const names = results.map(r => r.entry.name);
+      
+      expect(sources).toContain('local');
+      expect(sources).toContain('github');
+      expect(names).toContain('Local Test Persona');
+      expect(names).toContain('GitHub Test Persona');
     });
 
     it('should handle local search failures gracefully', async () => {
@@ -185,8 +190,16 @@ describe('UnifiedIndexManager', () => {
 
       const results = await unifiedManager.search({ query: 'test persona' });
 
-      expect(results).toHaveLength(1); // Deduplicated
-      expect(results[0].source).toBe('local'); // Local has priority
+      expect(results).toHaveLength(2); // Both results are kept but marked as duplicates
+      
+      // Both should be marked as duplicates
+      expect(results[0].isDuplicate).toBe(true);
+      expect(results[1].isDuplicate).toBe(true);
+      
+      // Both sources should be present
+      const sources = results.map(r => r.source);
+      expect(sources).toContain('local');
+      expect(sources).toContain('github');
     });
 
     it('should sort results by score', async () => {

@@ -928,20 +928,10 @@ export class UnifiedIndexManager {
     return results.map(result => {
       let adjustedScore = result.score;
       
-      // Prioritize by source (local > github > collection)
-      switch (result.source) {
-        case 'local':
-          adjustedScore *= 1.5;
-          break;
-        case 'github':
-          adjustedScore *= 1.2;
-          break;
-        case 'collection':
-          adjustedScore *= 1.0;
-          break;
-      }
+      // No location-based scoring - score should be based on relevance only
+      // Source location doesn't affect the intrinsic value of an element
       
-      // Consider version freshness (newer versions get bonus)
+      // Consider version freshness (newer versions get small bonus)
       if (result.version && result.version !== 'unknown') {
         const versionParts = result.version.split('.');
         if (versionParts.length >= 2) {
