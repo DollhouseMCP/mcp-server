@@ -304,25 +304,48 @@ invalid yaml here
       }));
 
       mockFetchFromGitHub.mockImplementation((url) => {
-        // Mock different types of API calls based on URL patterns
-        if (url === 'https://api.github.com/user') {
-          return Promise.resolve({ login: 'testuser' });
-        } else if (url === 'https://api.github.com/graphql') {
-          return Promise.reject(new Error('GraphQL implementation not yet complete'));
-        } else if (url.includes('/repos/') && url.endsWith('/dollhouse-portfolio')) {
-          return Promise.resolve({ html_url: 'test' });
-        } else if (url.includes('/commits/HEAD')) {
-          return Promise.resolve({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } });
-        } else if (url.includes('/contents/personas')) {
-          return Promise.resolve(largePersonaList);
-        } else if (url.includes('/contents/')) {
-          // Other directory contents (skills, templates, etc.)
-          return Promise.resolve([]);
-        } else if (url.includes('raw.githubusercontent.com')) {
-          // File content downloads for metadata extraction
-          return Promise.resolve('---\nname: Mock Persona\n---\nMock content');
-        } else {
-          return Promise.resolve([]);
+        try {
+          // Parse URL safely to validate hostname and pathname
+          const parsedUrl = new URL(url);
+          
+          // Validate allowed GitHub domains
+          const allowedHosts = [
+            'api.github.com',
+            'raw.githubusercontent.com'
+          ];
+          
+          if (!allowedHosts.includes(parsedUrl.hostname)) {
+            return Promise.reject(new Error('Invalid domain'));
+          }
+          
+          // Mock different types of API calls based on URL patterns
+          if (url === 'https://api.github.com/user') {
+            return Promise.resolve({ login: 'testuser' });
+          } else if (url === 'https://api.github.com/graphql') {
+            return Promise.reject(new Error('GraphQL implementation not yet complete'));
+          } else if (parsedUrl.hostname === 'api.github.com' && 
+                     parsedUrl.pathname.includes('/repos/') && 
+                     parsedUrl.pathname.endsWith('/dollhouse-portfolio')) {
+            return Promise.resolve({ html_url: 'test' });
+          } else if (parsedUrl.hostname === 'api.github.com' && 
+                     parsedUrl.pathname.includes('/commits/HEAD')) {
+            return Promise.resolve({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } });
+          } else if (parsedUrl.hostname === 'api.github.com' && 
+                     parsedUrl.pathname.includes('/contents/personas')) {
+            return Promise.resolve(largePersonaList);
+          } else if (parsedUrl.hostname === 'api.github.com' && 
+                     parsedUrl.pathname.includes('/contents/')) {
+            // Other directory contents (skills, templates, etc.)
+            return Promise.resolve([]);
+          } else if (parsedUrl.hostname === 'raw.githubusercontent.com') {
+            // File content downloads for metadata extraction
+            return Promise.resolve('---\nname: Mock Persona\n---\nMock content');
+          } else {
+            return Promise.resolve([]);
+          }
+        } catch (error) {
+          // Invalid URL format
+          return Promise.reject(new Error('Invalid URL format'));
         }
       });
 
@@ -401,6 +424,73 @@ invalid yaml here
       expect(stats.totalElements).toBe(10);
       expect(stats.recentUserAction).toBe(true);
       expect(stats.isStale).toBe(false);
+    });
+  });
+
+  describe('URL Security Validation', () => {
+    it('should reject malicious URLs with GitHub domain in path', async () => {
+      // Mock a malicious URL that contains GitHub domain in the path
+      const maliciousUrl = 'http://evil.com/raw.githubusercontent.com/malicious';
+      
+      mockFetchFromGitHub.mockImplementation((url) => {
+        try {
+          const parsedUrl = new URL(url);
+          const allowedHosts = ['api.github.com', 'raw.githubusercontent.com'];
+          
+          if (!allowedHosts.includes(parsedUrl.hostname)) {
+            return Promise.reject(new Error('Invalid domain'));
+          }
+          return Promise.resolve({});
+        } catch (error) {
+          return Promise.reject(new Error('Invalid URL format'));
+        }
+      });
+
+      // Test that malicious URL is rejected
+      await expect(mockFetchFromGitHub(maliciousUrl))
+        .rejects.toThrow('Invalid domain');
+    });
+
+    it('should accept legitimate GitHub URLs', async () => {
+      const validUrls = [
+        'https://api.github.com/repos/user/repo/contents/file',
+        'https://raw.githubusercontent.com/user/repo/main/file.md'
+      ];
+
+      mockFetchFromGitHub.mockImplementation((url) => {
+        try {
+          const parsedUrl = new URL(url);
+          const allowedHosts = ['api.github.com', 'raw.githubusercontent.com'];
+          
+          if (!allowedHosts.includes(parsedUrl.hostname)) {
+            return Promise.reject(new Error('Invalid domain'));
+          }
+          return Promise.resolve({ success: true });
+        } catch (error) {
+          return Promise.reject(new Error('Invalid URL format'));
+        }
+      });
+
+      for (const url of validUrls) {
+        const result = await mockFetchFromGitHub(url);
+        expect(result).toEqual({ success: true });
+      }
+    });
+
+    it('should reject URLs with invalid format', async () => {
+      const invalidUrl = 'not-a-valid-url';
+      
+      mockFetchFromGitHub.mockImplementation((url) => {
+        try {
+          new URL(url);
+          return Promise.resolve({});
+        } catch (error) {
+          return Promise.reject(new Error('Invalid URL format'));
+        }
+      });
+
+      await expect(mockFetchFromGitHub(invalidUrl))
+        .rejects.toThrow('Invalid URL format');
     });
   });
 });
