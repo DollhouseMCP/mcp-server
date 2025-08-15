@@ -6,18 +6,14 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { GitHubPortfolioIndexer, GitHubPortfolioIndex, GitHubIndexEntry } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
-import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
-
-// Create mock GitHubClient
-const mockFetchFromGitHub = jest.fn();
 
 // Mock dependencies
-jest.mock('../../../../src/collection/GitHubClient.js', () => ({
-  GitHubClient: jest.fn().mockImplementation(() => ({
-    fetchFromGitHub: mockFetchFromGitHub
-  }))
-}));
+jest.mock('../../../../src/collection/GitHubClient.js');
 jest.mock('../../../../src/portfolio/PortfolioRepoManager.js');
+
+// Import mocked functions
+import { mockFetchFromGitHub } from '../../../../src/collection/__mocks__/GitHubClient.js';
+import { mockCheckPortfolioExists } from '../../../../src/portfolio/__mocks__/PortfolioRepoManager.js';
 
 describe('GitHubPortfolioIndexer', () => {
   let indexer: GitHubPortfolioIndexer;
@@ -28,6 +24,7 @@ describe('GitHubPortfolioIndexer', () => {
     
     // Clear mocks
     mockFetchFromGitHub.mockClear();
+    mockCheckPortfolioExists.mockClear();
     
     // Mock TokenManager
     jest.spyOn(TokenManager, 'getGitHubTokenAsync').mockResolvedValue('test-token');
@@ -93,10 +90,12 @@ describe('GitHubPortfolioIndexer', () => {
         .mockResolvedValue([]); // empty directories
       
       // Mock portfolio repo manager
-      const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
+      mockCheckPortfolioExists.mockResolvedValue(true);
       
       const result = await indexer.getIndex();
+      
+      console.log('Result:', result);
+      console.log('Mock calls:', mockFetchFromGitHub.mock.calls.length);
       
       expect(result.username).toBe('testuser');
       expect(mockFetchFromGitHub).toHaveBeenCalled();
@@ -124,8 +123,7 @@ describe('GitHubPortfolioIndexer', () => {
   describe('GitHub API Integration', () => {
     beforeEach(() => {
       // Mock portfolio repo manager
-      const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
+      mockCheckPortfolioExists.mockResolvedValue(true);
     });
 
     it('should fetch repository content using REST API', async () => {
@@ -188,8 +186,7 @@ describe('GitHubPortfolioIndexer', () => {
 
     it('should handle non-existent portfolio repository', async () => {
       // Mock portfolio repo manager to return false
-      const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(false);
+      mockCheckPortfolioExists.mockResolvedValue(false);
       
       mockFetchFromGitHub.mockResolvedValue({ login: 'testuser' });
 
@@ -257,8 +254,7 @@ invalid yaml here
         .mockResolvedValueOnce({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } })
         .mockResolvedValue([]);
 
-      const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
+      mockCheckPortfolioExists.mockResolvedValue(true);
 
       const startTime = Date.now();
       await indexer.getIndex();
@@ -286,8 +282,7 @@ invalid yaml here
         .mockResolvedValueOnce(largePersonaList)
         .mockResolvedValue([]);
 
-      const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
-      mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
+      mockCheckPortfolioExists.mockResolvedValue(true);
 
       const result = await indexer.getIndex();
 
