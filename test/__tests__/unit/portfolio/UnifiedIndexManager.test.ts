@@ -7,11 +7,13 @@ import { UnifiedIndexManager, UnifiedIndexEntry, UnifiedSearchResult } from '../
 import { PortfolioIndexManager, IndexEntry, SearchResult } from '../../../../src/portfolio/PortfolioIndexManager.js';
 import { GitHubPortfolioIndexer, GitHubIndexEntry, GitHubPortfolioIndex } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
+import { CollectionIndexCache } from '../../../../src/cache/CollectionIndexCache.js';
 
 describe('UnifiedIndexManager', () => {
   let unifiedManager: UnifiedIndexManager;
   let mockLocalIndexManager: jest.Mocked<PortfolioIndexManager>;
   let mockGitHubIndexer: jest.Mocked<GitHubPortfolioIndexer>;
+  let mockCollectionIndexCache: jest.Mocked<CollectionIndexCache>;
 
   beforeEach(() => {
     // Reset singleton
@@ -33,9 +35,41 @@ describe('UnifiedIndexManager', () => {
       getCacheStats: jest.fn()
     } as any;
 
+    mockCollectionIndexCache = {
+      getIndex: jest.fn(),
+      getCacheStats: jest.fn(),
+      clearCache: jest.fn()
+    } as any;
+
     // Spy on getInstance methods
     jest.spyOn(PortfolioIndexManager, 'getInstance').mockReturnValue(mockLocalIndexManager);
     jest.spyOn(GitHubPortfolioIndexer, 'getInstance').mockReturnValue(mockGitHubIndexer);
+    
+    // Mock CollectionIndexCache constructor
+    jest.spyOn(CollectionIndexCache.prototype, 'getIndex').mockImplementation(mockCollectionIndexCache.getIndex);
+    jest.spyOn(CollectionIndexCache.prototype, 'getCacheStats').mockImplementation(mockCollectionIndexCache.getCacheStats);
+    jest.spyOn(CollectionIndexCache.prototype, 'clearCache').mockImplementation(mockCollectionIndexCache.clearCache);
+
+    // Set up default collection mocks
+    const defaultCollectionIndex = {
+      total_elements: 0,
+      index: {},
+      build_time_ms: 0,
+      built_at: new Date().toISOString()
+    };
+
+    const defaultCollectionCacheStats = {
+      isValid: true,
+      lastFetch: new Date(),
+      isStale: false
+    };
+
+    mockCollectionIndexCache.getIndex.mockResolvedValue(defaultCollectionIndex);
+    mockCollectionIndexCache.getCacheStats.mockReturnValue(defaultCollectionCacheStats);
+    mockCollectionIndexCache.clearCache.mockResolvedValue();
+    
+    // Ensure rebuildIndex returns a Promise
+    mockLocalIndexManager.rebuildIndex.mockResolvedValue(undefined);
 
     // Create unified manager
     unifiedManager = UnifiedIndexManager.getInstance();
@@ -247,22 +281,35 @@ describe('UnifiedIndexManager', () => {
 
   describe('Find by Name', () => {
     it('should find element in local portfolio first', async () => {
-      const localEntry: IndexEntry = {
-        filePath: '/local/personas/test.md',
-        elementType: ElementType.PERSONA,
-        metadata: { name: 'Test Persona' },
-        lastModified: new Date(),
-        filename: 'test'
-      };
+      const localResults: SearchResult[] = [{
+        entry: {
+          filePath: '/local/personas/test.md',
+          elementType: ElementType.PERSONA,
+          metadata: { name: 'Test Persona' },
+          lastModified: new Date(),
+          filename: 'test'
+        },
+        matchType: 'name',
+        score: 10
+      }];
 
-      mockLocalIndexManager.findByName.mockResolvedValue(localEntry);
+      // Mock search to return the local result
+      mockLocalIndexManager.search.mockResolvedValue(localResults);
+      mockGitHubIndexer.getIndex.mockResolvedValue({
+        username: 'testuser',
+        repository: 'dollhouse-portfolio',
+        lastUpdated: new Date(),
+        elements: new Map(),
+        totalElements: 0,
+        sha: ''
+      });
 
       const result = await unifiedManager.findByName('Test Persona');
 
       expect(result).toBeTruthy();
       expect(result!.source).toBe('local');
       expect(result!.name).toBe('Test Persona');
-      expect(mockGitHubIndexer.getIndex).not.toHaveBeenCalled();
+      expect(mockLocalIndexManager.search).toHaveBeenCalledWith('Test Persona', expect.any(Object));
     });
 
     it('should search GitHub when not found locally', async () => {
@@ -424,19 +471,47 @@ describe('UnifiedIndexManager', () => {
         sha: 'abc123'
       };
 
+      const mockCollectionIndex = {
+        total_elements: 0,
+        index: {},
+        build_time_ms: 0,
+        built_at: new Date().toISOString()
+      };
+
+      const mockCollectionCacheStats = {
+        isValid: true,
+        lastFetch: new Date(),
+        isStale: false
+      };
+
       mockLocalIndexManager.getStats.mockResolvedValue(localStats);
       mockGitHubIndexer.getCacheStats.mockReturnValue(githubCacheStats);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+      mockCollectionIndexCache.getIndex.mockResolvedValue(mockCollectionIndex);
+      mockCollectionIndexCache.getCacheStats.mockReturnValue(mockCollectionCacheStats);
 
       const stats = await unifiedManager.getStats();
 
       expect(stats.local.totalElements).toBe(5);
       expect(stats.github.totalElements).toBe(3);
-      expect(stats.combined.totalElements).toBe(8);
+      expect(stats.combined.totalElements).toBe(8); // 5 + 3 + 0 (collection)
       expect(stats.github.username).toBe('testuser');
     });
 
     it('should handle errors in statistics gathering', async () => {
+      const mockCollectionIndex = {
+        total_elements: 0,
+        index: {},
+        build_time_ms: 0,
+        built_at: new Date().toISOString()
+      };
+
+      const mockCollectionCacheStats = {
+        isValid: true,
+        lastFetch: new Date(),
+        isStale: false
+      };
+
       mockLocalIndexManager.getStats.mockRejectedValue(new Error('Local stats failed'));
       mockGitHubIndexer.getCacheStats.mockReturnValue({
         hasCachedData: false,
@@ -446,12 +521,14 @@ describe('UnifiedIndexManager', () => {
         totalElements: 0
       });
       mockGitHubIndexer.getIndex.mockRejectedValue(new Error('GitHub stats failed'));
+      mockCollectionIndexCache.getIndex.mockResolvedValue(mockCollectionIndex);
+      mockCollectionIndexCache.getCacheStats.mockReturnValue(mockCollectionCacheStats);
 
       const stats = await unifiedManager.getStats();
 
       expect(stats.local.totalElements).toBe(0);
       expect(stats.github.totalElements).toBe(0);
-      expect(stats.combined.totalElements).toBe(0);
+      expect(stats.combined.totalElements).toBe(0); // 0 + 0 + 0 (collection)
     });
   });
 
@@ -465,6 +542,7 @@ describe('UnifiedIndexManager', () => {
 
     it('should rebuild all indexes', async () => {
       mockLocalIndexManager.rebuildIndex.mockResolvedValue();
+    mockCollectionIndexCache.clearCache.mockResolvedValue();
       mockGitHubIndexer.clearCache.mockImplementation(() => {});
 
       await unifiedManager.rebuildAll();
