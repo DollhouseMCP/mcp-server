@@ -3,17 +3,39 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { GitHubPortfolioIndexer, GitHubPortfolioIndex, GitHubIndexEntry } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
+
+// Create mock functions first
+const mockFetchFromGitHub = jest.fn();
+const mockCheckPortfolioExists = jest.fn();
+
+// Mock modules using jest.unstable_mockModule for ES modules
+jest.unstable_mockModule('../../../../src/collection/GitHubClient.js', () => ({
+  GitHubClient: jest.fn().mockImplementation((apiCache, rateLimitTracker) => ({
+    fetchFromGitHub: mockFetchFromGitHub
+  }))
+}));
+
+jest.unstable_mockModule('../../../../src/portfolio/PortfolioRepoManager.js', () => ({
+  PortfolioRepoManager: jest.fn().mockImplementation(() => ({
+    checkPortfolioExists: mockCheckPortfolioExists
+  }))
+}));
+
+jest.unstable_mockModule('../../../../src/cache/APICache.js', () => ({
+  APICache: jest.fn().mockImplementation(() => ({
+    get: jest.fn(),
+    set: jest.fn(),
+    clear: jest.fn()
+  }))
+}));
+
+// Import types and non-mocked modules
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
 
-// Mock dependencies
-jest.mock('../../../../src/collection/GitHubClient.js');
-jest.mock('../../../../src/portfolio/PortfolioRepoManager.js');
-
-// Import mocked functions
-import { mockFetchFromGitHub } from '../../../../src/collection/__mocks__/GitHubClient.js';
-import { mockCheckPortfolioExists } from '../../../../src/portfolio/__mocks__/PortfolioRepoManager.js';
+// Dynamically import the modules under test after mocks are set up
+const { GitHubPortfolioIndexer } = await import('../../../../src/portfolio/GitHubPortfolioIndexer.js');
+const { GitHubPortfolioIndex, GitHubIndexEntry } = await import('../../../../src/portfolio/GitHubPortfolioIndexer.js');
 
 describe('GitHubPortfolioIndexer', () => {
   let indexer: GitHubPortfolioIndexer;
@@ -84,18 +106,16 @@ describe('GitHubPortfolioIndexer', () => {
       
       // Mock GitHub API responses
       mockFetchFromGitHub
-        .mockResolvedValueOnce({ login: 'testuser' }) // user info
-        .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // repo info
-        .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // latest commit
-        .mockResolvedValue([]); // empty directories
+        .mockResolvedValueOnce({ login: 'testuser' }) // 1. user info call
+        .mockRejectedValueOnce(new Error('GraphQL implementation not yet complete')) // 2. GraphQL call fails  
+        .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // 3. repo info
+        .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // 4. latest commit
+        .mockResolvedValue([]); // remaining calls for directory contents
       
       // Mock portfolio repo manager
       mockCheckPortfolioExists.mockResolvedValue(true);
       
       const result = await indexer.getIndex();
-      
-      console.log('Result:', result);
-      console.log('Mock calls:', mockFetchFromGitHub.mock.calls.length);
       
       expect(result.username).toBe('testuser');
       expect(mockFetchFromGitHub).toHaveBeenCalled();
@@ -144,11 +164,12 @@ describe('GitHubPortfolioIndexer', () => {
       }];
 
       mockFetchFromGitHub
-        .mockResolvedValueOnce(mockUserInfo) // user info
-        .mockResolvedValueOnce(mockRepoInfo) // repo info
-        .mockResolvedValueOnce(mockCommit) // latest commit
-        .mockResolvedValueOnce(mockPersonas) // personas directory
-        .mockResolvedValue([]); // other directories empty
+        .mockResolvedValueOnce(mockUserInfo) // 1. user info
+        .mockRejectedValueOnce(new Error('GraphQL implementation not yet complete')) // 2. GraphQL call fails
+        .mockResolvedValueOnce(mockRepoInfo) // 3. repo info
+        .mockResolvedValueOnce(mockCommit) // 4. latest commit
+        .mockResolvedValueOnce(mockPersonas) // 5. personas directory
+        .mockResolvedValue([]); // remaining directories empty
 
       const result = await indexer.getIndex();
 
@@ -264,7 +285,14 @@ invalid yaml here
     });
 
     it('should handle large portfolios efficiently', async () => {
-      // Create mock data for 1000 elements
+      // Mock setTimeout to avoid delays during testing
+      const originalSetTimeout = global.setTimeout;
+      global.setTimeout = jest.fn((fn) => {
+        if (typeof fn === 'function') fn();
+        return 1 as any;
+      });
+
+      // Create mock data for 1000 elements (make them > 10KB to skip metadata fetching)
       const largePersonaList = Array.from({ length: 1000 }, (_, i) => ({
         type: 'file',
         name: `persona-${i}.md`,
@@ -272,22 +300,43 @@ invalid yaml here
         sha: `sha${i}`,
         html_url: `https://github.com/test/repo/blob/main/personas/persona-${i}.md`,
         download_url: `https://raw.githubusercontent.com/test/repo/main/personas/persona-${i}.md`,
-        size: 1024
+        size: 15000 // > 10KB to skip metadata fetching
       }));
 
-      mockFetchFromGitHub
-        .mockResolvedValueOnce({ login: 'testuser' })
-        .mockResolvedValueOnce({ html_url: 'test' })
-        .mockResolvedValueOnce({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } })
-        .mockResolvedValueOnce(largePersonaList)
-        .mockResolvedValue([]);
+      mockFetchFromGitHub.mockImplementation((url) => {
+        // Mock different types of API calls based on URL patterns
+        if (url === 'https://api.github.com/user') {
+          return Promise.resolve({ login: 'testuser' });
+        } else if (url === 'https://api.github.com/graphql') {
+          return Promise.reject(new Error('GraphQL implementation not yet complete'));
+        } else if (url.includes('/repos/') && url.endsWith('/dollhouse-portfolio')) {
+          return Promise.resolve({ html_url: 'test' });
+        } else if (url.includes('/commits/HEAD')) {
+          return Promise.resolve({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } });
+        } else if (url.includes('/contents/personas')) {
+          return Promise.resolve(largePersonaList);
+        } else if (url.includes('/contents/')) {
+          // Other directory contents (skills, templates, etc.)
+          return Promise.resolve([]);
+        } else if (url.includes('raw.githubusercontent.com')) {
+          // File content downloads for metadata extraction
+          return Promise.resolve('---\nname: Mock Persona\n---\nMock content');
+        } else {
+          return Promise.resolve([]);
+        }
+      });
 
       mockCheckPortfolioExists.mockResolvedValue(true);
 
-      const result = await indexer.getIndex();
+      try {
+        const result = await indexer.getIndex();
 
-      expect(result.totalElements).toBe(1000);
-      expect(result.elements.get(ElementType.PERSONA)).toHaveLength(1000);
+        expect(result.totalElements).toBe(1000);
+        expect(result.elements.get(ElementType.PERSONA)).toHaveLength(1000);
+      } finally {
+        // Restore original setTimeout
+        global.setTimeout = originalSetTimeout;
+      }
     });
   });
 
