@@ -8,30 +8,32 @@ import { ElementType } from '../../../../src/portfolio/types.js';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
 import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 
+// Create mock GitHubClient
+const mockFetchFromGitHub = jest.fn();
+
 // Mock dependencies
-jest.mock('../../../../src/collection/GitHubClient.js');
+jest.mock('../../../../src/collection/GitHubClient.js', () => ({
+  GitHubClient: jest.fn().mockImplementation(() => ({
+    fetchFromGitHub: mockFetchFromGitHub
+  }))
+}));
 jest.mock('../../../../src/portfolio/PortfolioRepoManager.js');
 
 describe('GitHubPortfolioIndexer', () => {
   let indexer: GitHubPortfolioIndexer;
-  let mockGitHubClient: jest.Mocked<GitHubClient>;
 
   beforeEach(() => {
     // Reset singleton
     (GitHubPortfolioIndexer as any).instance = null;
     
-    // Create fresh indexer instance
-    indexer = GitHubPortfolioIndexer.getInstance();
-    
-    // Setup mocks
-    mockGitHubClient = new GitHubClient({} as any, new Map()) as jest.Mocked<GitHubClient>;
-    (indexer as any).githubClient = mockGitHubClient;
+    // Clear mocks
+    mockFetchFromGitHub.mockClear();
     
     // Mock TokenManager
     jest.spyOn(TokenManager, 'getGitHubTokenAsync').mockResolvedValue('test-token');
     
-    // Mock GitHub API responses
-    mockGitHubClient.fetchFromGitHub = jest.fn();
+    // Create fresh indexer instance (will use mocked GitHubClient)
+    indexer = GitHubPortfolioIndexer.getInstance();
   });
 
   afterEach(() => {
@@ -75,7 +77,7 @@ describe('GitHubPortfolioIndexer', () => {
       const result = await indexer.getIndex();
       
       expect(result).toBe(mockIndex);
-      expect(mockGitHubClient.fetchFromGitHub).not.toHaveBeenCalled();
+      expect(mockFetchFromGitHub).not.toHaveBeenCalled();
     });
 
     it('should fetch fresh data when cache is stale', async () => {
@@ -84,7 +86,7 @@ describe('GitHubPortfolioIndexer', () => {
       (indexer as any).lastFetch = new Date(Date.now() - 20 * 60 * 1000); // 20 minutes ago
       
       // Mock GitHub API responses
-      mockGitHubClient.fetchFromGitHub
+      mockFetchFromGitHub
         .mockResolvedValueOnce({ login: 'testuser' }) // user info
         .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // repo info
         .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // latest commit
@@ -97,7 +99,7 @@ describe('GitHubPortfolioIndexer', () => {
       const result = await indexer.getIndex();
       
       expect(result.username).toBe('testuser');
-      expect(mockGitHubClient.fetchFromGitHub).toHaveBeenCalled();
+      expect(mockFetchFromGitHub).toHaveBeenCalled();
     });
 
     it('should invalidate cache after user actions', () => {
@@ -143,7 +145,7 @@ describe('GitHubPortfolioIndexer', () => {
         size: 1024
       }];
 
-      mockGitHubClient.fetchFromGitHub
+      mockFetchFromGitHub
         .mockResolvedValueOnce(mockUserInfo) // user info
         .mockResolvedValueOnce(mockRepoInfo) // repo info
         .mockResolvedValueOnce(mockCommit) // latest commit
@@ -165,7 +167,7 @@ describe('GitHubPortfolioIndexer', () => {
 
     it('should handle rate limiting gracefully', async () => {
       const rateLimitError = new Error('GitHub API rate limit exceeded');
-      mockGitHubClient.fetchFromGitHub.mockRejectedValue(rateLimitError);
+      mockFetchFromGitHub.mockRejectedValue(rateLimitError);
 
       const result = await indexer.getIndex();
 
@@ -176,7 +178,7 @@ describe('GitHubPortfolioIndexer', () => {
 
     it('should handle authentication errors', async () => {
       const authError = new Error('GitHub authentication failed');
-      mockGitHubClient.fetchFromGitHub.mockRejectedValue(authError);
+      mockFetchFromGitHub.mockRejectedValue(authError);
 
       const result = await indexer.getIndex();
 
@@ -189,7 +191,7 @@ describe('GitHubPortfolioIndexer', () => {
       const mockPortfolioRepoManager = (indexer as any).portfolioRepoManager;
       mockPortfolioRepoManager.checkPortfolioExists = jest.fn<() => Promise<boolean>>().mockResolvedValue(false);
       
-      mockGitHubClient.fetchFromGitHub.mockResolvedValue({ login: 'testuser' });
+      mockFetchFromGitHub.mockResolvedValue({ login: 'testuser' });
 
       const result = await indexer.getIndex();
 
@@ -249,7 +251,7 @@ invalid yaml here
   describe('Performance Requirements', () => {
     it('should fetch index within 500ms for small portfolios', async () => {
       // Mock fast GitHub responses
-      mockGitHubClient.fetchFromGitHub
+      mockFetchFromGitHub
         .mockResolvedValueOnce({ login: 'testuser' })
         .mockResolvedValueOnce({ html_url: 'test' })
         .mockResolvedValueOnce({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } })
@@ -277,7 +279,7 @@ invalid yaml here
         size: 1024
       }));
 
-      mockGitHubClient.fetchFromGitHub
+      mockFetchFromGitHub
         .mockResolvedValueOnce({ login: 'testuser' })
         .mockResolvedValueOnce({ html_url: 'test' })
         .mockResolvedValueOnce({ sha: 'abc', commit: { committer: { date: new Date().toISOString() } } })
@@ -310,7 +312,7 @@ invalid yaml here
       (indexer as any).lastFetch = new Date(Date.now() - 30 * 60 * 1000);
       
       // Mock fetch failure
-      mockGitHubClient.fetchFromGitHub.mockRejectedValue(new Error('Network error'));
+      mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
 
       const result = await indexer.getIndex();
 
@@ -324,7 +326,7 @@ invalid yaml here
       (indexer as any).lastFetch = null;
       
       // Mock fetch failure
-      mockGitHubClient.fetchFromGitHub.mockRejectedValue(new Error('Network error'));
+      mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
 
       const result = await indexer.getIndex();
 
