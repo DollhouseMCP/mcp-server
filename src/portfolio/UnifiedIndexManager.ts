@@ -23,6 +23,7 @@ import { LRUCache, CacheFactory } from '../cache/LRUCache.js';
 import { PerformanceMonitor, SearchMetrics } from '../utils/PerformanceMonitor.js';
 import { IndexEntry as CollectionIndexEntry, CollectionIndex } from '../types/collection.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -238,6 +239,19 @@ export class UnifiedIndexManager {
       ...searchOptions,
       query: normalizedQuery
     };
+    
+    // SECURITY FIX (DMCP-SEC-006): Add audit logging for security monitoring
+    // Log unified search operations for security audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'UNIFIED_SEARCH',
+      severity: 'LOW',
+      source: 'UnifiedIndexManager.search',
+      details: `Unified search performed with query length: ${normalizedQuery.length}, sources: ${JSON.stringify({
+        local: includeLocal,
+        github: includeGitHub,
+        collection: includeCollection
+      })}`
+    });
     
     logger.debug('Starting optimized unified portfolio search', normalizedSearchOptions);
     

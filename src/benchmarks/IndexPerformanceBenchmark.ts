@@ -16,6 +16,7 @@ import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { GitHubClient } from '../collection/GitHubClient.js';
 import { APICache } from '../cache/APICache.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface BenchmarkResult {
   name: string;
@@ -241,7 +242,12 @@ export class IndexPerformanceBenchmark {
     const startTime = Date.now();
 
     // Test cache warming and hit rate optimization
-    const testQueries = ['test', 'performance', 'benchmark', 'cache'];
+    const rawQueries = ['test', 'performance', 'benchmark', 'cache'];
+    // DMCP-SEC-004 FIX: Normalize Unicode in all user input
+    const testQueries = rawQueries.map(q => {
+      const normalized = UnicodeValidator.normalize(q);
+      return normalized.isValid ? normalized.normalizedContent : q;
+    });
     let totalOperations = 0;
     let cacheHitsBefore = 0;
 
