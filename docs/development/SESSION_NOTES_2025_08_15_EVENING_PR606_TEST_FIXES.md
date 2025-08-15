@@ -126,6 +126,91 @@ Using Sonnet agents was EXTREMELY effective:
 3. **Mock Everything**: Collection cache was affecting statistics tests
 4. **User Feedback Matters**: Removing location bias was the right call
 
+## 🎯 EXACT STEPS FOR NEXT SESSION TO FIX REMAINING ISSUES
+
+### Step 1: Get to the Right Place
+```bash
+cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
+git checkout feature/search-index-implementation
+git pull
+```
+
+### Step 2: Identify the 4 Remaining Failures
+```bash
+# Check latest CI run for PR #606
+gh pr checks 606
+
+# Get the run ID from a failing test (look for the number in the URL)
+# Example: if URL is https://github.com/DollhouseMCP/mcp-server/actions/runs/17000898423
+# Then run_id is 17000898423
+
+# Find which tests are failing (replace RUN_ID with actual number)
+gh run view RUN_ID --log 2>/dev/null | grep -B 5 "FAIL test"
+
+# Or check all failures at once
+gh run view RUN_ID --log 2>/dev/null | grep "● " | grep -v "✓" | sort | uniq
+```
+
+### Step 3: Quick Investigation Pattern
+Based on our session, the 4 remaining failures are likely NOT in:
+- ❌ GitHubPortfolioIndexer.test.ts (all 18 passing)
+- ❌ UnifiedIndexManager.test.ts (all 17 passing)
+
+They're probably in other test files. To find them:
+```bash
+# Check test summary from CI
+gh run view RUN_ID --log 2>/dev/null | grep "Test Suites:" -A 5
+```
+
+### Step 4: Use Sonnet Agent if Needed
+If the failures are complex, immediately use a Sonnet agent:
+```typescript
+// Prompt template:
+"Fix the remaining test failures in [test-file-name].test.ts
+
+Current failures:
+[paste error messages from CI]
+
+The tests were working before PR #606 changes which:
+1. Removed location-based scoring from search results
+2. Added security logging
+3. Changed scoring to be purely relevance-based
+
+Please provide complete fixes."
+```
+
+### Step 5: Quick Test Verification
+```bash
+# Test locally before pushing
+npm test -- path/to/failing-test.test.ts --no-coverage
+
+# If all pass, commit and push
+git add -A
+git commit -m "fix: Fix remaining test failures in [component]
+
+- [Brief description of fixes]
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+git push
+```
+
+### Known Context from This Session
+- Security audit is PASSING ✅
+- Core platform tests (Ubuntu/macOS/Windows) are PASSING ✅  
+- GitHubPortfolioIndexer tests are FIXED ✅
+- UnifiedIndexManager tests are FIXED ✅
+- ~4 tests remain out of 1794 total
+- Docker tests are slow but not critical
+
+### Quick Win Checklist
+- [ ] Run commands in Step 2 to identify exact failures
+- [ ] Check if failures are in integration tests vs unit tests
+- [ ] Use Sonnet agent for complex mock issues
+- [ ] Verify locally before pushing
+- [ ] Watch CI for green checkmarks
+
 ## Commands for Next Session
 
 ```bash
@@ -134,9 +219,13 @@ cd /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server
 git checkout feature/search-index-implementation
 git pull
 
+# Check current PR status
+gh pr view 606
+
 # Check which 4 tests are still failing
 gh pr checks 606
-gh run view [run-id] --log | grep "FAIL"
+# Get the run ID from the failing test URL, then:
+gh run view [RUN_ID] --log 2>/dev/null | grep "● " | grep -v "✓"
 
 # Run specific test suites locally
 npm test -- [test-file] --no-coverage
