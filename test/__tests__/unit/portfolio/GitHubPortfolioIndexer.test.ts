@@ -10,11 +10,7 @@ import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 
 // Mock dependencies
 jest.mock('../../../../src/collection/GitHubClient.js');
-jest.mock('../../../../src/security/tokenManager.js', () => ({
-  TokenManager: {
-    getGitHubTokenAsync: jest.fn()
-  }
-}));
+jest.mock('../../../../src/security/tokenManager.js');
 jest.mock('../../../../src/portfolio/PortfolioRepoManager.js');
 
 describe('GitHubPortfolioIndexer', () => {
@@ -33,7 +29,8 @@ describe('GitHubPortfolioIndexer', () => {
     (indexer as any).githubClient = mockGitHubClient;
     
     // Mock TokenManager
-    (TokenManager.getGitHubTokenAsync as jest.MockedFunction<typeof TokenManager.getGitHubTokenAsync>).mockResolvedValue('test-token');
+    const mockGetGitHubTokenAsync = TokenManager.getGitHubTokenAsync as jest.Mock;
+    mockGetGitHubTokenAsync.mockResolvedValue('test-token');
     
     // Mock GitHub API responses
     mockGitHubClient.fetchFromGitHub = jest.fn();
