@@ -8,18 +8,6 @@ import { PortfolioIndexManager, IndexEntry, SearchResult } from '../../../../src
 import { GitHubPortfolioIndexer, GitHubIndexEntry, GitHubPortfolioIndex } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 
-// Mock dependencies
-jest.mock('../../../../src/portfolio/PortfolioIndexManager.js', () => ({
-  PortfolioIndexManager: {
-    getInstance: jest.fn()
-  }
-}));
-jest.mock('../../../../src/portfolio/GitHubPortfolioIndexer.js', () => ({
-  GitHubPortfolioIndexer: {
-    getInstance: jest.fn()
-  }
-}));
-
 describe('UnifiedIndexManager', () => {
   let unifiedManager: UnifiedIndexManager;
   let mockLocalIndexManager: jest.Mocked<PortfolioIndexManager>;
@@ -45,11 +33,9 @@ describe('UnifiedIndexManager', () => {
       getCacheStats: jest.fn()
     } as any;
 
-    // Mock the getInstance methods
-    const MockedPortfolioIndexManager = PortfolioIndexManager as jest.Mocked<typeof PortfolioIndexManager>;
-    const MockedGitHubPortfolioIndexer = GitHubPortfolioIndexer as jest.Mocked<typeof GitHubPortfolioIndexer>;
-    MockedPortfolioIndexManager.getInstance.mockReturnValue(mockLocalIndexManager);
-    MockedGitHubPortfolioIndexer.getInstance.mockReturnValue(mockGitHubIndexer);
+    // Spy on getInstance methods
+    jest.spyOn(PortfolioIndexManager, 'getInstance').mockReturnValue(mockLocalIndexManager);
+    jest.spyOn(GitHubPortfolioIndexer, 'getInstance').mockReturnValue(mockGitHubIndexer);
 
     // Create unified manager
     unifiedManager = UnifiedIndexManager.getInstance();
