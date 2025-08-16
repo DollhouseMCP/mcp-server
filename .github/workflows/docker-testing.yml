@@ -53,8 +53,30 @@ jobs:
           echo "📦 Installing dependencies..."
           npm ci
           echo "🔨 Building TypeScript locally to avoid Docker timeout..."
-          npm run build
+          # Run build with explicit error checking
+          if ! npm run build; then
+            echo "❌ TypeScript compilation failed!"
+            echo "Trying verbose build to see errors:"
+            npx tsc --listFiles || true
+            echo "Checking for TypeScript configuration issues:"
+            cat tsconfig.json
+            echo "Directory contents:"
+            ls -la
+            exit 1
+          fi
           echo "✅ TypeScript compilation completed"
+          # Verify dist directory exists
+          if [ ! -d "dist" ]; then
+            echo "❌ Error: dist/ directory was not created despite successful build!"
+            echo "Checking TypeScript output:"
+            npx tsc --listEmittedFiles || true
+            echo "Listing directory contents:"
+            ls -la
+            echo "Checking if src directory exists:"
+            ls -la src/ | head -10
+            exit 1
+          fi
+          echo "✅ Verified: dist/ directory exists with $(find dist -type f -name "*.js" | wc -l) JavaScript files"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -247,8 +269,30 @@ jobs:
           echo "📦 Installing dependencies for Docker Compose test..."
           npm ci
           echo "🔨 Building TypeScript locally to avoid Docker timeout..."
-          npm run build
+          # Run build with explicit error checking
+          if ! npm run build; then
+            echo "❌ TypeScript compilation failed!"
+            echo "Trying verbose build to see errors:"
+            npx tsc --listFiles || true
+            echo "Checking for TypeScript configuration issues:"
+            cat tsconfig.json
+            echo "Directory contents:"
+            ls -la
+            exit 1
+          fi
           echo "✅ TypeScript compilation completed"
+          # Verify dist directory exists
+          if [ ! -d "dist" ]; then
+            echo "❌ Error: dist/ directory was not created despite successful build!"
+            echo "Checking TypeScript output:"
+            npx tsc --listEmittedFiles || true
+            echo "Listing directory contents:"
+            ls -la
+            echo "Checking if src directory exists:"
+            ls -la src/ | head -10
+            exit 1
+          fi
+          echo "✅ Verified: dist/ directory exists with $(find dist -type f -name "*.js" | wc -l) JavaScript files"
 
       - name: Clear Docker system cache for Docker Compose (cache busting for PR #606)
         shell: bash
