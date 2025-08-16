@@ -109,11 +109,11 @@ jobs:
           docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
             docker run -i \
             --platform ${{ matrix.platform }} \
-            --env DOLLHOUSE_PORTFOLIO_DIR=/tmp/portfolio \
             --user 1001:1001 \
             --security-opt no-new-privileges \
             --read-only \
             --tmpfs /tmp \
+            --tmpfs /app/tmp \
             --memory 512m \
             --cpus 0.5 \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
@@ -154,11 +154,11 @@ jobs:
           echo "⏳ Running MCP server again for functionality testing..."
           docker_output=$(docker run \
             --platform ${{ matrix.platform }} \
-            --env DOLLHOUSE_PORTFOLIO_DIR=/tmp/portfolio \
             --user 1001:1001 \
             --security-opt no-new-privileges \
             --read-only \
             --tmpfs /tmp \
+            --tmpfs /app/tmp \
             --memory 512m \
             --cpus 0.5 \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
@@ -237,10 +237,9 @@ jobs:
           
           # Run MCP server with initialize command via Docker Compose
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
-          # Set portfolio directory to writable location for read-only Docker environment
+          # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
             docker compose --file docker/docker-compose.yml run --rm -T \
-            --env DOLLHOUSE_PORTFOLIO_DIR=/tmp/portfolio \
             dollhousemcp 2>&1 || true)
           exit_code=$?
           
@@ -274,7 +273,6 @@ jobs:
           # Run MCP server again to capture output for functionality testing
           echo "⏳ Running MCP server again for functionality testing..."
           docker_output=$(docker compose --file docker/docker-compose.yml run --rm \
-            --env DOLLHOUSE_PORTFOLIO_DIR=/tmp/portfolio \
             dollhousemcp 2>&1)
           
           # Test that server starts without errors
