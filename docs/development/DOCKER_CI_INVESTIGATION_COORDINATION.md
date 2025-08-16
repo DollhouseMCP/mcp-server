@@ -3,7 +3,7 @@
 **Date**: August 16, 2025  
 **Priority**: CRITICAL - Blocking PR #611  
 **Coordinator**: Opus  
-**Status**: ROOT CAUSE FOUND AND FIXED ✅
+**Status**: NEW CACHE DIRECTORY ISSUE DISCOVERED ❌
 
 ## 🟢 ROOT CAUSE IDENTIFIED
 
@@ -29,14 +29,21 @@ Set `DOLLHOUSE_PORTFOLIO_DIR` environment variable to writable tmpfs location:
 1. **Dockerfile**: Added `ENV DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio`
 2. **docker-compose.yml**: Added environment variable to services
 
-#### Part 2 (Commit: 010dba9) - Path Mismatch Fix ✨
-**Found the real issue**: Path mismatch between configurations!
+#### Part 2 (Commit: 010dba9) - Path Mismatch Fix
+**Found issue #2**: Path mismatch between configurations!
 1. **Removed env overrides**: Let Dockerfile's ENV take effect consistently
 2. **Added tmpfs mount**: Added `--tmpfs /app/tmp` to docker run commands
 3. **Consistent path**: Everything now uses `/app/tmp/portfolio`
 
+#### Part 3 (Commit: 3266bcf) - Collection Cache Fix ✨
+**Found issue #3**: Collection cache also writing to read-only filesystem!
+1. **Added DOLLHOUSE_CACHE_DIR support**: CollectionCache now respects environment variable
+2. **Set cache directory**: `DOLLHOUSE_CACHE_DIR=/app/tmp/cache` in Docker configs
+3. **Both directories fixed**: Portfolio and cache now use writable tmpfs locations
+
 ### Why This Works
-- Portfolio initialization uses `/app/tmp/portfolio` consistently
+- Portfolio initialization uses `/app/tmp/portfolio` consistently  
+- Collection cache uses `/app/tmp/cache` for persistent storage
 - `/app/tmp` is mounted as writable tmpfs volume
 - No conflicting environment variable overrides
 - Server can complete initialization and respond to MCP commands
@@ -61,18 +68,40 @@ Set `DOLLHOUSE_PORTFOLIO_DIR` environment variable to writable tmpfs location:
 - ✅ Tested locally - MCP responds correctly
 - ✅ Committed and pushed fix to PR #611
 
-## Current Status
+#### Latest Investigation Agent (Current)
+- ✅ Analyzed CI logs from commit 3266bcf after all previous fixes
+- ✅ Identified that portfolio fix worked correctly
+- ✅ Found new issue: CollectionCache not using DOLLHOUSE_CACHE_DIR
+- ✅ Confirmed CI test failure due to cache directory errors
+- ❌ **Next**: Need to fix CollectionCache implementation
 
-### What's Fixed
+## ❌ NEW ISSUE DISCOVERED - CACHE DIRECTORY
+
+### Latest CI Results (Commit 3266bcf)
+
+**The Problem**: Collection cache is still trying to write to read-only filesystem!
+
+#### Error Details from CI Logs:
+```
+[2025-08-16T22:27:37.723Z] [ERROR] Failed to create cache directory: Error: ENOENT: no such file or directory, mkdir '/app/.dollhousemcp'
+[2025-08-16T22:27:37.723Z] [ERROR] Failed to save collection cache: Error: ENOENT: no such file or directory, mkdir '/app/.dollhousemcp'
+```
+
+#### Analysis:
+1. **Portfolio fix worked**: ✅ Portfolio now uses `/app/tmp/portfolio` correctly
+2. **MCP initialize works**: ✅ Server responds to MCP commands properly  
+3. **Cache directory problem**: ❌ CollectionCache is NOT using `DOLLHOUSE_CACHE_DIR` environment variable
+4. **CI is still failing**: The test now fails because it detects "error" keywords in logs
+
+### Root Cause #4: Cache Directory Environment Variable Not Working
+The CollectionCache implementation is **not respecting** the `DOLLHOUSE_CACHE_DIR` environment variable and is still trying to create `/app/.dollhousemcp` instead of `/app/tmp/cache`.
+
+### Current Status
 - ✅ Portfolio initialization works in read-only Docker
-- ✅ MCP server responds to initialize commands
-- ✅ Local Docker tests pass
-- ✅ Configuration updated for CI environment
-
-### Waiting For
-- ⏳ CI to run and validate the fix
-- ⏳ PR #611 to be merged
-- ⏳ PR #606 to rebase and continue
+- ✅ MCP server responds to initialize commands  
+- ✅ Local Docker tests may be passing incorrectly (not catching cache errors)
+- ❌ CI detects cache errors and fails tests
+- ❌ CollectionCache needs to be updated to use environment variable
 
 ## Key Lessons Learned
 

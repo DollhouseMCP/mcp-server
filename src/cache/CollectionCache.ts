@@ -35,9 +35,11 @@ export class CollectionCache {
     const envCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
     if (envCacheDir) {
       this.cacheDir = envCacheDir;
+      logger.debug(`CollectionCache: Using environment cache directory: ${this.cacheDir}`);
     } else {
       const defaultBaseDir = baseDir || process.cwd();
       this.cacheDir = path.join(defaultBaseDir, '.dollhousemcp', 'cache');
+      logger.debug(`CollectionCache: Using default cache directory: ${this.cacheDir}`);
     }
     this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
   }
