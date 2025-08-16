@@ -68,7 +68,7 @@ if (process.env.DOLLHOUSE_DEBUG) {
 
 export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
-  private personasDir: string;
+  public personasDir: string | null;
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
   private currentUser: string | null = null;
@@ -117,7 +117,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Previously: this.personasDir was set here, creating directories before migration could fix them
     // Now: We delay directory access until initializePortfolio() completes
     // Using null to make the uninitialized state explicit (per PR review feedback)
-    this.personasDir = null as any; // Will be properly initialized in completeInitialization()
+    this.personasDir = null; // Will be properly initialized in completeInitialization()
     
     // Initialize element managers
     this.skillManager = new SkillManager();
@@ -358,16 +358,17 @@ export class DollhouseMCPServer implements IToolHandler {
 
   private async loadPersonas() {
     // Validate the personas directory path
-    if (!path.isAbsolute(this.personasDir)) {
+    // personasDir is guaranteed to be set by completeInitialization before this is called
+    if (!path.isAbsolute(this.personasDir!)) {
       logger.warn(`Personas directory path is not absolute: ${this.personasDir}`);
     }
     
     try {
-      await fs.access(this.personasDir);
+      await fs.access(this.personasDir!);
     } catch (error) {
       // Create personas directory if it doesn't exist
       try {
-        await fs.mkdir(this.personasDir, { recursive: true });
+        await fs.mkdir(this.personasDir!, { recursive: true });
         logger.info(`Created personas directory at: ${this.personasDir}`);
         // Continue to try loading (directory will be empty)
       } catch (mkdirError) {
@@ -379,7 +380,8 @@ export class DollhouseMCPServer implements IToolHandler {
     }
 
     try {
-      const files = await fs.readdir(this.personasDir);
+      // personasDir is guaranteed to be set by completeInitialization before this is called
+      const files = await fs.readdir(this.personasDir!);
       const markdownFiles = files.filter(file => file.endsWith('.md'));
 
       this.personas.clear();
@@ -390,7 +392,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
       for (const file of markdownFiles) {
         try {
-          const filePath = path.join(this.personasDir, file);
+          const filePath = path.join(this.personasDir!, file);
           const fileContent = await PathValidator.safeReadFile(filePath);
           
           // Use secure YAML parser
@@ -1768,7 +1770,8 @@ export class DollhouseMCPServer implements IToolHandler {
           break;
         case ElementType.PERSONA:
           // For personas, use a different approach
-          const personaPath = path.join(this.personasDir, `${name}.md`);
+          // personasDir is guaranteed to be set after ensureInitialized()
+          const personaPath = path.join(this.personasDir!, `${name}.md`);
           try {
             await fs.access(personaPath);
             await fs.unlink(personaPath);
@@ -2910,7 +2913,8 @@ export class DollhouseMCPServer implements IToolHandler {
       const author = this.getCurrentUserForAttribution();
       const uniqueId = generateUniqueId(sanitizedName, this.currentUser || undefined);
       const filename = validateFilename(`${slugify(sanitizedName)}.md`);
-      const filePath = path.join(this.personasDir, filename);
+      // personasDir is guaranteed to be set after ensureInitialized()
+      const filePath = path.join(this.personasDir!, filename);
 
     // Check if file already exists
     try {
@@ -3100,7 +3104,8 @@ ${sanitizedInstructions}
       };
     }
 
-    let filePath = path.join(this.personasDir, persona.filename);
+    // personasDir is guaranteed to be set after initialization
+    let filePath = path.join(this.personasDir!, persona.filename);
     let isDefault = isDefaultPersona(persona.filename);
 
     try {
@@ -3132,7 +3137,7 @@ ${sanitizedInstructions}
         const author = this.currentUser || generateAnonymousId();
         const uniqueId = generateUniqueId(persona.metadata.name, author);
         const newFilename = `${uniqueId}.md`;
-        const newFilePath = path.join(this.personasDir, newFilename);
+        const newFilePath = path.join(this.personasDir!, newFilename);
         
         // Create copy of the default persona
         const content = await PathValidator.safeReadFile(filePath);
@@ -4480,6 +4485,8 @@ Placeholders for custom format:
       await this.initializePortfolio();
       await this.completeInitialization();
       logger.info("Portfolio and personas initialized successfully");
+      // Output message that Docker tests can detect
+      logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
       throw error; // Re-throw to prevent server from starting with incomplete initialization
