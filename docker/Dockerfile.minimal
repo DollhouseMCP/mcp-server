@@ -1,0 +1,3 @@
+# Minimal test Dockerfile - just echo hello and exit
+FROM alpine:latest
+CMD ["echo", "Hello from minimal Docker test!"]

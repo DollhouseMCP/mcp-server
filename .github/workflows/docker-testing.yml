@@ -306,10 +306,19 @@ jobs:
           docker buildx prune --all --force || true
           echo "✅ Docker system cache cleared"
 
+      - name: Test MINIMAL Docker Compose (hello world test)
+        shell: bash
+        run: |
+          echo "🧪 Testing MINIMAL Docker Compose to verify Docker works at all..."
+          echo "This should just echo 'Hello' and exit successfully"
+          docker compose --file docker/docker-compose.minimal.yml build minimal-test
+          docker compose --file docker/docker-compose.minimal.yml run --rm minimal-test
+          echo "✅ Minimal Docker test passed!"
+          
       - name: Test Docker Compose build (ORIGINAL Dockerfile)
         shell: bash
         run: |
-          echo "🐳 Testing Docker Compose build with ORIGINAL Dockerfile..."
+          echo "🐳 Now testing the REAL Docker Compose build..."
           echo "📁 Verifying directory structure before Docker build:"
           echo "Current directory: $(pwd)"
           echo "Checking if src/ exists:"
