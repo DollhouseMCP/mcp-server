@@ -9,8 +9,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Build artifacts (rebuilt in container)
-# NOTE: dist/ is NOT excluded for Dockerfile.prebuilt which uses pre-compiled TypeScript
-# dist/ -- commented out for prebuilt strategy
+dist/
 *.tsbuildinfo
 
 # Git repository
