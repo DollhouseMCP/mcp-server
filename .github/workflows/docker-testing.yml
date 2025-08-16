@@ -41,51 +41,59 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Node.js for TypeScript compilation
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies and build TypeScript locally
+        shell: bash
+        run: |
+          echo "📦 Installing dependencies..."
+          npm ci
+          echo "🔨 Building TypeScript locally to avoid Docker timeout..."
+          npm run build
+          echo "✅ TypeScript compilation completed"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           platforms: ${{ matrix.platform }}
 
-      - name: Cache Docker layers
+      - name: Cache Docker layers (with cache busting for PR #606)
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ hashFiles('package*.json') }}
+          # Force cache invalidation by including run ID - prevents corrupted cache reuse
+          key: docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ github.run_id }}-${{ hashFiles('package*.json') }}
           restore-keys: |
-            docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-
-            docker-buildx-${{ matrix.runner }}-
+            # Intentionally restrictive to force fresh cache for Docker timeout fix
+            docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ github.run_id }}-
 
-      - name: Build Docker image (builder stage)
-        # Use bash for cross-platform compatibility and native builds (no emulation)
+      - name: Clear buildx builder cache (cache busting for PR #606)
         shell: bash
         run: |
-          echo "🔨 Building Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
+          echo "🧹 Clearing buildx builder cache to eliminate any corrupted layers..."
+          docker buildx prune --all --force || true
+          echo "✅ Buildx cache cleared"
+
+      - name: Build Docker image (prebuilt production)
+        # Use prebuilt Dockerfile that skips TypeScript compilation
+        shell: bash
+        run: |
+          echo "🏗️ Building prebuilt Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
+          echo "Using pre-compiled TypeScript to avoid timeout issues..."
+          echo "Cache strategy: Fresh cache with run ID ${{ github.run_id }} to prevent corruption"
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
             --platform ${{ matrix.platform }} \
-            --target builder \
-            --tag dollhousemcp:builder-${PLATFORM_TAG} \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
-            --load \
-            --file docker/Dockerfile \
-            .
-
-      - name: Build Docker image (production stage)
-        shell: bash
-        run: |
-          echo "🏗️ Building production Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
-          # Convert platform to tag-safe format (replace / with -)
-          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --target production \
             --tag dollhousemcp:latest-${PLATFORM_TAG} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --load \
-            --file docker/Dockerfile \
+            --file docker/Dockerfile.prebuilt \
             .
 
       - name: Scan Docker image for vulnerabilities
@@ -196,12 +204,18 @@ jobs:
           echo "🧹 Cleaning up any dangling containers..."
           docker system prune -f --volumes || true
 
-      - name: Move cache
+      - name: Move cache and complete cleanup (cache busting for PR #606)
         if: always()
         shell: bash
         run: |
+          echo "🧹 Performing comprehensive cache cleanup..."
+          # Remove old cache completely
           rm -rf /tmp/.buildx-cache
+          # Move new cache into place
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+          # Additional cleanup to prevent cache corruption
+          docker system prune -f --volumes || true
+          echo "✅ Cache cleanup completed"
 
       - name: Docker testing complete
         shell: bash
@@ -221,11 +235,36 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Test Docker Compose build
+      - name: Set up Node.js for TypeScript compilation
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies and build TypeScript locally
         shell: bash
         run: |
-          echo "🐳 Testing Docker Compose build..."
-          docker compose --file docker/docker-compose.yml build dollhousemcp
+          echo "📦 Installing dependencies for Docker Compose test..."
+          npm ci
+          echo "🔨 Building TypeScript locally to avoid Docker timeout..."
+          npm run build
+          echo "✅ TypeScript compilation completed"
+
+      - name: Clear Docker system cache for Docker Compose (cache busting for PR #606)
+        shell: bash
+        run: |
+          echo "🧹 Clearing Docker system cache for Docker Compose test..."
+          docker system prune -f --volumes || true
+          docker buildx prune --all --force || true
+          echo "✅ Docker system cache cleared"
+
+      - name: Test Docker Compose build (prebuilt)
+        shell: bash
+        run: |
+          echo "🐳 Testing Docker Compose build with prebuilt TypeScript..."
+          echo "Cache strategy: Fresh build with run ID ${{ github.run_id }} to prevent corruption"
+          # Use prebuilt compose file that references Dockerfile.prebuilt
+          docker compose --file docker/docker-compose.prebuilt.yml build dollhousemcp
 
       - name: Test Docker Compose startup
         shell: bash
@@ -233,8 +272,8 @@ jobs:
           echo "🚀 Testing Docker Compose startup..."
           
           # Run MCP server and capture logs directly (MCP servers exit after initialization)
-          echo "⏳ Running MCP server via Docker Compose..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
+          echo "⏳ Running MCP server via Docker Compose (prebuilt)..."
+          docker_output=$(docker compose --file docker/docker-compose.prebuilt.yml run --rm dollhousemcp 2>&1 || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
@@ -266,7 +305,7 @@ jobs:
           
           # Run MCP server again to capture output for functionality testing
           echo "⏳ Running MCP server again for functionality testing..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1)
+          docker_output=$(docker compose --file docker/docker-compose.prebuilt.yml run --rm dollhousemcp 2>&1)
           
           # Test that server starts without errors
           echo "Testing MCP server initialization..."
@@ -301,8 +340,8 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker compose --file docker/docker-compose.yml down
-          docker compose --file docker/docker-compose.yml rm -f
+          docker compose --file docker/docker-compose.prebuilt.yml down
+          docker compose --file docker/docker-compose.prebuilt.yml rm -f
 
       - name: Docker Compose testing complete
         shell: bash
