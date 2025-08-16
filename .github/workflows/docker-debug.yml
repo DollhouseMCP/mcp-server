@@ -26,13 +26,17 @@ jobs:
           echo "Available space: $(df -h /)"
           echo "Memory: $(free -h)"
 
-  # Level 1: Simple Docker Test (COMMENTED - uncomment to test)
-  # simple-docker:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 5
-  #   steps:
-  #     - name: Docker hello world
-  #       run: docker run --rm alpine:latest echo "Docker works at $(date)"
+  # Level 1: Simple Docker Test (ACTIVE - testing Docker functionality)
+  simple-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Docker hello world
+        timeout-minutes: 2
+        run: |
+          echo "Testing Docker at $(date)"
+          docker run --rm alpine:latest echo "Docker works!"
+          echo "Docker test completed at $(date)"
   
   # Level 2: Docker Build Test (COMMENTED - uncomment to test)
   # docker-build:
@@ -63,15 +67,19 @@ jobs:
   #         docker build -f Dockerfile -t mcp-server-test ..
   #         echo "Build completed successfully"
 
-  # Level 4: Full Docker Compose Test (COMMENTED - uncomment to test)  
-  # docker-compose:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 10
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       
-  #     - name: Docker Compose test
-  #       run: |
-  #         cd docker
-  #         docker compose up --build --exit-code-from app
+  # Level 4: Docker Compose Debug Test (ACTIVE - testing with minimal compose)  
+  docker-compose-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Test minimal Docker Compose
+        timeout-minutes: 3
+        run: |
+          echo "Starting Docker Compose test at $(date)"
+          cd docker
+          # Test with our debug compose file that has simpler services
+          docker compose -f docker-compose.debug.yml run --rm level1-echo
+          echo "Docker Compose test completed at $(date)"
