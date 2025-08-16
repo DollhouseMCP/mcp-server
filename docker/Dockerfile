@@ -90,6 +90,7 @@ ENV NODE_ENV=production \
     DOLLHOUSE_DISABLE_UPDATES=true \
     DOLLHOUSE_SECURITY_MODE=strict \
     DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
+    DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
     PATH="/app/node_modules/.bin:$PATH"
 
 # Default command with explicit platform handling

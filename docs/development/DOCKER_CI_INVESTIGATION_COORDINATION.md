@@ -22,16 +22,23 @@
 
 ## 🟢 SOLUTION IMPLEMENTED
 
-### Fix Applied (Commit: 71ea654)
-Set `DOLLHOUSE_PORTFOLIO_DIR` environment variable to writable tmpfs location:
+### Fix Applied - Two Parts
 
-1. **docker-testing.yml**: Added `--env DOLLHOUSE_PORTFOLIO_DIR=/tmp/portfolio`
-2. **Dockerfile**: Added `ENV DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio`
-3. **docker-compose.yml**: Added environment variable to services
+#### Part 1 (Commit: 71ea654) - Portfolio Directory Fix
+Set `DOLLHOUSE_PORTFOLIO_DIR` environment variable to writable tmpfs location:
+1. **Dockerfile**: Added `ENV DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio`
+2. **docker-compose.yml**: Added environment variable to services
+
+#### Part 2 (Commit: 010dba9) - Path Mismatch Fix ✨
+**Found the real issue**: Path mismatch between configurations!
+1. **Removed env overrides**: Let Dockerfile's ENV take effect consistently
+2. **Added tmpfs mount**: Added `--tmpfs /app/tmp` to docker run commands
+3. **Consistent path**: Everything now uses `/app/tmp/portfolio`
 
 ### Why This Works
-- Portfolio initialization now uses writable `/tmp` or `/app/tmp`
-- These are tmpfs volumes explicitly mounted as writable
+- Portfolio initialization uses `/app/tmp/portfolio` consistently
+- `/app/tmp` is mounted as writable tmpfs volume
+- No conflicting environment variable overrides
 - Server can complete initialization and respond to MCP commands
 
 ## Investigation Timeline

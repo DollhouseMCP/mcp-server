@@ -30,8 +30,15 @@ export class CollectionCache {
   private cacheFile: string;
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for collection cache
   
-  constructor(baseDir: string = process.cwd()) {
-    this.cacheDir = path.join(baseDir, '.dollhousemcp', 'cache');
+  constructor(baseDir?: string) {
+    // Use environment variable if set, otherwise fall back to parameter or default
+    const envCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
+    if (envCacheDir) {
+      this.cacheDir = envCacheDir;
+    } else {
+      const defaultBaseDir = baseDir || process.cwd();
+      this.cacheDir = path.join(defaultBaseDir, '.dollhousemcp', 'cache');
+    }
     this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
   }
   
