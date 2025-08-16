@@ -36,6 +36,7 @@ services:
       - NODE_ENV=production
       - PERSONAS_DIR=/app/data/personas
       - DOLLHOUSE_SECURITY_MODE=strict
+      - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio
     
     volumes:
       # Mount custom personas directory (optional - extends default personas)
@@ -74,6 +75,7 @@ services:
     environment:
       - NODE_ENV=development
       - PERSONAS_DIR=/app/data/personas
+      - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio
     
     volumes:
       - ..:/app
