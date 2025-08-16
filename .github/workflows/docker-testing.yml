@@ -106,6 +106,8 @@ jobs:
         run: |
           echo "🏗️ Building prebuilt Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
           echo "Using pre-compiled TypeScript to avoid timeout issues..."
+          echo "📁 Verifying dist/ directory exists before Docker build:"
+          ls -la dist/ | head -5 || echo "ERROR: dist/ directory not found!"
           echo "Cache strategy: Fresh cache with run ID ${{ github.run_id }} to prevent corruption"
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
@@ -306,6 +308,12 @@ jobs:
         shell: bash
         run: |
           echo "🐳 Testing Docker Compose build with prebuilt TypeScript..."
+          echo "📁 Verifying directory structure before Docker build:"
+          echo "Current directory: $(pwd)"
+          echo "Checking if dist/ exists:"
+          ls -la dist/ | head -5 || echo "dist/ directory not found!"
+          echo "Checking docker/ directory:"
+          ls -la docker/ || echo "docker/ directory not found!"
           echo "Cache strategy: Fresh build with run ID ${{ github.run_id }} to prevent corruption"
           # Use prebuilt compose file that references Dockerfile.prebuilt
           docker compose --file docker/docker-compose.prebuilt.yml build dollhousemcp
