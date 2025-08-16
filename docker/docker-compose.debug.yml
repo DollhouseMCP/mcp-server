@@ -1,0 +1,95 @@
+# Progressive Docker Compose Debug Configurations
+# Use with: docker compose -f docker/docker-compose.debug.yml up <service-name>
+
+services:
+  # Level 1: Simplest possible container test
+  level1-echo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level1
+    image: dollhousemcp:debug-level1
+    container_name: debug-level1-echo
+    restart: "no"
+    
+  # Level 2: Basic Alpine operations
+  level2-basic:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level2
+    image: dollhousemcp:debug-level2
+    container_name: debug-level2-basic
+    restart: "no"
+    
+  # Level 3: Node.js base functionality
+  level3-nodejs:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level3
+    image: dollhousemcp:debug-level3
+    container_name: debug-level3-nodejs
+    restart: "no"
+    
+  # Level 4: npm operations test
+  level4-npm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level4
+    image: dollhousemcp:debug-level4
+    container_name: debug-level4-npm
+    restart: "no"
+    volumes:
+      # Mount only essential files to avoid volume issues
+      - ../package.json:/test/package.json:ro
+      - ../package-lock.json:/test/package-lock.json:ro
+    
+  # Level 5: Minimal build process
+  level5-build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level5
+    image: dollhousemcp:debug-level5
+    container_name: debug-level5-build
+    restart: "no"
+    
+  # Test with security constraints (similar to CI)
+  level1-secure:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level1
+    image: dollhousemcp:debug-level1-secure
+    container_name: debug-level1-secure
+    restart: "no"
+    
+    # Apply CI-like security constraints
+    user: "1001:1001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=10M
+    
+    # Apply resource limits similar to CI
+    mem_limit: 512m
+    cpus: 0.5
+    
+  # Test with minimal resource constraints
+  level1-constrained:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.debug
+      target: level1
+    image: dollhousemcp:debug-level1-constrained
+    container_name: debug-level1-constrained
+    restart: "no"
+    
+    # Very tight resource limits to simulate CI stress
+    mem_limit: 128m
+    cpus: 0.1

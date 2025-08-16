@@ -1,0 +1,77 @@
+name: Docker Debug - Minimal Test
+# Extremely simple workflow to diagnose Docker CI hanging issue
+# Start with basic test, then uncomment levels progressively
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/docker-ci-infrastructure-debug]
+
+jobs:
+  # Level 0: Basic Actions Test
+  basic-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Echo test
+        run: echo "GitHub Actions is running at $(date)"
+        
+      - name: System info
+        run: |
+          echo "Runner: $(uname -a)"
+          echo "Docker version: $(docker --version)"
+          echo "Available space: $(df -h /)"
+          echo "Memory: $(free -h)"
+
+  # Level 1: Simple Docker Test (COMMENTED - uncomment to test)
+  # simple-docker:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 5
+  #   steps:
+  #     - name: Docker hello world
+  #       run: docker run --rm alpine:latest echo "Docker works at $(date)"
+  
+  # Level 2: Docker Build Test (COMMENTED - uncomment to test)
+  # docker-build:
+  #   runs-on: ubuntu-latest  
+  #   timeout-minutes: 5
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       
+  #     - name: Build minimal Dockerfile
+  #       run: |
+  #         echo "FROM alpine:latest" > Dockerfile.minimal
+  #         echo 'CMD ["echo", "Built successfully"]' >> Dockerfile.minimal
+  #         docker build -f Dockerfile.minimal -t test:minimal .
+  #         docker run --rm test:minimal
+
+  # Level 3: Our Dockerfile Test (COMMENTED - uncomment to test)
+  # our-dockerfile:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 10
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       
+  #     - name: Build our Dockerfile
+  #       run: |
+  #         cd docker
+  #         docker build -f Dockerfile -t mcp-server-test ..
+  #         echo "Build completed successfully"
+
+  # Level 4: Full Docker Compose Test (COMMENTED - uncomment to test)  
+  # docker-compose:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 10
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       
+  #     - name: Docker Compose test
+  #       run: |
+  #         cd docker
+  #         docker compose up --build --exit-code-from app

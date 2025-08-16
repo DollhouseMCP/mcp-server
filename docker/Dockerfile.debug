@@ -1,0 +1,39 @@
+# Progressive Docker Debug Configurations
+# Level 1: Alpine Echo - Simplest possible container
+FROM alpine:latest AS level1
+CMD ["echo", "Level 1: Alpine echo works"]
+
+# Level 2: Alpine with Basic Commands - Test basic shell operations
+FROM alpine:latest AS level2
+RUN apk add --no-cache curl
+CMD ["sh", "-c", "echo 'Level 2: Alpine with basic commands' && echo 'Current directory:' && pwd && echo 'Alpine version:' && cat /etc/alpine-release"]
+
+# Level 3: Node.js Base Image - Test Node.js runtime
+FROM node:24-alpine AS level3
+WORKDIR /test
+RUN echo '{"name": "test", "version": "1.0.0"}' > package.json
+RUN echo 'console.log("Level 3: Node.js base image works");' > test.js
+CMD ["node", "test.js"]
+
+# Level 4: Add npm Operations - Test package management
+FROM node:24-alpine AS level4
+WORKDIR /test
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev --silent || npm install --silent
+RUN echo 'console.log("Level 4: npm operations work");' > test.js
+RUN echo 'console.log("Node version:", process.version);' >> test.js
+RUN echo 'console.log("Platform:", process.platform);' >> test.js
+CMD ["node", "test.js"]
+
+# Level 5: Minimal Build Simulation - Test build process without complexity
+FROM node:24-alpine AS level5
+WORKDIR /test
+RUN mkdir -p src dist
+RUN echo 'const message = "Level 5: Minimal build simulation works";' > src/index.js
+RUN echo 'console.log(message);' >> src/index.js
+RUN echo 'module.exports = { message };' >> src/index.js
+RUN cp src/index.js dist/index.js
+CMD ["node", "dist/index.js"]
+
+# Default stage - Level 1 for safety
+FROM level1
