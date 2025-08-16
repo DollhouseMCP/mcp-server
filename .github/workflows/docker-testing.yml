@@ -102,9 +102,10 @@ jobs:
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           
-          # Run MCP server with security constraints and capture output directly
-          echo "⏳ Running MCP server with security constraints..."
-          docker_output=$(docker run \
+          # Run MCP server with security constraints and send initialize command
+          echo "⏳ Running MCP server with initialize command..."
+          docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
+            docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
             --security-opt no-new-privileges \
@@ -119,22 +120,22 @@ jobs:
           echo "Output captured:"
           echo "$docker_output"
           
-          # MCP servers typically output to stderr and may exit with code 0 after initialization
-          # Check for successful initialization in the captured output (stderr is redirected to stdout with 2>&1)
-          # FIX #610: Updated to check for new initialization messages after race condition fix
-          if echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
-            echo "✅ MCP server initialized successfully"
+          # Check for successful MCP response
+          # The server should return a JSON-RPC response with serverInfo
+          if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
+            echo "✅ MCP server responded correctly to initialize command"
+          elif echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
+            echo "✅ MCP server initialized (found log message)"
           elif echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ MCP server loaded personas (alternative success indicator)"
           else
-            echo "⚠️ Did not find expected initialization message"
-            echo "However, MCP servers often exit immediately after setup, which is normal"
-            # Don't fail here - check for errors instead
+            echo "⚠️ Did not find expected MCP response or initialization message"
+            # Check for errors
             if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
               echo "❌ Found errors in output"
               exit 1
             else
-              echo "✅ No errors found, assuming successful initialization"
+              echo "⚠️ No clear success indicator, but no errors found"
             fi
           fi
 
@@ -230,31 +231,31 @@ jobs:
         run: |
           echo "🚀 Testing Docker Compose startup..."
           
-          # Run MCP server and capture logs directly (MCP servers exit after initialization)
-          echo "⏳ Running MCP server via Docker Compose..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
+          # Run MCP server with initialize command via Docker Compose
+          echo "⏳ Running MCP server via Docker Compose with initialize command..."
+          docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
+            docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"
           echo "$docker_output"
           
-          # MCP servers typically output to stderr and may exit with code 0 after initialization
-          # Check for successful initialization in the captured output (stderr is redirected to stdout with 2>&1)
-          # FIX #610: Updated to check for new initialization messages after race condition fix
-          if echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
-            echo "✅ Docker Compose MCP server initialized successfully"
+          # Check for successful MCP response from Docker Compose
+          if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
+            echo "✅ Docker Compose MCP server responded correctly to initialize command"
+          elif echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
+            echo "✅ Docker Compose MCP server initialized (found log message)"
           elif echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ Docker Compose MCP server loaded personas (alternative success indicator)"
           else
-            echo "⚠️ Did not find expected initialization message"
-            echo "However, MCP servers often exit immediately after setup, which is normal"
-            # Don't fail here - check for errors instead
+            echo "⚠️ Did not find expected MCP response or initialization message"
+            # Check for errors
             if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
               echo "❌ Found errors in output"
               exit 1
             else
-              echo "✅ No errors found, assuming successful initialization"
+              echo "⚠️ No clear success indicator, but no errors found"
             fi
           fi
 
