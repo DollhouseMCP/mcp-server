@@ -226,12 +226,13 @@ jobs:
 
       - name: Test Docker Compose startup
         shell: bash
+        timeout-minutes: 2
         run: |
           echo "🚀 Testing Docker Compose startup..."
           
-          # Run MCP server and capture logs directly (MCP servers exit after initialization)
-          echo "⏳ Running MCP server via Docker Compose..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
+          # Run MCP server with timeout to prevent hanging
+          echo "⏳ Running MCP server via Docker Compose (with 30s timeout)..."
+          docker_output=$(timeout 30 docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
@@ -258,12 +259,13 @@ jobs:
 
       - name: Test Docker Compose functionality
         shell: bash
+        timeout-minutes: 2
         run: |
           echo "🔍 Testing Docker Compose MCP server functionality..."
           
-          # Run MCP server again to capture output for functionality testing
-          echo "⏳ Running MCP server again for functionality testing..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1)
+          # Run MCP server with timeout for functionality testing
+          echo "⏳ Running MCP server again for functionality testing (with 30s timeout)..."
+          docker_output=$(timeout 30 docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
           
           # Test that server starts without errors
           echo "Testing MCP server initialization..."
