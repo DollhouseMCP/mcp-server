@@ -72,6 +72,8 @@ export class DollhouseMCPServer implements IToolHandler {
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
   private currentUser: string | null = null;
+  private isInitialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
   private apiCache: APICache = new APICache();
   private collectionCache: CollectionCache = new CollectionCache();
   private rateLimitTracker = new Map<string, number[]>();
@@ -114,7 +116,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // CRITICAL FIX: Don't access directories until after migration runs
     // Previously: this.personasDir was set here, creating directories before migration could fix them
     // Now: We delay directory access until initializePortfolio() completes
-    this.personasDir = ''; // Temporary - will be set after migration
+    // Using null to make the uninitialized state explicit (per PR review feedback)
+    this.personasDir = null as any; // Will be properly initialized in completeInitialization()
     
     // Initialize element managers
     this.skillManager = new SkillManager();
@@ -219,6 +222,39 @@ export class DollhouseMCPServer implements IToolHandler {
     this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
     
     this.loadPersonas();
+    
+    // Mark initialization as complete
+    this.isInitialized = true;
+  }
+  
+  /**
+   * Ensure server is initialized before any operation
+   * FIX #610: Added for test compatibility - tests don't call run()
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.isInitialized) {
+      return;
+    }
+    
+    // If initialization is already in progress, wait for it
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+    
+    // Start initialization
+    this.initializationPromise = (async () => {
+      try {
+        await this.initializePortfolio();
+        await this.completeInitialization();
+        logger.info("Portfolio and personas initialized successfully (lazy)");
+      } catch (error) {
+        ErrorHandler.logError('DollhouseMCPServer.ensureInitialized', error);
+        throw error;
+      }
+    })();
+    
+    await this.initializationPromise;
   }
   
   /**
@@ -1699,6 +1735,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, deleteData } = args;
       
