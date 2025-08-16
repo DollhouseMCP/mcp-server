@@ -1274,6 +1274,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, description, content, metadata } = args;
       
@@ -2848,6 +2851,9 @@ export class DollhouseMCPServer implements IToolHandler {
 
   // Chat-based persona management tools
   async createPersona(name: string, description: string, instructions: string, triggers?: string) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       // Validate required fields
       if (!name || !description || !instructions) {
