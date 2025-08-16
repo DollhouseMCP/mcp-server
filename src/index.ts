@@ -154,35 +154,9 @@ export class DollhouseMCPServer implements IToolHandler {
     this.serverSetup = new ServerSetup();
     this.serverSetup.setupServer(this.server, this);
     
-    // Initialize portfolio and perform migration if needed
-    this.initializePortfolio().then(() => {
-      // NOW safe to access directories after migration
-      this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-      
-      // Log resolved path for debugging
-      logger.info(`Personas directory resolved to: ${this.personasDir}`);
-      
-      // Initialize PathValidator with the personas directory
-      PathValidator.initialize(this.personasDir);
-      
-      // Initialize update manager with safe directory
-      // Use the parent of personas directory to avoid production check
-      const safeDir = path.dirname(this.personasDir);
-      try {
-        this.updateManager = new UpdateManager(safeDir);
-      } catch (error) {
-        ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
-        // Continue without update functionality
-      }
-      
-      // Initialize import module that depends on personasDir
-      this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
-      
-      this.loadPersonas();
-    }).catch(error => {
-      // Don't use CRITICAL in the error message as it triggers Docker test failures
-      ErrorHandler.logError('DollhouseMCPServer.initializePortfolio', error);
-    });
+    // FIX #610: Portfolio initialization moved to run() method to prevent race condition
+    // Previously: this.initializePortfolio().then() ran async in constructor
+    // Now: Initialization happens synchronously in run() before MCP connection
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -214,6 +188,37 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize collection cache for anonymous access
     await this.initializeCollectionCache();
+  }
+  
+  /**
+   * Complete initialization after portfolio is ready
+   * FIX #610: This was previously in a .then() callback in the constructor
+   * Now called synchronously from run() to prevent race condition
+   */
+  private async completeInitialization(): Promise<void> {
+    // NOW safe to access directories after migration
+    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
+    
+    // Log resolved path for debugging
+    logger.info(`Personas directory resolved to: ${this.personasDir}`);
+    
+    // Initialize PathValidator with the personas directory
+    PathValidator.initialize(this.personasDir);
+    
+    // Initialize update manager with safe directory
+    // Use the parent of personas directory to avoid production check
+    const safeDir = path.dirname(this.personasDir);
+    try {
+      this.updateManager = new UpdateManager(safeDir);
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
+      // Continue without update functionality
+    }
+    
+    // Initialize import module that depends on personasDir
+    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+    
+    this.loadPersonas();
   }
   
   /**
@@ -4422,8 +4427,20 @@ Placeholders for custom format:
   }
 
   async run() {
-    const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");
+    
+    // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
+    // This ensures personas and portfolio are ready when MCP commands arrive
+    try {
+      await this.initializePortfolio();
+      await this.completeInitialization();
+      logger.info("Portfolio and personas initialized successfully");
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
+      throw error; // Re-throw to prevent server from starting with incomplete initialization
+    }
+    
+    const transport = new StdioServerTransport();
     
     // Set up graceful shutdown handlers
     const cleanup = async () => {
