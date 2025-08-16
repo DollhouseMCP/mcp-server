@@ -5,10 +5,10 @@ set -e
 
 echo "🚀 Starting MCP server test..."
 
-# Simple MCP request to list personas
-MCP_REQUEST='{"jsonrpc":"2.0","method":"list_personas","params":{},"id":1}'
+# Simple MCP request to list tools (a standard MCP method)
+MCP_REQUEST='{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}'
 
-echo "📤 Sending MCP request: list_personas"
+echo "📤 Sending MCP request: tools/list"
 
 # Run the container, send request, capture response
 RESPONSE=$(echo "$MCP_REQUEST" | docker compose -f docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
