@@ -1,5 +1,7 @@
 ---
 name: Docker Testing
+# Uses native ARM64 runners for ARM64 builds to eliminate emulation overhead
+# GitHub's ubuntu-24.04-arm provides native ARM64 execution for public repositories
 
 on:
   push:
@@ -19,24 +21,25 @@ env:
 jobs:
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          # Use native x86_64 runner for AMD64 builds
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          # Use native ARM64 runner for ARM64 builds (eliminates emulation overhead)
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,16 +50,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('package*.json') }}
+          key: docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ hashFiles('package*.json') }}
           restore-keys: |
-            docker-buildx-${{ runner.os }}-${{ matrix.platform }}-
-            docker-buildx-${{ runner.os }}-
+            docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-
+            docker-buildx-${{ matrix.runner }}-
 
       - name: Build Docker image (builder stage)
-        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        # Use bash for cross-platform compatibility and native builds (no emulation)
         shell: bash
         run: |
-          echo "🔨 Building Docker image for ${{ matrix.platform }}..."
+          echo "🔨 Building Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
@@ -72,7 +75,7 @@ jobs:
       - name: Build Docker image (production stage)
         shell: bash
         run: |
-          echo "🏗️ Building production Docker image for ${{ matrix.platform }}..."
+          echo "🏗️ Building production Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
@@ -97,7 +100,7 @@ jobs:
       - name: Test MCP server initialization (with security constraints)
         shell: bash
         run: |
-          echo "🚀 Testing MCP server initialization for ${{ matrix.platform }}..."
+          echo "🚀 Testing MCP server initialization for ${{ matrix.platform }} on native ${{ matrix.runner }}..."
           
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
@@ -140,7 +143,7 @@ jobs:
       - name: Test MCP server functionality
         shell: bash
         run: |
-          echo "🔍 Testing MCP server functionality for ${{ matrix.platform }}..."
+          echo "🔍 Testing MCP server functionality for ${{ matrix.platform }} on native ${{ matrix.runner }}..."
           
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
