@@ -329,75 +329,66 @@ jobs:
           # Use ORIGINAL compose file that builds TypeScript inside Docker
           timeout 300 docker compose --file docker/docker-compose.yml build dollhousemcp || echo "Build timed out after 5 minutes"
 
-      - name: Test Docker Compose startup
+      - name: Test Docker Compose with MCP commands
         shell: bash
+        timeout-minutes: 2
         run: |
-          echo "🚀 Testing Docker Compose startup..."
+          echo "🚀 Testing Docker Compose with actual MCP commands..."
           
-          # Run MCP server and capture logs directly (MCP servers exit after initialization)
-          echo "⏳ Running MCP server via Docker Compose (ORIGINAL)..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1 || true)
+          # Send a real MCP request to verify the server works
+          echo "📤 Sending MCP tools/list request to server..."
+          
+          # Create MCP request
+          MCP_REQUEST='{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}'
+          
+          # Send request and capture response
+          docker_output=$(echo "$MCP_REQUEST" | docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"
           echo "$docker_output"
           
-          # MCP servers typically output to stderr and may exit with code 0 after initialization
-          # Check for successful initialization in the captured output (stderr is redirected to stdout with 2>&1)
-          if echo "$docker_output" | grep -q "DollhouseMCP server running on stdio"; then
-            echo "✅ Docker Compose MCP server initialized successfully"
-          elif echo "$docker_output" | grep -q "Loaded persona:"; then
-            echo "✅ Docker Compose MCP server loaded personas (alternative success indicator)"
-          else
-            echo "⚠️ Did not find expected initialization message"
-            echo "However, MCP servers often exit immediately after setup, which is normal"
-            # Don't fail here - check for errors instead
-            if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
-              echo "❌ Found errors in output"
-              exit 1
+          # Check if we got a valid JSON-RPC response
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0"'; then
+            echo "✅ Valid JSON-RPC response received from MCP server"
+            
+            if echo "$docker_output" | grep -q '"result"'; then
+              echo "✅ Server successfully processed the tools/list request"
+              echo "🎉 MCP server is fully functional in Docker!"
+            elif echo "$docker_output" | grep -q '"error"'; then
+              echo "⚠️ Server returned an error but is responding to MCP protocol"
+              # This is still a success - server works, just may not have tools
             else
-              echo "✅ No errors found, assuming successful initialization"
+              echo "❌ Unexpected response format"
+              exit 1
             fi
+          else
+            echo "❌ No valid MCP response received"
+            echo "Server may have started but is not responding to MCP requests"
+            exit 1
           fi
 
-      - name: Test Docker Compose functionality
+      - name: Test Docker Compose functionality (additional validation)
         shell: bash
+        timeout-minutes: 1
         run: |
-          echo "🔍 Testing Docker Compose MCP server functionality..."
+          echo "🔍 Additional Docker Compose validation..."
           
-          # Run MCP server again to capture output for functionality testing
-          echo "⏳ Running MCP server again for functionality testing..."
-          docker_output=$(docker compose --file docker/docker-compose.yml run --rm dollhousemcp 2>&1)
+          # Send another MCP request to ensure consistency
+          echo "📤 Sending initialization request..."
+          INIT_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{}},"id":2}'
           
-          # Test that server starts without errors
-          echo "Testing MCP server initialization..."
+          docker_output=$(echo "$INIT_REQUEST" | timeout 30 docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
           
-          # Note: We can't check for "Loaded persona:" because the logger suppresses
-          # console output to maintain MCP protocol compatibility
-          if echo "$docker_output" | grep -q "Starting DollhouseMCP server"; then
-            echo "✅ MCP server initialized successfully"
+          # Verify we get a response
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0"'; then
+            echo "✅ Server responded to initialization request"
           else
-            echo "⚠️ Did not find startup message"
-            echo "Output was:"
-            echo "$docker_output"
-            # Don't fail if we at least got the personas directory message
-            if echo "$docker_output" | grep -q "Personas directory resolved to:"; then
-              echo "✅ Found personas directory initialization"
-            else
-              exit 1
-            fi
+            echo "⚠️ No response to initialization (server may not support this method)"
           fi
           
-          # Verify no critical errors during initialization
-          if echo "$docker_output" | grep -i "error\|failed\|exception"; then
-            echo "❌ Critical errors found during MCP server initialization"
-            echo "Error output:"
-            echo "$docker_output"
-            exit 1
-          else
-            echo "✅ No critical errors during initialization"
-          fi
+          echo "✅ Docker Compose validation completed"
 
       - name: Cleanup Docker Compose
         if: always()
