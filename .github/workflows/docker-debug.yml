@@ -38,34 +38,43 @@ jobs:
           docker run --rm alpine:latest echo "Docker works!"
           echo "Docker test completed at $(date)"
   
-  # Level 2: Docker Build Test (COMMENTED - uncomment to test)
-  # docker-build:
-  #   runs-on: ubuntu-latest  
-  #   timeout-minutes: 5
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       
-  #     - name: Build minimal Dockerfile
-  #       run: |
-  #         echo "FROM alpine:latest" > Dockerfile.minimal
-  #         echo 'CMD ["echo", "Built successfully"]' >> Dockerfile.minimal
-  #         docker build -f Dockerfile.minimal -t test:minimal .
-  #         docker run --rm test:minimal
+  # Level 2: Docker Build Test (ACTIVE - testing minimal build)
+  docker-build-minimal:
+    runs-on: ubuntu-latest  
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Build minimal Dockerfile
+        timeout-minutes: 2
+        run: |
+          echo "Building minimal Dockerfile at $(date)"
+          echo "FROM alpine:latest" > Dockerfile.minimal
+          echo 'CMD ["echo", "Built successfully"]' >> Dockerfile.minimal
+          docker build -f Dockerfile.minimal -t test:minimal .
+          docker run --rm test:minimal
+          echo "Minimal build test completed at $(date)"
 
-  # Level 3: Our Dockerfile Test (COMMENTED - uncomment to test)
-  # our-dockerfile:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 10
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       
-  #     - name: Build our Dockerfile
-  #       run: |
-  #         cd docker
-  #         docker build -f Dockerfile -t mcp-server-test ..
-  #         echo "Build completed successfully"
+  # Level 3: Production Dockerfile Test (ACTIVE - testing actual Dockerfile)
+  docker-build-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Build production Dockerfile
+        timeout-minutes: 8
+        run: |
+          echo "Building production Dockerfile at $(date)"
+          cd docker
+          # Build with timeout to prevent hanging on npm operations
+          timeout 480 docker build -f Dockerfile -t mcp-server-test .. || {
+            echo "Build timed out after 8 minutes"
+            exit 1
+          }
+          echo "Production build completed at $(date)"
 
   # Level 4: Docker Compose Debug Test (ACTIVE - testing with minimal compose)  
   docker-compose-debug:
