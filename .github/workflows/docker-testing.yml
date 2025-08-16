@@ -121,7 +121,8 @@ jobs:
           
           # MCP servers typically output to stderr and may exit with code 0 after initialization
           # Check for successful initialization in the captured output (stderr is redirected to stdout with 2>&1)
-          if echo "$docker_output" | grep -q "DollhouseMCP server running on stdio"; then
+          # FIX #610: Updated to check for new initialization messages after race condition fix
+          if echo "$docker_output" | grep -qE "(Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
             echo "✅ MCP server initialized successfully"
           elif echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ MCP server loaded personas (alternative success indicator)"
@@ -240,7 +241,8 @@ jobs:
           
           # MCP servers typically output to stderr and may exit with code 0 after initialization
           # Check for successful initialization in the captured output (stderr is redirected to stdout with 2>&1)
-          if echo "$docker_output" | grep -q "DollhouseMCP server running on stdio"; then
+          # FIX #610: Updated to check for new initialization messages after race condition fix
+          if echo "$docker_output" | grep -qE "(Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
             echo "✅ Docker Compose MCP server initialized successfully"
           elif echo "$docker_output" | grep -q "Loaded persona:"; then
             echo "✅ Docker Compose MCP server loaded personas (alternative success indicator)"
