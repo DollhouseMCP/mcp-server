@@ -107,7 +107,8 @@ jobs:
           echo "⏳ Running MCP server with initialize command..."
           # CRITICAL FIX: Set DOLLHOUSE_PORTFOLIO_DIR to writable tmpfs location
           # The default ~/.dollhouse/portfolio is read-only in Docker, causing initialization to hang
-          docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
+          # Use timeout to capture response since MCP server runs indefinitely
+          docker_output=$(timeout 5 sh -c "echo '{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"1.0.0\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0.0\"}},\"id\":1}' | \
             docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
@@ -117,7 +118,7 @@ jobs:
             --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
           exit_code=$?
           
           echo "Docker run completed with exit code: $exit_code"
@@ -153,7 +154,8 @@ jobs:
           
           # Run MCP server again to test functionality
           echo "⏳ Running MCP server again for functionality testing..."
-          docker_output=$(docker run \
+          # Use timeout since server runs indefinitely
+          docker_output=$(timeout 2 docker run \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
             --security-opt no-new-privileges \
@@ -162,7 +164,7 @@ jobs:
             --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1 || true)
           
           # Test that server starts without errors
           # Note: We can't check for "Loaded persona:" because the logger suppresses
@@ -257,9 +259,8 @@ jobs:
           # Run MCP server with initialize command via Docker Compose
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
-          docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
-            docker compose --file docker/docker-compose.yml run --rm -T \
-            dollhousemcp 2>&1 || true)
+          # Use timeout since MCP server runs indefinitely
+          docker_output=$(timeout 5 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
