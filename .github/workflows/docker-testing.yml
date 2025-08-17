@@ -21,19 +21,13 @@ env:
 jobs:
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Use native x86_64 runner for AMD64 builds
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          # Use native ARM64 runner for ARM64 builds (eliminates emulation overhead)
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+        platform: [linux/amd64, linux/arm64]
 
     steps:
       - name: Checkout repository
@@ -41,8 +35,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      # No longer pre-building TypeScript locally since PR #611 uses regular Dockerfile
-      # which builds TypeScript inside Docker container
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -66,16 +62,31 @@ jobs:
           docker buildx prune --all --force || true
           echo "✅ Buildx cache cleared"
 
-      - name: Build Docker image
+      - name: Build Docker image (builder stage)
         shell: bash
         run: |
-          echo "🏗️ Building Docker image for ${{ matrix.platform }} natively on ${{ matrix.runner }}..."
-          echo "Using regular Dockerfile that builds TypeScript inside container..."
-          echo "Cache strategy: Fresh cache with run ID ${{ github.run_id }} to prevent corruption"
+          echo "🔨 Building Docker image for ${{ matrix.platform }}..."
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           docker buildx build \
             --platform ${{ matrix.platform }} \
+            --target builder \
+            --tag dollhousemcp:builder-${PLATFORM_TAG} \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --load \
+            --file docker/Dockerfile \
+            .
+
+      - name: Build Docker image (production stage)
+        shell: bash
+        run: |
+          echo "🏗️ Building production Docker image for ${{ matrix.platform }}..."
+          # Convert platform to tag-safe format (replace / with -)
+          PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --target production \
             --tag dollhousemcp:latest-${PLATFORM_TAG} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
@@ -220,16 +231,13 @@ jobs:
   docker-compose-test:
     name: Docker Compose Test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      # No longer pre-building TypeScript locally since PR #611 uses regular Dockerfile
-      # which builds TypeScript inside Docker container
 
       - name: Clear Docker system cache for Docker Compose (cache busting for PR #606)
         shell: bash
