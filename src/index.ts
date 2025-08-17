@@ -68,10 +68,12 @@ if (process.env.DOLLHOUSE_DEBUG) {
 
 export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
-  private personasDir: string;
+  public personasDir: string | null;
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
   private currentUser: string | null = null;
+  private isInitialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
   private apiCache: APICache = new APICache();
   private collectionCache: CollectionCache = new CollectionCache();
   private rateLimitTracker = new Map<string, number[]>();
@@ -114,7 +116,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // CRITICAL FIX: Don't access directories until after migration runs
     // Previously: this.personasDir was set here, creating directories before migration could fix them
     // Now: We delay directory access until initializePortfolio() completes
-    this.personasDir = ''; // Temporary - will be set after migration
+    // Using null to make the uninitialized state explicit (per PR review feedback)
+    this.personasDir = null; // Will be properly initialized in completeInitialization()
     
     // Initialize element managers
     this.skillManager = new SkillManager();
@@ -154,35 +157,9 @@ export class DollhouseMCPServer implements IToolHandler {
     this.serverSetup = new ServerSetup();
     this.serverSetup.setupServer(this.server, this);
     
-    // Initialize portfolio and perform migration if needed
-    this.initializePortfolio().then(() => {
-      // NOW safe to access directories after migration
-      this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-      
-      // Log resolved path for debugging
-      logger.info(`Personas directory resolved to: ${this.personasDir}`);
-      
-      // Initialize PathValidator with the personas directory
-      PathValidator.initialize(this.personasDir);
-      
-      // Initialize update manager with safe directory
-      // Use the parent of personas directory to avoid production check
-      const safeDir = path.dirname(this.personasDir);
-      try {
-        this.updateManager = new UpdateManager(safeDir);
-      } catch (error) {
-        ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
-        // Continue without update functionality
-      }
-      
-      // Initialize import module that depends on personasDir
-      this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
-      
-      this.loadPersonas();
-    }).catch(error => {
-      // Don't use CRITICAL in the error message as it triggers Docker test failures
-      ErrorHandler.logError('DollhouseMCPServer.initializePortfolio', error);
-    });
+    // FIX #610: Portfolio initialization moved to run() method to prevent race condition
+    // Previously: this.initializePortfolio().then() ran async in constructor
+    // Now: Initialization happens synchronously in run() before MCP connection
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -214,6 +191,70 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize collection cache for anonymous access
     await this.initializeCollectionCache();
+  }
+  
+  /**
+   * Complete initialization after portfolio is ready
+   * FIX #610: This was previously in a .then() callback in the constructor
+   * Now called synchronously from run() to prevent race condition
+   */
+  private async completeInitialization(): Promise<void> {
+    // NOW safe to access directories after migration
+    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
+    
+    // Log resolved path for debugging
+    logger.info(`Personas directory resolved to: ${this.personasDir}`);
+    
+    // Initialize PathValidator with the personas directory
+    PathValidator.initialize(this.personasDir);
+    
+    // Initialize update manager with safe directory
+    // Use the parent of personas directory to avoid production check
+    const safeDir = path.dirname(this.personasDir);
+    try {
+      this.updateManager = new UpdateManager(safeDir);
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
+      // Continue without update functionality
+    }
+    
+    // Initialize import module that depends on personasDir
+    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+    
+    this.loadPersonas();
+    
+    // Mark initialization as complete
+    this.isInitialized = true;
+  }
+  
+  /**
+   * Ensure server is initialized before any operation
+   * FIX #610: Added for test compatibility - tests don't call run()
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.isInitialized) {
+      return;
+    }
+    
+    // If initialization is already in progress, wait for it
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+    
+    // Start initialization
+    this.initializationPromise = (async () => {
+      try {
+        await this.initializePortfolio();
+        await this.completeInitialization();
+        logger.info("Portfolio and personas initialized successfully (lazy)");
+      } catch (error) {
+        ErrorHandler.logError('DollhouseMCPServer.ensureInitialized', error);
+        throw error;
+      }
+    })();
+    
+    await this.initializationPromise;
   }
   
   /**
@@ -317,16 +358,17 @@ export class DollhouseMCPServer implements IToolHandler {
 
   private async loadPersonas() {
     // Validate the personas directory path
-    if (!path.isAbsolute(this.personasDir)) {
+    // personasDir is guaranteed to be set by completeInitialization before this is called
+    if (!path.isAbsolute(this.personasDir!)) {
       logger.warn(`Personas directory path is not absolute: ${this.personasDir}`);
     }
     
     try {
-      await fs.access(this.personasDir);
+      await fs.access(this.personasDir!);
     } catch (error) {
       // Create personas directory if it doesn't exist
       try {
-        await fs.mkdir(this.personasDir, { recursive: true });
+        await fs.mkdir(this.personasDir!, { recursive: true });
         logger.info(`Created personas directory at: ${this.personasDir}`);
         // Continue to try loading (directory will be empty)
       } catch (mkdirError) {
@@ -338,7 +380,8 @@ export class DollhouseMCPServer implements IToolHandler {
     }
 
     try {
-      const files = await fs.readdir(this.personasDir);
+      // personasDir is guaranteed to be set by completeInitialization before this is called
+      const files = await fs.readdir(this.personasDir!);
       const markdownFiles = files.filter(file => file.endsWith('.md'));
 
       this.personas.clear();
@@ -349,7 +392,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
       for (const file of markdownFiles) {
         try {
-          const filePath = path.join(this.personasDir, file);
+          const filePath = path.join(this.personasDir!, file);
           const fileContent = await PathValidator.safeReadFile(filePath);
           
           // Use secure YAML parser
@@ -1233,6 +1276,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, description, content, metadata } = args;
       
@@ -1694,6 +1740,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, deleteData } = args;
       
@@ -1721,7 +1770,8 @@ export class DollhouseMCPServer implements IToolHandler {
           break;
         case ElementType.PERSONA:
           // For personas, use a different approach
-          const personaPath = path.join(this.personasDir, `${name}.md`);
+          // personasDir is guaranteed to be set after ensureInitialized()
+          const personaPath = path.join(this.personasDir!, `${name}.md`);
           try {
             await fs.access(personaPath);
             await fs.unlink(personaPath);
@@ -2924,6 +2974,9 @@ export class DollhouseMCPServer implements IToolHandler {
 
   // Chat-based persona management tools
   async createPersona(name: string, description: string, instructions: string, triggers?: string) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       // Validate required fields
       if (!name || !description || !instructions) {
@@ -2980,7 +3033,8 @@ export class DollhouseMCPServer implements IToolHandler {
       const author = this.getCurrentUserForAttribution();
       const uniqueId = generateUniqueId(sanitizedName, this.currentUser || undefined);
       const filename = validateFilename(`${slugify(sanitizedName)}.md`);
-      const filePath = path.join(this.personasDir, filename);
+      // personasDir is guaranteed to be set after ensureInitialized()
+      const filePath = path.join(this.personasDir!, filename);
 
     // Check if file already exists
     try {
@@ -3170,7 +3224,8 @@ ${sanitizedInstructions}
       };
     }
 
-    let filePath = path.join(this.personasDir, persona.filename);
+    // personasDir is guaranteed to be set after initialization
+    let filePath = path.join(this.personasDir!, persona.filename);
     let isDefault = isDefaultPersona(persona.filename);
 
     try {
@@ -3202,7 +3257,7 @@ ${sanitizedInstructions}
         const author = this.currentUser || generateAnonymousId();
         const uniqueId = generateUniqueId(persona.metadata.name, author);
         const newFilename = `${uniqueId}.md`;
-        const newFilePath = path.join(this.personasDir, newFilename);
+        const newFilePath = path.join(this.personasDir!, newFilename);
         
         // Create copy of the default persona
         const content = await PathValidator.safeReadFile(filePath);
@@ -4863,8 +4918,22 @@ Placeholders for custom format:
   }
 
   async run() {
-    const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");
+    
+    // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
+    // This ensures personas and portfolio are ready when MCP commands arrive
+    try {
+      await this.initializePortfolio();
+      await this.completeInitialization();
+      logger.info("Portfolio and personas initialized successfully");
+      // Output message that Docker tests can detect
+      logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
+      throw error; // Re-throw to prevent server from starting with incomplete initialization
+    }
+    
+    const transport = new StdioServerTransport();
     
     // Set up graceful shutdown handlers
     const cleanup = async () => {
