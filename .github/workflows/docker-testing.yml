@@ -112,8 +112,8 @@ jobs:
             --user 1001:1001 \
             --security-opt no-new-privileges \
             --read-only \
-            --tmpfs /tmp \
-            --tmpfs /app/tmp \
+            --tmpfs /tmp:noexec,nosuid,mode=1777 \
+            --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
             --memory 512m \
             --cpus 0.5 \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
@@ -157,8 +157,8 @@ jobs:
             --user 1001:1001 \
             --security-opt no-new-privileges \
             --read-only \
-            --tmpfs /tmp \
-            --tmpfs /app/tmp \
+            --tmpfs /tmp:noexec,nosuid,mode=1777 \
+            --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
             --memory 512m \
             --cpus 0.5 \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1)
