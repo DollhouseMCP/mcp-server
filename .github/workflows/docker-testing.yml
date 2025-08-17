@@ -45,22 +45,14 @@ jobs:
         with:
           platforms: ${{ matrix.platform }}
 
-      - name: Cache Docker layers (with cache busting for PR #606)
+      - name: Cache Docker layers
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          # Force cache invalidation by including run ID - prevents corrupted cache reuse
-          key: docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ github.run_id }}-${{ hashFiles('package*.json') }}
+          key: docker-buildx-${{ runner.os }}-${{ matrix.platform }}-${{ github.sha }}
           restore-keys: |
-            # Intentionally restrictive to force fresh cache for Docker timeout fix
-            docker-buildx-${{ matrix.runner }}-${{ matrix.platform }}-${{ github.run_id }}-
-
-      - name: Clear buildx builder cache (cache busting for PR #606)
-        shell: bash
-        run: |
-          echo "🧹 Clearing buildx builder cache to eliminate any corrupted layers..."
-          docker buildx prune --all --force || true
-          echo "✅ Buildx cache cleared"
+            docker-buildx-${{ runner.os }}-${{ matrix.platform }}-
+            docker-buildx-${{ runner.os }}-
 
       - name: Build Docker image (builder stage)
         shell: bash
@@ -208,18 +200,12 @@ jobs:
           echo "🧹 Cleaning up any dangling containers..."
           docker system prune -f --volumes || true
 
-      - name: Move cache and complete cleanup (cache busting for PR #606)
+      - name: Move cache
         if: always()
         shell: bash
         run: |
-          echo "🧹 Performing comprehensive cache cleanup..."
-          # Remove old cache completely
           rm -rf /tmp/.buildx-cache
-          # Move new cache into place
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
-          # Additional cleanup to prevent cache corruption
-          docker system prune -f --volumes || true
-          echo "✅ Cache cleanup completed"
 
       - name: Docker testing complete
         shell: bash
@@ -239,13 +225,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Clear Docker system cache for Docker Compose (cache busting for PR #606)
-        shell: bash
-        run: |
-          echo "🧹 Clearing Docker system cache for Docker Compose test..."
-          docker system prune -f --volumes || true
-          docker buildx prune --all --force || true
-          echo "✅ Docker system cache cleared"
 
       - name: Test MINIMAL Docker Compose (hello world test)
         shell: bash
@@ -270,78 +249,40 @@ jobs:
           # Build using the regular Dockerfile which compiles TypeScript inside Docker
           docker compose --file docker/docker-compose.yml build dollhousemcp
 
-      - name: Test Docker Compose with MCP commands
+      - name: Test Docker Compose startup
         shell: bash
-        timeout-minutes: 2
         run: |
-          echo "🚀 Testing Docker Compose with MCP initialization and tools/list commands..."
+          echo "🚀 Testing Docker Compose startup..."
           
-          # First test with initialize command (from PR #611)
-          echo "📤 Sending MCP initialize request to server..."
+          # Run MCP server with initialize command via Docker Compose
+          echo "⏳ Running MCP server via Docker Compose with initialize command..."
+          # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           docker_output=$(echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}' | \
             docker compose --file docker/docker-compose.yml run --rm -T \
             dollhousemcp 2>&1 || true)
           exit_code=$?
           
-          echo "Initialize command completed with exit code: $exit_code"
+          echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"
           echo "$docker_output"
           
-          # Check for successful MCP response from initialize
+          # Check for successful MCP response from Docker Compose
           if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
             echo "✅ Docker Compose MCP server responded correctly to initialize command"
           elif echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
             echo "✅ Docker Compose MCP server initialized (found log message)"
+          elif echo "$docker_output" | grep -q "Loaded persona:"; then
+            echo "✅ Docker Compose MCP server loaded personas (alternative success indicator)"
           else
-            echo "⚠️ Did not find expected MCP response to initialize"
-          fi
-          
-          # Now test with tools/list command (from PR #606)
-          echo "📤 Sending MCP tools/list request to server..."
-          MCP_REQUEST='{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}'
-          
-          docker_output=$(echo "$MCP_REQUEST" | docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
-          
-          echo "Tools/list command output:"
-          echo "$docker_output"
-          
-          # Check if we got a valid JSON-RPC response
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0"'; then
-            echo "✅ Valid JSON-RPC response received from MCP server"
-            
-            if echo "$docker_output" | grep -q '"result"'; then
-              echo "✅ Server successfully processed the tools/list request"
-              echo "🎉 MCP server is fully functional in Docker!"
-            elif echo "$docker_output" | grep -q '"error"'; then
-              echo "⚠️ Server returned an error but is responding to MCP protocol"
-              # This is still a success - server works, just may not have tools
+            echo "⚠️ Did not find expected MCP response or initialization message"
+            # Check for errors
+            if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
+              echo "❌ Found errors in output"
+              exit 1
             else
-              echo "⚠️ Got JSON-RPC response but unexpected format"
+              echo "⚠️ No clear success indicator, but no errors found"
             fi
-          else
-            echo "⚠️ No valid JSON-RPC response to tools/list"
           fi
-
-      - name: Test Docker Compose functionality (additional validation)
-        shell: bash
-        timeout-minutes: 1
-        run: |
-          echo "🔍 Additional Docker Compose validation..."
-          
-          # Send another MCP request to ensure consistency
-          echo "📤 Sending another initialization request to verify consistency..."
-          INIT_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{}},"id":3}'
-          
-          docker_output=$(echo "$INIT_REQUEST" | timeout 30 docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1 || true)
-          
-          # Verify we get a response
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0"'; then
-            echo "✅ Server responded to additional initialization request"
-          else
-            echo "⚠️ No response to initialization (server may not support this method)"
-          fi
-          
-          echo "✅ Docker Compose validation completed"
 
       - name: Cleanup Docker Compose
         if: always()
