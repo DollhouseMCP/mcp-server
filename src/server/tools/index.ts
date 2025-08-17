@@ -9,3 +9,5 @@ export * from './CollectionTools.js';
 export * from './UserTools.js';
 export * from './UpdateTools.js';
 export * from './ConfigTools.js';
+export * from './AuthTools.js';
+export * from './BuildInfoTools.js';

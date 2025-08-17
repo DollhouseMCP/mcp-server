@@ -3459,6 +3459,99 @@ Placeholders for custom format:
     }
   }
 
+  /**
+   * Get comprehensive build and runtime information
+   */
+  async getBuildInfo() {
+    try {
+      // Import version information
+      const { PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE, PACKAGE_NAME } = await import('./generated/version.js');
+      
+      // Basic runtime information
+      const buildInfo: any = {
+        version: PACKAGE_VERSION,
+        packageName: PACKAGE_NAME,
+        buildTimestamp: BUILD_TIMESTAMP,
+        buildType: BUILD_TYPE,
+        platform: {
+          architecture: process.arch,
+          platform: process.platform,
+          nodeVersion: process.version,
+          uptime: process.uptime()
+        }
+      };
+
+      // Check if running in Docker
+      try {
+        const cgroups = await fs.readFile('/proc/1/cgroup', 'utf-8');
+        buildInfo.docker = {
+          isDockerContainer: cgroups.includes('docker') || cgroups.includes('containerd'),
+          details: 'Running in containerized environment'
+        };
+      } catch {
+        buildInfo.docker = {
+          isDockerContainer: false,
+          details: 'Not running in container or container detection unavailable'
+        };
+      }
+
+      // Get git information if available
+      try {
+        const { getCurrentGitCommit } = await import('./utils/git.js');
+        const cwd = process.cwd();
+        const gitCommit = await getCurrentGitCommit(cwd);
+        buildInfo.git = {
+          commit: gitCommit,
+          available: true
+        };
+      } catch (error) {
+        buildInfo.git = {
+          commit: 'unavailable',
+          available: false,
+          reason: error instanceof Error ? error.message : 'Git information not available'
+        };
+      }
+
+      // Environment information
+      buildInfo.environment = {
+        isDevelopment: process.env.NODE_ENV === 'development',
+        debugMode: !!process.env.DOLLHOUSE_DEBUG,
+        mcpConnected: true
+      };
+
+      return {
+        content: [{
+          type: "text",
+          text: `🏗️ DollhouseMCP Build Information:\n\n` +
+                `📦 **Package**: ${buildInfo.packageName} v${buildInfo.version}\n` +
+                `⏰ **Built**: ${buildInfo.buildTimestamp}\n` +
+                `🔧 **Build Type**: ${buildInfo.buildType}\n\n` +
+                `💻 **Platform**:\n` +
+                `   • Architecture: ${buildInfo.platform.architecture}\n` +
+                `   • Platform: ${buildInfo.platform.platform}\n` +
+                `   • Node.js: ${buildInfo.platform.nodeVersion}\n` +
+                `   • Uptime: ${Math.floor(buildInfo.platform.uptime)}s\n\n` +
+                `🐳 **Container**: ${buildInfo.docker.isDockerContainer ? 'Yes' : 'No'}\n` +
+                `   ${buildInfo.docker.details}\n\n` +
+                `📋 **Git**: ${buildInfo.git.available ? buildInfo.git.commit.substring(0, 8) : 'N/A'}\n` +
+                `${buildInfo.git.available ? '' : `   ${buildInfo.git.reason}\n`}\n` +
+                `🔧 **Environment**:\n` +
+                `   • Development: ${buildInfo.environment.isDevelopment}\n` +
+                `   • Debug Mode: ${buildInfo.environment.debugMode}\n` +
+                `   • MCP Connected: ${buildInfo.environment.mcpConnected}`
+        }]
+      };
+    } catch (error) {
+      logger.error('Failed to get build info:', error);
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Failed to retrieve build information: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+
   async run() {
     const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");

@@ -65,4 +65,7 @@ export interface IToolHandler {
   importPersona(source: string, overwrite?: boolean): Promise<any>;
   sharePersona(persona: string, expiryDays?: number): Promise<any>;
   importFromUrl(url: string, overwrite?: boolean): Promise<any>;
+  
+  // Build information tools
+  getBuildInfo(): Promise<any>;
 }
