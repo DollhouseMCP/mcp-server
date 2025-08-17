@@ -375,10 +375,31 @@ jobs:
             echo "This suggests the container failed to start or produce any output."
           else
             echo "✅ Output captured, analyzing content..."
-            echo "\n📋 FULL RAW OUTPUT:"
+            echo "\n📋 FULL RAW OUTPUT (first 5000 chars):"
             echo "--- BEGIN OUTPUT ---"
-            echo "$docker_output"
+            echo "$docker_output" | head -c 5000
+            echo ""
             echo "--- END OUTPUT ---"
+            
+            # Extract and display JSON-RPC response if present
+            echo "\n🔍 SEARCHING FOR JSON-RPC RESPONSE:"
+            json_response=$(echo "$docker_output" | grep -o '{"jsonrpc":"2.0"[^}]*}' || echo "")
+            if [ -n "$json_response" ]; then
+              echo "✅ FOUND JSON-RPC RESPONSE:"
+              echo "$json_response" | jq '.' 2>/dev/null || echo "$json_response"
+              
+              # Extract specific fields for validation
+              echo "\n📊 RESPONSE DETAILS:"
+              echo "- Protocol: $(echo "$json_response" | grep -o '"jsonrpc":"[^"]*"' || echo 'Not found')"
+              echo "- ID: $(echo "$json_response" | grep -o '"id":[^,}]*' || echo 'Not found')"
+              echo "- Server Name: $(echo "$json_response" | grep -o '"name":"[^"]*"' || echo 'Not found')"
+              echo "- Has Result: $(echo "$json_response" | grep -q '"result"' && echo 'Yes' || echo 'No')"
+              echo "- Has Error: $(echo "$json_response" | grep -q '"error"' && echo 'Yes' || echo 'No')"
+            else
+              echo "⚠️ No JSON-RPC response pattern found in output"
+              echo "Looking for any JSON-like content..."
+              echo "$docker_output" | grep -o '{.*}' | head -5 || echo "No JSON patterns found"
+            fi
           fi
           
           echo "\n🔍 PLATFORM-SPECIFIC ANALYSIS:"
@@ -508,10 +529,49 @@ jobs:
           echo "🔄 Exit Code: ${tools_exit_code}"
           echo "========================================="
           
-          echo "\n📋 TOOLS/LIST OUTPUT:"
+          echo "\n📋 TOOLS/LIST RAW OUTPUT (first 5000 chars):"
           echo "--- BEGIN OUTPUT ---"
-          echo "$docker_output"
+          echo "$docker_output" | head -c 5000
+          echo ""
           echo "--- END OUTPUT ---"
+          
+          # Extract and display tools/list response
+          echo "\n🔍 EXTRACTING TOOLS/LIST JSON-RPC RESPONSE:"
+          tools_response=$(echo "$docker_output" | grep -o '{"jsonrpc":"2.0".*}' || echo "")
+          if [ -n "$tools_response" ]; then
+            echo "✅ FOUND TOOLS/LIST JSON-RPC RESPONSE:"
+            # Try to pretty print with jq, fall back to raw if jq fails
+            echo "$tools_response" | jq '.' 2>/dev/null || echo "$tools_response"
+            
+            # Extract details about the tools
+            echo "\n📊 TOOLS/LIST RESPONSE ANALYSIS:"
+            echo "- Protocol Version: $(echo "$tools_response" | grep -o '"jsonrpc":"[^"]*"' || echo 'Not found')"
+            echo "- Request ID: $(echo "$tools_response" | grep -o '"id":[^,}]*' || echo 'Not found')"
+            
+            # Check if we have tools in the response
+            if echo "$tools_response" | grep -q '"tools":\['; then
+              echo "- Tools Array: ✅ Present"
+              # Try to count and list tools
+              tool_names=$(echo "$tools_response" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g')
+              tool_count=$(echo "$tool_names" | wc -l | tr -d ' ')
+              echo "- Tool Count: $tool_count tools returned"
+              if [ -n "$tool_names" ]; then
+                echo "\n📦 TOOLS FOUND:"
+                echo "$tool_names" | head -10 | while read -r tool; do
+                  echo "  - $tool"
+                done
+                if [ "$tool_count" -gt 10 ]; then
+                  echo "  ... and $((tool_count - 10)) more"
+                fi
+              fi
+            else
+              echo "- Tools Array: ❌ Not found or empty"
+            fi
+          else
+            echo "⚠️ No valid JSON-RPC response found in tools/list output"
+            echo "Checking for any JSON-like patterns..."
+            echo "$docker_output" | grep -o '{.*}' | head -3 || echo "No JSON patterns detected"
+          fi
           
           echo "\n🧪 JSON-RPC RESPONSE VALIDATION:"
           if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":2'; then
