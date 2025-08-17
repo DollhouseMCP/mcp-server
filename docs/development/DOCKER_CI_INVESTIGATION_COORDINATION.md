@@ -146,6 +146,19 @@ The CollectionCache implementation is **not respecting** the `DOLLHOUSE_CACHE_DI
 4. **Use tmpfs volumes** - `/tmp` or `/app/tmp` for writable locations
 5. **Test with actual MCP commands** - Not just container startup
 
+## Session Status: PAUSED
+
+**Paused at**: 7:30 PM EST, August 16, 2025  
+**Last commit**: `7e162f8` - Added debug logging to CollectionCache  
+**Current issue**: Environment variable works locally but not in CI  
+**Next action**: Check CI logs for debug output from CollectionCache
+
+### To Resume
+1. Check CI results from commit 7e162f8
+2. Look for: `"CollectionCache: Using cache directory"`
+3. If env var not working in CI, implement fallback detection
+4. See `SESSION_DOCKER_CI_DEBUG_2025_08_16_EVENING.md` for full details
+
 ---
 
-*Coordination document last updated: August 16, 2025 - Issue RESOLVED*
+*Coordination document last updated: August 16, 2025 - Issue IN PROGRESS*
