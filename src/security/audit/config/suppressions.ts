@@ -243,6 +243,11 @@ export const suppressions: Suppression[] = [
     file: 'src/tools/**/types.ts',
     reason: 'Type definition files do not process user input - compile-time only'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/BuildInfoService.ts',
+    reason: 'BuildInfoService only processes system information (package.json, git commands, Docker runtime) - the MCP tool takes no parameters and no user input flows through this service'
+  },
   
   // ========================================
   // Audit Logging False Positives
