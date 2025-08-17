@@ -13,6 +13,7 @@ import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
 import { getAuthTools } from './tools/AuthTools.js';
 import { getPortfolioTools } from './tools/PortfolioTools.js';
+import { getBuildInfoTools } from './tools/BuildInfoTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
@@ -63,6 +64,9 @@ export class ServerSetup {
     
     // Register config tools
     this.toolRegistry.registerMany(getConfigTools(instance));
+    
+    // Register build info tools
+    this.toolRegistry.registerMany(getBuildInfoTools(instance));
   }
   
   /**

@@ -52,16 +52,30 @@ describe('UnifiedIndexManager', () => {
 
     // Set up default collection mocks
     const defaultCollectionIndex = {
+      version: '1.0.0',
+      generated: new Date().toISOString(),
       total_elements: 0,
       index: {},
-      build_time_ms: 0,
-      built_at: new Date().toISOString()
+      metadata: {
+        build_time_ms: 0,
+        file_count: 0,
+        skipped_files: 0,
+        categories: 0,
+        nodejs_version: process.version,
+        builder_version: '1.0.0'
+      }
     };
 
     const defaultCollectionCacheStats = {
       isValid: true,
-      lastFetch: new Date(),
-      isStale: false
+      age: 0,
+      hasCache: true,
+      elements: 0,
+      memoryCache: {},
+      performanceMetrics: {
+        averageResponseTime: 0,
+        cacheHitRate: 0
+      }
     };
 
     mockCollectionIndexCache.getIndex.mockResolvedValue(defaultCollectionIndex);
@@ -472,16 +486,30 @@ describe('UnifiedIndexManager', () => {
       };
 
       const mockCollectionIndex = {
+        version: '1.0.0',
+        generated: new Date().toISOString(),
         total_elements: 0,
         index: {},
-        build_time_ms: 0,
-        built_at: new Date().toISOString()
+        metadata: {
+          build_time_ms: 0,
+          file_count: 0,
+          skipped_files: 0,
+          categories: 0,
+          nodejs_version: process.version,
+          builder_version: '1.0.0'
+        }
       };
 
       const mockCollectionCacheStats = {
         isValid: true,
-        lastFetch: new Date(),
-        isStale: false
+        age: 0,
+        hasCache: true,
+        elements: 0,
+        memoryCache: {},
+        performanceMetrics: {
+          averageResponseTime: 0,
+          cacheHitRate: 0
+        }
       };
 
       mockLocalIndexManager.getStats.mockResolvedValue(localStats);
@@ -500,16 +528,30 @@ describe('UnifiedIndexManager', () => {
 
     it('should handle errors in statistics gathering', async () => {
       const mockCollectionIndex = {
+        version: '1.0.0',
+        generated: new Date().toISOString(),
         total_elements: 0,
         index: {},
-        build_time_ms: 0,
-        built_at: new Date().toISOString()
+        metadata: {
+          build_time_ms: 0,
+          file_count: 0,
+          skipped_files: 0,
+          categories: 0,
+          nodejs_version: process.version,
+          builder_version: '1.0.0'
+        }
       };
 
       const mockCollectionCacheStats = {
         isValid: true,
-        lastFetch: new Date(),
-        isStale: false
+        age: 0,
+        hasCache: true,
+        elements: 0,
+        memoryCache: {},
+        performanceMetrics: {
+          averageResponseTime: 0,
+          cacheHitRate: 0
+        }
       };
 
       mockLocalIndexManager.getStats.mockRejectedValue(new Error('Local stats failed'));

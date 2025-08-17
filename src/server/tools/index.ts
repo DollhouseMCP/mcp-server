@@ -11,3 +11,4 @@ export * from './UpdateTools.js';
 export * from './ConfigTools.js';
 export * from './AuthTools.js';
 export * from './PortfolioTools.js';
+export * from './BuildInfoTools.js';

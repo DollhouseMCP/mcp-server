@@ -5,8 +5,8 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
 // Create mock functions first
-const mockFetchFromGitHub = jest.fn();
-const mockCheckPortfolioExists = jest.fn();
+const mockFetchFromGitHub = jest.fn<(url: string) => Promise<any>>();
+const mockCheckPortfolioExists = jest.fn<() => Promise<boolean>>();
 
 // Mock modules using jest.unstable_mockModule for ES modules
 jest.unstable_mockModule('../../../../src/collection/GitHubClient.js', () => ({
@@ -32,13 +32,13 @@ jest.unstable_mockModule('../../../../src/cache/APICache.js', () => ({
 // Import types and non-mocked modules
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { TokenManager } from '../../../../src/security/tokenManager.js';
+import type { GitHubPortfolioIndex, GitHubIndexEntry } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
 
 // Dynamically import the modules under test after mocks are set up
 const { GitHubPortfolioIndexer } = await import('../../../../src/portfolio/GitHubPortfolioIndexer.js');
-const { GitHubPortfolioIndex, GitHubIndexEntry } = await import('../../../../src/portfolio/GitHubPortfolioIndexer.js');
 
 describe('GitHubPortfolioIndexer', () => {
-  let indexer: GitHubPortfolioIndexer;
+  let indexer: any; // Using any due to dynamic import limitations
 
   beforeEach(() => {
     // Reset singleton
@@ -287,10 +287,10 @@ invalid yaml here
     it('should handle large portfolios efficiently', async () => {
       // Mock setTimeout to avoid delays during testing
       const originalSetTimeout = global.setTimeout;
-      global.setTimeout = jest.fn((fn) => {
+      global.setTimeout = jest.fn((fn: any) => {
         if (typeof fn === 'function') fn();
         return 1 as any;
-      });
+      }) as any;
 
       // Create mock data for 1000 elements (make them > 10KB to skip metadata fetching)
       const largePersonaList = Array.from({ length: 1000 }, (_, i) => ({
