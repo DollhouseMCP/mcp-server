@@ -127,35 +127,31 @@ jobs:
           
           # Check for successful MCP response
           # The server should return a JSON-RPC response with serverInfo
-          if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
-            echo "✅ MCP server responded correctly to initialize command"
-          elif echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
-            echo "✅ MCP server initialized (found log message)"
-          elif echo "$docker_output" | grep -q "Loaded persona:"; then
-            echo "✅ MCP server loaded personas (alternative success indicator)"
-          else
-            echo "⚠️ Did not find expected MCP response or initialization message"
-            # Check for errors
-            if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
-              echo "❌ Found errors in output"
-              exit 1
-            else
-              echo "⚠️ No clear success indicator, but no errors found"
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
+            echo "✅ MCP server returned valid JSON-RPC response"
+            if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
+              echo "✅ Response contains correct serverInfo"
             fi
+            # Test passed - we got a proper API response
+          else
+            echo "❌ FAILED: MCP server did not return a JSON-RPC response"
+            echo "This means the server is not responding to API calls properly"
+            exit 1
           fi
 
-      - name: Test MCP server functionality
+      - name: Test MCP server with tools/list command
         shell: bash
         run: |
-          echo "🔍 Testing MCP server functionality for ${{ matrix.platform }} on native ${{ matrix.runner }}..."
+          echo "🔍 Testing MCP server tools/list functionality for ${{ matrix.platform }}..."
           
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           
-          # Run MCP server again to test functionality
-          echo "⏳ Running MCP server again for functionality testing..."
-          # Use timeout since server runs indefinitely
-          docker_output=$(timeout 2 docker run \
+          # Send tools/list command to verify server functionality
+          echo "⏳ Sending tools/list command to MCP server..."
+          # Use timeout since server runs indefinitely after responding
+          docker_output=$(timeout 5 sh -c "echo '{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{},\"id\":2}' | \
+            docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
             --security-opt no-new-privileges \
@@ -164,34 +160,21 @@ jobs:
             --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
             --memory 512m \
             --cpus 0.5 \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1 || true)
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
           
-          # Test that server starts without errors
-          # Note: We can't check for "Loaded persona:" because the logger suppresses
-          # console output to maintain MCP protocol compatibility
-          echo "Checking for successful initialization..."
-          if echo "$docker_output" | grep -q "Starting DollhouseMCP server"; then
-            echo "✅ MCP server started successfully"
-          else
-            echo "⚠️ Did not find startup message"
-            echo "Output was:"
-            echo "$docker_output"
-            # Don't fail if we at least got the personas directory message
-            if echo "$docker_output" | grep -q "Personas directory resolved to:"; then
-              echo "✅ Found personas directory initialization"
-            else
-              exit 1
+          echo "Output captured:"
+          echo "$docker_output"
+          
+          # Check for successful JSON-RPC response
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":2'; then
+            echo "✅ MCP server returned valid JSON-RPC response to tools/list"
+            if echo "$docker_output" | grep -q '"result"'; then
+              echo "✅ Response contains result field - server is fully functional"
             fi
-          fi
-          
-          # Verify no critical errors during initialization
-          if echo "$docker_output" | grep -i "error\|failed\|exception"; then
-            echo "❌ Critical errors found during MCP server initialization"
-            echo "Error output:"
-            echo "$docker_output"
-            exit 1
           else
-            echo "✅ No critical errors during initialization"
+            echo "❌ FAILED: MCP server did not return a JSON-RPC response to tools/list"
+            echo "This indicates the server is not handling API requests properly"
+            exit 1
           fi
 
 
@@ -268,21 +251,15 @@ jobs:
           echo "$docker_output"
           
           # Check for successful MCP response from Docker Compose
-          if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
-            echo "✅ Docker Compose MCP server responded correctly to initialize command"
-          elif echo "$docker_output" | grep -qE "(DollhouseMCP server ready - waiting for MCP connection|Portfolio and personas initialized successfully|DollhouseMCP server running on stdio)"; then
-            echo "✅ Docker Compose MCP server initialized (found log message)"
-          elif echo "$docker_output" | grep -q "Loaded persona:"; then
-            echo "✅ Docker Compose MCP server loaded personas (alternative success indicator)"
-          else
-            echo "⚠️ Did not find expected MCP response or initialization message"
-            # Check for errors
-            if echo "$docker_output" | grep -qi "error\|exception\|failed to"; then
-              echo "❌ Found errors in output"
-              exit 1
-            else
-              echo "⚠️ No clear success indicator, but no errors found"
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
+            echo "✅ Docker Compose MCP server returned valid JSON-RPC response"
+            if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
+              echo "✅ Response contains correct serverInfo - server is working"
             fi
+          else
+            echo "❌ FAILED: Docker Compose MCP server did not return a JSON-RPC response"
+            echo "The server is not responding to API calls through Docker Compose"
+            exit 1
           fi
 
       - name: Cleanup Docker Compose
