@@ -100,7 +100,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.server = new Server(
       {
         name: "dollhousemcp",
-        version: "1.0.0",
+        version: "1.0.0-build-20250817-1630-pr606",
       },
       {
         capabilities: {
@@ -4919,6 +4919,8 @@ Placeholders for custom format:
 
   async run() {
     logger.info("Starting DollhouseMCP server...");
+    // Docker build verification - proves we're running fresh code
+    logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
     
     // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
     // This ensures personas and portfolio are ready when MCP commands arrive
