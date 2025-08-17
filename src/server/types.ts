@@ -33,6 +33,7 @@ export interface IToolHandler {
   // Collection tools
   browseCollection(section?: string, type?: string): Promise<any>;
   searchCollection(query: string): Promise<any>;
+  searchCollectionEnhanced(query: string, options?: any): Promise<any>;
   getCollectionContent(path: string): Promise<any>;
   installContent(path: string): Promise<any>;
   submitContent(content: string): Promise<any>;
@@ -74,4 +75,6 @@ export interface IToolHandler {
   initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}): Promise<any>;
   portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): Promise<any>;
   syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}): Promise<any>;
+  searchPortfolio(options: {query: string; elementType?: string; fuzzyMatch?: boolean; maxResults?: number; includeKeywords?: boolean; includeTags?: boolean; includeTriggers?: boolean; includeDescriptions?: boolean}): Promise<any>;
+  searchAll(options: {query: string; sources?: string[]; elementType?: string; page?: number; pageSize?: number; sortBy?: string}): Promise<any>;
 }

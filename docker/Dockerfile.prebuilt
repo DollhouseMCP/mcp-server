@@ -1,35 +1,7 @@
-# Multi-stage build for production efficiency and security
-# Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node:24-slim AS builder
+# Production-only Dockerfile that uses pre-built TypeScript
+# Skips TypeScript compilation to avoid timeout issues with large index.ts
+# Requires dist/ directory to be built locally before Docker build
 
-# Install build dependencies for better cross-platform compatibility
-# These are especially important for ARM64 builds
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-COPY tsconfig.json ./
-
-# Install dependencies
-RUN npm ci
-
-# Copy source code
-COPY src/ ./src/
-COPY data/personas/ ./data/personas/
-COPY scripts/ ./scripts/
-
-# Build the application
-RUN npm run build
-
-# Production stage with security hardening
-# Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
 FROM node:24-slim AS production
 
 # Install only essential runtime dependencies and remove unnecessary packages
@@ -60,9 +32,9 @@ COPY package*.json ./
 # Install only production dependencies
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built application from builder stage (excluding test files)
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/data/personas ./data/personas
+# Copy pre-built application (dist/ must exist locally)
+COPY dist ./dist
+COPY data/personas ./data/personas
 
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets
@@ -85,7 +57,9 @@ USER dollhouse
 # Add security labels for container metadata
 LABEL security.non-root="true" \
       security.no-new-privileges="true" \
-      security.read-only-root="true"
+      security.read-only-root="true" \
+      build.strategy="prebuilt" \
+      build.note="TypeScript compiled locally to avoid Docker timeout"
 
 # Set environment variables with security considerations
 ENV NODE_ENV=production \
@@ -93,8 +67,6 @@ ENV NODE_ENV=production \
     NODE_OPTIONS="--max-old-space-size=256" \
     DOLLHOUSE_DISABLE_UPDATES=true \
     DOLLHOUSE_SECURITY_MODE=strict \
-    DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
-    DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
     PATH="/app/node_modules/.bin:$PATH"
 
 # Default command with explicit platform handling

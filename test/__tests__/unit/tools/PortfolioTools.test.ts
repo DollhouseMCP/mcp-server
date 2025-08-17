@@ -25,6 +25,8 @@ type MockServer = Partial<IToolHandler> & {
   initPortfolio: jest.MockedFunction<(options: { repositoryName?: string; private?: boolean; description?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   portfolioConfig: jest.MockedFunction<(options: { autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   syncPortfolio: jest.MockedFunction<(options: { direction: string; force: boolean; dryRun: boolean }) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  searchPortfolio: jest.MockedFunction<(options: any) => Promise<{ content: Array<{ type: string; text: string }> }>>;
+  searchAll: jest.MockedFunction<(options: any) => Promise<{ content: Array<{ type: string; text: string }> }>>;
   getPersonaIndicator: jest.MockedFunction<() => string>;
 };
 
@@ -153,6 +155,8 @@ describe('PortfolioTools', () => {
       initPortfolio: jest.fn(),
       portfolioConfig: jest.fn(),
       syncPortfolio: jest.fn(),
+      searchPortfolio: jest.fn(),
+      searchAll: jest.fn(),
       getPersonaIndicator: jest.fn(() => '[TEST] ')
     };
 
@@ -172,15 +176,17 @@ describe('PortfolioTools', () => {
   });
 
   describe('Tool Structure', () => {
-    it('should return all 4 portfolio tools', () => {
+    it('should return all 6 portfolio tools', () => {
       const tools = getPortfolioTools(mockServer as IToolHandler);
-      expect(tools).toHaveLength(4);
+      expect(tools).toHaveLength(6);
       
       const toolNames = tools.map(t => t.tool.name);
       expect(toolNames).toContain('portfolio_status');
       expect(toolNames).toContain('init_portfolio');
       expect(toolNames).toContain('portfolio_config');
       expect(toolNames).toContain('sync_portfolio');
+      expect(toolNames).toContain('search_portfolio');
+      expect(toolNames).toContain('search_all');
     });
 
     it('should have valid tool definitions with proper schemas', () => {
@@ -1046,6 +1052,14 @@ describe('PortfolioTools', () => {
 
       mockServer.syncPortfolio.mockResolvedValue({
         content: [{ type: 'text', text: 'Sync response' }]
+      });
+
+      mockServer.searchPortfolio.mockResolvedValue({
+        content: [{ type: 'text', text: 'Search response' }]
+      });
+
+      mockServer.searchAll.mockResolvedValue({
+        content: [{ type: 'text', text: 'Search all response' }]
       });
 
       for (const { tool, handler } of tools) {

@@ -100,7 +100,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.server = new Server(
       {
         name: "dollhousemcp",
-        version: "1.0.0",
+        version: "1.0.0-build-20250817-1630-pr606",
       },
       {
         capabilities: {
@@ -2049,6 +2049,44 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
 
+  async searchCollectionEnhanced(query: string, options: any = {}) {
+    try {
+      // Enhanced input validation for search query
+      const validatedQuery = MCPInputValidator.validateSearchQuery(query);
+      
+      // Validate and sanitize options
+      const validatedOptions = {
+        elementType: options.elementType ? String(options.elementType) : undefined,
+        category: options.category ? String(options.category) : undefined,
+        page: options.page ? Math.max(1, parseInt(options.page) || 1) : 1,
+        pageSize: options.pageSize ? Math.min(100, Math.max(1, parseInt(options.pageSize) || 25)) : 25,
+        sortBy: options.sortBy && ['relevance', 'name', 'date'].includes(options.sortBy) ? options.sortBy : 'relevance'
+      };
+      
+      const results = await this.collectionSearch.searchCollectionWithOptions(validatedQuery, validatedOptions);
+      const text = this.collectionSearch.formatSearchResultsWithPagination(results, this.getPersonaIndicator());
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: text,
+          },
+        ],
+      };
+    } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${sanitized.message}`,
+          },
+        ],
+      };
+    }
+  }
+
   async getCollectionContent(path: string) {
     try {
       const { metadata, content } = await this.personaDetails.getCollectionContent(path);
@@ -2214,6 +2252,71 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
     
+    // Check for duplicates across all sources before submission
+    try {
+      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
+      const unifiedManager = UnifiedIndexManager.getInstance();
+      
+      // Extract the actual element name from the content path
+      const basename = path.basename(foundPath!, path.extname(foundPath!));
+      const duplicates = await unifiedManager.checkDuplicates(basename);
+      
+      if (duplicates.length > 0) {
+        const duplicate = duplicates[0];
+        let warningText = `⚠️ **Duplicate Detection Alert**\n\n`;
+        warningText += `Found "${duplicate.name}" in multiple sources:\n\n`;
+        
+        for (const source of duplicate.sources) {
+          const sourceIcon = this.getSourceIcon(source.source);
+          warningText += `${sourceIcon} **${source.source}**: ${source.version || 'unknown version'} (${source.lastModified.toLocaleDateString()})\n`;
+        }
+        
+        warningText += `\n`;
+        
+        if (duplicate.hasVersionConflict && duplicate.versionConflict) {
+          warningText += `🔄 **Version Conflict Detected**\n`;
+          warningText += `Recommended source: **${duplicate.versionConflict.recommended}**\n`;
+          warningText += `Reason: ${duplicate.versionConflict.reason}\n\n`;
+        }
+        
+        warningText += `**Recommendations:**\n`;
+        warningText += `• Review existing versions before submitting\n`;
+        warningText += `• Consider updating local version instead of creating duplicate\n`;
+        warningText += `• Ensure your version adds meaningful improvements\n`;
+        warningText += `• Update version number in metadata if submitting enhancement\n\n`;
+        warningText += `**Proceeding with submission anyway...**\n\n`;
+        
+        // Log the duplicate detection for monitoring
+        logger.warn('Duplicate content detected during submission', {
+          contentIdentifier,
+          elementType,
+          duplicateInfo: duplicate
+        });
+        
+        // Continue with submission but show warning
+        const result = await submitTool.execute({
+          name: contentIdentifier,
+          type: elementType
+        });
+        
+        // Combine warning with submission result
+        const responseText = `${this.getPersonaIndicator()}${result.success ? '⚠️' : '❌'} ${warningText}${result.message}`;
+        
+        return {
+          content: [{
+            type: "text",
+            text: responseText,
+          }],
+        };
+      }
+    } catch (duplicateError) {
+      // If duplicate checking fails, log but continue with submission
+      logger.warn('Duplicate checking failed during submission', {
+        contentIdentifier,
+        error: duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
+      });
+    }
+    
     // Execute the submission with the detected element type
     const result = await submitTool.execute({
       name: contentIdentifier,
@@ -2238,8 +2341,9 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async getCollectionCacheHealth() {
     try {
-      // Get cache statistics
-      const stats = await this.collectionCache.getCacheStats();
+      // Get cache statistics from both caches
+      const collectionStats = await this.collectionCache.getCacheStats();
+      const searchStats = await this.collectionSearch.getCacheStats();
       
       // Check if cache directory exists
       const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
@@ -2266,22 +2370,32 @@ export class DollhouseMCPServer implements IToolHandler {
         return `${minutes}m old`;
       };
       
-      // Build health report
+      // Build health report with both cache systems
       const healthReport = {
-        status: stats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
-        cacheExists: cacheFileExists,
-        itemCount: stats.itemCount,
-        cacheAge: formatAge(stats.cacheAge),
-        cacheAgeMs: stats.cacheAge,
-        isValid: stats.isValid,
-        cacheFileSize: cacheFileSize,
-        cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
-        ttlRemaining: stats.isValid ? formatAge(24 * 60 * 60 * 1000 - stats.cacheAge) : 'Expired',
-        recommendation: stats.isValid 
-          ? 'Cache is healthy and serving content' 
-          : cacheFileExists 
-            ? 'Cache has expired. Will refresh on next collection access.'
-            : 'No cache present. Will be created on first collection access.'
+        collection: {
+          status: collectionStats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+          cacheExists: cacheFileExists,
+          itemCount: collectionStats.itemCount,
+          cacheAge: formatAge(collectionStats.cacheAge),
+          cacheAgeMs: collectionStats.cacheAge,
+          isValid: collectionStats.isValid,
+          cacheFileSize: cacheFileSize,
+          cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
+          ttlRemaining: collectionStats.isValid ? formatAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
+        },
+        index: {
+          status: searchStats.index.isValid ? 'healthy' : (searchStats.index.hasCache ? 'expired' : 'empty'),
+          hasCache: searchStats.index.hasCache,
+          elements: searchStats.index.elements,
+          cacheAge: formatAge(searchStats.index.age),
+          isValid: searchStats.index.isValid,
+          ttlRemaining: searchStats.index.isValid ? formatAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
+        },
+        overall: {
+          recommendation: (collectionStats.isValid || searchStats.index.isValid)
+            ? 'Cache system is operational and serving content efficiently'
+            : 'Cache system will refresh on next access for optimal performance'
+        }
       };
       
       return {
@@ -2289,14 +2403,20 @@ export class DollhouseMCPServer implements IToolHandler {
           {
             type: "text",
             text: `${this.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
-              `**Status**: ${healthReport.status === 'healthy' ? '✅' : healthReport.status === 'expired' ? '⚠️' : '📦'} ${healthReport.status.toUpperCase()}\n` +
-              `**Items Cached**: ${healthReport.itemCount}\n` +
-              `**Cache Age**: ${healthReport.cacheAge}\n` +
-              `**Cache Size**: ${healthReport.cacheFileSizeFormatted}\n` +
-              `**Valid**: ${healthReport.isValid ? 'Yes ✓' : 'No ✗'}\n` +
-              `**TTL Remaining**: ${healthReport.ttlRemaining}\n\n` +
-              `**Recommendation**: ${healthReport.recommendation}\n\n` +
-              `Cache enables offline browsing and faster collection access.`,
+              `## 🗄️ Collection Cache (Legacy)\n` +
+              `**Status**: ${healthReport.collection.status === 'healthy' ? '✅' : healthReport.collection.status === 'expired' ? '⚠️' : '📦'} ${healthReport.collection.status.toUpperCase()}\n` +
+              `**Items Cached**: ${healthReport.collection.itemCount}\n` +
+              `**Cache Age**: ${healthReport.collection.cacheAge}\n` +
+              `**Cache Size**: ${healthReport.collection.cacheFileSizeFormatted}\n` +
+              `**TTL Remaining**: ${healthReport.collection.ttlRemaining}\n\n` +
+              `## 🚀 Index Cache (Enhanced Search)\n` +
+              `**Status**: ${healthReport.index.status === 'healthy' ? '✅' : healthReport.index.status === 'expired' ? '⚠️' : '📦'} ${healthReport.index.status.toUpperCase()}\n` +
+              `**Elements Indexed**: ${healthReport.index.elements}\n` +
+              `**Cache Age**: ${healthReport.index.cacheAge}\n` +
+              `**TTL Remaining**: ${healthReport.index.ttlRemaining}\n\n` +
+              `**Overall Status**: ${healthReport.overall.recommendation}\n\n` +
+              `The enhanced index cache provides fast search with pagination, filtering, and sorting. ` +
+              `The collection cache serves as a fallback for offline browsing.`,
           },
         ],
       };
@@ -3987,20 +4107,26 @@ Placeholders for custom format:
         const skillsPath = localPortfolioManager.getElementDir(ElementType.SKILL);
         const templatesPath = localPortfolioManager.getElementDir(ElementType.TEMPLATE);
         const agentsPath = localPortfolioManager.getElementDir(ElementType.AGENT);
+        const memoriesPath = localPortfolioManager.getElementDir(ElementType.MEMORY);
+        const ensemblesPath = localPortfolioManager.getElementDir(ElementType.ENSEMBLE);
 
-        const [personas, skills, templates, agents] = await Promise.all([
+        const [personas, skills, templates, agents, memories, ensembles] = await Promise.all([
           this.countElementsInDir(personasPath),
           this.countElementsInDir(skillsPath),
           this.countElementsInDir(templatesPath),
-          this.countElementsInDir(agentsPath)
+          this.countElementsInDir(agentsPath),
+          this.countElementsInDir(memoriesPath),
+          this.countElementsInDir(ensemblesPath)
         ]);
 
-        const totalElements = personas + skills + templates + agents;
+        const totalElements = personas + skills + templates + agents + memories + ensembles;
         statusText += `📈 **Local Elements**:\n`;
         statusText += `  • Personas: ${personas}\n`;
         statusText += `  • Skills: ${skills}\n`;
         statusText += `  • Templates: ${templates}\n`;
         statusText += `  • Agents: ${agents}\n`;
+        statusText += `  • Memories: ${memories}\n`;
+        statusText += `  • Ensembles: ${ensembles}\n`;
         statusText += `  • **Total**: ${totalElements}\n\n`;
 
         statusText += `🔄 **Sync Status**: Use sync_portfolio to update GitHub\n`;
@@ -4326,6 +4452,321 @@ Placeholders for custom format:
   }
 
   /**
+   * Search local portfolio using the metadata index system
+   * This provides fast, comprehensive search across all element types
+   */
+  async searchPortfolio(options: {
+    query: string; 
+    elementType?: string; 
+    fuzzyMatch?: boolean; 
+    maxResults?: number; 
+    includeKeywords?: boolean; 
+    includeTags?: boolean; 
+    includeTriggers?: boolean; 
+    includeDescriptions?: boolean;
+  }) {
+    try {
+      // Validate the query parameter
+      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
+          }]
+        };
+      }
+
+      // Import portfolio index manager
+      const { PortfolioIndexManager } = await import('./portfolio/PortfolioIndexManager.js');
+      const indexManager = PortfolioIndexManager.getInstance();
+
+      // Parse element type if provided
+      let elementType: ElementType | undefined;
+      if (options.elementType) {
+        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
+        if (!validTypes.includes(options.elementType)) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
+            }]
+          };
+        }
+        elementType = options.elementType as ElementType;
+      }
+
+      // Build search options
+      const searchOptions = {
+        elementType,
+        fuzzyMatch: options.fuzzyMatch !== false, // Default to true
+        maxResults: options.maxResults || 20,
+        includeKeywords: options.includeKeywords !== false,
+        includeTags: options.includeTags !== false,
+        includeTriggers: options.includeTriggers !== false,
+        includeDescriptions: options.includeDescriptions !== false
+      };
+
+      // Perform the search
+      const results = await indexManager.search(options.query, searchOptions);
+
+      // Format the results
+      let text = `${this.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
+      text += `**Query**: "${options.query}"\n`;
+      
+      if (elementType) {
+        text += `**Type Filter**: ${elementType}\n`;
+      }
+      
+      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
+
+      if (results.length === 0) {
+        text += `No elements found matching your search criteria.\n\n`;
+        text += `**Tips for better results:**\n`;
+        text += `• Try different keywords or partial names\n`;
+        text += `• Remove the type filter to search all element types\n`;
+        text += `• Check spelling and try synonyms\n`;
+        text += `• Use the list_elements tool to see all available content`;
+      } else {
+        text += `**Results:**\n\n`;
+        
+        for (const result of results) {
+          const { entry, matchType } = result;
+          const icon = this.getElementIcon(entry.elementType);
+          
+          text += `${icon} **${entry.metadata.name}**\n`;
+          text += `   📁 Type: ${entry.elementType}\n`;
+          text += `   🎯 Match: ${matchType}\n`;
+          
+          if (entry.metadata.description) {
+            const desc = entry.metadata.description.length > 100 
+              ? entry.metadata.description.substring(0, 100) + '...'
+              : entry.metadata.description;
+            text += `   📝 ${desc}\n`;
+          }
+          
+          if (entry.metadata.tags && entry.metadata.tags.length > 0) {
+            text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
+          }
+          
+          text += `   📄 File: ${entry.filename}.md\n\n`;
+        }
+        
+        if (results.length >= searchOptions.maxResults) {
+          text += `⚠️ Results limited to ${searchOptions.maxResults}. Refine your search for more specific results.\n\n`;
+        }
+        
+        text += `💡 **Next steps:**\n`;
+        text += `• Use get_element_details to see full content\n`;
+        text += `• Use activate_element to activate elements\n`;
+        text += `• Use submit_content to share with the community`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text
+        }]
+      };
+
+    } catch (error: any) {
+      ErrorHandler.logError('DollhouseMCPServer.searchPortfolio', error, { 
+        query: options.query,
+        elementType: options.elementType 
+      });
+      
+      return {
+        content: [{
+          type: "text", 
+          text: `${this.getPersonaIndicator()}❌ Search failed: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Search across all sources (local, GitHub, collection) using UnifiedIndexManager
+   * This provides comprehensive search with duplicate detection and version comparison
+   */
+  async searchAll(options: {
+    query: string;
+    sources?: string[];
+    elementType?: string;
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+  }) {
+    try {
+      // Validate the query parameter
+      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
+          }]
+        };
+      }
+
+      // Import unified index manager
+      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
+      const { ElementType } = await import('./portfolio/types.js');
+      const unifiedManager = UnifiedIndexManager.getInstance();
+
+      // Parse element type if provided
+      let elementType: ElementType | undefined;
+      if (options.elementType) {
+        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
+        if (!validTypes.includes(options.elementType)) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
+            }]
+          };
+        }
+        elementType = options.elementType as ElementType;
+      }
+
+      // Parse sources (default to local and github)
+      const sources = options.sources || ['local', 'github'];
+      const includeLocal = sources.includes('local');
+      const includeGitHub = sources.includes('github');
+      const includeCollection = sources.includes('collection');
+
+      // Build search options
+      const searchOptions = {
+        query: options.query,
+        includeLocal,
+        includeGitHub,
+        includeCollection,
+        elementType,
+        page: options.page || 1,
+        pageSize: options.pageSize || 20,
+        sortBy: (options.sortBy as any) || 'relevance'
+      };
+
+      // Perform the unified search
+      const results = await unifiedManager.search(searchOptions);
+
+      // Format the results
+      let text = `${this.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
+      text += `**Query**: "${options.query}"\n`;
+      text += `**Sources**: ${sources.join(', ')}\n`;
+      
+      if (elementType) {
+        text += `**Type Filter**: ${elementType}\n`;
+      }
+      
+      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
+
+      if (results.length === 0) {
+        text += `No elements found matching your search criteria.\n\n`;
+        text += `**Tips for better results:**\n`;
+        text += `• Try different keywords or partial names\n`;
+        text += `• Remove the type filter to search all element types\n`;
+        text += `• Include more sources: local, github, collection\n`;
+        text += `• Check spelling and try synonyms\n`;
+        text += `• Use browse_collection to explore available content`;
+      } else {
+        text += `**Results:**\n\n`;
+        
+        for (const result of results) {
+          const { entry, source, matchType, score, isDuplicate, versionConflict } = result;
+          const icon = this.getElementIcon(entry.elementType);
+          const sourceIcon = this.getSourceIcon(source);
+          
+          text += `${icon} **${entry.name}** ${sourceIcon}\n`;
+          text += `   📁 Type: ${entry.elementType} | Source: ${source}\n`;
+          text += `   🎯 Match: ${matchType} | Score: ${score.toFixed(2)}\n`;
+          
+          if (entry.description) {
+            const desc = entry.description.length > 100 
+              ? entry.description.substring(0, 100) + '...'
+              : entry.description;
+            text += `   📝 ${desc}\n`;
+          }
+
+          if (entry.version) {
+            text += `   🏷️ Version: ${entry.version}\n`;
+          }
+
+          // Show duplicate information
+          if (isDuplicate) {
+            text += `   ⚠️ **Duplicate detected across sources**\n`;
+            if (versionConflict) {
+              text += `   🔄 Version conflict - Recommended: ${versionConflict.recommended} (${versionConflict.reason})\n`;
+            }
+          }
+          
+          text += `\n`;
+        }
+        
+        const hasMore = results.length >= searchOptions.pageSize;
+        if (hasMore) {
+          const nextPage = searchOptions.page + 1;
+          text += `⚠️ Results limited to ${searchOptions.pageSize}. Use page=${nextPage} for more results.\n\n`;
+        }
+        
+        text += `💡 **Next steps:**\n`;
+        text += `• Use get_element_details to see full content\n`;
+        text += `• Use install_content for collection items\n`;
+        text += `• Use activate_element for local elements\n`;
+        text += `• Check for duplicates before submitting new content`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text
+        }]
+      };
+
+    } catch (error: any) {
+      const { ErrorHandler } = await import('./utils/ErrorHandler.js');
+      const { SecureErrorHandler } = await import('./security/errorHandler.js');
+      
+      ErrorHandler.logError('DollhouseMCPServer.searchAll', error, { 
+        query: options.query,
+        sources: options.sources,
+        elementType: options.elementType 
+      });
+      
+      return {
+        content: [{
+          type: "text", 
+          text: `${this.getPersonaIndicator()}❌ Unified search failed: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Get icon for source type
+   */
+  private getSourceIcon(source: string): string {
+    const icons: { [key: string]: string } = {
+      local: '💻',
+      github: '🐙',
+      collection: '🌐'
+    };
+    return icons[source] || '📁';
+  }
+
+  /**
+   * Get icon for element type
+   */
+  private getElementIcon(elementType: ElementType): string {
+    const icons = {
+      personas: '🎭',
+      skills: '🎯',
+      templates: '📄',
+      agents: '🤖',
+      memories: '🧠',
+      ensembles: '🎼'
+    };
+    return icons[elementType] || '📁';
+  }
+
+  /**
    * Helper method to count elements in a directory
    */
   private async countElementsInDir(dirPath: string): Promise<number> {
@@ -4478,6 +4919,8 @@ Placeholders for custom format:
 
   async run() {
     logger.info("Starting DollhouseMCP server...");
+    // Docker build verification - proves we're running fresh code
+    logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
     
     // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
     // This ensures personas and portfolio are ready when MCP commands arrive
