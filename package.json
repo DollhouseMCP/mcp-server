@@ -120,7 +120,7 @@
     "jest": "^30.0.4",
     "ts-jest": "^29.4.0",
     "ts-jest-resolver": "^2.0.1",
-    "tsx": "^4.0.0",
+    "tsx": "^4.20.4",
     "typescript": "^5.8.3"
   },
   "engines": {
