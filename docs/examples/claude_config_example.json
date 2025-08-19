@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "persona-mcp-server": {
-      "command": "node",
-      "args": ["/path/to/persona-mcp-server/dist/index.js"]
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["@dollhousemcp/mcp-server"]
     }
   }
 }
@@ -13,17 +13,26 @@
 // 3. On Linux: Save to ~/.config/Claude/claude_desktop_config.json
 // 4. Restart Claude Desktop after making changes
 
-// Note: The PERSONAS_DIR environment variable is optional - the server will automatically
-// look for personas in the "personas" subdirectory of the server installation folder
-
-// If you want to use a custom personas directory, add the env section:
+// Alternative: Source installation (for development)
 // {
 //   "mcpServers": {
-//     "persona-mcp-server": {
+//     "dollhousemcp": {
 //       "command": "node",
-//       "args": ["/path/to/persona-mcp-server/dist/index.js"],
+//       "args": ["/absolute/path/to/DollhouseMCP/dist/index.js"]
+//     }
+//   }
+// }
+
+// With environment variables (optional):
+// {
+//   "mcpServers": {
+//     "dollhousemcp": {
+//       "command": "npx",
+//       "args": ["@dollhousemcp/mcp-server"],
 //       "env": {
-//         "PERSONAS_DIR": "/custom/path/to/personas"
+//         "DOLLHOUSE_USER": "your-username",
+//         "DOLLHOUSE_EMAIL": "your-email@example.com",
+//         "DOLLHOUSE_GITHUB_CLIENT_ID": "your_oauth_client_id"
 //       }
 //     }
 //   }
