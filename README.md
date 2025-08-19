@@ -1030,8 +1030,6 @@ node dist/index.js --help 2>/dev/null || echo "Server compiled successfully"
 
 # Verify personas directory
 ls -la personas/
-
-get_server_status    # Check current system status
 ```
 
 ## ☁️ Cloud Deployment
@@ -1496,13 +1494,6 @@ interface DollhouseTool {
 // validate_persona - { persona: string }
 ```
 
-#### Auto-Update System
-```typescript
-// check_for_updates - No parameters
-// update_server - { confirm: boolean }
-// rollback_update - { confirm: boolean }
-// get_server_status - No parameters
-```
 
 ### Error Handling
 
@@ -1555,7 +1546,6 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
   - Smart caching with ETags and conditional requests
 - 🛠️ **System Tools**:
   - `get_build_info` - Comprehensive build and runtime information
-  - `convert_to_git_installation` - Convert npm to git installation
 - ⚙️ **Collection Configuration**:
   - `configure_collection_submission` - Auto-submit settings
   - `get_collection_submission_config` - Check submission config

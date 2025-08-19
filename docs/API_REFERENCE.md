@@ -4,7 +4,7 @@ Complete reference for all MCP tools available in DollhouseMCP v1.6.0
 
 ## Overview
 
-DollhouseMCP provides 56 MCP tools organized into these categories:
+DollhouseMCP provides 51 MCP tools organized into these categories:
 - **Element Tools**: Work with all element types (personas, skills, templates, agents, memories, ensembles)
 - **Persona Tools**: Legacy tools for backward compatibility (being phased out)
 - **Collection Tools**: GitHub marketplace integration and community content
@@ -16,7 +16,7 @@ DollhouseMCP provides 56 MCP tools organized into these categories:
 
 ## Breaking Changes in v1.6.0
 
-- **Tool Count**: Expanded from 40+ to 56 total tools
+- **Tool Count**: Expanded from 40+ to 51 total tools
 - **Portfolio System**: New portfolio management tools for local and GitHub synchronization
 - **Enhanced Search**: Unified search across local, GitHub, and collection sources
 - **Collection Enhancements**: Enhanced search with pagination and filtering
@@ -959,7 +959,7 @@ For users upgrading from earlier versions, see these migration guides:
 2. **Validate Content**: Use `validate_element` before important operations
 3. **Set User Identity**: Configure identity for proper attribution with `set_user_identity`
 4. **Manage Portfolios**: Use portfolio tools for organized element management
-5. **Stay Updated**: Regularly check for updates with `check_for_updates`
+5. **Keep Elements Updated**: Regularly sync your portfolio and collection content
 6. **Use Type Plurals**: Element types are plural (`personas`, `skills`, not `persona`, `skill`)
 
 ## Common Workflows
@@ -1012,7 +1012,7 @@ submit_content "My Custom Helper"
 
 ## Version History
 
-- **v1.6.0**: 56 total tools, portfolio management, enhanced search, build diagnostics
+- **v1.6.0**: 51 total tools, portfolio management, enhanced search, build diagnostics
 - **v1.5.0**: GitHub OAuth authentication with secure token storage  
 - **v1.4.5**: Fixed Claude Desktop integration issues
 - **v1.4.0**: NPM package distribution support
