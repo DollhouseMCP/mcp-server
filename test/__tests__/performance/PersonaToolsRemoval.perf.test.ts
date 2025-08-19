@@ -53,10 +53,15 @@ describe('PersonaTools Removal Performance Verification', () => {
         const server = new DollhouseMCPServer();
         const initTime = performance.now();
 
+        // ✅ FIXED: Handle MCP responses in performance measurement [AGENT-FIX-637]
+        // ✅ FIXED: Use unique persona names to avoid conflicts [AGENT-FIX-637]
         // Test first operation (creation)
         const firstOpStart = performance.now();
-        await server.createPersona('Performance Test', 'Test persona', 'Test instructions');
+        const uniqueName = `Performance Test ${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const createResponse = await server.createPersona(uniqueName, 'Test persona', 'Test instructions');
         const firstOpEnd = performance.now();
+        // Verify creation was successful
+        expect(createResponse.content[0].text).toContain('✅');
 
         // Test multiple operations for average
         const avgOpStart = performance.now();
@@ -64,8 +69,12 @@ describe('PersonaTools Removal Performance Verification', () => {
         for (let i = 0; i < 5; i++) {
             operations.push(server.listPersonas());
         }
-        await Promise.all(operations);
+        const results = await Promise.all(operations);
         const avgOpEnd = performance.now();
+        // Verify all operations returned proper MCP responses
+        results.forEach(result => {
+            expect(result.content[0].type).toBe('text');
+        });
 
         const endMemory = process.memoryUsage().heapUsed;
 
@@ -281,16 +290,23 @@ describe('PersonaTools Removal Performance Verification', () => {
             
             const startTime = performance.now();
             
+            // ✅ FIXED: Handle MCP responses in concurrent operations [AGENT-FIX-637]
+            // ✅ FIXED: Use unique names for concurrent personas [AGENT-FIX-637]
             // Test concurrent operations
+            const timestamp = Date.now();
             const operations = [
-                server.createPersona('Concurrent 1', 'Test 1', 'Instructions 1'),
-                server.createPersona('Concurrent 2', 'Test 2', 'Instructions 2'),
-                server.createPersona('Concurrent 3', 'Test 3', 'Instructions 3'),
+                server.createPersona(`Concurrent 1 ${timestamp}`, 'Test 1', 'Instructions 1'),
+                server.createPersona(`Concurrent 2 ${timestamp}`, 'Test 2', 'Instructions 2'),
+                server.createPersona(`Concurrent 3 ${timestamp}`, 'Test 3', 'Instructions 3'),
                 server.listPersonas(),
                 server.listPersonas()
             ];
             
-            await Promise.all(operations);
+            const results = await Promise.all(operations);
+            // Verify all operations returned proper MCP responses
+            results.forEach(result => {
+                expect(result.content[0].type).toBe('text');
+            });
             
             const endTime = performance.now();
             const duration = endTime - startTime;
@@ -303,9 +319,13 @@ describe('PersonaTools Removal Performance Verification', () => {
             expect(duration).toBeLessThan(2000); // Less than 2 seconds for all
             expect(duration / 5).toBeLessThan(400); // Less than 400ms average
             
+            // ✅ FIXED: Verify operations with MCP response parsing [AGENT-FIX-637]
             // Verify all operations completed successfully
-            const personas = await server.listPersonas();
-            expect(personas.length).toBeGreaterThanOrEqual(3);
+            const personasResponse = await server.listPersonas();
+            const personasText = personasResponse.content[0].text;
+            const personaCount = personasText.includes('Available Personas (') ? 
+                parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+            expect(personaCount).toBeGreaterThanOrEqual(3);
         });
 
         test('should maintain performance under load', async () => {
@@ -314,12 +334,15 @@ describe('PersonaTools Removal Performance Verification', () => {
             
             const measurements = [];
             
+            // ✅ FIXED: Handle MCP responses in load testing [AGENT-FIX-637]
             // Simulate load with multiple sequential operations
             for (let i = 0; i < 10; i++) {
                 const start = performance.now();
-                await server.listPersonas();
+                const response = await server.listPersonas();
                 const end = performance.now();
                 measurements.push(end - start);
+                // Verify each response is valid
+                expect(response.content[0].type).toBe('text');
             }
             
             const avgTime = measurements.reduce((a, b) => a + b, 0) / measurements.length;
