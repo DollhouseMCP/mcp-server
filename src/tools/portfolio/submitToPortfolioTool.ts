@@ -115,9 +115,24 @@ export class SubmitToPortfolioTool {
         // Type explicitly provided - search in that specific directory only
         localPath = await this.findLocalContent(safeName, elementType);
         if (!localPath) {
+          // UX IMPROVEMENT: Provide helpful suggestions for finding content
+          const portfolioManager = PortfolioManager.getInstance();
+          const elementDir = portfolioManager.getElementDir(elementType);
+          
           return {
             success: false,
-            message: `Could not find ${elementType} named "${params.name}" in local portfolio`,
+            message: `Could not find ${elementType} named "${params.name}" in local portfolio.\n\n` +
+                    `**Searched in**: ${elementDir}\n\n` +
+                    `**Troubleshooting Tips**:\n` +
+                    `• Check if the file exists using your file explorer\n` +
+                    `• Try using the exact filename (without extension)\n` +
+                    `• Use \`list_portfolio\` to see all available ${elementType}\n` +
+                    `• If unsure of the type, omit --type and let the system detect it\n\n` +
+                    `**Common name formats that work**:\n` +
+                    `• "my-element" (kebab-case)\n` +
+                    `• "My Element" (with spaces)\n` +
+                    `• "MyElement" (PascalCase)\n` +
+                    `• Partial matches are supported`,
             error: 'CONTENT_NOT_FOUND'
           };
         }
@@ -127,17 +142,38 @@ export class SubmitToPortfolioTool {
         const detectionResult = await this.detectElementType(safeName);
         
         if (!detectionResult.found) {
-          // Content not found in any element directory - provide helpful guidance
+          // UX IMPROVEMENT: Enhanced guidance with specific suggestions
           const availableTypes = Object.values(ElementType).join(', ');
+          
+          // Get suggestions for similar names
+          const suggestions = await this.generateNameSuggestions(safeName);
+          
+          let message = `Content "${params.name}" not found in portfolio.\n\n`;
+          message += `🔍 **Searched in all element types**: ${availableTypes}\n\n`;
+          
+          if (suggestions.length > 0) {
+            message += `💡 **Did you mean one of these?**\n`;
+            for (const suggestion of suggestions.slice(0, 5)) {
+              message += `  • "${suggestion.name}" (${suggestion.type})\n`;
+            }
+            message += `\n`;
+          }
+          
+          message += `🛠️ **Troubleshooting Steps**:\n`;
+          message += `1. 📝 Use \`list_portfolio\` to see all available content\n`;
+          message += `2. 🔍 Check exact spelling and try variations:\n`;
+          message += `   • "${params.name.toLowerCase()}" (lowercase)\n`;
+          message += `   • "${params.name.replace(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
+          if (params.name.includes('.')) {
+            message += `   • "${params.name.replace(/\./g, '')}" (no dots)\n`;
+          }
+          message += `3. 🎯 Specify element type: \`submit_content "${params.name}" --type=personas\`\n`;
+          message += `4. 📁 Check if file exists in portfolio directories\n\n`;
+          message += `📝 **Tip**: The system searches filenames AND metadata names with fuzzy matching.`;
+          
           return {
             success: false,
-            message: `Content "${params.name}" not found in portfolio.\n\n` +
-                    `Searched in all element types: ${availableTypes}\n\n` +
-                    `To resolve this:\n` +
-                    `1. Verify the content name/filename is correct\n` +
-                    `2. Check if the content exists using the list_portfolio tool\n` +
-                    `3. If submitting a specific type, use the --type parameter\n\n` +
-                    `Note: The system no longer defaults to any element type to prevent incorrect submissions.`,
+            message,
             error: 'CONTENT_NOT_FOUND'
           };
         }
@@ -252,12 +288,19 @@ export class SubmitToPortfolioTool {
       // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
       // Now: Clean adapter pattern that implements IElement interface properly
       const adapter = new PortfolioElementAdapter(element);
-      const fileUrl = await this.portfolioManager.saveElement(adapter, true);
+      
+      // UX IMPROVEMENT: Add retry logic for transient failures
+      const fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
       
       if (!fileUrl) {
         return {
           success: false,
-          message: 'Failed to save element to GitHub portfolio',
+          message: 'Failed to save element to GitHub portfolio after multiple attempts.\n\n' +
+                  '💡 **Troubleshooting Tips**:\n' +
+                  '• Check your GitHub authentication: `gh auth status`\n' +
+                  '• Verify repository permissions\n' +
+                  '• Try again in a few minutes (GitHub API rate limits)\n' +
+                  '• Check GitHub status: https://status.github.com',
           error: 'SAVE_FAILED'
         };
       }
@@ -483,9 +526,10 @@ export class SubmitToPortfolioTool {
       // because findLocalContent only searched filenames, not metadata names
       const indexManager = PortfolioIndexManager.getInstance();
       
+      // UX IMPROVEMENT: Enhanced search with fuzzy matching
       const indexEntry = await indexManager.findByName(name, { 
         elementType: type,
-        fuzzyMatch: true 
+        fuzzyMatch: true
       });
       
       if (indexEntry) {
@@ -506,11 +550,63 @@ export class SubmitToPortfolioTool {
       const portfolioManager = PortfolioManager.getInstance();
       const portfolioDir = portfolioManager.getElementDir(type);
       
-      const file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
+      // UX IMPROVEMENT: Try multiple search strategies for better user experience
+      let file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
         extensions: ['.md', '.json', '.yaml', '.yml'],
         partialMatch: true,
         cacheResults: true
       });
+      
+      // If not found, try normalizing the name (e.g., "J.A.R.V.I.S." -> "j-a-r-v-i-s")
+      if (!file) {
+        const normalizedName = name.toLowerCase()
+          .replace(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
+          .replace(/-+/g, '-')         // Replace multiple dashes with single dash
+          .replace(/^-|-$/g, '');      // Remove leading/trailing dashes
+          
+        if (normalizedName !== name.toLowerCase()) {
+          logger.debug('Trying normalized name search', { 
+            original: name, 
+            normalized: normalizedName,
+            type 
+          });
+          
+          file = await FileDiscoveryUtil.findFile(portfolioDir, normalizedName, {
+            extensions: ['.md', '.json', '.yaml', '.yml'],
+            partialMatch: true,
+            cacheResults: true
+          });
+        }
+      }
+      
+      // If still not found, try searching by display name patterns
+      if (!file) {
+        // Try common variations like removing dots, spaces, etc.
+        const variations = [
+          name.replace(/\./g, ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
+          name.replace(/\s+/g, '-'),      // Replace spaces with dashes
+          name.replace(/[\s\.]/g, ''),    // Remove spaces and dots
+          name.replace(/[\s\.]/g, '-'),   // Replace spaces and dots with dashes
+        ].filter(v => v !== name && v.length > 0);
+        
+        for (const variation of variations) {
+          file = await FileDiscoveryUtil.findFile(portfolioDir, variation, {
+            extensions: ['.md', '.json', '.yaml', '.yml'],
+            partialMatch: true,
+            cacheResults: true
+          });
+          
+          if (file) {
+            logger.debug('Found content using name variation', {
+              original: name,
+              variation,
+              file,
+              type
+            });
+            break;
+          }
+        }
+      }
       
       if (file) {
         logger.debug('Found local content file via fallback', { name, type, file });
@@ -597,5 +693,229 @@ export class SubmitToPortfolioTool {
         matches: []
       };
     }
+  }
+
+  /**
+   * UX IMPROVEMENT: Generate name suggestions for similar content
+   * Helps users find content when exact matches fail
+   */
+  private async generateNameSuggestions(searchName: string): Promise<Array<{name: string, type: string}>> {
+    try {
+      const suggestions: Array<{name: string, type: string}> = [];
+      const searchLower = searchName.toLowerCase();
+      
+      // Get all available content across all types
+      for (const elementType of Object.values(ElementType)) {
+        try {
+          const portfolioManager = PortfolioManager.getInstance();
+          const elementDir = portfolioManager.getElementDir(elementType);
+          
+          // Get files in this directory
+          const files = await FileDiscoveryUtil.findFile(elementDir, '*', {
+            extensions: ['.md', '.json', '.yaml', '.yml'],
+            partialMatch: false,
+            cacheResults: true
+          });
+          
+          if (Array.isArray(files)) {
+            for (const filePath of files) {
+              const basename = path.basename(filePath, path.extname(filePath));
+              
+              // Calculate similarity using simple metrics
+              if (this.calculateSimilarity(searchLower, basename.toLowerCase()) > 0.3) {
+                suggestions.push({
+                  name: basename,
+                  type: elementType
+                });
+              }
+            }
+          } else if (files) {
+            const basename = path.basename(files, path.extname(files));
+            if (this.calculateSimilarity(searchLower, basename.toLowerCase()) > 0.3) {
+              suggestions.push({
+                name: basename,
+                type: elementType
+              });
+            }
+          }
+        } catch (error) {
+          // Skip this type if there's an error
+          continue;
+        }
+      }
+      
+      // Sort by similarity (higher is better)
+      return suggestions.sort((a, b) => {
+        const simA = this.calculateSimilarity(searchLower, a.name.toLowerCase());
+        const simB = this.calculateSimilarity(searchLower, b.name.toLowerCase());
+        return simB - simA;
+      });
+      
+    } catch (error) {
+      logger.warn('Failed to generate name suggestions', { searchName, error });
+      return [];
+    }
+  }
+  
+  /**
+   * Simple similarity calculation using Levenshtein-like approach
+   * Returns value between 0 and 1, where 1 is identical
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    // Handle exact matches
+    if (str1 === str2) return 1;
+    
+    // Handle substring matches
+    if (str1.includes(str2) || str2.includes(str1)) return 0.8;
+    
+    // Handle partial matches
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 0;
+    
+    // Count common characters
+    let common = 0;
+    for (let i = 0; i < shorter.length; i++) {
+      if (longer.includes(shorter[i])) {
+        common++;
+      }
+    }
+    
+    return common / longer.length;
+  }
+  
+  /**
+   * UX IMPROVEMENT: Save element with automatic retry logic for transient failures
+   * Handles common GitHub API issues like rate limits and temporary network problems
+   */
+  private async saveElementWithRetry(
+    adapter: PortfolioElementAdapter, 
+    elementName: string, 
+    elementType: ElementType,
+    maxRetries: number = 3
+  ): Promise<string | null> {
+    let lastError: any = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.debug(`Attempting to save element (attempt ${attempt}/${maxRetries})`, {
+          elementName,
+          elementType,
+          attempt
+        });
+        
+        const fileUrl = await this.portfolioManager.saveElement(adapter, true);
+        
+        if (fileUrl) {
+          if (attempt > 1) {
+            logger.info(`Element saved successfully after ${attempt} attempts`, {
+              elementName,
+              elementType,
+              fileUrl
+            });
+          }
+          return fileUrl;
+        }
+        
+        // If saveElement returns null, treat as a failure but don't retry immediately
+        lastError = new Error(`saveElement returned null on attempt ${attempt}`);
+        
+      } catch (error: any) {
+        lastError = error;
+        const isRetryable = this.isRetryableError(error);
+        
+        logger.warn(`Save attempt ${attempt} failed`, {
+          elementName,
+          elementType,
+          attempt,
+          error: error.message,
+          isRetryable,
+          willRetry: isRetryable && attempt < maxRetries
+        });
+        
+        // If this is not a retryable error, fail immediately
+        if (!isRetryable) {
+          logger.error('Non-retryable error encountered, aborting retries', {
+            elementName,
+            error: error.message
+          });
+          break;
+        }
+        
+        // If we have more attempts, wait before retrying
+        if (attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff, max 5s
+          logger.debug(`Waiting ${delay}ms before retry`, { attempt, delay });
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    
+    // All attempts failed
+    logger.error(`All ${maxRetries} save attempts failed`, {
+      elementName,
+      elementType,
+      lastError: lastError?.message
+    });
+    
+    return null;
+  }
+  
+  /**
+   * Determine if an error is worth retrying
+   * Retryable: network issues, rate limits, temporary GitHub API problems
+   * Non-retryable: authentication issues, validation errors, permanent failures
+   */
+  private isRetryableError(error: any): boolean {
+    const errorMessage = error?.message?.toLowerCase() || '';
+    const errorCode = error?.code;
+    const statusCode = error?.status || error?.statusCode;
+    
+    // Network and timeout errors
+    if (errorCode === 'ENOTFOUND' || errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT') {
+      return true;
+    }
+    
+    // GitHub API rate limits
+    if (statusCode === 429 || errorMessage.includes('rate limit')) {
+      return true;
+    }
+    
+    // Temporary GitHub API issues
+    if (statusCode >= 500 && statusCode < 600) {
+      return true;
+    }
+    
+    // Temporary GitHub API problems
+    if (errorMessage.includes('temporarily unavailable') || 
+        errorMessage.includes('service unavailable') ||
+        errorMessage.includes('internal server error')) {
+      return true;
+    }
+    
+    // Connection issues
+    if (errorMessage.includes('connection') && 
+        (errorMessage.includes('timeout') || errorMessage.includes('reset'))) {
+      return true;
+    }
+    
+    // Don't retry authentication or permission issues
+    if (statusCode === 401 || statusCode === 403 || 
+        errorMessage.includes('unauthorized') || 
+        errorMessage.includes('forbidden') ||
+        errorMessage.includes('authentication')) {
+      return false;
+    }
+    
+    // Don't retry validation errors
+    if (statusCode === 400 || statusCode === 422 ||
+        errorMessage.includes('invalid') ||
+        errorMessage.includes('validation')) {
+      return false;
+    }
+    
+    // Default to not retrying for unknown errors to avoid infinite loops
+    return false;
   }
 }

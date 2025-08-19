@@ -2156,10 +2156,11 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async submitContent(contentIdentifier: string) {
-    // Use the new portfolio-based submission tool
-    const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
-    const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
-    const submitTool = new SubmitToPortfolioTool(this.apiCache);
+    try {
+      // Use the new portfolio-based submission tool
+      const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
+      const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
+      const submitTool = new SubmitToPortfolioTool(this.apiCache);
     
     // Try to find the content across all element types
     const portfolioManager = PortfolioManager.getInstance();
@@ -2230,18 +2231,64 @@ export class DollhouseMCPServer implements IToolHandler {
         searchedTypes: Object.values(ElementType) 
       });
       
+      // UX IMPROVEMENT: Enhanced error message with smart suggestions
+      let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
+      errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
+      
+      // Try to provide smart suggestions based on partial matches
+      try {
+        const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
+        const suggestions: string[] = [];
+        
+        // Search for similar names across all element types
+        for (const elementType of Object.values(ElementType)) {
+          const dir = portfolioManager.getElementDir(elementType);
+          try {
+            const partialMatches = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+              extensions: ['.md', '.json', '.yaml', '.yml'],
+              partialMatch: true,
+              cacheResults: false
+            });
+            
+            if (Array.isArray(partialMatches) && partialMatches.length > 0) {
+              for (const match of partialMatches.slice(0, 2)) {
+                const basename = path.basename(match, path.extname(match));
+                suggestions.push(`"${basename}" (${elementType})`);
+              }
+            } else if (partialMatches) {
+              const basename = path.basename(partialMatches, path.extname(partialMatches));
+              suggestions.push(`"${basename}" (${elementType})`);
+            }
+          } catch (error) {
+            // Skip this type if there's an error
+            continue;
+          }
+        }
+        
+        if (suggestions.length > 0) {
+          errorMessage += `💡 **Did you mean one of these?**\n`;
+          for (const suggestion of suggestions.slice(0, 5)) {
+            errorMessage += `  • ${suggestion}\n`;
+          }
+          errorMessage += `\n`;
+        }
+      } catch (suggestionError) {
+        // If suggestions fail, continue without them
+        logger.debug('Failed to generate suggestions', { suggestionError });
+      }
+      
+      errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
+      errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
+      errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations\n`;
+      errorMessage += `3. 🎯 **Specify type**: Try \`submit_content "${contentIdentifier}" --type=personas\`\n`;
+      errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually\n\n`;
+      errorMessage += `📝 **Tip**: The system searches both filenames and display names with fuzzy matching.`;
+      
       return {
         content: [
           {
             type: "text",
-            text: `❌ Content "${contentIdentifier}" not found in portfolio.\n\n` +
-                  `**Searched in all element types:** ${availableTypes}\n\n` +
-                  `**To resolve this issue:**\n` +
-                  `1. Check if the content exists in your portfolio\n` +
-                  `2. Verify the content name/filename is correct\n` +
-                  `3. If the content is in a specific type directory, try using the exact filename\n` +
-                  `4. Use the \`list_portfolio\` tool to see all available content\n\n` +
-                  `**Note:** The system no longer defaults to any element type to prevent incorrect submissions.`,
+            text: errorMessage,
           },
         ],
       };
@@ -2332,6 +2379,48 @@ export class DollhouseMCPServer implements IToolHandler {
         },
       ],
     };
+    
+    } catch (error: any) {
+      // UX IMPROVEMENT: Comprehensive error handling with fallback suggestions
+      logger.error('Unexpected error in submitContent', {
+        contentIdentifier,
+        error: error.message,
+        stack: error.stack
+      });
+      
+      let errorMessage = `${this.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
+      errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
+      
+      // Provide contextual troubleshooting based on error type
+      if (error.message?.includes('auth') || error.message?.includes('token')) {
+        errorMessage += `🔐 **Authentication Issue**:\n`;
+        errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
+        errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
+      }
+      
+      if (error.message?.includes('network') || error.message?.includes('connection')) {
+        errorMessage += `🌐 **Network Issue**:\n`;
+        errorMessage += `• Check your internet connection\n`;
+        errorMessage += `• Try again in a few minutes\n`;
+        errorMessage += `• Check GitHub status: https://status.github.com\n\n`;
+      }
+      
+      errorMessage += `🚑 **Emergency Alternatives**:\n`;
+      errorMessage += `1. 🔄 **Retry**: Try the same command again\n`;
+      errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
+      errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
+      errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface\n\n`;
+      errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: errorMessage,
+          },
+        ],
+      };
+    }
   }
 
   async getCollectionCacheHealth() {
@@ -3980,7 +4069,15 @@ Placeholders for custom format:
           return {
             content: [{
               type: "text",
-              text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+              text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
             }]
           };
         }
@@ -4066,7 +4163,15 @@ Placeholders for custom format:
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
           }]
         };
       }
@@ -4176,7 +4281,15 @@ Placeholders for custom format:
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please use setup_github_auth first.`
+            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
           }]
         };
       }
@@ -4186,13 +4299,37 @@ Placeholders for custom format:
       // Check if portfolio exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
       const portfolioManager = new PortfolioRepoManager();
+      
+      // CRITICAL FIX: Set GitHub token like submit_content does
+      // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
+      const { TokenManager } = await import('./security/tokenManager.js');
+      const token = await TokenManager.getGitHubTokenAsync();
+      if (!token) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please authenticate first using setup_github_auth.`
+          }]
+        };
+      }
+      portfolioManager.setToken(token);
+      
       const portfolioExists = await portfolioManager.checkPortfolioExists(username);
 
       if (!portfolioExists) {
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ No portfolio found. Use init_portfolio to create one first.`
+            text: `${this.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
+                  `🏠 **Quick Setup**:\n` +
+                  `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
+                  `2. This creates: https://github.com/[username]/dollhouse-portfolio\n\n` +
+                  `📝 **What you'll get**:\n` +
+                  `• Public repository to showcase your AI elements\n` +
+                  `• Organized structure for personas, skills, templates, and agents\n` +
+                  `• Automatic syncing of your local portfolio\n` +
+                  `• Community sharing capabilities\n\n` +
+                  `🚀 **After setup**: Use \`sync_portfolio\` to upload your content!`
           }]
         };
       }
@@ -4245,25 +4382,71 @@ Placeholders for custom format:
       // For now, implement basic push functionality
       if (options.direction === 'push' || options.direction === 'both') {
         let syncCount = 0;
+        let totalElements = 0;
         let syncText = `${this.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`;
 
-        // Get all local elements
+        // UX IMPROVEMENT: Calculate total elements for progress tracking
         const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
+        const elementCounts: Record<string, number> = {};
         const failedElements: Array<{type: string, name: string, error: string}> = [];
         
+        // Pre-calculate totals for better progress indicators
+        try {
+          syncText += `📊 **Calculating sync scope...**\n`;
+          for (const elementType of elementTypes) {
+            try {
+              const elements = await this.getElementsList(elementType);
+              elementCounts[elementType] = elements.length;
+              totalElements += elements.length;
+            } catch (error: any) {
+              elementCounts[elementType] = 0;
+              logger.warn(`Failed to count ${elementType}`, { error: error.message });
+            }
+          }
+          
+          syncText += `\n🎯 **Ready to sync ${totalElements} elements:**\n`;
+          for (const [type, count] of Object.entries(elementCounts)) {
+            const icon = count > 0 ? '✅' : '⚪';
+            syncText += `  ${icon} ${type}: ${count} elements\n`;
+          }
+          syncText += `\n🚀 **Starting sync process...**\n\n`;
+          
+        } catch (error: any) {
+          syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
+        }
+        
+        // UX IMPROVEMENT: Process each element type with progress tracking
         for (const elementType of elementTypes) {
+          const typeCount = elementCounts[elementType] || 0;
+          if (typeCount === 0) {
+            syncText += `⏩ **Skipping ${elementType}** (no elements found)\n`;
+            continue;
+          }
+          
+          syncText += `📁 **Processing ${elementType}** (${typeCount} elements):\n`;
+          let typeSuccessCount = 0;
+          
           try {
             const elements = await this.getElementsList(elementType);
             
-            for (const elementName of elements) {
+            for (let i = 0; i < elements.length; i++) {
+              const elementName = elements[i];
+              const progress = `[${i + 1}/${elements.length}]`;
+              
               try {
+                // UX IMPROVEMENT: Show individual element progress
+                syncText += `  ${progress} 🔄 Syncing "${elementName}"...`;
+                
                 // Load element and save to portfolio
                 const element = await this.loadElementByType(elementName, elementType);
                 if (element) {
                   await portfolioManager.saveElement(element, true); // Explicit consent
                   syncCount++;
+                  typeSuccessCount++;
+                  syncText += ` ✅\n`;
                   logger.debug(`Successfully synced ${elementType}/${elementName}`);
                 } else {
+                  syncText += ` ❌ (null element)\n`;
                   failedElements.push({
                     type: elementType,
                     name: elementName,
@@ -4272,6 +4455,7 @@ Placeholders for custom format:
                 }
               } catch (elementError: any) {
                 const errorMessage = elementError.message || 'Unknown error during element sync';
+                syncText += ` ❌ (${errorMessage})\n`;
                 failedElements.push({
                   type: elementType,
                   name: elementName,
@@ -4280,9 +4464,15 @@ Placeholders for custom format:
                 logger.warn(`Failed to sync ${elementType}/${elementName}`, { error: errorMessage });
               }
             }
+            
+            // UX IMPROVEMENT: Show completion summary for each type
+            const successRate = elements.length > 0 ? Math.round((typeSuccessCount / elements.length) * 100) : 0;
+            const statusIcon = successRate === 100 ? '🎉' : successRate > 50 ? '⚠️' : '❌';
+            syncText += `  ${statusIcon} **${elementType} complete**: ${typeSuccessCount}/${elements.length} synced (${successRate}%)\n\n`;
           } catch (listError: any) {
-            // Handle errors in getting the elements list for this type
+            // UX IMPROVEMENT: Better error reporting for list failures
             const errorMessage = listError.message || 'Failed to get elements list';
+            syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
             failedElements.push({
               type: elementType,
               name: 'ALL',
@@ -4292,26 +4482,57 @@ Placeholders for custom format:
           }
         }
 
-        syncText += `✅ **Sync Complete!**\n`;
-        syncText += `📤 Uploaded: ${syncCount} elements\n`;
+        // UX IMPROVEMENT: Enhanced final summary with actionable insights
+        const successRate = totalElements > 0 ? Math.round((syncCount / totalElements) * 100) : 0;
+        const summaryIcon = successRate === 100 ? '🎉' : successRate >= 80 ? '✅' : successRate >= 50 ? '⚠️' : '❌';
         
-        // Include failed elements information if any
+        syncText += `${summaryIcon} **Sync Complete!**\n`;
+        syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
+        syncText += `🏠 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        
+        // Include failed elements information with actionable suggestions
         if (failedElements.length > 0) {
-          syncText += `⚠️ **Failed**: ${failedElements.length} elements\n\n`;
-          syncText += `**Failed Elements:**\n`;
+          syncText += `⚠️ **Issues Encountered** (${failedElements.length} problems):\n\n`;
+          
+          // Group failures by type for better organization
+          const failuresByType: Record<string, Array<{name: string, error: string}>> = {};
           for (const failed of failedElements) {
-            if (failed.name === 'ALL') {
-              syncText += `  • ${failed.type}: ${failed.error}\n`;
-            } else {
-              syncText += `  • ${failed.type}/${failed.name}: ${failed.error}\n`;
+            if (!failuresByType[failed.type]) {
+              failuresByType[failed.type] = [];
             }
+            failuresByType[failed.type].push({ name: failed.name, error: failed.error });
           }
-          syncText += `\n`;
+          
+          for (const [type, failures] of Object.entries(failuresByType)) {
+            syncText += `📁 **${type}** (${failures.length} issues):\n`;
+            for (const failure of failures) {
+              if (failure.name === 'ALL') {
+                syncText += `  ❌ ${failure.error}\n`;
+              } else {
+                syncText += `  ❌ "${failure.name}": ${failure.error}\n`;
+              }
+            }
+            syncText += `\n`;
+          }
+          
+          // UX IMPROVEMENT: Add helpful suggestions for common issues
+          syncText += `💡 **Troubleshooting Tips**:\n`;
+          syncText += `  • Check element file formats and metadata\n`;
+          syncText += `  • Verify GitHub authentication is still valid\n`;
+          syncText += `  • Try syncing individual elements with \`submit_content\`\n`;
+          syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
         } else {
-          syncText += `🎉 All elements synced successfully!\n\n`;
+          syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
         }
         
-        syncText += `🔗 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        // UX IMPROVEMENT: Add next steps and helpful links
+        if (syncCount > 0) {
+          syncText += `🚀 **Next Steps**:\n`;
+          syncText += `  • View your portfolio: https://github.com/${username}/dollhouse-portfolio\n`;
+          syncText += `  • Share individual elements using \`submit_content <name>\`\n`;
+          syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
+        }
+        
         syncText += `Your elements are now available on GitHub!`;
 
         return {
@@ -4339,10 +4560,14 @@ Placeholders for custom format:
       };
 
     } catch (error) {
+      // IMPROVED ERROR HANDLING: Ensure we always have a meaningful error message
+      const sanitizedError = SecureErrorHandler.sanitizeError(error);
+      const errorMessage = sanitizedError?.message || (error as any)?.message || String(error) || 'Unknown error occurred';
+      
       return {
         content: [{
           type: "text",
-          text: `${this.getPersonaIndicator()}❌ Failed to sync portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+          text: `${this.getPersonaIndicator()}❌ Failed to sync portfolio: ${errorMessage}`
         }]
       };
     }
