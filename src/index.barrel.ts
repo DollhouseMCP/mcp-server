@@ -30,8 +30,6 @@ export * from './persona/index.js';
 // Collection
 export * from './collection/index.js';
 
-// Update
-export * from './update/index.js';
 
 // Server
 export * from './server/index.js';

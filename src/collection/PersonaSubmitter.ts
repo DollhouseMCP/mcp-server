@@ -9,7 +9,7 @@
  */
 
 import { Persona } from '../types/persona.js';
-import { RateLimiter, RateLimitStatus } from '../update/RateLimiter.js';
+import { RateLimiter, RateLimitStatus } from '../utils/RateLimiter.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 
 // Configuration constants

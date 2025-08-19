@@ -50,12 +50,6 @@ export interface IToolHandler {
   clearGitHubAuth(): Promise<any>;
   configureOAuth(client_id?: string): Promise<any>;
   
-  // Update tools
-  checkForUpdates(): Promise<any>;
-  updateServer(confirm: boolean): Promise<any>;
-  rollbackUpdate(confirm: boolean): Promise<any>;
-  getServerStatus(): Promise<any>;
-  convertToGitInstallation(targetDir?: string, confirm?: boolean): Promise<any>;
   
   // Config tools
   configureIndicator(config: any): Promise<any>;

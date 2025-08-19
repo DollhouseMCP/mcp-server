@@ -7,7 +7,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
-import { UpdateConfigManager } from '../config/updateConfig.js';
 
 export type InstallationType = 'npm' | 'git' | 'unknown';
 
@@ -15,9 +14,7 @@ export class InstallationDetector {
   private static cachedType: InstallationType | null = null;
   
   // Maximum directory levels to search upward for .git directory
-  private static get MAX_SEARCH_DEPTH(): number {
-    return UpdateConfigManager.getInstance().getMaxSearchDepth();
-  }
+  private static readonly MAX_SEARCH_DEPTH = 10;
   
   /**
    * Detect the installation type (npm global, git clone, or unknown)

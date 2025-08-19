@@ -10,7 +10,6 @@ DollhouseMCP provides 56 MCP tools organized into these categories:
 - **Collection Tools**: GitHub marketplace integration and community content
 - **Portfolio Tools**: Personal and GitHub portfolio management  
 - **Auth Tools**: GitHub OAuth authentication
-- **Update Tools**: Server maintenance and updates
 - **Config Tools**: System configuration and settings
 - **User Tools**: User identity management
 - **Build Info Tools**: System information and diagnostics
@@ -749,98 +748,6 @@ configure_oauth "Ov23liABCDEF1234567890"
 configure_oauth  # Show current configuration
 ```
 
-## Update Tools (5 tools)
-
-These tools handle server maintenance, updates, and version management.
-
-### check_for_updates
-Check if a newer version of DollhouseMCP is available.
-
-**Example:**
-```bash
-check_for_updates
-```
-
-**Expected Output:**
-```
-🔍 Checking for updates...
-
-📦 Current version: v1.6.0
-🆕 Latest version: v1.6.0
-
-✨ New features in v1.6.0:
-- Enhanced portfolio sync
-- New element types  
-- Performance improvements
-
-🔄 Update available! Use 'update_server' to upgrade.
-```
-
-### update_server
-Update DollhouseMCP to the latest version from GitHub.
-
-**Parameters:**
-- `confirm` (required): Confirm the update (true to proceed, false for preview)
-
-**Example:**
-```bash
-update_server --confirm false  # Preview
-update_server --confirm true   # Execute
-```
-
-### rollback_update
-Rollback to the previous version from backup.
-
-**Parameters:**
-- `confirm` (required): Confirm the rollback (true to proceed, false for info)
-
-**Example:**
-```bash
-rollback_update --confirm false  # Show rollback info
-rollback_update --confirm true   # Execute rollback
-```
-
-### get_server_status
-Get current server status, version, and system information.
-
-**Example:**
-```bash
-get_server_status
-```
-
-**Expected Output:**
-```
-🖥️ DollhouseMCP Server Status
-
-📦 Version: v1.6.0
-🏠 Installation: /Users/johndoe/.dollhouse/mcp-server
-📅 Started: 2025-08-19T08:00:00Z
-⏱️ Uptime: 6 hours 45 minutes
-
-📊 System Info:
-- Node.js: v20.11.0
-- Platform: darwin (macOS)
-- Memory: 145MB / 512MB
-- Portfolio: ~/.dollhouse/portfolio
-
-🔧 Features:
-✅ GitHub Authentication
-✅ Portfolio Sync  
-✅ Collection Access
-```
-
-### convert_to_git_installation
-Convert from npm installation to git installation for more control over updates.
-
-**Parameters:**
-- `targetDir` (optional): Target directory for git installation (default: ~/.dollhouse/mcp-server-git)
-- `confirm` (required): Confirm the conversion (true to proceed, false for preview)
-
-**Example:**
-```bash
-convert_to_git_installation --confirm false  # Preview
-convert_to_git_installation --targetDir "/custom/path" --confirm true
-```
 
 ## Config Tools (4 tools)
 
@@ -1041,7 +948,6 @@ For users upgrading from earlier versions, see these migration guides:
 | Collection Tools | 7 | Community marketplace integration |
 | Portfolio Tools | 6 | Personal and GitHub portfolio management |
 | Auth Tools | 4 | GitHub OAuth authentication |
-| Update Tools | 5 | Server maintenance and updates |
 | Config Tools | 4 | System configuration |
 | User Tools | 3 | User identity management |
 | Build Info Tools | 1 | System diagnostics |

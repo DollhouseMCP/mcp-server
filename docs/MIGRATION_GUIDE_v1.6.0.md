@@ -122,6 +122,31 @@ await server.createPersona(...); // Now works
 - Update any automation or documentation
 - Functionality is identical, only names changed
 
+### 4. Update Tools Removed
+
+**Impact**: 5 update/maintenance tools have been completely removed from v1.6.0.
+
+#### Removed Tools (No Replacement)
+| Removed Tool | Purpose |
+|--------------|---------|
+| `check_for_updates` | Check for newer versions |
+| `update_server` | Update to latest version |
+| `rollback_update` | Rollback to previous version |
+| `get_server_status` | Get server status and version info |
+| `convert_to_git_installation` | Convert to git installation |
+
+#### How to Migrate
+**For Update Management**:
+- Use standard npm/package manager commands for updates:
+  ```bash
+  npm install -g @dollhousemcp/mcp-server@latest
+  ```
+- Use `dollhousemcp --version` for version information
+- Use process monitoring tools for server status
+- Manual backup/restore procedures replace rollback functionality
+
+**Note**: These tools were removed to simplify the server and reduce security surface area. Standard package management is now the recommended approach.
+
 ---
 
 ## New Features

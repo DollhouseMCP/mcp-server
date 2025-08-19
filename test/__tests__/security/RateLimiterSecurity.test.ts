@@ -2,7 +2,7 @@
  * Security tests for RateLimiter implementation
  */
 
-import { RateLimiter, RateLimiterFactory } from '../../../src/update/RateLimiter.js';
+import { RateLimiter, RateLimiterFactory } from '../../../src/utils/RateLimiter.js';
 import { describe, expect, it, beforeEach, jest } from '@jest/globals';
 
 describe('RateLimiter Security Tests', () => {

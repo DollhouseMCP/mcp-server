@@ -9,7 +9,6 @@ import { getPersonaTools } from './tools/PersonaTools.js';
 import { getElementTools } from './tools/ElementTools.js';
 import { getCollectionTools } from './tools/CollectionTools.js';
 import { getUserTools } from './tools/UserTools.js';
-import { getUpdateTools } from './tools/UpdateTools.js';
 import { getConfigTools } from './tools/ConfigTools.js';
 import { getAuthTools } from './tools/AuthTools.js';
 import { getPortfolioTools } from './tools/PortfolioTools.js';
@@ -59,8 +58,6 @@ export class ServerSetup {
     // Register portfolio tools
     this.toolRegistry.registerMany(getPortfolioTools(instance));
     
-    // Register update tools
-    this.toolRegistry.registerMany(getUpdateTools(instance));
     
     // Register config tools
     this.toolRegistry.registerMany(getConfigTools(instance));
