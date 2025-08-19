@@ -32,7 +32,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌍 Website**: https://dollhousemcp.com (planned)  
 **📦 Version**: v1.6.0
 
-> **🎉 New in v1.6.0**: Portfolio management system with GitHub integration, enhanced collection search with pagination, and 51 total MCP tools! See [Migration Guide](docs/MIGRATION_GUIDE_v1.6.0.md) for upgrade instructions.
+> **🎉 New in v1.6.0**: Portfolio management system with GitHub integration, enhanced collection search with pagination, and 42 total MCP tools! See [Migration Guide](docs/MIGRATION_GUIDE_v1.6.0.md) for upgrade instructions.
+
+> **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
 ## 🚀 Quick Start
 
@@ -61,7 +63,7 @@ npm install -g @dollhousemcp/mcp-server
 }
 ```
 
-Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas` to get started.
+Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements type="personas"` to get started.
 
 > **🎯 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
 
@@ -69,7 +71,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **51 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **42 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
 | 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
@@ -182,13 +184,17 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 └── agents/         # Autonomous assistants
 ```
 
-### Legacy Persona Tools
+### Persona Management via ElementTools
 
-For backward compatibility, the original persona-specific tools still work:
-- `list_personas` → calls `list_elements type="personas"`
-- `activate_persona` → calls `activate_element type="personas"`
-- `get_active_persona` → calls `get_active_elements type="personas"`
-- etc.
+Personas are now managed through the generic ElementTools system:
+- **`list_elements type="personas"`** - Display all local personas with enhanced metadata
+- **`activate_element name="name" type="personas"`** - Activate by name, filename, or unique ID
+- **`get_active_elements type="personas"`** - Get current active persona information
+- **`deactivate_element type="personas"`** - Return to default mode
+- **`get_element_details name="name" type="personas"`** - View complete persona details
+- **`reload_elements type="personas"`** - Refresh personas from filesystem
+
+> **📖 Migration**: Legacy PersonaTools were removed in v1.6.0. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for complete migration instructions.
 
 ## 🔒 Enterprise-Grade Security
 
@@ -319,9 +325,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 51 DollhouseMCP tools will be available
+3. All 42 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (51 Total)
+## 🛠️ Available Tools (42 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -335,13 +341,12 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`render_template`** - Render a template element with provided variables
 - **`execute_agent`** - Execute an agent element with a specific goal
 
-### Core Persona Management (Legacy - Still Supported)
-- **`list_personas`** - Display all local personas with enhanced metadata
-- **`activate_persona`** - Activate by name, filename, or unique ID
-- **`get_active_persona`** - Get current persona information
-- **`deactivate_persona`** - Return to default mode
-- **`get_persona_details`** - View complete persona details
-- **`reload_personas`** - Refresh from filesystem
+### Persona Export/Import (Specialized Tools)
+- **`export_persona`** - Export single persona to JSON format
+- **`export_all_personas`** - Export all personas to JSON bundle  
+- **`import_persona`** - Import persona from file path or JSON string
+- **`share_persona`** - Generate shareable URL for persona
+- **`import_from_url`** - Import persona from shared URL
 
 ### GitHub Collection Integration
 - **`browse_collection`** - Browse content by section and type (flat structure, no categories)
@@ -369,10 +374,6 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`get_user_identity`** - View current identity status
 - **`clear_user_identity`** - Return to anonymous mode
 
-### Chat-Based Persona Management
-- **`create_persona`** - Guided persona creation through chat
-- **`edit_persona`** - Modify existing persona fields
-- **`validate_persona`** - Comprehensive quality validation
 
 ### System Tools
 - **`get_build_info`** - Comprehensive build and runtime information
@@ -497,11 +498,18 @@ get_build_info section="environment"                   # Environment details
 get_build_info section="dependencies"                  # Dependency versions
 ```
 
-### Persona Creation & Management
+### Persona Management with ElementTools
 ```
-create_persona "Study Buddy" "A helpful tutor" "educational" "You are a patient tutor..."
-edit_persona "Study Buddy" "description" "An encouraging academic mentor"
-validate_persona "Study Buddy"             # Check quality and format
+# List all personas
+list_elements type="personas"
+
+# Activate a persona
+activate_element name="Study Buddy" type="personas"
+
+# Get persona details
+get_element_details name="Study Buddy" type="personas"
+
+# Submit to community collection
 submit_persona "Study Buddy"               # Share with community
 ```
 
@@ -572,17 +580,17 @@ install_element path="library/personas/technical-writer.md"
 install_element path="library/templates/project-update.md"
 ```
 
-**Step 3: Customize and Create**
+**Step 3: Customize and Activate**
 ```
 # Activate installed elements
 activate_element name="code-reviewer" type="skills"
 activate_element name="technical-writer" type="personas"
 
-# Create your own custom elements
-create_persona name="My Assistant" description="Personal AI assistant" instructions="You are my helpful personal assistant..."
+# View your active elements
+get_active_elements
 
-# Validate your creations
-validate_persona name="My Assistant"
+# Get details about any element
+get_element_details name="technical-writer" type="personas"
 ```
 
 **Step 4: Sync and Share**
@@ -593,7 +601,7 @@ submit_content name="My Assistant"
 # Sync everything to GitHub
 sync_portfolio direction="push"
 
-# Optionally submit to community collection
+# Optionally submit personas to community collection
 submit_persona name="My Assistant"
 ```
 
@@ -1461,14 +1469,13 @@ interface DollhouseTool {
 
 ### Tool Categories
 
-#### Core Persona Management
+#### Persona Export/Import
 ```typescript
-// list_personas - No parameters
-// activate_persona - { persona: string }
-// get_active_persona - No parameters  
-// deactivate_persona - No parameters
-// get_persona_details - { persona: string }
-// reload_personas - No parameters
+// export_persona - { persona: string }
+// export_all_personas - { includeDefaults?: boolean }
+// import_persona - { source: string, overwrite?: boolean }
+// share_persona - { persona: string, expiryDays?: number }
+// import_from_url - { url: string, overwrite?: boolean }
 ```
 
 #### Collection Integration
@@ -1487,12 +1494,6 @@ interface DollhouseTool {
 // clear_user_identity - No parameters
 ```
 
-#### Chat-Based Management
-```typescript
-// create_persona - { name: string, description: string, category?: string, instructions: string }
-// edit_persona - { persona: string, field: string, value: string }
-// validate_persona - { persona: string }
-```
 
 
 ### Error Handling
@@ -1558,7 +1559,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - 🔄 **Roundtrip Workflow** - Complete content submission cycle
 
 **Statistics**:
-- 51 total MCP tools (down from 56 - UpdateTools removed)
+- 42 total MCP tools (down from 51 - 9 PersonaTools removed, 5 preserved)
 - 89 commits ahead of main
 - 257 files changed
 - 50,857 lines added

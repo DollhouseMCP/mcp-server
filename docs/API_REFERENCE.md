@@ -4,9 +4,9 @@ Complete reference for all MCP tools available in DollhouseMCP v1.6.0
 
 ## Overview
 
-DollhouseMCP provides 51 MCP tools organized into these categories:
+DollhouseMCP provides 42 MCP tools organized into these categories:
 - **Element Tools**: Work with all element types (personas, skills, templates, agents, memories, ensembles)
-- **Persona Tools**: Legacy tools for backward compatibility (being phased out)
+- **Persona Export/Import Tools**: Specialized tools for persona sharing and backup (5 tools)
 - **Collection Tools**: GitHub marketplace integration and community content
 - **Portfolio Tools**: Personal and GitHub portfolio management  
 - **Auth Tools**: GitHub OAuth authentication
@@ -16,11 +16,15 @@ DollhouseMCP provides 51 MCP tools organized into these categories:
 
 ## Breaking Changes in v1.6.0
 
-- **Tool Count**: Expanded from 40+ to 51 total tools
+- **⚠️ PersonaTools Removal**: 9 redundant PersonaTools removed, reducing total from 51 to 42 tools
+- **Tool Count**: Reduced from 51 to 42 total tools for a cleaner API
+- **Migration Required**: Legacy PersonaTools replaced with ElementTools equivalents
 - **Portfolio System**: New portfolio management tools for local and GitHub synchronization
 - **Enhanced Search**: Unified search across local, GitHub, and collection sources
 - **Collection Enhancements**: Enhanced search with pagination and filtering
 - **Build Information**: New build info tools for better system diagnostics
+
+> **📖 Migration Required**: See [PersonaTools Migration Guide](PERSONATOOLS_MIGRATION_GUIDE.md) for step-by-step migration instructions.
 
 ## New Features Highlights
 
@@ -527,101 +531,23 @@ get_collection_cache_health
    • Agents: 123 cached
 ```
 
-## Persona Tools (14 tools) - Legacy
+## Persona Export/Import Tools (5 tools)
 
-**⚠️ These tools are maintained for backward compatibility but should be replaced with generic element tools.**
+**⚠️ Breaking Change**: 9 redundant PersonaTools were removed in v1.6.0. Only these 5 specialized tools remain:
 
-### list_personas
-List all available personas. **Use `list_elements --type personas` instead.**
+> **Removed Tools** (use ElementTools instead):
+> - `list_personas` → `list_elements type="personas"`
+> - `activate_persona` → `activate_element name="name" type="personas"`
+> - `get_active_persona` → `get_active_elements type="personas"`
+> - `deactivate_persona` → `deactivate_element type="personas"`
+> - `get_persona_details` → `get_element_details name="name" type="personas"`
+> - `reload_personas` → `reload_elements type="personas"`
+> - `create_persona` → Use ElementTools or server methods
+> - `edit_persona` → Use ElementTools or server methods
+> - `validate_persona` → Use ElementTools or server methods
 
-**Example:**
-```bash
-list_personas
-```
+The following tools provide unique functionality not available in ElementTools:
 
-### activate_persona  
-Activate a specific persona by name. **Use `activate_element [name] --type personas` instead.**
-
-**Parameters:**
-- `persona` (required): The persona name or filename to activate
-
-**Example:**
-```bash
-activate_persona "Professional Writer"
-```
-
-### get_active_persona
-Get information about the currently active persona. **Use `get_active_elements --type personas` instead.**
-
-**Example:**
-```bash
-get_active_persona
-```
-
-### deactivate_persona
-Deactivate the current persona. **Use `deactivate_element [name] --type personas` instead.**
-
-**Example:**
-```bash
-deactivate_persona
-```
-
-### get_persona_details
-Get detailed information about a specific persona. **Use `get_element_details [name] --type personas` instead.**
-
-**Parameters:**
-- `persona` (required): The persona name or filename to get details for
-
-**Example:**
-```bash
-get_persona_details "Creative Writer"
-```
-
-### reload_personas
-Reload all personas from the personas directory. **Use `reload_elements --type personas` instead.**
-
-**Example:**
-```bash
-reload_personas
-```
-
-### create_persona
-Create a new persona with guided assistance. **Use `create_element --type personas` instead.**
-
-**Parameters:**
-- `name` (required): The display name for the persona
-- `description` (required): A brief description of the persona
-- `instructions` (required): The main instructions/prompt for the persona
-- `triggers` (optional): Comma-separated list of trigger words
-
-**Example:**
-```bash
-create_persona "Data Scientist" "Expert in data analysis" "You are an expert data scientist..."
-```
-
-### edit_persona
-Edit an existing persona's properties. **Use `edit_element --type personas` instead.**
-
-**Parameters:**
-- `persona` (required): The persona name or filename to edit
-- `field` (required): Field to edit (name, description, instructions, triggers, etc.)
-- `value` (required): The new value for the field
-
-**Example:**
-```bash
-edit_persona "Data Scientist" description "Advanced data analysis expert"
-```
-
-### validate_persona
-Validate a persona's format. **Use `validate_element --type personas` instead.**
-
-**Parameters:**
-- `persona` (required): The persona name or filename to validate
-
-**Example:**
-```bash
-validate_persona "Creative Writer"
-```
 
 ### export_persona
 Export a single persona to JSON format.
@@ -944,14 +870,14 @@ For users upgrading from earlier versions, see these migration guides:
 | Category | Count | Purpose |
 |----------|-------|---------|
 | Element Tools | 12 | Work with all element types |
-| Persona Tools | 14 | Legacy compatibility (being phased out) |
+| Persona Export/Import Tools | 5 | Specialized persona sharing and backup |
 | Collection Tools | 7 | Community marketplace integration |
 | Portfolio Tools | 6 | Personal and GitHub portfolio management |
 | Auth Tools | 4 | GitHub OAuth authentication |
 | Config Tools | 4 | System configuration |
 | User Tools | 3 | User identity management |
 | Build Info Tools | 1 | System diagnostics |
-| **Total** | **56** | Complete MCP tool suite |
+| **Total** | **42** | Complete MCP tool suite |
 
 ## Best Practices
 
@@ -1012,7 +938,7 @@ submit_content "My Custom Helper"
 
 ## Version History
 
-- **v1.6.0**: 51 total tools, portfolio management, enhanced search, build diagnostics
+- **v1.6.0**: 42 total tools (PersonaTools streamlined), portfolio management, enhanced search, build diagnostics
 - **v1.5.0**: GitHub OAuth authentication with secure token storage  
 - **v1.4.5**: Fixed Claude Desktop integration issues
 - **v1.4.0**: NPM package distribution support

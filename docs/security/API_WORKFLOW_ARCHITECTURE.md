@@ -288,18 +288,20 @@ stateDiagram-v2
 
 ### MCP Tool APIs
 
-| Tool | Security Controls | Rate Limit | Auth Required |
-|------|------------------|------------|---------------|
-| `list_personas` | None | 100/min | No |
-| `activate_persona` | Content validation | 50/min | No |
-| `create_persona` | Full validation pipeline | 10/min | No |
-| `edit_persona` | Schema validation | 20/min | No |
-| `share_persona` | Token validation, content scan | 5/min | Optional |
-| `import_persona` | URL validation, content scan | 10/min | No |
-| `browse_marketplace` | Cache layer | 30/min | No |
-| `search_marketplace` | Input sanitization | 20/min | No |
-| `install_persona` | Full validation pipeline | 10/min | No |
-| `submit_persona` | Full security gates | 2/min | Yes |
+| Tool | Security Controls | Rate Limit | Auth Required | Status |
+|------|------------------|------------|---------------|--------|
+| `list_personas` | None | 100/min | No | **REMOVED v1.6.0** |
+| `activate_persona` | Content validation | 50/min | No | **REMOVED v1.6.0** |
+| `create_persona` | Full validation pipeline | 10/min | No | **REMOVED v1.6.0** |
+| `edit_persona` | Schema validation | 20/min | No | **REMOVED v1.6.0** |
+| `share_persona` | Token validation, content scan | 5/min | Optional | ✅ Active |
+| `import_persona` | URL validation, content scan | 10/min | No | ✅ Active |
+| `browse_marketplace` | Cache layer | 30/min | No | **REMOVED v1.6.0** |
+| `search_marketplace` | Input sanitization | 20/min | No | **REMOVED v1.6.0** |
+| `install_persona` | Full validation pipeline | 10/min | No | **REMOVED v1.6.0** |
+| `submit_persona` | Full security gates | 2/min | Yes | **REMOVED v1.6.0** |
+
+> **⚠️ v1.6.0 Breaking Changes**: 9 PersonaTools and 5 marketplace aliases removed. Functionality preserved via ElementTools and collection tools. See [PersonaTools Migration Guide](../PERSONATOOLS_MIGRATION_GUIDE.md).
 
 ### External API Interactions
 

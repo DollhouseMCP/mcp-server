@@ -46,31 +46,67 @@ DollhouseMCP is a comprehensive Model Context Protocol (MCP) server that provide
 
 ## 🛠️ Current Technical Architecture
 
-### MCP Tools Available (17 Total)
-**Core Persona Management (6):**
-1. `list_personas` - Enhanced metadata display
-2. `activate_persona` - Multi-format persona activation
-3. `get_active_persona` - Current persona info
-4. `deactivate_persona` - Return to default mode
-5. `get_persona_details` - Complete persona information
-6. `reload_personas` - Refresh from filesystem
+### MCP Tools Available (42 Total - Streamlined in v1.6.0)
 
-**GitHub Marketplace Integration (5):**
-7. `browse_collection` - Browse by section and type (no categories)
-8. `search_collection` - Content-based search
-9. `get_collection_content` - Detailed content info
-10. `install_persona` - One-click installation
-11. `submit_persona` - Automated GitHub issue creation
+**Element Management (12) - Generic tools for all element types:**
+1. `list_elements` - List elements by type (personas, skills, templates, etc.)
+2. `activate_element` - Activate any element type
+3. `get_active_elements` - View active elements by type
+4. `deactivate_element` - Deactivate specific elements
+5. `get_element_details` - Detailed element information
+6. `reload_elements` - Refresh elements from filesystem
+7. `create_element` - Create new elements
+8. `edit_element` - Modify element properties
+9. `delete_element` - Remove elements
+10. `validate_element` - Quality validation
+11. `render_template` - Render template elements with variables
+12. `execute_agent` - Execute agent elements with goals
 
-**User Identity Management (3):**
-12. `set_user_identity` - Username/email attribution
-13. `get_user_identity` - Current identity status
-14. `clear_user_identity` - Anonymous mode
+**Persona Export/Import (5) - Specialized persona sharing:**
+13. `export_persona` - Export single persona to JSON
+14. `export_all_personas` - Export all personas to JSON bundle
+15. `import_persona` - Import from file or JSON
+16. `share_persona` - Generate shareable URL
+17. `import_from_url` - Import from shared URL
 
-**Chat-Based Management (3):**
-15. `create_persona` - Guided creation interface
-16. `edit_persona` - Field-specific editing
-17. `validate_persona` - Quality validation
+**Collection Tools (7) - Community marketplace:**
+18. `browse_collection` - Browse by section and type
+19. `search_collection` - Content-based search
+20. `search_collection_enhanced` - Advanced search with pagination
+21. `get_collection_content` - Detailed content info
+22. `get_collection_cache_health` - Monitor collection cache
+23. `install_content` - One-click installation
+24. `submit_content` - Submit to collection
+
+**Portfolio Tools (6) - GitHub integration:**
+25. `portfolio_status` - Check portfolio repository status
+26. `init_portfolio` - Create GitHub portfolio
+27. `sync_portfolio` - Sync with GitHub
+28. `search_portfolio` - Search local portfolio
+29. `search_all` - Unified search across all sources
+30. `submit_content` - Upload to GitHub portfolio
+
+**Authentication (4) - GitHub OAuth:**
+31. `setup_github_auth` - OAuth device flow
+32. `check_github_auth` - Authentication status
+33. `clear_github_auth` - Clear credentials
+34. `configure_oauth` - Configure OAuth client
+
+**Configuration (4) - System settings:**
+35. `configure_indicator` - Persona indicator display
+36. `get_indicator_config` - View indicator settings
+37. `configure_collection_submission` - Auto-submit settings
+38. `get_collection_submission_config` - View submission config
+
+**User Identity (3) - Attribution system:**
+39. `set_user_identity` - Username/email attribution
+40. `get_user_identity` - Current identity status
+41. `clear_user_identity` - Anonymous mode
+
+**System Information (1):**
+42. `get_build_info` - Build and runtime information
+
+> **⚠️ Breaking Change in v1.6.0**: 9 redundant PersonaTools were removed (list_personas, activate_persona, etc.) in favor of ElementTools. See [PersonaTools Migration Guide](../PERSONATOOLS_MIGRATION_GUIDE.md).
 
 ### Core Technologies
 - **Framework**: TypeScript with MCP SDK v0.5.0
@@ -173,11 +209,11 @@ install_element "library/personas/study-buddy.md"
 - **Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/`
 - **Git Status**: Clean, all changes committed and pushed
 - **Build Status**: TypeScript compiling successfully
-- **Server Status**: All 17 MCP tools verified functional
+- **Server Status**: All 42 MCP tools verified functional
 - **Test Status**: Server startup and tool registration confirmed
 
 ### Repository Health
-- **Main Repo**: 17 clean files, proper .gitignore, no build artifacts
+- **Main Repo**: Streamlined codebase with 42 MCP tools, proper .gitignore, no build artifacts
 - **Marketplace Repo**: 8 files with initial persona collection
 - **Documentation**: Comprehensive claude.md with current state
 - **Setup Scripts**: Cross-platform installation support
@@ -192,7 +228,7 @@ install_element "library/personas/study-buddy.md"
 - ✅ Full documentation of current capabilities
 
 ### Technical Achievements ✅
-- ✅ 17 fully functional MCP tools
+- ✅ 42 fully functional MCP tools (streamlined from 51 in v1.6.0)
 - ✅ GitHub marketplace with 5 initial personas
 - ✅ Complete persona lifecycle management
 - ✅ Environment-based user attribution system
@@ -260,7 +296,7 @@ This project has evolved from a simple persona management prototype into a compr
 DollhouseMCP server running on stdio
 Generated unique ID for Business Consultant: business-consultant_20250701-191847_Persona MCP Server
 Loaded persona: Creative Writer (creative-writer_20250701-150000_dollhousemcp)
-✅ All 17 MCP tools registered and functional in Claude Desktop
+✅ All 42 MCP tools registered and functional in Claude Desktop
 ```
 
 The foundation is now established for a transformative AI persona ecosystem that balances individual productivity, community collaboration, and sustainable business practices. **The platform is production-ready and thoroughly validated.**
