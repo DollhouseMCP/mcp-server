@@ -9,13 +9,27 @@ import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 
 // Content types supported by MCP server (Issue #144)
-// Hide: tools, memories, ensembles, prompts from MCP queries
+// Hide: memories, ensembles from MCP queries
 const MCP_SUPPORTED_TYPES = [
   ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
   ElementType.SKILL,      // skills - supported by ElementTools
   ElementType.AGENT,      // agents - supported by ElementTools  
   ElementType.TEMPLATE    // templates - supported by ElementTools
 ];
+
+/**
+ * Type guard to safely check if a string is a valid ElementType
+ */
+function isElementType(value: string): value is ElementType {
+  return Object.values(ElementType).includes(value as ElementType);
+}
+
+/**
+ * Type guard to safely check if an ElementType is supported by MCP
+ */
+function isMCPSupportedType(elementType: ElementType): boolean {
+  return MCP_SUPPORTED_TYPES.includes(elementType);
+}
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
@@ -67,9 +81,11 @@ export class CollectionBrowser {
       // In the library section, we have content type directories
       if (section === 'library' && !type) {
         // Filter to only show MCP-supported content types
-        const contentTypes = data.filter((item: any) => 
-          item.type === 'dir' && MCP_SUPPORTED_TYPES.includes(item.name as ElementType)
-        );
+        const contentTypes = data.filter((item: any) => {
+          if (item.type !== 'dir') return false;
+          const elementType = isElementType(item.name) ? item.name as ElementType : null;
+          return elementType && isMCPSupportedType(elementType);
+        });
         return { items: [], categories: contentTypes };
       }
       
@@ -162,8 +178,10 @@ export class CollectionBrowser {
       const pathParts = item.path.split('/');
       if (pathParts.length >= 2 && pathParts[0] === 'library') {
         // Only include MCP-supported types in cache browsing
-        if (MCP_SUPPORTED_TYPES.includes(pathParts[1] as ElementType)) {
-          types.add(pathParts[1]);
+        const typeName = pathParts[1];
+        const elementType = isElementType(typeName) ? typeName as ElementType : null;
+        if (elementType && isMCPSupportedType(elementType)) {
+          types.add(typeName);
         }
       }
     });
@@ -244,9 +262,7 @@ export class CollectionBrowser {
           'personas': '🎭',
           'skills': '🛠️',
           'agents': '🤖',
-          'prompts': '💬',
           'templates': '📄',
-          'tools': '🔧',
           'ensembles': '🎼',
           'memories': '🧠'
         };
@@ -270,9 +286,7 @@ export class CollectionBrowser {
         'personas': '🎭',
         'skills': '🛠️',
         'agents': '🤖',
-        'prompts': '💬',
         'templates': '📄',
-        'tools': '🔧',
         'ensembles': '🎼',
         'memories': '🧠'
       };
