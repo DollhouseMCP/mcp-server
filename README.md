@@ -17,7 +17,8 @@
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/blob/main/Dockerfile)
 [![Test Coverage](https://img.shields.io/badge/Coverage-600%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
-[![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
+[![GitHub Views](https://komarev.com/ghpvc/?username=DollhouseMCP&repo=mcp-server&label=Repository+Views&style=flat)](https://github.com/DollhouseMCP/mcp-server)
+[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered collection. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
 
@@ -25,9 +26,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.5.2
+**📦 Version**: v1.6.0
 
-> **🎉 New in v1.5.2**: Anonymous collection browsing and submission! No GitHub authentication required for basic usage. See [Anonymous Submission Guide](docs/ANONYMOUS_SUBMISSION_GUIDE.md) for details.
+> **🎉 New in v1.6.0**: Portfolio management system with GitHub integration, enhanced collection search with pagination, and 51 total MCP tools! See [Migration Guide](docs/MIGRATION_GUIDE_v1.6.0.md) for upgrade instructions.
 
 ## 🚀 Quick Start
 
@@ -64,7 +65,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **49 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **51 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
 | 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
@@ -111,6 +112,8 @@ Manage your portfolio on GitHub for sharing and collaboration:
 - **`init_portfolio`** - Create a new GitHub portfolio repository
 - **`portfolio_config`** - Configure sync and submission settings
 - **`sync_portfolio`** - Synchronize local and GitHub repositories
+- **`search_portfolio`** - Search your local portfolio with advanced indexing
+- **`search_all`** - Unified search across local, GitHub, and collection sources
 - **`submit_content`** - Upload elements to your GitHub portfolio
 
 > **📘 Getting Started**: New to portfolios? Follow our [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md) for step-by-step instructions.
@@ -219,7 +222,7 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 #### NPM Installation (NEW! - Recommended)
 
 ```bash
-npm install -g @mickdarling/dollhousemcp
+npm install -g @dollhousemcp/mcp-server
 ```
 
 After installation, add DollhouseMCP to your Claude Desktop configuration:
@@ -313,9 +316,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 49 DollhouseMCP tools will be available
+3. All 51 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (49 Total)
+## 🛠️ Available Tools (51 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -340,9 +343,23 @@ Add DollhouseMCP to your Claude Desktop configuration:
 ### GitHub Collection Integration
 - **`browse_collection`** - Browse content by section and type (flat structure, no categories)
 - **`search_collection`** - Search across all collection content
+- **`search_collection_enhanced`** - Enhanced search with pagination, filtering, and sorting
 - **`get_collection_content`** - View detailed content info
+- **`get_collection_cache_health`** - Monitor collection cache status and performance
 - **`install_element`** - One-click download and installation of any element type
 - **`submit_persona`** - Submit to collection via GitHub issue
+
+### GitHub Portfolio Management (NEW!)
+- **`portfolio_status`** - Check your GitHub portfolio repository status
+- **`init_portfolio`** - Create a new GitHub portfolio repository
+- **`sync_portfolio`** - Synchronize local and GitHub repositories
+- **`search_portfolio`** - Search your local portfolio with advanced indexing
+- **`search_all`** - Unified search across local, GitHub, and collection sources
+- **`submit_content`** - Upload elements to your GitHub portfolio
+
+### Collection Configuration (NEW!)
+- **`configure_collection_submission`** - Configure auto-submit and default settings
+- **`get_collection_submission_config`** - View current submission configuration
 
 ### User Identity Management
 - **`set_user_identity`** - Set username for persona attribution
@@ -360,6 +377,10 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`rollback_update`** - Restore previous version from automatic backups
 - **`get_server_status`** - Comprehensive server status with version, git info, and system details
 
+### System Tools (NEW!)
+- **`get_build_info`** - Comprehensive build and runtime information
+- **`convert_to_git_installation`** - Convert npm installation to git-based installation
+
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
 - **`get_indicator_config`** - View current indicator configuration settings
@@ -373,10 +394,111 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 ### Collection Operations
 ```
-browse_collection(section="library", type="personas")  # Browse all personas
-browse_collection(section="library", type="skills")    # Browse skills
-search_collection "writing"                # Search for writing personas
-install_element "library/personas/storyteller.md"  # Install from collection
+# Browse collection content by type
+browse_collection section="library" type="personas"    # Browse all personas
+browse_collection section="library" type="skills"      # Browse skills
+browse_collection section="library" type="templates"   # Browse templates
+
+# Search collection content
+search_collection query="writing"                      # Search for writing personas
+search_collection query="code review"                  # Find code review skills
+
+# Enhanced collection search with pagination
+search_collection_enhanced query="data analysis" maxResults=10 elementType="skills"
+search_collection_enhanced query="creative" page=2 resultsPerPage=5
+
+# Install elements from collection
+install_element path="library/personas/storyteller.md"        # Install persona
+install_element path="library/skills/code-reviewer.md"       # Install skill
+install_element path="library/templates/email-template.md"   # Install template
+
+# Check collection cache health
+get_collection_cache_health
+```
+
+### Portfolio Workflow (NEW!)
+```
+# Check GitHub portfolio status
+portfolio_status                                       # Check repository status
+
+# Initialize a new GitHub portfolio (first time setup)
+init_portfolio                                         # Create GitHub repository
+init_portfolio repoName="my-ai-portfolio"             # Custom repository name
+
+# Synchronize local and GitHub portfolios
+sync_portfolio                                         # Sync both directions
+sync_portfolio direction="push"                        # Push local to GitHub
+sync_portfolio direction="pull"                        # Pull GitHub to local
+
+# Search your local portfolio with advanced indexing
+search_portfolio query="writing"                       # Search all element types
+search_portfolio query="code" elementType="skills"     # Search specific type
+search_portfolio query="email" fuzzyMatch=true         # Enable fuzzy matching
+
+# Unified search across all sources (local, GitHub, collection)
+search_all query="data analysis"                       # Search everywhere
+search_all query="creative writing" maxResults=20      # Limit results
+search_all query="templates" source="local"            # Search specific source
+
+# Submit content with smart auto-detection
+submit_content name="code-review"                      # Auto-detects element type
+submit_content name="my-persona" elementType="personas" # Explicit type
+submit_content name="email-template" description="Professional email template"
+
+# Configure collection submission settings
+configure_collection_submission autoSubmit=true        # Enable auto-submit
+configure_collection_submission defaultLicense="MIT"   # Set default license
+get_collection_submission_config                       # View current config
+```
+
+### Portfolio Element Management
+```
+# List elements by type (works with all element types)
+list_elements type="personas"                          # List personas
+list_elements type="skills"                            # List skills  
+list_elements type="templates"                         # List templates
+list_elements type="agents"                            # List agents
+
+# Activate elements to customize AI behavior
+activate_element name="code-reviewer" type="skills"    # Activate skill
+activate_element name="professional" type="personas"   # Activate persona
+activate_element name="email-format" type="templates"  # Activate template
+
+# View active elements
+get_active_elements                                     # All active elements
+get_active_elements type="skills"                      # Active skills only
+
+# Get detailed element information
+get_element_details name="code-reviewer" type="skills" # View skill details
+get_element_details name="my-persona" type="personas"  # View persona details
+
+# Deactivate elements
+deactivate_element name="code-reviewer" type="skills"  # Deactivate specific
+deactivate_element type="personas"                     # Deactivate all personas
+
+# Refresh elements from filesystem
+reload_elements                                         # Reload all elements
+reload_elements type="skills"                          # Reload specific type
+```
+
+### Specialized Element Operations
+```
+# Render templates with variables
+render_template name="project-update" variables='{"project": "DollhouseMCP", "status": "Released"}'
+render_template name="email-professional" variables='{"recipient": "John", "subject": "Meeting"}'
+
+# Execute agents with specific goals
+execute_agent name="project-manager" goal="Create a sprint plan for next week"
+execute_agent name="data-analyst" goal="Analyze sales trends for Q3"
+```
+
+### System Information
+```
+# Get comprehensive build and runtime information
+get_build_info                                         # Full system info
+get_build_info section="version"                       # Version info only
+get_build_info section="environment"                   # Environment details
+get_build_info section="dependencies"                  # Dependency versions
 ```
 
 ### Persona Creation & Management
@@ -446,6 +568,169 @@ Environment variables for persistent configuration:
 export DOLLHOUSE_INDICATOR_ENABLED=true
 export DOLLHOUSE_INDICATOR_STYLE=minimal
 export DOLLHOUSE_INDICATOR_EMOJI=🎨
+```
+
+## 🔄 Complete Workflows
+
+### Setting Up Portfolio from Scratch
+
+**Step 1: Initial Setup**
+```
+# Set your user identity for attribution
+set_user_identity "your-username"
+
+# Check current portfolio status
+portfolio_status
+
+# Initialize a new GitHub portfolio repository
+init_portfolio repoName="my-ai-portfolio"
+```
+
+**Step 2: Browse and Install Elements**
+```
+# Browse the community collection
+browse_collection section="library" type="personas"
+browse_collection section="library" type="skills"
+
+# Search for specific elements
+search_collection query="code review"
+search_collection_enhanced query="data analysis" elementType="skills" maxResults=5
+
+# Install elements you like
+install_element path="library/skills/code-reviewer.md"
+install_element path="library/personas/technical-writer.md"
+install_element path="library/templates/project-update.md"
+```
+
+**Step 3: Customize and Create**
+```
+# Activate installed elements
+activate_element name="code-reviewer" type="skills"
+activate_element name="technical-writer" type="personas"
+
+# Create your own custom elements
+create_persona name="My Assistant" description="Personal AI assistant" instructions="You are my helpful personal assistant..."
+
+# Validate your creations
+validate_persona name="My Assistant"
+```
+
+**Step 4: Sync and Share**
+```
+# Submit your custom content to GitHub portfolio
+submit_content name="My Assistant"
+
+# Sync everything to GitHub
+sync_portfolio direction="push"
+
+# Optionally submit to community collection
+submit_persona name="My Assistant"
+```
+
+### Searching Across All Sources
+
+**Unified Search Example**
+```
+# Search everything (local portfolio, GitHub portfolio, community collection)
+search_all query="writing assistant"
+
+# Search with filters
+search_all query="code" elementType="skills" maxResults=10
+
+# Search specific sources
+search_all query="templates" source="collection"    # Collection only
+search_all query="my content" source="local"        # Local portfolio only
+search_all query="my content" source="github"       # GitHub portfolio only
+```
+
+**Advanced Portfolio Search**
+```
+# Search your local portfolio with fuzzy matching
+search_portfolio query="analysi" fuzzyMatch=true    # Finds "analysis" elements
+
+# Search by element type
+search_portfolio query="email" elementType="templates"
+search_portfolio query="review" elementType="skills"
+
+# Get all elements of a type
+list_elements type="personas"
+list_elements type="agents"
+```
+
+### Content Submission with Auto-Detection
+
+**Smart Element Detection**
+```
+# System automatically detects element type
+submit_content name="code-review"                   # Finds in skills/
+submit_content name="email-template"                # Finds in templates/
+submit_content name="my-persona"                    # Finds in personas/
+
+# Add description for better documentation
+submit_content name="data-analyzer" description="Advanced data analysis skill"
+
+# Override auto-detection if needed
+submit_content name="ambiguous-name" elementType="skills"
+```
+
+**Batch Content Management**
+```
+# Configure submission settings
+configure_collection_submission autoSubmit=true
+configure_collection_submission defaultLicense="CC-BY-SA-4.0"
+
+# Check configuration
+get_collection_submission_config
+
+# Submit multiple elements
+submit_content name="skill-1"
+submit_content name="skill-2"
+submit_content name="template-1"
+
+# Sync all changes to GitHub
+sync_portfolio
+```
+
+### Daily Workflow Example
+
+**Morning Setup**
+```
+# Check for updates
+get_build_info section="version"
+portfolio_status
+
+# Activate your daily toolkit
+activate_element name="code-reviewer" type="skills"
+activate_element name="professional" type="personas"
+activate_element name="email-template" type="templates"
+
+# Check what's active
+get_active_elements
+```
+
+**During Work**
+```
+# Use templates for communication
+render_template name="email-template" variables='{"recipient": "team", "subject": "Sprint Update"}'
+
+# Deploy agents for tasks
+execute_agent name="project-manager" goal="Review pending tasks and prioritize"
+
+# Search for tools as needed
+search_all query="debugging" elementType="skills"
+```
+
+**End of Day**
+```
+# Save any new content
+submit_content name="new-skill"
+submit_content name="daily-template"
+
+# Sync to GitHub
+sync_portfolio
+
+# Check system health
+get_collection_cache_health
 ```
 
 ### GitHub Authentication (v1.5.0+)
@@ -847,7 +1132,7 @@ DollhouseMCP/
 │   ├── index.ts                  # Main MCP server (DollhouseMCPServer)
 │   ├── cache/                    # API caching layer
 │   ├── config/                   # Configuration management
-│   ├── marketplace/              # GitHub collection integration
+│   ├── collection/               # GitHub collection integration
 │   ├── persona/                  # Persona management core
 │   ├── security/                 # Input validation and security
 │   ├── server/                   # MCP server setup and tools
@@ -1283,10 +1568,48 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-<<<<<<< HEAD
-### v1.5.0 - August 5, 2025 (Current)
-=======
-### v1.5.1 - August 5, 2025 (Current)
+### v1.6.0 - August 18, 2025 (Current - Develop Branch)
+
+**⚠️ Breaking Changes**:
+- 🔄 **Serialization Format Change** - `BaseElement.serialize()` now returns markdown with YAML frontmatter instead of JSON
+  - Migration: Use new `serializeToJSON()` method for backward compatibility
+- 🏗️ **Server Initialization** - Portfolio initialization moved from constructor to `run()` method
+  - New `ensureInitialized()` method provides lazy initialization for tests
+
+**Major New Features**:
+- 🔍 **Enhanced Portfolio System** (6 new tools):
+  - `portfolio_status` - Check GitHub portfolio status
+  - `init_portfolio` - Create GitHub portfolio repository
+  - `sync_portfolio` - Synchronize local/GitHub repositories  
+  - `search_portfolio` - Search with advanced indexing
+  - `search_all` - Unified search across all sources
+  - Complete GitHub integration with indexing
+- 📊 **Enhanced Collection Search**:
+  - `search_collection_enhanced` - Pagination, filtering, sorting
+  - `get_collection_cache_health` - Cache monitoring
+  - Smart caching with ETags and conditional requests
+- 🛠️ **System Tools**:
+  - `get_build_info` - Comprehensive build and runtime information
+  - `convert_to_git_installation` - Convert npm to git installation
+- ⚙️ **Collection Configuration**:
+  - `configure_collection_submission` - Auto-submit settings
+  - `get_collection_submission_config` - Check submission config
+
+**Infrastructure Improvements**:
+- 🚀 **High-Performance Caching** - Memory-aware LRU cache system
+- 🔒 **Enhanced Security** - YAML bomb protection, content validation
+- 📦 **Build Information Service** - Runtime and build info API
+- 🎯 **Error Handler** - Centralized error management system
+- 🔄 **Roundtrip Workflow** - Complete content submission cycle
+
+**Statistics**:
+- 51 total MCP tools (down from 56 - UpdateTools removed)
+- 89 commits ahead of main
+- 257 files changed
+- 50,857 lines added
+- 76 test files modified/added
+
+### v1.5.1 - August 5, 2025
 **Critical Bug Fixes**:
 - 🔧 **Fixed OAuth Token Retrieval** - `setup_github_auth` tokens now properly used for API calls
 - 🔧 **Fixed Collection Browsing** - Removed legacy category validation blocking browsing
@@ -1294,7 +1617,6 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **Element System Alignment** - Full consistency with new architecture
 
 ### v1.5.0 - August 5, 2025
->>>>>>> origin/main
 **GitHub OAuth Authentication**:
 - 🔐 **OAuth Device Flow** - Secure authentication without manual token management
 - 🔒 **AES-256-GCM Encryption** - Tokens encrypted at rest with machine-specific keys
