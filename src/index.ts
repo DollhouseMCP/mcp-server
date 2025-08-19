@@ -1956,9 +1956,14 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX #471: Replace legacy category validation with proper section/type validation
       // Valid sections: library, showcase, catalog
-      // Valid types: personas, skills, agents, prompts, templates, tools, ensembles, memories
+      // Valid types for MCP: personas, skills, agents, templates (others filtered per Issue #144)
+      // Note: tools, prompts, ensembles, memories exist in collection but are filtered from MCP
       const validSections = ['library', 'showcase', 'catalog'];
-      const validTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'];
+      
+      // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
+      // See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete checklist
+      // This array is often forgotten and causes validation failures for new types
+      const validTypes = ['personas', 'skills', 'agents', 'templates'];  // Only MCP-supported types
       
       // Validate section if provided
       const validatedSection = section ? sanitizeInput(section.toLowerCase()) : undefined;

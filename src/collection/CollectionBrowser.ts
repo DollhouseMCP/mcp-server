@@ -6,6 +6,33 @@ import { GitHubClient } from './GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
+import { ElementType } from '../portfolio/types.js';
+
+// Content types supported by MCP server (Issue #144)
+// Hide: memories, ensembles from MCP queries
+// ⚠️ CRITICAL: When adding new element types, you MUST update this array!
+// Also update validTypes array in src/index.ts
+// See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
+const MCP_SUPPORTED_TYPES = [
+  ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
+  ElementType.SKILL,      // skills - supported by ElementTools
+  ElementType.AGENT,      // agents - supported by ElementTools  
+  ElementType.TEMPLATE    // templates - supported by ElementTools
+];
+
+/**
+ * Type guard to safely check if a string is a valid ElementType
+ */
+function isElementType(value: string): value is ElementType {
+  return Object.values(ElementType).includes(value as ElementType);
+}
+
+/**
+ * Type guard to safely check if an ElementType is supported by MCP
+ */
+function isMCPSupportedType(elementType: ElementType): boolean {
+  return MCP_SUPPORTED_TYPES.includes(elementType);
+}
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
@@ -56,9 +83,12 @@ export class CollectionBrowser {
       
       // In the library section, we have content type directories
       if (section === 'library' && !type) {
-        const contentTypes = data.filter((item: any) => 
-          item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
-        );
+        // Filter to only show MCP-supported content types
+        const contentTypes = data.filter((item: any) => {
+          if (item.type !== 'dir') return false;
+          const elementType = isElementType(item.name) ? item.name as ElementType : null;
+          return elementType && isMCPSupportedType(elementType);
+        });
         return { items: [], categories: contentTypes };
       }
       
@@ -150,7 +180,12 @@ export class CollectionBrowser {
     items.forEach(item => {
       const pathParts = item.path.split('/');
       if (pathParts.length >= 2 && pathParts[0] === 'library') {
-        types.add(pathParts[1]);
+        // Only include MCP-supported types in cache browsing
+        const typeName = pathParts[1];
+        const elementType = isElementType(typeName) ? typeName as ElementType : null;
+        if (elementType && isMCPSupportedType(elementType)) {
+          types.add(typeName);
+        }
       }
     });
     
@@ -211,7 +246,7 @@ export class CollectionBrowser {
         const icon = sectionIcons[sec.name] || '📁';
         const descriptions: { [key: string]: string } = {
           'library': 'Free community content',
-          'showcase': 'Featured high-quality content',
+          'showcase': 'Featured high-quality content (coming soon)',
           'catalog': 'Premium content (coming soon)'
         };
         textParts.push(
@@ -230,9 +265,7 @@ export class CollectionBrowser {
           'personas': '🎭',
           'skills': '🛠️',
           'agents': '🤖',
-          'prompts': '💬',
           'templates': '📄',
-          'tools': '🔧',
           'ensembles': '🎼',
           'memories': '🧠'
         };
@@ -256,9 +289,7 @@ export class CollectionBrowser {
         'personas': '🎭',
         'skills': '🛠️',
         'agents': '🤖',
-        'prompts': '💬',
         'templates': '📄',
-        'tools': '🔧',
         'ensembles': '🎼',
         'memories': '🧠'
       };

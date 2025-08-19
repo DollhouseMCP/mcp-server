@@ -87,31 +87,53 @@ interface ElementRatings {
 }
 ```
 
+## ⚠️ CRITICAL: Type Validation Arrays
+
+**Before implementing any new element type, you MUST update multiple validation arrays scattered throughout the codebase. Missing even one can cause runtime failures.**
+
+**👉 Use the comprehensive checklist: [ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md](./ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md)**
+
+The most critical locations that are often forgotten:
+- `validTypes` array in `src/index.ts` (line ~1812)
+- `MCP_SUPPORTED_TYPES` in `src/collection/CollectionBrowser.ts`
+- All mapping objects (`pluralToSingularMap`, `pluralToDirMap`)
+
+**Consider using the centralized config in `src/config/element-types.ts` to avoid manual updates.**
+
 ## Implementation Checklist
 
 ### For Each Element Type:
 
-#### 1. Core Implementation
+#### 1. **FIRST: Update Type Validation** ⚠️
+- [ ] **Follow [ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md](./ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md) completely**
+- [ ] Update ElementType enum in `src/portfolio/types.ts`
+- [ ] Update `validTypes` array in `src/index.ts` 
+- [ ] Update `MCP_SUPPORTED_TYPES` in `src/collection/CollectionBrowser.ts`
+- [ ] Update all mapping objects
+- [ ] Test MCP validation works
+
+#### 2. Core Implementation
 - [ ] Create element class implementing `IElement`
 - [ ] Define element-specific metadata interface
 - [ ] Implement validation logic
 - [ ] Add serialization/deserialization
 - [ ] Create element manager class
 
-#### 2. Features
+#### 3. Features
 - [ ] Reference resolution
 - [ ] Rating system integration
 - [ ] Natural language feedback processing
 - [ ] Extension field handling
 - [ ] Lifecycle methods (if applicable)
 
-#### 3. Integration
+#### 4. Integration
 - [ ] MCP tool updates (use generic tools)
 - [ ] Collection browsing support
 - [ ] Import/export functionality
 - [ ] Cross-element compatibility
 
-#### 4. Testing
+#### 5. Testing
+- [ ] **Type validation tests** (most important)
 - [ ] Unit tests for element operations
 - [ ] Integration tests with other elements
 - [ ] Performance tests
