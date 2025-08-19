@@ -183,8 +183,7 @@ async function validateBeforeCreate(type, elementData) {
 
 ### Issue #3: Dependency Management Warnings
 **Severity:** MEDIUM  
-**Impact:** Update functionality may fail  
-**Affected Functions:** `update_server`, `rollback_update`
+**Impact:** System dependency warnings
 
 #### Technical Analysis
 From server status:

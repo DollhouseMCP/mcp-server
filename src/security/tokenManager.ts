@@ -3,7 +3,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { RateLimiter } from '../update/RateLimiter.js';
+import { RateLimiter } from '../utils/RateLimiter.js';
 import { SecurityError } from './errors.js';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';

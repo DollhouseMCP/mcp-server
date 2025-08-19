@@ -69,7 +69,7 @@ import { PathValidator } from '../security/pathValidator.js';
 import { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { RateLimiter } from '../update/RateLimiter.js';
+import { RateLimiter } from './RateLimiter.js';
 import { logger } from './logger.js';
 
 /**

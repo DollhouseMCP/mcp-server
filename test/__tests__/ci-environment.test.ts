@@ -230,52 +230,6 @@ describe('CI Environment Tests', () => {
     });
   });
 
-  describe('BackupManager CI Safety', () => {
-    it('should use safe directories in CI environment', async () => {
-      if (isCI) {
-        // In CI, BackupManager should use temporary directories
-        const { BackupManager } = await import('../../src/update/BackupManager.js');
-        
-        // Create a test directory in tmp with UUID for better uniqueness guarantees
-        const testDir = path.join(os.tmpdir(), 'backup-ci-test-' + uuidv4());
-        await fs.mkdir(testDir, { recursive: true });
-        
-        try {
-          // This should not throw in CI
-          const backup = new BackupManager(testDir);
-          expect(backup).toBeDefined();
-        } finally {
-          await fs.rm(testDir, { recursive: true, force: true });
-        }
-      }
-    });
-  });
-
-  describe('UpdateManager CI Compatibility', () => {
-    it('should handle rootDir configuration in CI', async () => {
-      if (isCI) {
-        const { UpdateManager } = await import('../../src/update/UpdateManager.js');
-        
-        // Create a test directory with UUID for better uniqueness guarantees
-        const testDir = path.join(os.tmpdir(), 'update-ci-test-' + uuidv4());
-        await fs.mkdir(testDir, { recursive: true });
-        
-        // Create a minimal package.json
-        await fs.writeFile(
-          path.join(testDir, 'package.json'),
-          JSON.stringify({ name: 'test-project', version: '1.0.0' })
-        );
-        
-        try {
-          // This should work with custom rootDir
-          const updater = new UpdateManager(testDir);
-          expect(updater).toBeDefined();
-        } finally {
-          await fs.rm(testDir, { recursive: true, force: true });
-        }
-      }
-    });
-  });
 
   describe('Integration Test Environment', () => {
     it('should provide necessary environment for integration tests', () => {

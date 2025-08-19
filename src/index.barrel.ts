@@ -2,7 +2,7 @@
  * Central barrel file for easier imports
  * 
  * Usage:
- * import { PersonaManager, GitHubClient, UpdateManager } from '@/index.barrel';
+ * import { PersonaManager, GitHubClient } from '@/index.barrel';
  */
 
 // Types
@@ -30,8 +30,6 @@ export * from './persona/index.js';
 // Collection
 export * from './collection/index.js';
 
-// Update
-export * from './update/index.js';
 
 // Server
 export * from './server/index.js';

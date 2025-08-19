@@ -21,7 +21,7 @@ import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes, NetworkErrorCodes } from '../../utils/errorCodes.js';
-import { RateLimiter } from '../../update/RateLimiter.js';
+import { RateLimiter } from '../../utils/RateLimiter.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { validateContentSize } from '../../security/InputValidator.js';
 

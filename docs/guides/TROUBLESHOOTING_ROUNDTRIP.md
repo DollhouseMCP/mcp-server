@@ -8,7 +8,7 @@ Before diving into specific issues, run these commands to gather diagnostic info
 
 ```
 # Check overall system status
-get_server_status
+get_build_info
 
 # Check authentication
 check_github_auth
@@ -691,7 +691,7 @@ If you've tried the solutions in this guide and still have issues:
 
 Gather this diagnostic information:
 
-1. **System info**: Run `get_server_status`
+1. **System info**: Run `get_build_info`
 2. **Authentication status**: Run `check_github_auth`  
 3. **Portfolio status**: Run `portfolio_status`
 4. **Error messages**: Copy exact error messages
@@ -707,7 +707,7 @@ Gather this diagnostic information:
 
 When reporting issues, include:
 
-- **DollhouseMCP version**: From `get_server_status`
+- **DollhouseMCP version**: From `get_build_info`
 - **Operating system**: macOS, Windows, Linux version
 - **Node.js version**: Output of `node --version`
 - **Exact error message**: Copy/paste the full error

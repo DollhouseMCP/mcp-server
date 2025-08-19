@@ -36,7 +36,7 @@
 - ✅ Assessed completeness against stated testing scope
 
 **Sources Consulted:**
-- Live DollhouseMCP system v1.5.1 (get_server_status, function testing)
+- Live DollhouseMCP system v1.5.1 (function testing)
 - Actual function call results from testing session
 - Mathematical verification of reported statistics
 - Cross-reference against stated methodology
@@ -70,7 +70,7 @@
 
 **Claims Verified:**
 - ✅ search_collection failure with GitHub auth - Reproduced identical error
-- ✅ get_server_status functionality - Verified with identical output
+- ✅ System status functionality - Verified with system information
 - ✅ Element management functions - Confirmed through actual testing
 - ⚠️ Performance metrics - Limited verification (see issues below)
 
@@ -116,9 +116,9 @@
 | Claim | Section | Verification Method | Source | Confidence |
 |-------|---------|-------------------|---------|------------|
 | 49 total tools available | Executive Summary | Systematic enumeration | Function analysis | High |
-| DollhouseMCP v1.5.1 | Test Environment | Direct system query | get_server_status | High |
+| DollhouseMCP v1.5.1 | Test Environment | Direct system query | System information | High |
 | GitHub auth requirement for search | Detailed Results | Error reproduction | search_collection test | High |
-| Git v2.39.5 dependency warning | System Status | Server status verification | get_server_status output | High |
+| Git v2.39.5 dependency warning | System Status | Server status verification | System status output | High |
 | Pass/fail statistics accuracy | Executive Summary | Mathematical validation | Statistical calculation | High |
 
 ### Unverified Claims

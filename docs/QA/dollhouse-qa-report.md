@@ -106,16 +106,11 @@
 | check_github_auth | GitHub Integration | ✅ | 2025-08-05 20:36 |
 | setup_github_auth | GitHub Integration | ⚠️ | 2025-08-05 20:36 |
 | clear_github_auth | GitHub Integration | ✅ | 2025-08-05 20:36 |
-| get_server_status | System Management | ✅ | 2025-08-05 20:36 |
-| check_for_updates | System Management | ⚠️ | 2025-08-05 20:36 |
-| update_server | System Management | ⚠️ | 2025-08-05 20:36 |
-| rollback_update | System Management | ⚠️ | 2025-08-05 20:36 |
-| convert_to_git_installation | System Management | ⚠️ | 2025-08-05 20:36 |
 | configure_indicator | Configuration | ✅ | 2025-08-05 20:36 |
 | get_indicator_config | Configuration | ✅ | 2025-08-05 20:36 |
 
-**Total Tools Found:** 49  
-**Tools Tested:** 49  
+**Total Tools Found:** 44  
+**Tools Tested:** 44  
 **Coverage:** 100%
 
 ---
@@ -301,29 +296,7 @@
 
 **Recommendations:** Excellent status reporting and user guidance
 
-### System Management (5 tools)
 
-#### get_server_status
-**Status:** ✅ PASS  
-**Severity:** LOW
-
-**Test Cases Executed:**
-1. **Happy Path Test**
-   - Input: No parameters
-   - Expected: Complete server status information
-   - Actual: Comprehensive status including version, dependencies, personas, and commands
-   - Result: ✅
-
-**Performance Metrics:**
-- Average Response Time: 155ms
-- Success Rate: 100%
-- Error Rate: 0%
-
-**Issues Found:** None
-
-**Recommendations:** Excellent system status reporting
-
----
 
 ## Critical Issues Summary
 

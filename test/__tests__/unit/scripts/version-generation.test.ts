@@ -48,17 +48,5 @@ export const PACKAGE_NAME = '${testPackageName}';
     });
   });
   
-  describe('version file usage', () => {
-    it('should be importable by VersionManager', async () => {
-      // Try to import VersionManager which uses the generated version
-      const { VersionManager } = await import('../../../../src/update/VersionManager.js');
-      
-      const versionManager = new VersionManager();
-      expect(versionManager).toBeDefined();
-      
-      // Should be able to get a version
-      const version = await versionManager.getCurrentVersion();
-      expect(version).toMatch(/^\d+\.\d+\.\d+/);
-    });
-  });
+  // VersionManager tests removed - UpdateTools and VersionManager have been removed from the codebase
 });

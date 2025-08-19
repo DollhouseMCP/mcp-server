@@ -34,7 +34,6 @@ import { PathValidator } from './security/pathValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
-import { UpdateManager } from './update/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
@@ -85,7 +84,6 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaDetails: PersonaDetails;
   private elementInstaller: ElementInstaller;
   private personaSubmitter: PersonaSubmitter;
-  private updateManager?: UpdateManager;
   private serverSetup: ServerSetup;
   private personaExporter: PersonaExporter;
   private personaImporter?: PersonaImporter;
@@ -209,14 +207,6 @@ export class DollhouseMCPServer implements IToolHandler {
     PathValidator.initialize(this.personasDir);
     
     // Initialize update manager with safe directory
-    // Use the parent of personas directory to avoid production check
-    const safeDir = path.dirname(this.personasDir);
-    try {
-      this.updateManager = new UpdateManager(safeDir);
-    } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.initializeUpdateManager', error);
-      // Continue without update functionality
-    }
     
     // Initialize import module that depends on personasDir
     this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
@@ -3506,112 +3496,14 @@ ${sanitizedInstructions}
     };
   }
 
-  // retryNetworkOperation is now handled by UpdateChecker
+  // retryNetworkOperation has been removed with UpdateTools
 
-  // Auto-update management tools
-  async checkForUpdates() {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.checkForUpdates();
-    return {
-      content: [{ type: "text", text: this.getPersonaIndicator() + text }]
-    };
-  }
 
-  // Update helper methods are now handled by UpdateManager
 
-  async updateServer(confirm: boolean) {
-    if (!confirm) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '⚠️ **Update Confirmation Required**\n\n' +
-            'To proceed with the update, you must confirm:\n' +
-            '`update_server true`\n\n' +
-            '**What will happen:**\n' +
-            '• Backup current version\n' +
-            '• Pull latest changes from GitHub\n' +
-            '• Update dependencies\n' +
-            '• Rebuild TypeScript\n' +
-            '• Restart server (will disconnect temporarily)\n\n' +
-            '**Prerequisites:**\n' +
-            '• Git repository must be clean (no uncommitted changes)\n' +
-            '• Network connection required\n' +
-            '• Sufficient disk space for backup'
-        }]
-      };
-    }
 
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.updateServer(confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text }]
-    };
-  }
 
-  // Rollback helper methods are now handled by UpdateManager
 
-  async rollbackUpdate(confirm: boolean) {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text }]
-    };
-  }
 
-  // Version and git info methods are now handled by UpdateManager
-
-  // Status helper methods are now handled by UpdateManager
-
-  async getServerStatus() {
-    // Add persona information to the status
-    const personaInfo = `
-**🎭 Persona Information:**
-• **Total Personas:** ${this.personas.size}
-• **Active Persona:** ${this.activePersona || 'None'}
-• **User Identity:** ${this.currentUser || 'Anonymous'}
-• **Personas Directory:** ${this.personasDir}`;
-    
-    if (!this.updateManager) {
-      const errorMessage = `${this.getPersonaIndicator()}❌ Update functionality not available (initialization failed)\n\n${personaInfo}`;
-      return {
-        content: [{ type: "text", text: errorMessage }]
-      };
-    }
-    const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
-    // Insert persona info into the status text
-    const updatedText = text.replace('**Available Commands:**', personaInfo + '\n\n**Available Commands:**');
-    
-    return {
-      content: [{ type: "text", text: updatedText }]
-    };
-  }
-
-  async convertToGitInstallation(targetDir?: string, confirm: boolean = false) {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const result = await this.updateManager.convertToGitInstallation(targetDir, confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text: result.text }]
-    };
-  }
-
-  // Version and dependency methods are now handled by UpdateManager
 
 
   /**
@@ -4948,10 +4840,6 @@ Placeholders for custom format:
         }
         
         // Clean up any other resources
-        if (this.updateManager) {
-          // UpdateManager might have active operations too
-          logger.debug("Cleaning up update manager...");
-        }
         
         logger.info("Cleanup completed");
       } catch (error) {

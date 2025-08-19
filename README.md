@@ -77,7 +77,6 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas`
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
-| 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
 | 📦 **NPM Installation** | Install MCP servers from npm with cross-platform support and atomic operations |
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
@@ -375,15 +374,8 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`edit_persona`** - Modify existing persona fields
 - **`validate_persona`** - Comprehensive quality validation
 
-### Auto-Update System
-- **`check_for_updates`** - Check GitHub releases for available DollhouseMCP updates
-- **`update_server`** - Automated git pull + npm install + build with backup creation
-- **`rollback_update`** - Restore previous version from automatic backups
-- **`get_server_status`** - Comprehensive server status with version, git info, and system details
-
-### System Tools (NEW!)
+### System Tools
 - **`get_build_info`** - Comprehensive build and runtime information
-- **`convert_to_git_installation`** - Convert npm installation to git-based installation
 
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
@@ -520,34 +512,8 @@ get_user_identity                          # Check current status
 clear_user_identity                        # Return to anonymous
 ```
 
-### Auto-Update Operations
 
-The auto-update system provides enterprise-grade update management with safety features:
 
-```
-check_for_updates                          # Check for new DollhouseMCP versions
-get_server_status                          # View current version and system info
-update_server true                         # Perform automated update with backup
-rollback_update true                       # Revert to previous version if needed
-```
-
-**How Auto-Update Works:**
-
-1. **Version Check**: Queries GitHub releases API for latest version
-2. **Backup Creation**: Automatically backs up current installation (including user personas)
-3. **Update Process**: 
-   - Performs `git pull` to fetch latest code
-   - Runs `npm install` for dependency updates
-   - Rebuilds TypeScript with `npm run build`
-4. **Verification**: Validates the update succeeded
-5. **Rollback Option**: Keep last 5 backups for easy recovery
-
-**Safety Features:**
-- Rate limiting prevents API abuse
-- GPG signature verification (when available)
-- Dependency version validation
-- Automatic backup retention (5 most recent)
-- User personas preserved during updates
 
 ### Persona Indicators
 DollhouseMCP adds visual indicators to AI responses when a persona is active:
@@ -1037,7 +1003,6 @@ npm run test:coverage
 npm run test:watch
 
 # Run specific test suites
-npm run test:auto-update
 npm run test:personas
 npm run test:collection
 ```
@@ -1065,10 +1030,6 @@ node dist/index.js --help 2>/dev/null || echo "Server compiled successfully"
 
 # Verify personas directory
 ls -la personas/
-
-# Test auto-update system
-check_for_updates    # Use in Claude Desktop
-get_server_status    # Check current system status
 ```
 
 ## ☁️ Cloud Deployment
@@ -1152,7 +1113,6 @@ DollhouseMCP/
 │   └── debug-detective.md
 ├── custom-personas/              # User-created personas (git-ignored)
 ├── docs/                         # Documentation
-│   ├── auto-update/             # Auto-update system docs
 │   └── development/             # Development notes and guides
 ├── scripts/                      # Management and utility scripts
 ├── Dockerfile                    # Multi-stage Docker build
@@ -1376,11 +1336,10 @@ If you upgraded from v1.4.2, the server will automatically migrate your director
    npm --version
    ```
 
-5. **Test auto-update system:**
+5. **Check system status:**
    ```bash
    # Use within Claude Desktop
-   check_for_updates    # Check for available updates
-   get_server_status    # View system information
+   get_build_info    # Get build and runtime information
    ```
 
 6. **Validate personas:**
@@ -1535,13 +1494,6 @@ interface DollhouseTool {
 // validate_persona - { persona: string }
 ```
 
-#### Auto-Update System
-```typescript
-// check_for_updates - No parameters
-// update_server - { confirm: boolean }
-// rollback_update - { confirm: boolean }
-// get_server_status - No parameters
-```
 
 ### Error Handling
 
@@ -1594,7 +1546,6 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
   - Smart caching with ETags and conditional requests
 - 🛠️ **System Tools**:
   - `get_build_info` - Comprehensive build and runtime information
-  - `convert_to_git_installation` - Convert npm to git installation
 - ⚙️ **Collection Configuration**:
   - `configure_collection_submission` - Auto-submit settings
   - `get_collection_submission_config` - Check submission config

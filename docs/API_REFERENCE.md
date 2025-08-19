@@ -4,20 +4,19 @@ Complete reference for all MCP tools available in DollhouseMCP v1.6.0
 
 ## Overview
 
-DollhouseMCP provides 56 MCP tools organized into these categories:
+DollhouseMCP provides 51 MCP tools organized into these categories:
 - **Element Tools**: Work with all element types (personas, skills, templates, agents, memories, ensembles)
 - **Persona Tools**: Legacy tools for backward compatibility (being phased out)
 - **Collection Tools**: GitHub marketplace integration and community content
 - **Portfolio Tools**: Personal and GitHub portfolio management  
 - **Auth Tools**: GitHub OAuth authentication
-- **Update Tools**: Server maintenance and updates
 - **Config Tools**: System configuration and settings
 - **User Tools**: User identity management
 - **Build Info Tools**: System information and diagnostics
 
 ## Breaking Changes in v1.6.0
 
-- **Tool Count**: Expanded from 40+ to 56 total tools
+- **Tool Count**: Expanded from 40+ to 51 total tools
 - **Portfolio System**: New portfolio management tools for local and GitHub synchronization
 - **Enhanced Search**: Unified search across local, GitHub, and collection sources
 - **Collection Enhancements**: Enhanced search with pagination and filtering
@@ -749,98 +748,6 @@ configure_oauth "Ov23liABCDEF1234567890"
 configure_oauth  # Show current configuration
 ```
 
-## Update Tools (5 tools)
-
-These tools handle server maintenance, updates, and version management.
-
-### check_for_updates
-Check if a newer version of DollhouseMCP is available.
-
-**Example:**
-```bash
-check_for_updates
-```
-
-**Expected Output:**
-```
-🔍 Checking for updates...
-
-📦 Current version: v1.6.0
-🆕 Latest version: v1.6.0
-
-✨ New features in v1.6.0:
-- Enhanced portfolio sync
-- New element types  
-- Performance improvements
-
-🔄 Update available! Use 'update_server' to upgrade.
-```
-
-### update_server
-Update DollhouseMCP to the latest version from GitHub.
-
-**Parameters:**
-- `confirm` (required): Confirm the update (true to proceed, false for preview)
-
-**Example:**
-```bash
-update_server --confirm false  # Preview
-update_server --confirm true   # Execute
-```
-
-### rollback_update
-Rollback to the previous version from backup.
-
-**Parameters:**
-- `confirm` (required): Confirm the rollback (true to proceed, false for info)
-
-**Example:**
-```bash
-rollback_update --confirm false  # Show rollback info
-rollback_update --confirm true   # Execute rollback
-```
-
-### get_server_status
-Get current server status, version, and system information.
-
-**Example:**
-```bash
-get_server_status
-```
-
-**Expected Output:**
-```
-🖥️ DollhouseMCP Server Status
-
-📦 Version: v1.6.0
-🏠 Installation: /Users/johndoe/.dollhouse/mcp-server
-📅 Started: 2025-08-19T08:00:00Z
-⏱️ Uptime: 6 hours 45 minutes
-
-📊 System Info:
-- Node.js: v20.11.0
-- Platform: darwin (macOS)
-- Memory: 145MB / 512MB
-- Portfolio: ~/.dollhouse/portfolio
-
-🔧 Features:
-✅ GitHub Authentication
-✅ Portfolio Sync  
-✅ Collection Access
-```
-
-### convert_to_git_installation
-Convert from npm installation to git installation for more control over updates.
-
-**Parameters:**
-- `targetDir` (optional): Target directory for git installation (default: ~/.dollhouse/mcp-server-git)
-- `confirm` (required): Confirm the conversion (true to proceed, false for preview)
-
-**Example:**
-```bash
-convert_to_git_installation --confirm false  # Preview
-convert_to_git_installation --targetDir "/custom/path" --confirm true
-```
 
 ## Config Tools (4 tools)
 
@@ -1041,7 +948,6 @@ For users upgrading from earlier versions, see these migration guides:
 | Collection Tools | 7 | Community marketplace integration |
 | Portfolio Tools | 6 | Personal and GitHub portfolio management |
 | Auth Tools | 4 | GitHub OAuth authentication |
-| Update Tools | 5 | Server maintenance and updates |
 | Config Tools | 4 | System configuration |
 | User Tools | 3 | User identity management |
 | Build Info Tools | 1 | System diagnostics |
@@ -1053,7 +959,7 @@ For users upgrading from earlier versions, see these migration guides:
 2. **Validate Content**: Use `validate_element` before important operations
 3. **Set User Identity**: Configure identity for proper attribution with `set_user_identity`
 4. **Manage Portfolios**: Use portfolio tools for organized element management
-5. **Stay Updated**: Regularly check for updates with `check_for_updates`
+5. **Keep Elements Updated**: Regularly sync your portfolio and collection content
 6. **Use Type Plurals**: Element types are plural (`personas`, `skills`, not `persona`, `skill`)
 
 ## Common Workflows
@@ -1106,7 +1012,7 @@ submit_content "My Custom Helper"
 
 ## Version History
 
-- **v1.6.0**: 56 total tools, portfolio management, enhanced search, build diagnostics
+- **v1.6.0**: 51 total tools, portfolio management, enhanced search, build diagnostics
 - **v1.5.0**: GitHub OAuth authentication with secure token storage  
 - **v1.4.5**: Fixed Claude Desktop integration issues
 - **v1.4.0**: NPM package distribution support

@@ -466,13 +466,6 @@ edit_persona "Study Buddy" "instructions" "You are a supportive tutor who..."
 validate_persona "Study Buddy"      # Check quality and format
 ```
 
-**Auto-Update System:**
-```
-check_for_updates                   # Check for new versions on GitHub
-get_server_status                   # View current version and system info
-update_server true                  # Perform automated update with backup
-rollback_update true                # Revert to previous version if needed
-```
 
 ## Business Model & Legal Framework
 
