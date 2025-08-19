@@ -10,6 +10,7 @@ import { ExportedPersona, ExportBundle } from './PersonaExporter.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { validateFilename, validatePath, sanitizeInput, validateContentSize } from '../../security/InputValidator.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { generateUniqueId } from '../../utils/filesystem.js';
 import { logger } from '../../utils/logger.js';
@@ -212,12 +213,19 @@ export class PersonaImporter {
       // Validate metadata
       const metadata = await this.validateAndEnrichMetadata(exportData.metadata);
       
-      // Validate content
-      const validationResult = ContentValidator.validateAndSanitize(exportData.content);
+      // Validate and normalize Unicode content first
+      const unicodeResult = UnicodeValidator.normalize(exportData.content);
+      if (unicodeResult.severity === 'critical') {
+        throw new Error(`Critical Unicode security threat detected: ${unicodeResult.detectedIssues?.join(', ')}`);
+      }
+      const unicodeNormalizedContent = unicodeResult.normalizedContent;
+
+      // Then validate content for other security threats
+      const validationResult = ContentValidator.validateAndSanitize(unicodeNormalizedContent);
       if (!validationResult.isValid && validationResult.severity === 'critical') {
         throw new Error(`Critical security threat detected: ${validationResult.detectedPatterns?.join(', ')}`);
       }
-      const sanitizedContent = validationResult.sanitizedContent || exportData.content;
+      const sanitizedContent = validationResult.sanitizedContent || unicodeNormalizedContent;
 
       // Generate safe filename
       let filename = validateFilename(exportData.filename || `${metadata.name.toLowerCase().replace(/\s+/g, '-')}.md`);
@@ -274,6 +282,21 @@ export class PersonaImporter {
       throw new Error("Missing required fields: name and description");
     }
 
+    // Validate and normalize Unicode in metadata fields
+    const nameResult = UnicodeValidator.normalize(metadata.name);
+    const descResult = UnicodeValidator.normalize(metadata.description);
+    
+    if (nameResult.severity === 'critical') {
+      throw new Error(`Critical Unicode security threat in persona name: ${nameResult.detectedIssues?.join(', ')}`);
+    }
+    if (descResult.severity === 'critical') {
+      throw new Error(`Critical Unicode security threat in persona description: ${descResult.detectedIssues?.join(', ')}`);
+    }
+
+    // Use normalized values
+    metadata.name = nameResult.normalizedContent;
+    metadata.description = descResult.normalizedContent;
+
     // Generate unique_id if missing
     if (!metadata.unique_id) {
       metadata.unique_id = generateUniqueId(metadata.name, this.currentUser || 'imported');
@@ -285,7 +308,7 @@ export class PersonaImporter {
     metadata.category = metadata.category || 'custom';
     metadata.created_date = metadata.created_date || new Date().toISOString();
 
-    // Validate with YAML parser for security
+    // Validate with YAML parser for security using normalized metadata
     const validated = await SecureYamlParser.parse(matter.stringify('', metadata));
 
     return validated.data as PersonaMetadata;

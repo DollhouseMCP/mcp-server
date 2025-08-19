@@ -14,9 +14,14 @@ DollhouseMCP has evolved from a persona management tool to a comprehensive AI po
 
 ### What's Preserved?
 - ✅ All existing personas remain functional
-- ✅ Persona-specific tools still work (deprecated but functional)
+- ✅ Export/import persona tools still work (5 tools preserved)
 - ✅ File format unchanged
 - ✅ No data loss during migration
+
+### What Changed?
+- ⚠️ 9 redundant PersonaTools removed in favor of ElementTools
+- ⚠️ Tool count reduced from 51 to 42 for cleaner API
+- ✅ All functionality preserved through ElementTools equivalents
 
 ## Migration Paths
 
@@ -32,13 +37,13 @@ The system automatically migrates your personas on first run:
 
 2. **Automatic migration occurs**
    - Old location: `~/.dollhouse/personas/`
-   - New location: `~/.dollhouse/portfolio/persona/`
+   - New location: `~/.dollhouse/portfolio/personas/`
    - Original files are preserved
 
 3. **Verify migration**
    ```bash
-   # In Claude Desktop
-   list_elements --type persona
+   # In Claude Desktop - use new ElementTools syntax
+   list_elements type="personas"
    ```
 
 ### Option 2: Manual Migration
@@ -46,8 +51,8 @@ If you prefer manual control:
 
 1. **Create portfolio structure**
    ```bash
-   mkdir -p ~/.dollhouse/portfolio/persona
-   mkdir -p ~/.dollhouse/portfolio/skill
+   mkdir -p ~/.dollhouse/portfolio/personas
+   mkdir -p ~/.dollhouse/portfolio/skills
    mkdir -p ~/.dollhouse/portfolio/template
    mkdir -p ~/.dollhouse/portfolio/agent
    ```

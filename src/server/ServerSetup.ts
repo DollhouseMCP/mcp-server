@@ -5,7 +5,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ToolRegistry } from './tools/ToolRegistry.js';
-import { getPersonaTools } from './tools/PersonaTools.js';
+import { getPersonaExportImportTools } from './tools/PersonaTools.js';
 import { getElementTools } from './tools/ElementTools.js';
 import { getCollectionTools } from './tools/CollectionTools.js';
 import { getUserTools } from './tools/UserTools.js';
@@ -43,8 +43,8 @@ export class ServerSetup {
     // Register element tools (new generic tools for all element types)
     this.toolRegistry.registerMany(getElementTools(instance));
     
-    // Register persona tools (legacy - kept for backward compatibility)
-    this.toolRegistry.registerMany(getPersonaTools(instance));
+    // Register persona export/import tools (core functionality moved to element tools)
+    this.toolRegistry.registerMany(getPersonaExportImportTools(instance));
     
     // Register collection tools
     this.toolRegistry.registerMany(getCollectionTools(instance));

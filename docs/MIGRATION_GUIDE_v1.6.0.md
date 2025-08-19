@@ -122,7 +122,45 @@ await server.createPersona(...); // Now works
 - Update any automation or documentation
 - Functionality is identical, only names changed
 
-### 4. Update Tools Removed
+### 4. PersonaTools Streamlined (Breaking Change)
+
+**Impact**: 9 redundant PersonaTools have been removed, reducing total tools from 51 to 42.
+
+#### Removed Tools and ElementTools Equivalents
+| Removed Tool | Replacement |
+|--------------|-------------|
+| `list_personas` | `list_elements type="personas"` |
+| `activate_persona` | `activate_element name="name" type="personas"` |
+| `get_active_persona` | `get_active_elements type="personas"` |
+| `deactivate_persona` | `deactivate_element type="personas"` |
+| `get_persona_details` | `get_element_details name="name" type="personas"` |
+| `reload_personas` | `reload_elements type="personas"` |
+| `create_persona` | Use ElementTools or server methods |
+| `edit_persona` | Use ElementTools or server methods |
+| `validate_persona` | Use ElementTools or server methods |
+
+#### How to Migrate
+**Update All PersonaTools Usage**:
+```bash
+# OLD: Removed tools
+list_personas
+activate_persona persona="creative-writer"
+
+# NEW: ElementTools equivalents
+list_elements type="personas"
+activate_element name="creative-writer" type="personas"
+```
+
+**Preserved PersonaTools** (5 tools remain for export/import functionality):
+- `export_persona` - Export single persona to JSON
+- `export_all_personas` - Export all personas to JSON bundle  
+- `import_persona` - Import from file or JSON
+- `share_persona` - Generate shareable URL
+- `import_from_url` - Import from shared URL
+
+> **📖 Complete Migration Guide**: See [PersonaTools Migration Guide](PERSONATOOLS_MIGRATION_GUIDE.md) for detailed step-by-step instructions.
+
+### 5. Update Tools Removed
 
 **Impact**: 5 update/maintenance tools have been completely removed from v1.6.0.
 
@@ -410,14 +448,14 @@ portfolio_config --auto_sync false --default_visibility public
 
 #### Test Basic Functionality
 ```bash
-# List your elements
-list_elements --type personas
+# List your personas using new ElementTools syntax
+list_elements type="personas"
 
 # Create a test element
-create_element --type persona --name "Test Migration" --description "Testing v1.6.0"
+create_element --type personas --name "Test Migration" --description "Testing v1.6.0"
 
 # Test serialization (should work transparently)
-get_element_details "Test Migration" --type persona
+get_element_details name="Test Migration" type="personas"
 ```
 
 #### Test New Features
@@ -540,9 +578,9 @@ browse_collection
 dollhousemcp --version
 # Should show 1.6.0
 
-# Test basic operations
-list_elements --type personas
-create_element --type persona --name "Migration Test" --description "Test persona"
+# Test basic operations using ElementTools syntax
+list_elements type="personas"
+create_element --type personas --name "Migration Test" --description "Test persona"
 ```
 
 #### Feature Verification
@@ -634,7 +672,8 @@ dollhousemcp --version
 # Should show 1.4.5
 
 # Test basic functionality
-list_personas  # Should work with old tools
+# Note: list_personas was removed - use ElementTools
+list_elements type="personas"  # Use new syntax
 ```
 
 **Note**: Your data is safe during rollback - only the server version changes.
