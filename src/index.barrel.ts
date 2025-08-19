@@ -2,7 +2,7 @@
  * Central barrel file for easier imports
  * 
  * Usage:
- * import { PersonaManager, GitHubClient, UpdateManager } from '@/index.barrel';
+ * import { PersonaManager, GitHubClient } from '@/index.barrel';
  */
 
 // Types

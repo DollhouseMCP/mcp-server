@@ -3496,7 +3496,7 @@ ${sanitizedInstructions}
     };
   }
 
-  // retryNetworkOperation is now handled by UpdateChecker
+  // retryNetworkOperation has been removed with UpdateTools
 
 
 
