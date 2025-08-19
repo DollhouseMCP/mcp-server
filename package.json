@@ -108,7 +108,7 @@
     "js-yaml": "^4.1.0",
     "jsdom": "^26.1.0",
     "uuid": "^11.1.0",
-    "zod": "^4.0.5"
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
