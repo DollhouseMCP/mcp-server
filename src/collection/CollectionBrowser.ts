@@ -6,6 +6,16 @@ import { GitHubClient } from './GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
+import { ElementType } from '../portfolio/types.js';
+
+// Content types supported by MCP server (Issue #144)
+// Hide: tools, memories, ensembles, prompts from MCP queries
+const MCP_SUPPORTED_TYPES = [
+  ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
+  ElementType.SKILL,      // skills - supported by ElementTools
+  ElementType.AGENT,      // agents - supported by ElementTools  
+  ElementType.TEMPLATE    // templates - supported by ElementTools
+];
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
@@ -56,8 +66,9 @@ export class CollectionBrowser {
       
       // In the library section, we have content type directories
       if (section === 'library' && !type) {
+        // Filter to only show MCP-supported content types
         const contentTypes = data.filter((item: any) => 
-          item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
+          item.type === 'dir' && MCP_SUPPORTED_TYPES.includes(item.name as ElementType)
         );
         return { items: [], categories: contentTypes };
       }
@@ -150,7 +161,10 @@ export class CollectionBrowser {
     items.forEach(item => {
       const pathParts = item.path.split('/');
       if (pathParts.length >= 2 && pathParts[0] === 'library') {
-        types.add(pathParts[1]);
+        // Only include MCP-supported types in cache browsing
+        if (MCP_SUPPORTED_TYPES.includes(pathParts[1] as ElementType)) {
+          types.add(pathParts[1]);
+        }
       }
     });
     
@@ -211,7 +225,7 @@ export class CollectionBrowser {
         const icon = sectionIcons[sec.name] || '📁';
         const descriptions: { [key: string]: string } = {
           'library': 'Free community content',
-          'showcase': 'Featured high-quality content',
+          'showcase': 'Featured high-quality content (coming soon)',
           'catalog': 'Premium content (coming soon)'
         };
         textParts.push(
