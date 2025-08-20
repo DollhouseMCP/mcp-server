@@ -35,7 +35,7 @@ describe('AgentManager', () => {
     
     // Set up default PortfolioManager mock before creating AgentManager
     mockPortfolioManager = {
-      listElements: jest.fn().mockResolvedValue([]),
+      listElements: jest.fn<() => Promise<any[]>>().mockResolvedValue([]),
       getInstance: jest.fn()
     };
     (PortfolioManager.getInstance as any) = jest.fn(() => mockPortfolioManager);

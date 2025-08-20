@@ -6,6 +6,7 @@
  */
 
 import { isProductionPath, validateTestPath, emergencyCleanup } from './helpers/portfolio-test-utils.js';
+import { SecurityMonitor } from '../src/security/securityMonitor.js';
 import * as path from 'path';
 
 // Set test environment variables
@@ -24,6 +25,13 @@ function validateEnvironmentSafety(): void {
   
   // Check portfolio directory
   if (portfolioDir && isProductionPath(portfolioDir)) {
+    // SECURITY FIX: Add audit logging for production path detection
+    SecurityMonitor.logSecurityEvent({
+      type: 'TEST_ENVIRONMENT_PRODUCTION_PATH',
+      severity: 'HIGH',
+      source: 'jest.setup.validateEnvironmentSafety',
+      details: `Test environment pointing to production portfolio: ${portfolioDir}`
+    });
     throw new Error(
       `SECURITY ERROR: Test environment is pointing to production portfolio: ${portfolioDir}. ` +
       `Tests must use temporary directories only. ` +
@@ -33,6 +41,13 @@ function validateEnvironmentSafety(): void {
   
   // Check legacy personas directory
   if (personasDir && isProductionPath(personasDir)) {
+    // SECURITY FIX: Add audit logging for deprecated environment variable
+    SecurityMonitor.logSecurityEvent({
+      type: 'TEST_ENVIRONMENT_DEPRECATED_VAR',
+      severity: 'MEDIUM',
+      source: 'jest.setup.validateEnvironmentSafety',
+      details: `Deprecated DOLLHOUSE_PERSONAS_DIR pointing to production: ${personasDir}`
+    });
     throw new Error(
       `SECURITY ERROR: Test environment is using deprecated DOLLHOUSE_PERSONAS_DIR pointing to production: ${personasDir}. ` +
       `Update tests to use DOLLHOUSE_PORTFOLIO_DIR with a test directory.`

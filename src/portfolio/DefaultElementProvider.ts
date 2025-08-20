@@ -202,12 +202,22 @@ export class DefaultElementProvider {
   }
 
   /**
-   * Check if a filename matches test data patterns that should never be copied to production
-   * @param filename The filename to check
-   * @returns true if the filename matches test patterns that should be blocked
+   * Cached compiled regex patterns for performance optimization
    */
-  private isTestDataPattern(filename: string): boolean {
-    const testPatterns = [
+  private static compiledTestPatterns: RegExp[] | null = null;
+
+  /**
+   * Get compiled test patterns with caching for better performance
+   * @returns Array of compiled regex patterns
+   */
+  private getCompiledTestPatterns(): RegExp[] {
+    // Use cached patterns if available
+    if (DefaultElementProvider.compiledTestPatterns) {
+      return DefaultElementProvider.compiledTestPatterns;
+    }
+    
+    // Compile and cache patterns on first use
+    DefaultElementProvider.compiledTestPatterns = [
       /^testpersona/i,
       /^yamltest/i,
       /^yamlbomb/i,
@@ -221,30 +231,64 @@ export class DefaultElementProvider {
       /-\d{13}-[a-z0-9]+\.md$/i, // Pattern for timestamp-based test files
     ];
     
-    return testPatterns.some(pattern => pattern.test(filename));
+    return DefaultElementProvider.compiledTestPatterns;
+  }
+
+  /**
+   * Check if a filename matches test data patterns that should never be copied to production
+   * Uses cached regex patterns for improved performance
+   * @param filename The filename to check
+   * @returns true if the filename matches test patterns that should be blocked
+   */
+  private isTestDataPattern(filename: string): boolean {
+    const patterns = this.getCompiledTestPatterns();
+    return patterns.some(pattern => pattern.test(filename));
   }
 
   /**
    * Detect if we're in a production environment by checking for production indicators
+   * Uses a confidence-based approach requiring multiple indicators for better accuracy
    * @returns true if this appears to be a production environment
    */
   private isProductionEnvironment(): boolean {
-    const productionIndicators = [
-      // Check if we're in a typical user home directory
-      process.env.HOME && process.env.HOME.includes('/Users/'),
-      process.env.HOME && process.env.HOME.includes('/home/'),
-      process.env.USERPROFILE, // Windows user profile
+    // Weighted indicators for production detection
+    const indicators = {
+      // Strong indicators (weight: 2)
+      hasUserHomeDir: (process.env.HOME && (process.env.HOME.includes('/Users/') || process.env.HOME.includes('/home/'))) || 
+                      !!process.env.USERPROFILE,
+      isProductionNode: process.env.NODE_ENV === 'production',
+      notInTestDir: !process.cwd().includes('/test') && !process.cwd().includes('/__tests__') && !process.cwd().includes('/temp'),
       
-      // Check if we're not in development/test environments
-      !process.env.NODE_ENV || process.env.NODE_ENV === 'production',
-      !process.env.CI, // Not in CI environment
-      !process.cwd().includes('/test'),
-      !process.cwd().includes('/__tests__'),
-      !process.cwd().includes('/temp'),
-    ];
+      // Moderate indicators (weight: 1)
+      notInCI: !process.env.CI,
+      noTestEnv: process.env.NODE_ENV !== 'test',
+      noDevEnv: process.env.NODE_ENV !== 'development',
+    };
     
-    // If any production indicators are true, consider it production
-    return productionIndicators.some(indicator => indicator);
+    // Calculate weighted score
+    let score = 0;
+    if (indicators.hasUserHomeDir) score += 2;
+    if (indicators.isProductionNode) score += 2;
+    if (indicators.notInTestDir) score += 2;
+    if (indicators.notInCI) score += 1;
+    if (indicators.noTestEnv) score += 1;
+    if (indicators.noDevEnv) score += 1;
+    
+    // Log detection details for debugging
+    const activeIndicators = Object.entries(indicators)
+      .filter(([_, value]) => value)
+      .map(([key]) => key);
+    
+    if (score >= 3 && logger.isDebugEnabled()) {
+      logger.debug(
+        '[DefaultElementProvider] Production environment detected',
+        { score, activeIndicators }
+      );
+    }
+    
+    // Require a score of at least 3 for production detection (more confident)
+    // This prevents false positives in edge cases while maintaining security
+    return score >= 3;
   }
   
   /**

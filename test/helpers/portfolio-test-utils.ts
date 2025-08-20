@@ -16,6 +16,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { afterEach } from '@jest/globals';
+import { UnicodeValidator } from '../../src/security/unicodeValidator.js';
+import { SecurityMonitor } from '../../src/security/securityMonitor.js';
 
 /**
  * Configuration for portfolio test utilities
@@ -77,17 +79,48 @@ export function isProductionPath(portfolioPath: string): boolean {
  * @throws Error if path appears to be production
  */
 export function validateTestPath(portfolioPath: string): void {
-  if (isProductionPath(portfolioPath)) {
+  // SECURITY FIX: Add Unicode normalization to prevent homograph attacks
+  const normalized = UnicodeValidator.normalize(portfolioPath);
+  if (normalized.hasSecurityRisk) {
+    // SECURITY FIX: Add audit logging for security events
+    SecurityMonitor.logSecurityEvent({
+      type: 'TEST_PATH_SECURITY_RISK',
+      severity: 'HIGH',
+      source: 'portfolio-test-utils.validateTestPath',
+      details: `Security risk detected in test path: ${normalized.securityRisks.join(', ')}`
+    });
     throw new Error(
-      `SECURITY: Attempted to use production portfolio path in tests: ${portfolioPath}. ` +
+      `SECURITY: Path contains security risks: ${normalized.securityRisks.join(', ')}`
+    );
+  }
+  
+  const normalizedPath = normalized.normalizedContent;
+  
+  if (isProductionPath(normalizedPath)) {
+    // SECURITY FIX: Add audit logging for blocked production access
+    SecurityMonitor.logSecurityEvent({
+      type: 'TEST_PRODUCTION_ACCESS_BLOCKED',
+      severity: 'MEDIUM',
+      source: 'portfolio-test-utils.validateTestPath',
+      details: `Blocked test access to production path: ${normalizedPath}`
+    });
+    throw new Error(
+      `SECURITY: Attempted to use production portfolio path in tests: ${normalizedPath}. ` +
       `Tests must use temporary directories only.`
     );
   }
   
   // Additional safety checks
-  if (!portfolioPath.includes('temp') && !portfolioPath.includes('test')) {
+  if (!normalizedPath.includes('temp') && !normalizedPath.includes('test')) {
+    // SECURITY FIX: Add audit logging for invalid test paths
+    SecurityMonitor.logSecurityEvent({
+      type: 'TEST_PATH_INVALID',
+      severity: 'LOW',
+      source: 'portfolio-test-utils.validateTestPath',
+      details: `Test path must contain 'temp' or 'test': ${normalizedPath}`
+    });
     throw new Error(
-      `SECURITY: Test portfolio path must contain 'temp' or 'test': ${portfolioPath}`
+      `SECURITY: Test portfolio path must contain 'temp' or 'test': ${normalizedPath}`
     );
   }
 }
