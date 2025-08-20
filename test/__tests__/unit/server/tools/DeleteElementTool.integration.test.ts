@@ -37,9 +37,9 @@ describe('Delete Element Tool Integration', () => {
     server = new DollhouseMCPServer();
     
     // Create test elements
-    await createTestSkill('test-skill');
-    await createTestTemplate('test-template');
-    await createTestAgent('test-agent');
+    await createTestSkill('sample-skill');
+    await createTestTemplate('sample-template');
+    await createTestAgent('sample-agent');
   });
   
   afterEach(async () => {
@@ -113,43 +113,43 @@ Goals:
   describe('Basic deletion', () => {
     it('should delete a skill element successfully', async () => {
       const args = {
-        name: 'test-skill',
+        name: 'sample-skill',
         type: 'skills',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted skills \'test-skill\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted skills \'sample-skill\'');
       
       // Verify file is deleted
       const skillsDir = portfolioManager.getElementDir(ElementType.SKILL);
       const files = await fs.readdir(skillsDir);
-      expect(files).not.toContain('test-skill.md');
+      expect(files).not.toContain('sample-skill.md');
     });
     
     it('should delete a template element successfully', async () => {
       const args = {
-        name: 'test-template',
+        name: 'sample-template',
         type: 'templates',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted templates \'test-template\'');
+      expect(result.content[0].text).toContain('✅ Successfully deleted templates \'sample-template\'');
     });
     
     it('should delete an agent element without state', async () => {
       const args = {
-        name: 'test-agent',
+        name: 'sample-agent',
         type: 'agents',
         deleteData: false
       };
       
       const result = await server.deleteElement(args);
       
-      expect(result.content[0].text).toContain('✅ Successfully deleted agents \'test-agent\'')
+      expect(result.content[0].text).toContain('✅ Successfully deleted agents \'sample-agent\'')
     });
     
     it('should report error for non-existent element', async () => {

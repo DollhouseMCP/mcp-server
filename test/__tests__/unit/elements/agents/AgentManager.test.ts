@@ -11,12 +11,14 @@ import * as os from 'os';
 jest.mock('../../../../../src/security/fileLockManager.js');
 jest.mock('../../../../../src/security/securityMonitor.js');
 jest.mock('../../../../../src/utils/logger.js');
+jest.mock('../../../../../src/portfolio/PortfolioManager.js');
 
 // Import after mocking
 import { AgentManager } from '../../../../../src/elements/agents/AgentManager.js';
 import { Agent } from '../../../../../src/elements/agents/Agent.js';
 import { AgentMetadata } from '../../../../../src/elements/agents/types.js';
 import { ElementType } from '../../../../../src/portfolio/types.js';
+import { PortfolioManager } from '../../../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../../src/security/securityMonitor.js';
 
@@ -24,11 +26,20 @@ describe('AgentManager', () => {
   let agentManager: AgentManager;
   let testDir: string;
   let portfolioPath: string;
+  let mockPortfolioManager: any;
 
   beforeEach(async () => {
     // Create temporary test directory
     testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-test-'));
     portfolioPath = testDir;
+    
+    // Set up default PortfolioManager mock before creating AgentManager
+    mockPortfolioManager = {
+      listElements: jest.fn().mockResolvedValue([]),
+      getInstance: jest.fn()
+    };
+    (PortfolioManager.getInstance as any) = jest.fn(() => mockPortfolioManager);
+    
     agentManager = new AgentManager(portfolioPath);
     
     // Initialize manager
@@ -297,13 +308,8 @@ Content`;
 
   describe('List', () => {
     it('should list all agents', async () => {
-      const mockReaddir = jest.spyOn(fs, 'readdir').mockImplementation(() => Promise.resolve([
-        'agent1.md',
-        'agent2.md',
-        '.hidden.md', // Should be ignored
-        'not-agent.txt', // Should be ignored
-        '.state' // Should be ignored
-      ] as any));
+      // Configure the mock to return agent files
+      mockPortfolioManager.listElements.mockResolvedValue(['agent1.md', 'agent2.md']);
 
       (FileLockManager.atomicReadFile as any) = jest.fn(async (path: any) => {
         if (path.includes('agent1')) {
@@ -327,7 +333,8 @@ Content`;
     });
 
     it('should handle read errors gracefully', async () => {
-      const mockReaddir = jest.spyOn(fs, 'readdir').mockImplementation(() => Promise.resolve(['bad.md'] as any));
+      // Configure mock to return files but atomicReadFile to fail
+      mockPortfolioManager.listElements.mockResolvedValue(['bad.md']);
       (FileLockManager.atomicReadFile as any) = jest.fn(() => Promise.reject(new Error('Read error')));
 
       const agents = await agentManager.list();

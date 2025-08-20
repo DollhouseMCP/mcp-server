@@ -179,7 +179,7 @@ export class PortfolioManager {
    * Check if a filename appears to be a test element
    * SAFETY: Pattern-based filtering only, no content parsing
    */
-  private isTestElement(filename: string): boolean {
+  public isTestElement(filename: string): boolean {
     // Dangerous test patterns that should never appear in production
     const dangerousPatterns = [
       /^bin-sh/i,
@@ -187,7 +187,14 @@ export class PortfolioManager {
       /^nc-e-bin/i,
       /^python-c-import/i,
       /^curl.*evil/i,
-      /^wget.*malicious/i
+      /^wget.*malicious/i,
+      /^eval-/i,
+      /^exec-/i,
+      /^bash-c-/i,
+      /^sh-c-/i,
+      /^powershell-/i,
+      /^cmd-c-/i,
+      /shell-injection/i
     ];
     
     // Common test patterns
