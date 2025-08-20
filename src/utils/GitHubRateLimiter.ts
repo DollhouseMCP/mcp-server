@@ -14,6 +14,7 @@ import { GITHUB_API_RATE_LIMITS } from '../config/portfolio-constants.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { logger } from './logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface GitHubRateLimitInfo {
   limit: number;
@@ -120,6 +121,21 @@ export class GitHubRateLimiter {
     apiCall: () => Promise<T>,
     priority: 'high' | 'normal' | 'low' = 'normal'
   ): Promise<T> {
+    // SECURITY FIX (DMCP-SEC-004): Normalize Unicode in operation name to prevent injection attacks
+    const normalizedOperation = UnicodeValidator.normalize(operation);
+    if (!normalizedOperation.isValid) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'GitHubRateLimiter.queueRequest',
+        details: `Invalid Unicode in operation name: ${normalizedOperation.detectedIssues?.[0] || 'unknown error'}`
+      });
+      // Use a safe fallback for the operation name
+      operation = 'github-api-request';
+    } else {
+      operation = normalizedOperation.normalizedContent;
+    }
+    
     const requestId = `${operation}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
     return new Promise<T>((resolve, reject) => {
