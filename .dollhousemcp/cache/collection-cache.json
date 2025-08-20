@@ -4,206 +4,206 @@
       "name": "creative-writer.md",
       "path": "library/personas/creative-writer.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "eli5-explainer.md",
       "path": "library/personas/eli5-explainer.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "debug-detective.md",
       "path": "library/personas/debug-detective.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "technical-analyst.md",
       "path": "library/personas/technical-analyst.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "business-consultant.md",
       "path": "library/personas/business-consultant.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "security-analyst.md",
       "path": "library/personas/security-analyst.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "code-review.md",
       "path": "library/skills/code-review.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "creative-writing.md",
       "path": "library/skills/creative-writing.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "data-analysis.md",
       "path": "library/skills/data-analysis.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "research.md",
       "path": "library/skills/research.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "translation.md",
       "path": "library/skills/translation.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "threat-modeling.md",
       "path": "library/skills/threat-modeling.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "penetration-testing.md",
       "path": "library/skills/penetration-testing.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "code-reviewer.md",
       "path": "library/agents/code-reviewer.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "research-assistant.md",
       "path": "library/agents/research-assistant.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "task-manager.md",
       "path": "library/agents/task-manager.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "code-documentation.md",
       "path": "library/templates/code-documentation.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "email-professional.md",
       "path": "library/templates/email-professional.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "meeting-notes.md",
       "path": "library/templates/meeting-notes.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "project-brief.md",
       "path": "library/templates/project-brief.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "report-executive.md",
       "path": "library/templates/report-executive.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "penetration-test-report.md",
       "path": "library/templates/penetration-test-report.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "security-vulnerability-report.md",
       "path": "library/templates/security-vulnerability-report.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "threat-assessment-report.md",
       "path": "library/templates/threat-assessment-report.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "business-advisor.md",
       "path": "library/ensembles/business-advisor.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "creative-studio.md",
       "path": "library/ensembles/creative-studio.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "development-team.md",
       "path": "library/ensembles/development-team.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "security-analysis-team.md",
       "path": "library/ensembles/security-analysis-team.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "safe-roundtrip-tester.md",
       "path": "library/skills/safe-roundtrip-tester.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "roundtrip-test-skill.md",
       "path": "library/skills/roundtrip-test-skill.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "test-validator.md",
       "path": "library/skills/test-validator.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "sample-skill.md",
       "path": "library/skills/sample-skill.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "test-element.md",
       "path": "library/agents/test-element.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     },
     {
       "name": "testing-framework.md",
       "path": "library/templates/testing-framework.md",
       "sha": "seed-data",
-      "last_modified": "2025-08-19T17:52:51.811Z"
+      "last_modified": "2025-08-20T18:07:27.618Z"
     }
   ],
-  "timestamp": 1755625971811
+  "timestamp": 1755713247619
 }

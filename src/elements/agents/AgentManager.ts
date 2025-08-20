@@ -11,6 +11,7 @@ import { Agent } from './Agent.js';
 import { AgentMetadata, AgentState } from './types.js';
 import { IElementManager, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
+import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import * as yaml from 'js-yaml';
@@ -42,9 +43,11 @@ interface AgentFileData {
 export class AgentManager implements IElementManager<Agent> {
   private readonly agentsPath: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
+  private portfolioManager: PortfolioManager;
 
   constructor(portfolioPath: string) {
     this.agentsPath = path.join(portfolioPath, ElementType.AGENT);
+    this.portfolioManager = PortfolioManager.getInstance();
   }
 
   /**
@@ -313,17 +316,12 @@ export class AgentManager implements IElementManager<Agent> {
 
   /**
    * List all agents
+   * SECURITY: Uses PortfolioManager.listElements() which filters test elements
    */
   public async list(): Promise<Agent[]> {
     try {
-      const files = await fs.readdir(this.agentsPath);
-      
-      // Filter for agent files
-      const agentFiles = files.filter(file => 
-        file.endsWith(AGENT_FILE_EXTENSION) && 
-        !file.startsWith('.') &&
-        file !== STATE_DIRECTORY
-      );
+      // Use PortfolioManager to get filtered list (excludes test elements)
+      const agentFiles = await this.portfolioManager.listElements(ElementType.AGENT);
 
       // Load all agents
       const agents: Agent[] = [];
