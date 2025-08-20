@@ -273,7 +273,7 @@ describe('DefaultElementProvider', () => {
     it('should handle errors during copy gracefully', async () => {
       // Set up test data
       await fs.mkdir(path.join(dataDir, 'personas'), { recursive: true });
-      await fs.writeFile(path.join(dataDir, 'personas', 'test.md'), 'Test');
+      await fs.writeFile(path.join(dataDir, 'personas', 'sample.md'), 'Test');
       
       // Create provider with test paths
       const testProvider = new TestableDefaultElementProvider([dataDir]);
@@ -347,7 +347,7 @@ describe('DefaultElementProvider', () => {
       try {
         const files = await fs.readdir(personaDir);
         expect(files).toHaveLength(1);
-        expect(files).toContain('test.md');
+        expect(files).toContain('sample.md');
       } catch (error) {
         // Directory might not exist if populateDefaults didn't run
         console.log('Error reading persona dir:', error);
@@ -361,13 +361,13 @@ describe('DefaultElementProvider', () => {
       // Create a file with specific content
       await fs.mkdir(path.join(dataDir, 'personas'), { recursive: true });
       const testContent = '---\nname: Test Persona\n---\n# Test Content\n\nThis is a test persona with specific content for checksum verification.';
-      await fs.writeFile(path.join(dataDir, 'personas', 'test.md'), testContent);
+      await fs.writeFile(path.join(dataDir, 'personas', 'sample.md'), testContent);
       
       const testProvider = new TestableDefaultElementProvider([dataDir]);
       await testProvider.populateDefaults(portfolioDir);
       
       // Verify the file was copied correctly
-      const copiedContent = await fs.readFile(path.join(portfolioDir, 'personas', 'test.md'), 'utf-8');
+      const copiedContent = await fs.readFile(path.join(portfolioDir, 'personas', 'sample.md'), 'utf-8');
       expect(copiedContent).toBe(testContent);
     });
     
