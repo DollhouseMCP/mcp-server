@@ -43,8 +43,15 @@ schema:
       active_topics: "array"
       completed_topics: "array"
       parked_topics: "array"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.342Z"
+  originalPath: "data/memories/conversation-history.md"
 ---
-
 # Conversation History Memory
 
 This memory element provides continuity across conversation sessions, maintaining context, preferences, and ongoing topics to enable more natural and productive interactions.

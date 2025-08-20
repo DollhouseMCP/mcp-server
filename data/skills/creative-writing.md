@@ -32,8 +32,15 @@ parameters:
     description: "Stylistic elements to include"
     default: ["dialogue", "description"]
     enum: ["dialogue", "description", "action", "introspection", "humor", "metaphor", "symbolism"]
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.346Z"
+  originalPath: "data/skills/creative-writing.md"
 ---
-
 # Creative Writing Skill
 
 This skill enhances creative writing abilities for crafting compelling narratives, developing rich characters, and employing advanced literary techniques.

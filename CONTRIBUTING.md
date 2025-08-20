@@ -184,6 +184,47 @@ Some tests may be temporarily excluded due to Jest's ES module limitations. We f
 - Tests will be re-enabled as Jest's ES module support improves
 - This ensures documentation of expected behavior and future-ready test coverage
 
+### Test File Metadata Requirements
+
+When creating **test files for DollhouseMCP** (not user elements), you must include test metadata:
+
+```yaml
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"        # Choose: test-fixtures, integration-testing, unit-testing
+  purpose: "Clear description of test purpose"
+  created: "2025-08-20"         # Current date YYYY-MM-DD
+  version: "1.0.0"              # Start with 1.0.0
+# ... your element metadata ...
+---
+```
+
+**Template for new test files**:
+```markdown
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"
+  purpose: "Test [element type] for [specific behavior] validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+name: "Sample Test Element"
+description: "A test element for validating specific functionality"
+type: persona  # or skill, template, agent, etc.
+---
+
+# Sample Test Element
+
+Your test content here...
+```
+
+**Important Notes**:
+- ✅ **Only DollhouseMCP test files** need this metadata
+- ❌ **User elements should NOT** include `_dollhouseMCPTest: true`
+- 🎯 **Write clear purposes**: "Test persona for behavior validation" not "Test file"
+- 📖 **See full guide**: [Test Metadata Convention](docs/TEST_METADATA_CONVENTION.md)
+
 ### Manual Testing
 - Test with your AI platform (Claude, ChatGPT, etc.)
 - Verify personas load correctly

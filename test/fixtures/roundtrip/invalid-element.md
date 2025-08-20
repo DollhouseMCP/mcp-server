@@ -1,3 +1,13 @@
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"
+  purpose: "Invalid data testing for error handling"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.337Z"
+  originalPath: "test/fixtures/roundtrip/invalid-element.md"
+---
 # Invalid Test Element
 
 This is an intentionally malformed element for testing error handling.

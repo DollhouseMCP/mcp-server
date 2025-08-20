@@ -8,8 +8,15 @@ created: 2025-08-11
 updated: 2025-08-11
 tags: [testing, integration, workflow, validation]
 proficiency: intermediate
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "roundtrip-testing"
+  purpose: "End-to-end roundtrip workflow testing"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.351Z"
+  originalPath: "test-elements/roundtrip-test-skill-from-collection.md"
 ---
-
 # Roundtrip Test Skill
 
 ## Purpose

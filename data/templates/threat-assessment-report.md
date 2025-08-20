@@ -37,8 +37,15 @@ variables:
     enum: ["low", "medium", "high", "critical"]
 outputFormats: ["pdf", "html", "markdown", "docx"]
 includes: []
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.350Z"
+  originalPath: "data/templates/threat-assessment-report.md"
 ---
-
 # Threat Assessment Report
 
 **System:** {{system_name}}  

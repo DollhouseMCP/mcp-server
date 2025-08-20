@@ -40,8 +40,15 @@ variables:
     enum: ["formal", "professional", "friendly-professional", "casual-professional"]
 outputFormats: ["text", "html", "markdown"]
 includes: []
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.348Z"
+  originalPath: "data/templates/email-professional.md"
 ---
-
 Subject: {{subject}}
 
 Dear {{#if recipient_title}}{{recipient_title}} {{/if}}{{recipient_name}},

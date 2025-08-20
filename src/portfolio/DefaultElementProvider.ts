@@ -11,6 +11,7 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
+import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -201,54 +202,115 @@ export class DefaultElementProvider {
     }
   }
 
+  // DEPRECATED: Commented out filename pattern detection - replaced with metadata-based detection
   /**
    * Cached compiled regex patterns for performance optimization
+   * @deprecated Use metadata-based detection instead
    */
-  private static compiledTestPatterns: RegExp[] | null = null;
+  // private static compiledTestPatterns: RegExp[] | null = null;
 
   /**
    * Get compiled test patterns with caching for better performance
+   * @deprecated Use metadata-based detection instead
    * @returns Array of compiled regex patterns
    */
-  private getCompiledTestPatterns(): RegExp[] {
-    // Use cached patterns if available
-    if (DefaultElementProvider.compiledTestPatterns) {
-      return DefaultElementProvider.compiledTestPatterns;
-    }
-    
-    // Compile and cache patterns on first use
-    // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
-    // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
-    // We only block specific test patterns that are clearly from our test suite
-    DefaultElementProvider.compiledTestPatterns = [
-      /^testpersona/i,              // Our test suite pattern
-      /^yamltest/i,                 // Security test pattern
-      /^yamlbomb/i,                 // Security test pattern
-      /^memory-test-/i,             // Performance test pattern
-      /^perf-test-/i,               // Performance test pattern
-      /^test-fixture-/i,            // Test fixture pattern (more specific)
-      /^test-data-/i,               // Test data pattern (more specific)
-      /bin-sh|rm-rf|pwned/i,        // Malicious patterns
-      /concurrent-\d+/i,            // Concurrent test pattern
-      /legacy\.md$/i,               // Legacy test pattern
-      /performance-test/i,          // Performance test pattern
-      /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
-      /^unittest-/i,                // Unit test pattern
-      /^integrationtest-/i,         // Integration test pattern
-    ];
-    
-    return DefaultElementProvider.compiledTestPatterns;
-  }
+  // private getCompiledTestPatterns(): RegExp[] {
+  //   // Use cached patterns if available
+  //   if (DefaultElementProvider.compiledTestPatterns) {
+  //     return DefaultElementProvider.compiledTestPatterns;
+  //   }
+  //   
+  //   // Compile and cache patterns on first use
+  //   // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
+  //   // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
+  //   // We only block specific test patterns that are clearly from our test suite
+  //   DefaultElementProvider.compiledTestPatterns = [
+  //     /^testpersona/i,              // Our test suite pattern
+  //     /^yamltest/i,                 // Security test pattern
+  //     /^yamlbomb/i,                 // Security test pattern
+  //     /^memory-test-/i,             // Performance test pattern
+  //     /^perf-test-/i,               // Performance test pattern
+  //     /^test-fixture-/i,            // Test fixture pattern (more specific)
+  //     /^test-data-/i,               // Test data pattern (more specific)
+  //     /bin-sh|rm-rf|pwned/i,        // Malicious patterns
+  //     /concurrent-\d+/i,            // Concurrent test pattern
+  //     /legacy\.md$/i,               // Legacy test pattern
+  //     /performance-test/i,          // Performance test pattern
+  //     /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
+  //     /^unittest-/i,                // Unit test pattern
+  //     /^integrationtest-/i,         // Integration test pattern
+  //   ];
+  //   
+  //   return DefaultElementProvider.compiledTestPatterns;
+  // }
 
   /**
    * Check if a filename matches test data patterns that should never be copied to production
-   * Uses cached regex patterns for improved performance
+   * @deprecated Use isDollhouseMCPTestElement() for metadata-based detection instead
    * @param filename The filename to check
    * @returns true if the filename matches test patterns that should be blocked
    */
-  private isTestDataPattern(filename: string): boolean {
-    const patterns = this.getCompiledTestPatterns();
-    return patterns.some(pattern => pattern.test(filename));
+  // private isTestDataPattern(filename: string): boolean {
+  //   const patterns = this.getCompiledTestPatterns();
+  //   return patterns.some(pattern => pattern.test(filename));
+  // }
+
+  /**
+   * Read metadata from YAML frontmatter only (never reads content body)
+   * Uses a small buffer to safely extract only the frontmatter between --- markers
+   * @param filePath Path to the file to read metadata from
+   * @returns Parsed metadata object or null if no frontmatter found
+   */
+  private async readMetadataOnly(filePath: string): Promise<any | null> {
+    try {
+      // Open file and read only first 4KB to avoid reading dangerous content
+      const fd = await fs.open(filePath, 'r');
+      const buffer = Buffer.alloc(4096); // Only read first 4KB maximum
+      
+      try {
+        const result = await fd.read(buffer, 0, 4096, 0);
+        const header = buffer.subarray(0, result.bytesRead).toString('utf-8');
+        
+        // Look for YAML frontmatter between --- markers
+        const match = header.match(/^---\n([\s\S]*?)\n---/);
+        if (!match) {
+          return null; // No frontmatter found
+        }
+        
+        // Parse the YAML frontmatter safely
+        try {
+          const metadata = yaml.load(match[1]);
+          return typeof metadata === 'object' && metadata !== null ? metadata : null;
+        } catch (yamlError) {
+          // Invalid YAML, return null
+          logger.debug(`[DefaultElementProvider] Invalid YAML in ${filePath}: ${yamlError}`);
+          return null;
+        }
+      } finally {
+        await fd.close();
+      }
+    } catch (error) {
+      // File doesn't exist or can't be read
+      logger.debug(`[DefaultElementProvider] Could not read metadata from ${filePath}: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a file is a DollhouseMCP test element based on metadata
+   * This replaces filename pattern detection with accurate metadata-based detection
+   * @param filePath Path to the file to check
+   * @returns true if the file contains _dollhouseMCPTest: true metadata
+   */
+  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean> {
+    try {
+      const metadata = await this.readMetadataOnly(filePath);
+      return !!(metadata && metadata._dollhouseMCPTest === true);
+    } catch (error) {
+      // If we can't read the metadata, assume it's not a test file
+      logger.debug(`[DefaultElementProvider] Error checking test metadata for ${filePath}: ${error}`);
+      return false;
+    }
   }
 
   /**
@@ -326,35 +388,40 @@ export class DefaultElementProvider {
           continue;
         }
 
-        // Production safety check: Block test data patterns in production environments
-        if (this.isProductionEnvironment() && this.isTestDataPattern(normalizedFile.normalizedContent)) {
-          logger.warn(
-            `[DefaultElementProvider] SECURITY: Blocking test data pattern in production: ${normalizedFile.normalizedContent}`,
-            { 
-              file: normalizedFile.normalizedContent,
-              reason: 'Test data pattern detected in production environment',
-              elementType
-            }
-          );
-          
-          // Log security event for blocked test data
-          SecurityMonitor.logSecurityEvent({
-            type: 'TEST_DATA_BLOCKED',
-            severity: 'MEDIUM',
-            source: 'DefaultElementProvider.copyElementFiles',
-            details: `Blocked test data pattern in production: ${normalizedFile.normalizedContent}`,
-            metadata: {
-              filename: normalizedFile.normalizedContent,
-              elementType,
-              reason: 'Test data pattern detected in production environment'
-            }
-          });
-          
-          continue;
-        }
-        
         const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
         const destPath = path.join(destDir, normalizedFile.normalizedContent);
+        
+        // Production safety check: Block DollhouseMCP test elements in production environments
+        if (this.isProductionEnvironment()) {
+          const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
+          
+          if (isDollhouseTest) {
+            logger.warn(
+              `[DefaultElementProvider] SECURITY: Blocking DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
+              { 
+                file: normalizedFile.normalizedContent,
+                reason: 'DollhouseMCP test element detected in production environment',
+                elementType
+              }
+            );
+            
+            // Log security event for blocked test data
+            SecurityMonitor.logSecurityEvent({
+              type: 'TEST_DATA_BLOCKED',
+              severity: 'MEDIUM',
+              source: 'DefaultElementProvider.copyElementFiles',
+              details: `Blocked DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
+              metadata: {
+                filename: normalizedFile.normalizedContent,
+                elementType,
+                reason: 'DollhouseMCP test element detected in production environment',
+                detectionMethod: 'metadata-based'
+              }
+            });
+            
+            continue;
+          }
+        }
         
         try {
           // Check if destination file already exists

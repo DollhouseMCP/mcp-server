@@ -1,3 +1,13 @@
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"
+  purpose: "Test fixture for workflow validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.338Z"
+  originalPath: "test/fixtures/roundtrip/sample-persona.md"
+---
 # Test Creative Writer
 
 A test persona for validating the roundtrip workflow.

@@ -35,8 +35,15 @@ variables:
     default: "TBD"
 outputFormats: ["markdown", "html", "pdf", "docx"]
 includes: []
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.349Z"
+  originalPath: "data/templates/project-brief.md"
 ---
-
 # Project Brief: {{project_name}}
 
 {{#if project_code}}**Project Code:** {{project_code}}{{/if}}  
