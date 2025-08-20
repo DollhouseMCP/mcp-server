@@ -68,7 +68,7 @@ describe('MigrationManager', () => {
     it('should return false when portfolio already exists', async () => {
       // Create legacy personas
       await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, 'test.md'), 'content');
+      await fs.writeFile(path.join(legacyDir, 'sample.md'), 'content');
       
       // Create portfolio
       await portfolioManager.initialize();
@@ -79,7 +79,7 @@ describe('MigrationManager', () => {
     it('should return true when legacy exists but portfolio does not', async () => {
       // Create legacy personas
       await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, 'test.md'), 'content');
+      await fs.writeFile(path.join(legacyDir, 'sample.md'), 'content');
       
       expect(await migrationManager.needsMigration()).toBe(true);
     });
@@ -124,7 +124,7 @@ describe('MigrationManager', () => {
     it('should create backup when requested', async () => {
       // Create legacy personas
       await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, 'test.md'), '# Test');
+      await fs.writeFile(path.join(legacyDir, 'sample.md'), '# Test');
       
       const result = await migrationManager.migrate({ backup: true });
       
@@ -135,7 +135,7 @@ describe('MigrationManager', () => {
       // Verify backup exists
       if (result.backupPath) {
         await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
-        const backupFile = await fs.readFile(path.join(result.backupPath, 'test.md'), 'utf-8');
+        const backupFile = await fs.readFile(path.join(result.backupPath, 'sample.md'), 'utf-8');
         expect(backupFile).toBe('# Test');
       }
     });
@@ -148,12 +148,12 @@ describe('MigrationManager', () => {
     it('should preserve original files after migration', async () => {
       // Create legacy personas
       await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, 'test.md'), '# Test');
+      await fs.writeFile(path.join(legacyDir, 'sample.md'), '# Test');
       
       await migrationManager.migrate();
       
       // Original file should still exist
-      await expect(fs.access(path.join(legacyDir, 'test.md')))
+      await expect(fs.access(path.join(legacyDir, 'sample.md')))
         .resolves.toBeUndefined();
     });
   });
@@ -201,7 +201,7 @@ describe('MigrationManager', () => {
     it('should create timestamped backup directory', async () => {
       // Create legacy content
       await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, 'test.md'), 'content');
+      await fs.writeFile(path.join(legacyDir, 'sample.md'), 'content');
       await fs.mkdir(path.join(legacyDir, 'subdir'), { recursive: true });
       await fs.writeFile(path.join(legacyDir, 'subdir', 'nested.md'), 'nested');
       
@@ -212,7 +212,7 @@ describe('MigrationManager', () => {
       // Verify only files were backed up (not subdirectories)
       if (result.backupPath) {
         const backupContents = await fs.readdir(result.backupPath);
-        expect(backupContents).toContain('test.md');
+        expect(backupContents).toContain('sample.md');
         expect(backupContents).not.toContain('subdir');
       }
     });

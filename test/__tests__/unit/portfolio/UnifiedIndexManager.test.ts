@@ -106,11 +106,11 @@ describe('UnifiedIndexManager', () => {
     it('should combine results from local and GitHub searches', async () => {
       const localResults: SearchResult[] = [{
         entry: {
-          filePath: '/local/personas/test.md',
+          filePath: '/local/personas/sample.md',
           elementType: ElementType.PERSONA,
           metadata: { name: 'Local Test Persona', description: 'Local persona' },
           lastModified: new Date(),
-          filename: 'test'
+          filename: 'sample'
         },
         matchType: 'name',
         score: 3
@@ -121,13 +121,13 @@ describe('UnifiedIndexManager', () => {
         repository: 'dollhouse-portfolio',
         lastUpdated: new Date(),
         elements: new Map([[ElementType.PERSONA, [{
-          path: 'personas/github-test.md',
+          path: 'personas/github-sample.md',
           name: 'GitHub Test Persona',
           description: 'GitHub persona',
           elementType: ElementType.PERSONA,
           sha: 'abc123',
-          htmlUrl: 'https://github.com/test/repo/blob/main/personas/github-test.md',
-          downloadUrl: 'https://raw.githubusercontent.com/test/repo/main/personas/github-test.md',
+          htmlUrl: 'https://github.com/test/repo/blob/main/personas/github-sample.md',
+          downloadUrl: 'https://raw.githubusercontent.com/test/repo/main/personas/github-sample.md',
           lastModified: new Date(),
           size: 1024
         }]]]),
@@ -158,7 +158,7 @@ describe('UnifiedIndexManager', () => {
         repository: 'dollhouse-portfolio',
         lastUpdated: new Date(),
         elements: new Map([[ElementType.PERSONA, [{
-          path: 'personas/github-test.md',
+          path: 'personas/github-sample.md',
           name: 'GitHub Test Persona',
           elementType: ElementType.PERSONA,
           sha: 'abc123',
@@ -183,11 +183,11 @@ describe('UnifiedIndexManager', () => {
     it('should handle GitHub search failures gracefully', async () => {
       const localResults: SearchResult[] = [{
         entry: {
-          filePath: '/local/personas/test.md',
+          filePath: '/local/personas/sample.md',
           elementType: ElementType.PERSONA,
           metadata: { name: 'Local Test Persona' },
           lastModified: new Date(),
-          filename: 'test'
+          filename: 'sample'
         },
         matchType: 'name',
         score: 3
@@ -205,11 +205,11 @@ describe('UnifiedIndexManager', () => {
     it('should deduplicate results by name and type', async () => {
       const localResults: SearchResult[] = [{
         entry: {
-          filePath: '/local/personas/test.md',
+          filePath: '/local/personas/sample.md',
           elementType: ElementType.PERSONA,
           metadata: { name: 'Test Persona' },
           lastModified: new Date(),
-          filename: 'test'
+          filename: 'sample'
         },
         matchType: 'name',
         score: 3
@@ -220,7 +220,7 @@ describe('UnifiedIndexManager', () => {
         repository: 'dollhouse-portfolio',
         lastUpdated: new Date(),
         elements: new Map([[ElementType.PERSONA, [{
-          path: 'personas/test.md',
+          path: 'personas/sample.md',
           name: 'Test Persona', // Same name as local
           elementType: ElementType.PERSONA,
           sha: 'abc123',
@@ -297,11 +297,11 @@ describe('UnifiedIndexManager', () => {
     it('should find element in local portfolio first', async () => {
       const localResults: SearchResult[] = [{
         entry: {
-          filePath: '/local/personas/test.md',
+          filePath: '/local/personas/sample.md',
           elementType: ElementType.PERSONA,
           metadata: { name: 'Test Persona' },
           lastModified: new Date(),
-          filename: 'test'
+          filename: 'sample'
         },
         matchType: 'name',
         score: 10
@@ -332,7 +332,7 @@ describe('UnifiedIndexManager', () => {
         repository: 'dollhouse-portfolio',
         lastUpdated: new Date(),
         elements: new Map([[ElementType.PERSONA, [{
-          path: 'personas/test.md',
+          path: 'personas/sample.md',
           name: 'Test Persona',
           elementType: ElementType.PERSONA,
           sha: 'abc123',
@@ -416,15 +416,15 @@ describe('UnifiedIndexManager', () => {
 
     it('should deduplicate elements by name and type', async () => {
       const localEntries: IndexEntry[] = [{
-        filePath: '/local/personas/test.md',
+        filePath: '/local/personas/sample.md',
         elementType: ElementType.PERSONA,
         metadata: { name: 'Test Persona' },
         lastModified: new Date(),
-        filename: 'test'
+        filename: 'sample'
       }];
 
       const githubEntries: GitHubIndexEntry[] = [{
-        path: 'personas/test.md',
+        path: 'personas/sample.md',
         name: 'Test Persona', // Same name
         elementType: ElementType.PERSONA,
         sha: 'abc123',
@@ -597,7 +597,7 @@ describe('UnifiedIndexManager', () => {
   describe('Entry Conversion', () => {
     it('should convert local entries correctly', () => {
       const localEntry: IndexEntry = {
-        filePath: '/local/personas/test.md',
+        filePath: '/local/personas/sample.md',
         elementType: ElementType.PERSONA,
         metadata: {
           name: 'Test Persona',
@@ -609,29 +609,29 @@ describe('UnifiedIndexManager', () => {
           triggers: ['test trigger']
         },
         lastModified: new Date('2023-01-01'),
-        filename: 'test'
+        filename: 'sample'
       };
 
       const converted = (unifiedManager as any).convertLocalEntry(localEntry);
 
       expect(converted.source).toBe('local');
       expect(converted.name).toBe('Test Persona');
-      expect(converted.localFilePath).toBe('/local/personas/test.md');
+      expect(converted.localFilePath).toBe('/local/personas/sample.md');
       expect(converted.tags).toEqual(['test', 'example']);
       expect(converted.githubPath).toBeUndefined();
     });
 
     it('should convert GitHub entries correctly', () => {
       const githubEntry: GitHubIndexEntry = {
-        path: 'personas/test.md',
+        path: 'personas/sample.md',
         name: 'Test Persona',
         description: 'A test persona',
         version: '1.0.0',
         author: 'Test Author',
         elementType: ElementType.PERSONA,
         sha: 'abc123',
-        htmlUrl: 'https://github.com/test/repo/blob/main/personas/test.md',
-        downloadUrl: 'https://raw.githubusercontent.com/test/repo/main/personas/test.md',
+        htmlUrl: 'https://github.com/test/repo/blob/main/personas/sample.md',
+        downloadUrl: 'https://raw.githubusercontent.com/test/repo/main/personas/sample.md',
         lastModified: new Date('2023-01-01'),
         size: 1024
       };
@@ -640,7 +640,7 @@ describe('UnifiedIndexManager', () => {
 
       expect(converted.source).toBe('github');
       expect(converted.name).toBe('Test Persona');
-      expect(converted.githubPath).toBe('personas/test.md');
+      expect(converted.githubPath).toBe('personas/sample.md');
       expect(converted.githubSha).toBe('abc123');
       expect(converted.localFilePath).toBeUndefined();
     });

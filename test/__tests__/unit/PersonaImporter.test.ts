@@ -135,7 +135,7 @@ describe('PersonaImporter Basic Tests', () => {
               name: "Second Test Persona",
               unique_id: "second-test_20250711-120000_test"
             },
-            filename: "second-test.md"
+            filename: "second-sample.md"
           }
         ],
         personaCount: 2
@@ -185,7 +185,7 @@ You are a markdown test assistant.`;
           category: "test"
         },
         content: "Test content",
-        filename: "test.md",
+        filename: "sample.md",
         exportedAt: new Date().toISOString()
       };
       

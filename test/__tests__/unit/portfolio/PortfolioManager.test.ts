@@ -180,8 +180,8 @@ describe('PortfolioManager', () => {
         const path1 = portfolioManager.getElementPath(ElementType.PERSONA, 'test');
         expect(path1).toMatch(/personas[/\\]test\.md$/);
         
-        const path2 = portfolioManager.getElementPath(ElementType.PERSONA, 'test.md');
-        expect(path2).toMatch(/personas[/\\]test\.md$/);
+        const path2 = portfolioManager.getElementPath(ElementType.PERSONA, 'sample.md');
+        expect(path2).toMatch(/personas[/\\]sample\.md$/);
       });
     });
     

@@ -14,13 +14,13 @@ describe('PersonaElement', () => {
         description: 'A test persona'
       };
 
-      const persona = new PersonaElement(metadata, 'Test content', 'test.md');
+      const persona = new PersonaElement(metadata, 'Test content', 'sample.md');
 
       expect(persona.type).toBe(ElementType.PERSONA);
       expect(persona.metadata.name).toBe('Test Persona');
       expect(persona.metadata.description).toBe('A test persona');
       expect(persona.content).toBe('Test content');
-      expect(persona.filename).toBe('test.md');
+      expect(persona.filename).toBe('sample.md');
       expect(persona.metadata.category).toBe('personal');
       expect(persona.metadata.age_rating).toBe('all');
       expect(persona.metadata.ai_generated).toBe(false);
