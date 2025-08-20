@@ -287,9 +287,9 @@ describe('Version Persistence', () => {
       // Restore metadata for save
       skill.metadata = originalMetadata;
       
-      await skillManager.save(skill, 'metadata-test.md');
+      await skillManager.save(skill, 'metadata-sample.md');
       
-      const loaded = await skillManager.load('metadata-test.md');
+      const loaded = await skillManager.load('metadata-sample.md');
       
       expect(loaded.version).toBe('2.0.0');
       expect(loaded.metadata.version).toBe('2.0.0');

@@ -13,7 +13,7 @@ describe('InputValidator - Security Edge Cases', () => {
   describe('validateFilename', () => {
     it('should accept valid filenames', () => {
       const validFilenames = [
-        'test.md',
+        'sample.md',
         'my-persona.yaml',
         'character_2025.json',
         'abc' + 'd'.repeat(246) + 'e' // Max length minus extension
@@ -368,10 +368,10 @@ describe('InputValidator - Security Edge Cases', () => {
   describe('Combined Attack Vectors', () => {
     it('should handle polyglot attacks', () => {
       const polyglotAttacks = [
-        'test.md\x00.exe',
-        '../test.md%00.php',
+        'sample.md\x00.exe',
+        '../sample.md%00.php',
         'file.md\r\nContent-Type: text/html',
-        'test.md;ls -la;#'
+        'sample.md;ls -la;#'
       ];
 
       polyglotAttacks.forEach(attack => {
@@ -493,7 +493,7 @@ describe('InputValidator - Security Edge Cases', () => {
       
       // Additional timing attack protection tests
       // Test that early vs late rejection doesn't leak timing info
-      const earlyReject = 'Δtest.md';  // Fails on first character
+      const earlyReject = 'Δsample.md';  // Fails on first character
       const lateReject = 'test-file-name-that-is-very-long-and-fails-at-endΔ.md';
       
       // Run position variance test multiple times
@@ -537,10 +537,10 @@ describe('InputValidator - Security Edge Cases', () => {
       // Test 1: Verify that validation error messages don't leak information
       // about where in the input the validation failed
       const invalidPatterns = [
-        '\x00test.md',      // Control character
-        'test\x00file.md',  // Control character in middle
-        'testfile\x00.md',  // Control character at end
-        'Δtest.md',         // Non-ASCII character at start
+        '\x00sample.md',      // Control character
+        'sample\x00file.md',  // Control character in middle
+        'samplefile\x00.md',  // Control character at end
+        'Δsample.md',         // Non-ASCII character at start
         'testΔfile.md',     // Non-ASCII character in middle
         'testfileΔ.md',     // Non-ASCII character at end
       ];
@@ -567,11 +567,11 @@ describe('InputValidator - Security Edge Cases', () => {
       // Test 3: Verify sanitization is consistent
       // Some characters are sanitized rather than rejected
       const sanitizationTests = [
-        { input: 'test/file.md', expected: 'testfile.md' },
-        { input: 'test\\file.md', expected: 'testfile.md' },
-        { input: 'test:file.md', expected: 'testfile.md' },
-        { input: 'test*file.md', expected: 'testfile.md' },
-        { input: '...test.md', expected: 'test.md' },
+        { input: 'sample/file.md', expected: 'samplefile.md' },
+        { input: 'sample\\file.md', expected: 'samplefile.md' },
+        { input: 'sample:file.md', expected: 'samplefile.md' },
+        { input: 'sample*file.md', expected: 'samplefile.md' },
+        { input: '...sample.md', expected: 'sample.md' },
       ];
       
       sanitizationTests.forEach(({ input, expected }) => {
@@ -580,11 +580,11 @@ describe('InputValidator - Security Edge Cases', () => {
       
       // Test 4: Verify that valid inputs all pass without timing variations
       const validInputs = [
-        'test.md',
+        'sample.md',
         'my-file.txt',
         'document_v2.pdf',
         'README.md',
-        '123-test.js',
+        '123-sample.js',
       ];
       
       validInputs.forEach(input => {

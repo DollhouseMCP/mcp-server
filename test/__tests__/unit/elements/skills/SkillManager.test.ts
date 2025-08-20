@@ -112,10 +112,10 @@ This is a test skill.`;
         tags: ['test']
       }, 'Save test instructions');
       
-      await skillManager.save(skill, 'save-test.md');
+      await skillManager.save(skill, 'save-sample.md');
       
       // Verify file was created
-      const savedPath = path.join(portfolioManager.getElementDir(ElementType.SKILL), 'save-test.md');
+      const savedPath = path.join(portfolioManager.getElementDir(ElementType.SKILL), 'save-sample.md');
       const exists = await fs.access(savedPath).then(() => true).catch(() => false);
       expect(exists).toBe(true);
       
@@ -344,7 +344,7 @@ tags:
     it('should use FileLockManager for all file operations', async () => {
       const skill = new Skill({ name: 'Security Test' }, 'content');
       
-      await skillManager.save(skill, 'security-test.md');
+      await skillManager.save(skill, 'security-sample.md');
       
       expect(FileLockManager.atomicWriteFile).toHaveBeenCalled();
     });
@@ -352,7 +352,7 @@ tags:
     it('should log all security-relevant operations', async () => {
       const skill = new Skill({ name: 'Audit Test' }, 'content');
       
-      await skillManager.save(skill, 'audit-test.md');
+      await skillManager.save(skill, 'audit-sample.md');
       
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledTimes(1);
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(

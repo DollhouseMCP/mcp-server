@@ -243,7 +243,7 @@ describe('Persona Lifecycle Integration', () => {
         'This is a test persona created specifically for testing file permission errors. It needs to be at least 50 characters long to pass validation.'
       );
       
-      const filePath = path.join(personasDir, 'error-test.md');
+      const filePath = path.join(personasDir, 'error-sample.md');
       const fs = await import('fs/promises');
       
       try {

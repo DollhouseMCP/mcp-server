@@ -9,7 +9,7 @@ describe('Backtick Validation', () => {
   describe('Markdown Code Formatting (Should PASS)', () => {
     it('should allow markdown inline code with tool commands', () => {
       const validMarkdown = [
-        'Install with: `install_content "library/skills/test.md"`',
+        'Install with: `install_content "library/skills/sample.md"`',
         'Run the command: `npm install @dollhousemcp/mcp-server`',
         'Use: `list_elements --type skills`',
         'Configure with: `configure_collection_submission autoSubmit: true`',

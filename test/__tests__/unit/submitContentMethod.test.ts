@@ -26,7 +26,7 @@ describe('submitContent method improvements', () => {
         searchResults.push({ type, startTime, endTime });
         
         // Return result for 'skills' to simulate finding a match
-        return type === 'skills' ? { type, file: `/path/to/${type}/test.md` } : null;
+        return type === 'skills' ? { type, file: `/path/to/${type}/sample.md` } : null;
       });
       
       // Wait for all searches using Promise.allSettled
@@ -63,7 +63,7 @@ describe('submitContent method improvements', () => {
       for (const types of testCases) {
         const searchPromises = types.map(async (type) => {
           await new Promise(resolve => setTimeout(resolve, 5));
-          return type === types[0] ? { type, file: `/path/${type}/test.md` } : null;
+          return type === types[0] ? { type, file: `/path/${type}/sample.md` } : null;
         });
         
         const results = await Promise.allSettled(searchPromises);

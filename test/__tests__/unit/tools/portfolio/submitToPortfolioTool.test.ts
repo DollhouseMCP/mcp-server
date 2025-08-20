@@ -64,7 +64,7 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
       setToken: jest.fn(),
       checkPortfolioExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       createPortfolio: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio'),
-      saveElement: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/test.md')
+      saveElement: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/sample.md')
     };
     
     // Mock constructors
@@ -346,7 +346,7 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
       });
       
       expect(result.success).toBe(true);
-      expect(result.url).toBe('https://github.com/testuser/portfolio/blob/main/personas/test.md');
+      expect(result.url).toBe('https://github.com/testuser/portfolio/blob/main/personas/sample.md');
     });
     
     it('should fail if element save fails', async () => {
