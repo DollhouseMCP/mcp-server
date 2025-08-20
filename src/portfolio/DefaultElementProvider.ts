@@ -200,6 +200,52 @@ export class DefaultElementProvider {
       return false;
     }
   }
+
+  /**
+   * Check if a filename matches test data patterns that should never be copied to production
+   * @param filename The filename to check
+   * @returns true if the filename matches test patterns that should be blocked
+   */
+  private isTestDataPattern(filename: string): boolean {
+    const testPatterns = [
+      /^testpersona/i,
+      /^yamltest/i,
+      /^yamlbomb/i,
+      /^memory-test-/i,
+      /^perf-test-/i,
+      /^test-/i,
+      /bin-sh|rm-rf|pwned/i,
+      /concurrent-\d+/i,
+      /legacy\.md$/i,
+      /performance-test/i,
+      /-\d{13}-[a-z0-9]+\.md$/i, // Pattern for timestamp-based test files
+    ];
+    
+    return testPatterns.some(pattern => pattern.test(filename));
+  }
+
+  /**
+   * Detect if we're in a production environment by checking for production indicators
+   * @returns true if this appears to be a production environment
+   */
+  private isProductionEnvironment(): boolean {
+    const productionIndicators = [
+      // Check if we're in a typical user home directory
+      process.env.HOME && process.env.HOME.includes('/Users/'),
+      process.env.HOME && process.env.HOME.includes('/home/'),
+      process.env.USERPROFILE, // Windows user profile
+      
+      // Check if we're not in development/test environments
+      !process.env.NODE_ENV || process.env.NODE_ENV === 'production',
+      !process.env.CI, // Not in CI environment
+      !process.cwd().includes('/test'),
+      !process.cwd().includes('/__tests__'),
+      !process.cwd().includes('/temp'),
+    ];
+    
+    // If any production indicators are true, consider it production
+    return productionIndicators.some(indicator => indicator);
+  }
   
   /**
    * Copy all files from source directory to destination directory
@@ -225,6 +271,33 @@ export class DefaultElementProvider {
         const normalizedFile = UnicodeValidator.normalize(file);
         if (!normalizedFile.isValid) {
           logger.warn(`[DefaultElementProvider] Skipping file with invalid Unicode: ${file}`);
+          continue;
+        }
+
+        // Production safety check: Block test data patterns in production environments
+        if (this.isProductionEnvironment() && this.isTestDataPattern(normalizedFile.normalizedContent)) {
+          logger.warn(
+            `[DefaultElementProvider] SECURITY: Blocking test data pattern in production: ${normalizedFile.normalizedContent}`,
+            { 
+              file: normalizedFile.normalizedContent,
+              reason: 'Test data pattern detected in production environment',
+              elementType
+            }
+          );
+          
+          // Log security event for blocked test data
+          SecurityMonitor.logSecurityEvent({
+            type: 'TEST_DATA_BLOCKED',
+            severity: 'MEDIUM',
+            source: 'DefaultElementProvider.copyElementFiles',
+            details: `Blocked test data pattern in production: ${normalizedFile.normalizedContent}`,
+            metadata: {
+              filename: normalizedFile.normalizedContent,
+              elementType,
+              reason: 'Test data pattern detected in production environment'
+            }
+          });
+          
           continue;
         }
         
