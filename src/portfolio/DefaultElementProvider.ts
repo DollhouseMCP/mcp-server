@@ -217,18 +217,24 @@ export class DefaultElementProvider {
     }
     
     // Compile and cache patterns on first use
+    // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
+    // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
+    // We only block specific test patterns that are clearly from our test suite
     DefaultElementProvider.compiledTestPatterns = [
-      /^testpersona/i,
-      /^yamltest/i,
-      /^yamlbomb/i,
-      /^memory-test-/i,
-      /^perf-test-/i,
-      /^test-/i,
-      /bin-sh|rm-rf|pwned/i,
-      /concurrent-\d+/i,
-      /legacy\.md$/i,
-      /performance-test/i,
-      /-\d{13}-[a-z0-9]+\.md$/i, // Pattern for timestamp-based test files
+      /^testpersona/i,              // Our test suite pattern
+      /^yamltest/i,                 // Security test pattern
+      /^yamlbomb/i,                 // Security test pattern
+      /^memory-test-/i,             // Performance test pattern
+      /^perf-test-/i,               // Performance test pattern
+      /^test-fixture-/i,            // Test fixture pattern (more specific)
+      /^test-data-/i,               // Test data pattern (more specific)
+      /bin-sh|rm-rf|pwned/i,        // Malicious patterns
+      /concurrent-\d+/i,            // Concurrent test pattern
+      /legacy\.md$/i,               // Legacy test pattern
+      /performance-test/i,          // Performance test pattern
+      /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
+      /^unittest-/i,                // Unit test pattern
+      /^integrationtest-/i,         // Integration test pattern
     ];
     
     return DefaultElementProvider.compiledTestPatterns;
