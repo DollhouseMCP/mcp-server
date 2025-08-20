@@ -1000,47 +1000,47 @@ export class SubmitToPortfolioTool {
       // Validate and normalize input parameters
       const validationResult = await this.validateAndNormalizeParams(params);
       if (!validationResult.success) {
-        return validationResult.error;
+        return validationResult.error!;
       }
-      const safeName = validationResult.safeName;
+      const safeName = validationResult.safeName!;
 
       // Check authentication status
       const authResult = await this.checkAuthentication();
       if (!authResult.success) {
-        return authResult.error;
+        return authResult.error!;
       }
-      const authStatus = authResult.authStatus;
+      const authStatus = authResult.authStatus!;
 
       // Find content locally with smart type detection
-      const contentResult = await this.discoverContentWithTypeDetection(safeName, params.type, params.name);
+      const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
       if (!contentResult.success) {
-        return contentResult.error;
+        return contentResult.error!;
       }
-      const elementType = contentResult.elementType;
-      const localPath = contentResult.localPath;
+      const elementType = contentResult.elementType!;
+      const localPath = contentResult.localPath!;
 
       // Validate file and content security
       const securityResult = await this.validateFileAndContent(localPath);
       if (!securityResult.success) {
-        return securityResult.error;
+        return securityResult.error!;
       }
-      const content = securityResult.content;
+      const content = securityResult.content!;
 
       // Get user consent (placeholder for now - could add interactive prompt later)
       logger.info(`Preparing to submit ${safeName} to GitHub portfolio`);
 
       // Prepare metadata for element
-      const metadata = this.prepareElementMetadata(safeName, elementType, authStatus);
+      const metadata = this.prepareElementMetadata(safeName!, elementType, authStatus);
 
       // Set up GitHub repository access
       const repoResult = await this.setupGitHubRepository(authStatus);
       if (!repoResult.success) {
-        return repoResult.error;
+        return repoResult.error!;
       }
 
       // Submit element to portfolio and handle collection submission
       return await this.submitElementAndHandleResponse(
-        safeName, 
+        safeName!, 
         elementType, 
         metadata, 
         content, 

@@ -38,7 +38,7 @@ export interface GitHubRateStatus extends RateLimitStatus {
 }
 
 export class GitHubRateLimiter {
-  private rateLimiter: RateLimiter;
+  private rateLimiter!: RateLimiter;
   private requestQueue: GitHubApiRequest[] = [];
   private processing = false;
   private lastRateLimitInfo?: GitHubRateLimitInfo;

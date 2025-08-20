@@ -60,7 +60,7 @@ export class EarlyTerminationSearch {
     }
 
     // Execute searches in batches if there are many
-    const batches = [];
+    const batches: Array<Array<() => Promise<T | null>>> = [];
     for (let i = 0; i < searches.length; i += maxParallelSearches) {
       batches.push(searches.slice(i, i + maxParallelSearches));
     }
