@@ -159,15 +159,15 @@ export class SkillManager implements IElementManager<Skill> {
 
   /**
    * List all available skills
+   * SECURITY: Uses PortfolioManager.listElements() which filters test elements
    */
   async list(): Promise<Skill[]> {
     try {
       // Ensure directory exists
       await fs.mkdir(this.skillsDir, { recursive: true });
       
-      // Read all markdown files
-      const files = await fs.readdir(this.skillsDir);
-      const markdownFiles = files.filter(f => f.endsWith('.md'));
+      // Use PortfolioManager to get filtered list (excludes test elements)
+      const markdownFiles = await this.portfolioManager.listElements(ElementType.SKILL);
       
       // Load all skills in parallel
       const skills = await Promise.all(

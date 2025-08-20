@@ -346,6 +346,7 @@ export class DollhouseMCPServer implements IToolHandler {
     return sanitized;
   }
 
+
   private async loadPersonas() {
     // Validate the personas directory path
     // personasDir is guaranteed to be set by completeInitialization before this is called
@@ -372,7 +373,9 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // personasDir is guaranteed to be set by completeInitialization before this is called
       const files = await fs.readdir(this.personasDir!);
-      const markdownFiles = files.filter(file => file.endsWith('.md'));
+      const markdownFiles = files
+        .filter(file => file.endsWith('.md'))
+        .filter(file => !this.portfolioManager.isTestElement(file));
 
       this.personas.clear();
       

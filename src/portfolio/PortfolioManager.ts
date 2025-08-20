@@ -176,6 +176,58 @@ export class PortfolioManager {
   }
   
   /**
+   * Check if a filename appears to be a test element
+   * SAFETY: Pattern-based filtering only, no content parsing
+   */
+  public isTestElement(filename: string): boolean {
+    // Dangerous test patterns that should never appear in production
+    const dangerousPatterns = [
+      /^bin-sh/i,
+      /^rm-rf/i,
+      /^nc-e-bin/i,
+      /^python-c-import/i,
+      /^curl.*evil/i,
+      /^wget.*malicious/i,
+      /^eval-/i,
+      /^exec-/i,
+      /^bash-c-/i,
+      /^sh-c-/i,
+      /^powershell-/i,
+      /^cmd-c-/i,
+      /shell-injection/i
+    ];
+    
+    // Common test patterns
+    const testPatterns = [
+      /^test-/i,
+      /^memory-test-/i,
+      /^yaml-test/i,
+      /^perf-test-/i,
+      /^stability-test-/i,
+      /^roundtrip-test/i,
+      /test-persona/i,
+      /test-skill/i,
+      /test-template/i,
+      /test-agent/i,
+      /\.test\./,
+      /__test__/,
+      /test-data/,
+      /penetration-test/i,
+      /metadata-test/i,
+      /testpersona\d+/i  // Generated test personas with timestamps
+    ];
+    
+    // Check dangerous patterns first
+    if (dangerousPatterns.some(pattern => pattern.test(filename))) {
+      logger.warn(`[PortfolioManager] Filtered dangerous test element: ${filename}`);
+      return true;
+    }
+    
+    // Check common test patterns
+    return testPatterns.some(pattern => pattern.test(filename));
+  }
+
+  /**
    * List all elements of a specific type
    */
   public async listElements(type: ElementType): Promise<string[]> {
@@ -183,8 +235,10 @@ export class PortfolioManager {
     
     try {
       const files = await fs.readdir(elementDir);
-      // Filter for markdown files only
-      return files.filter(file => file.endsWith(ELEMENT_FILE_EXTENSION));
+      // Filter for markdown files only and exclude test elements
+      return files
+        .filter(file => file.endsWith(ELEMENT_FILE_EXTENSION))
+        .filter(file => !this.isTestElement(file));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       
