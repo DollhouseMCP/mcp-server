@@ -90,7 +90,7 @@ describe('DefaultElementProvider', () => {
     it('should find data directory with personas', async () => {
       // Create test file
       await fs.writeFile(
-        path.join(dataDir, 'personas', 'test.md'),
+        path.join(dataDir, 'personas', 'sample.md'),
         '---\nname: Test\n---\nTest content'
       );
       
@@ -208,17 +208,17 @@ describe('DefaultElementProvider', () => {
       await fs.mkdir(destDir, { recursive: true });
       
       // Create source file
-      await fs.writeFile(path.join(sourceDir, 'test.md'), 'Original content');
+      await fs.writeFile(path.join(sourceDir, 'sample.md'), 'Original content');
       
       // Create existing destination file with different content
-      await fs.writeFile(path.join(destDir, 'test.md'), 'User modified content');
+      await fs.writeFile(path.join(destDir, 'sample.md'), 'User modified content');
       
       const count = await (provider as any).copyElementFiles(sourceDir, destDir, 'personas');
       
       expect(count).toBe(0);
       
       // Verify existing file was not overwritten
-      const content = await fs.readFile(path.join(destDir, 'test.md'), 'utf-8');
+      const content = await fs.readFile(path.join(destDir, 'sample.md'), 'utf-8');
       expect(content).toBe('User modified content');
     });
     
@@ -246,7 +246,7 @@ describe('DefaultElementProvider', () => {
       for (const type of elementTypes) {
         const dir = path.join(dataDir, type);
         await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(path.join(dir, `${type}-test.md`), `Test ${type}`);
+        await fs.writeFile(path.join(dir, `${type}-sample.md`), `Sample ${type}`);
       }
       
       // Create provider with test paths
@@ -255,12 +255,12 @@ describe('DefaultElementProvider', () => {
       await testProvider.populateDefaults(portfolioDir);
       
       // Verify files were copied
-      expect(await fs.readdir(path.join(portfolioDir, 'personas'))).toContain('personas-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'skills'))).toContain('skills-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'templates'))).toContain('templates-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'agents'))).toContain('agents-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'memories'))).toContain('memories-test.md');
-      expect(await fs.readdir(path.join(portfolioDir, 'ensembles'))).toContain('ensembles-test.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'personas'))).toContain('personas-sample.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'skills'))).toContain('skills-sample.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'templates'))).toContain('templates-sample.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'agents'))).toContain('agents-sample.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'memories'))).toContain('memories-sample.md');
+      expect(await fs.readdir(path.join(portfolioDir, 'ensembles'))).toContain('ensembles-sample.md');
     });
     
     it('should handle missing data directory gracefully', async () => {
@@ -296,7 +296,8 @@ describe('DefaultElementProvider', () => {
       const destDir = path.join(portfolioDir, 'personas');
       
       // Test with various Unicode characters
-      const unicodeFilename = 'test-émojis-🎭-中文.md';
+      // FIX: Changed filename to avoid 'test-' prefix which is blocked by production safety
+      const unicodeFilename = 'unicode-émojis-🎭-中文.md';
       await fs.writeFile(path.join(sourceDir, unicodeFilename), 'Unicode test');
       
       const count = await (provider as any).copyElementFiles(sourceDir, destDir, 'personas');
@@ -311,7 +312,7 @@ describe('DefaultElementProvider', () => {
       // Set up test data - ensure dataDir has proper structure
       const personasDir = path.join(dataDir, 'personas');
       await fs.mkdir(personasDir, { recursive: true });
-      await fs.writeFile(path.join(personasDir, 'test.md'), 'Test content');
+      await fs.writeFile(path.join(personasDir, 'sample.md'), 'Sample content');
       
       // Create skills directory too so findDataDirectory succeeds
       await fs.mkdir(path.join(dataDir, 'skills'), { recursive: true });

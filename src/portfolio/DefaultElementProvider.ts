@@ -279,7 +279,9 @@ export class DefaultElementProvider {
       .filter(([_, value]) => value)
       .map(([key]) => key);
     
-    if (score >= 3 && logger.isDebugEnabled()) {
+    // TYPESCRIPT FIX: Removed logger.isDebugEnabled() check as this method doesn't exist on MCPLogger
+    // The logger already handles debug level internally, so we can call debug() directly
+    if (score >= 3) {
       logger.debug(
         '[DefaultElementProvider] Production environment detected',
         { score, activeIndicators }
