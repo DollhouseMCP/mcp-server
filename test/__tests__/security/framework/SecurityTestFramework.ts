@@ -273,9 +273,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       const injectionPayloads = this.MALICIOUS_PAYLOADS.commandInjection;
@@ -336,10 +336,10 @@ export class SecurityTestFramework {
       }
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory
@@ -359,9 +359,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       const traversalPayloads = this.MALICIOUS_PAYLOADS.pathTraversal;
@@ -397,10 +397,10 @@ export class SecurityTestFramework {
       }
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory
@@ -420,9 +420,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       const yamlPayloads = this.MALICIOUS_PAYLOADS.yamlInjection;
@@ -455,10 +455,10 @@ export class SecurityTestFramework {
       }
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory
@@ -487,9 +487,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       
@@ -508,10 +508,10 @@ export class SecurityTestFramework {
       expect(memoryUsage).toBeLessThan(500 * 1024 * 1024); // Less than 500MB
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory
@@ -531,9 +531,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       const largeInput = 'x'.repeat(1024 * 1024); // 1MB
@@ -549,10 +549,10 @@ export class SecurityTestFramework {
       expect(result.content[0].text).toContain('Created Successfully');
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory
@@ -572,9 +572,9 @@ export class SecurityTestFramework {
       await fs.mkdir(tempDir, { recursive: true });
       
       // Set isolated environment for this test
-      const originalPersonasDir = process.env.DOLLHOUSE_PERSONAS_DIR;
-      process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'personas');
-      await fs.mkdir(process.env.DOLLHOUSE_PERSONAS_DIR, { recursive: true });
+      const originalPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = tempDir;
+      await fs.mkdir(path.join(tempDir, 'personas'), { recursive: true });
       
       server = new DollhouseMCPServer();
       const specialChars = [
@@ -603,10 +603,10 @@ export class SecurityTestFramework {
       }
       
       // Restore original environment
-      if (originalPersonasDir) {
-        process.env.DOLLHOUSE_PERSONAS_DIR = originalPersonasDir;
+      if (originalPortfolioDir) {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
       } else {
-        delete process.env.DOLLHOUSE_PERSONAS_DIR;
+        delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
     } finally {
       // Cleanup temp directory

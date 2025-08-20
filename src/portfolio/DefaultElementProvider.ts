@@ -200,6 +200,104 @@ export class DefaultElementProvider {
       return false;
     }
   }
+
+  /**
+   * Cached compiled regex patterns for performance optimization
+   */
+  private static compiledTestPatterns: RegExp[] | null = null;
+
+  /**
+   * Get compiled test patterns with caching for better performance
+   * @returns Array of compiled regex patterns
+   */
+  private getCompiledTestPatterns(): RegExp[] {
+    // Use cached patterns if available
+    if (DefaultElementProvider.compiledTestPatterns) {
+      return DefaultElementProvider.compiledTestPatterns;
+    }
+    
+    // Compile and cache patterns on first use
+    // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
+    // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
+    // We only block specific test patterns that are clearly from our test suite
+    DefaultElementProvider.compiledTestPatterns = [
+      /^testpersona/i,              // Our test suite pattern
+      /^yamltest/i,                 // Security test pattern
+      /^yamlbomb/i,                 // Security test pattern
+      /^memory-test-/i,             // Performance test pattern
+      /^perf-test-/i,               // Performance test pattern
+      /^test-fixture-/i,            // Test fixture pattern (more specific)
+      /^test-data-/i,               // Test data pattern (more specific)
+      /bin-sh|rm-rf|pwned/i,        // Malicious patterns
+      /concurrent-\d+/i,            // Concurrent test pattern
+      /legacy\.md$/i,               // Legacy test pattern
+      /performance-test/i,          // Performance test pattern
+      /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
+      /^unittest-/i,                // Unit test pattern
+      /^integrationtest-/i,         // Integration test pattern
+    ];
+    
+    return DefaultElementProvider.compiledTestPatterns;
+  }
+
+  /**
+   * Check if a filename matches test data patterns that should never be copied to production
+   * Uses cached regex patterns for improved performance
+   * @param filename The filename to check
+   * @returns true if the filename matches test patterns that should be blocked
+   */
+  private isTestDataPattern(filename: string): boolean {
+    const patterns = this.getCompiledTestPatterns();
+    return patterns.some(pattern => pattern.test(filename));
+  }
+
+  /**
+   * Detect if we're in a production environment by checking for production indicators
+   * Uses a confidence-based approach requiring multiple indicators for better accuracy
+   * @returns true if this appears to be a production environment
+   */
+  private isProductionEnvironment(): boolean {
+    // Weighted indicators for production detection
+    const indicators = {
+      // Strong indicators (weight: 2)
+      hasUserHomeDir: (process.env.HOME && (process.env.HOME.includes('/Users/') || process.env.HOME.includes('/home/'))) || 
+                      !!process.env.USERPROFILE,
+      isProductionNode: process.env.NODE_ENV === 'production',
+      notInTestDir: !process.cwd().includes('/test') && !process.cwd().includes('/__tests__') && !process.cwd().includes('/temp'),
+      
+      // Moderate indicators (weight: 1)
+      notInCI: !process.env.CI,
+      noTestEnv: process.env.NODE_ENV !== 'test',
+      noDevEnv: process.env.NODE_ENV !== 'development',
+    };
+    
+    // Calculate weighted score
+    let score = 0;
+    if (indicators.hasUserHomeDir) score += 2;
+    if (indicators.isProductionNode) score += 2;
+    if (indicators.notInTestDir) score += 2;
+    if (indicators.notInCI) score += 1;
+    if (indicators.noTestEnv) score += 1;
+    if (indicators.noDevEnv) score += 1;
+    
+    // Log detection details for debugging
+    const activeIndicators = Object.entries(indicators)
+      .filter(([_, value]) => value)
+      .map(([key]) => key);
+    
+    // TYPESCRIPT FIX: Removed logger.isDebugEnabled() check as this method doesn't exist on MCPLogger
+    // The logger already handles debug level internally, so we can call debug() directly
+    if (score >= 3) {
+      logger.debug(
+        '[DefaultElementProvider] Production environment detected',
+        { score, activeIndicators }
+      );
+    }
+    
+    // Require a score of at least 3 for production detection (more confident)
+    // This prevents false positives in edge cases while maintaining security
+    return score >= 3;
+  }
   
   /**
    * Copy all files from source directory to destination directory
@@ -225,6 +323,33 @@ export class DefaultElementProvider {
         const normalizedFile = UnicodeValidator.normalize(file);
         if (!normalizedFile.isValid) {
           logger.warn(`[DefaultElementProvider] Skipping file with invalid Unicode: ${file}`);
+          continue;
+        }
+
+        // Production safety check: Block test data patterns in production environments
+        if (this.isProductionEnvironment() && this.isTestDataPattern(normalizedFile.normalizedContent)) {
+          logger.warn(
+            `[DefaultElementProvider] SECURITY: Blocking test data pattern in production: ${normalizedFile.normalizedContent}`,
+            { 
+              file: normalizedFile.normalizedContent,
+              reason: 'Test data pattern detected in production environment',
+              elementType
+            }
+          );
+          
+          // Log security event for blocked test data
+          SecurityMonitor.logSecurityEvent({
+            type: 'TEST_DATA_BLOCKED',
+            severity: 'MEDIUM',
+            source: 'DefaultElementProvider.copyElementFiles',
+            details: `Blocked test data pattern in production: ${normalizedFile.normalizedContent}`,
+            metadata: {
+              filename: normalizedFile.normalizedContent,
+              elementType,
+              reason: 'Test data pattern detected in production environment'
+            }
+          });
+          
           continue;
         }
         

@@ -86,10 +86,21 @@ else
 fi
 
 # Test 3: Create test personas locally
-print_test "Creating test personas in local portfolio..."
+print_test "Creating test personas in temporary test directory..."
+
+# Create temporary test directory (safe for testing)
+TEST_PORTFOLIO_DIR=$(mktemp -d -t "dollhouse-test-portfolio-XXXXXX")
+mkdir -p "$TEST_PORTFOLIO_DIR/personas"
+mkdir -p "$TEST_PORTFOLIO_DIR/skills"
+mkdir -p "$TEST_PORTFOLIO_DIR/templates"
+mkdir -p "$TEST_PORTFOLIO_DIR/agents"
+mkdir -p "$TEST_PORTFOLIO_DIR/ensembles"
+mkdir -p "$TEST_PORTFOLIO_DIR/memories"
+
+print_success "Created temporary test portfolio: $TEST_PORTFOLIO_DIR"
 
 # Create test persona for manual submission
-cat > "$HOME/.dollhouse/portfolio/personas/${TEST_PERSONA_MANUAL}.md" << EOF
+cat > "$TEST_PORTFOLIO_DIR/personas/${TEST_PERSONA_MANUAL}.md" << EOF
 ---
 name: ${TEST_PERSONA_MANUAL}
 description: Test persona for manual collection submission
@@ -115,7 +126,7 @@ EOF
 print_success "Created test persona: ${TEST_PERSONA_MANUAL}"
 
 # Create test persona for auto submission
-cat > "$HOME/.dollhouse/portfolio/personas/${TEST_PERSONA_AUTO}.md" << EOF
+cat > "$TEST_PORTFOLIO_DIR/personas/${TEST_PERSONA_AUTO}.md" << EOF
 ---
 name: ${TEST_PERSONA_AUTO}
 description: Test persona for automatic collection submission
@@ -142,6 +153,11 @@ print_success "Created test persona: ${TEST_PERSONA_AUTO}"
 
 # Test 4: Check environment variables
 print_test "Checking environment configuration..."
+
+# Set environment to use test directory instead of production
+export DOLLHOUSE_PORTFOLIO_DIR="$TEST_PORTFOLIO_DIR"
+print_success "Set DOLLHOUSE_PORTFOLIO_DIR to test directory: $TEST_PORTFOLIO_DIR"
+
 if [ -z "$DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION" ]; then
     echo "  DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION is not set (defaults to false)"
 else
@@ -201,12 +217,28 @@ echo "     - Portfolio: https://github.com/${GITHUB_USER}/${PORTFOLIO_REPO}"
 echo "     - Collection: https://github.com/DollhouseMCP/collection/issues"
 echo ""
 
-# Cleanup reminder
-print_test "Remember to clean up test data after testing:"
-echo "  rm ~/.dollhouse/portfolio/personas/${TEST_PERSONA_MANUAL}.md"
-echo "  rm ~/.dollhouse/portfolio/personas/${TEST_PERSONA_AUTO}.md"
-echo "  Close any test issues in the collection repository"
+# Cleanup function
+cleanup_test_environment() {
+    print_test "Cleaning up test environment..."
+    
+    # Clean up temporary test directory
+    if [ -n "$TEST_PORTFOLIO_DIR" ] && [ -d "$TEST_PORTFOLIO_DIR" ]; then
+        rm -rf "$TEST_PORTFOLIO_DIR"
+        print_success "Cleaned up temporary test directory: $TEST_PORTFOLIO_DIR"
+    fi
+    
+    # Reset environment variables
+    unset DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION
+    unset DOLLHOUSE_PORTFOLIO_DIR
+    print_success "Environment variables reset to default state"
+    
+    echo "  NOTE: Close any test issues created in the collection repository"
+}
 
-# Reset environment
-unset DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION
-print_success "Environment reset to default state"
+# Set up cleanup trap to ensure cleanup happens even if script exits early
+trap cleanup_test_environment EXIT
+
+# Manual cleanup reminder
+print_test "Automatic cleanup is configured (trap on EXIT)"
+echo "  Test directory will be cleaned up automatically: $TEST_PORTFOLIO_DIR"
+echo "  Manual cleanup if needed: cleanup_test_environment"

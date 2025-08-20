@@ -34,12 +34,10 @@ describe('ElementInstaller Security - Download-Then-Validate Vulnerability Fix',
     // Backup original environment
     originalEnv = { ...process.env };
     
-    // Set test environment with temporary directories
+    // Set test environment with temporary directory
     const tempDir = os.tmpdir();
-    process.env.DOLLHOUSE_PERSONAS_DIR = path.join(tempDir, 'test-personas');
-    process.env.DOLLHOUSE_SKILLS_DIR = path.join(tempDir, 'test-skills'); 
-    process.env.DOLLHOUSE_TEMPLATES_DIR = path.join(tempDir, 'test-templates');
-    process.env.DOLLHOUSE_AGENTS_DIR = path.join(tempDir, 'test-agents');
+    const testPortfolioDir = path.join(tempDir, 'test-portfolio');
+    process.env.DOLLHOUSE_PORTFOLIO_DIR = testPortfolioDir;
     
     // Create mock GitHub client
     mockGitHubClient = {

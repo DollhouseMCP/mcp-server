@@ -29,7 +29,7 @@ describe('MCP Tools Security Tests', () => {
     process.chdir(testDir);
     
     // Set environment to use test directory
-    process.env.DOLLHOUSE_PERSONAS_DIR = path.join(testDir, 'personas');
+    process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
     
     // Initialize server
     server = new DollhouseMCPServer();
