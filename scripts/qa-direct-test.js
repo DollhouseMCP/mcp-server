@@ -106,7 +106,8 @@ class DirectMCPTestRunner {
     ];
 
     for (const test of tests) {
-      const result = await this.callTool('browse_marketplace', test.params);
+      // REMOVED: browse_marketplace tool no longer exists
+      const result = { success: false, error: 'Tool removed: browse_marketplace no longer available' };
       this.results.push(result);
       
       if (result.success) {
@@ -140,7 +141,7 @@ class DirectMCPTestRunner {
     console.log('\n🎭 Testing Persona Operations...');
     
     // Get active persona first
-    let result = await this.callTool('get_active_persona');
+    let result = await this.callTool('// REMOVED: get_active_persona');
     this.results.push(result);
     console.log(`  ✅ Get Active (initial): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
@@ -150,7 +151,7 @@ class DirectMCPTestRunner {
     console.log(`  ✅ Activate Creative Writer: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
     // Get active persona again
-    result = await this.callTool('get_active_persona');
+    result = await this.callTool('// REMOVED: get_active_persona');
     this.results.push(result);
     console.log(`  ✅ Get Active (after activation): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
