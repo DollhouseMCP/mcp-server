@@ -13,6 +13,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "inspector:dev": "npx @modelcontextprotocol/inspector tsx src/index.ts",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "setup": "npm install && npm run build",
@@ -101,7 +103,7 @@
     "url": "https://github.com/sponsors/mickdarling"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.16.0",
+    "@modelcontextprotocol/sdk": "^1.17.3",
     "@types/dompurify": "^3.0.5",
     "@types/uuid": "^10.0.0",
     "dompurify": "^3.2.6",
@@ -109,6 +111,7 @@
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
     "jsdom": "^26.1.0",
+    "node-fetch": "^3.3.2",
     "uuid": "^11.1.0",
     "zod": "^4.0.5"
   },

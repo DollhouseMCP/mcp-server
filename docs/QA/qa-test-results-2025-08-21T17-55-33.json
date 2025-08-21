@@ -1,0 +1,156 @@
+{
+  "timestamp": "2025-08-21T17:55:33.322Z",
+  "duration": "20ms",
+  "summary": {
+    "total": 17,
+    "successful": 0,
+    "failed": 17,
+    "success_rate": "0.0%"
+  },
+  "results": [
+    {
+      "success": false,
+      "tool": "list_elements",
+      "params": {
+        "type": "personas"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "list_elements",
+      "params": {
+        "type": "skills"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "list_elements",
+      "params": {
+        "type": "templates"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "list_elements",
+      "params": {
+        "type": "agents"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {
+        "category": "personas"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {
+        "query": "creative"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_user_identity",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "set_user_identity",
+      "params": {
+        "username": "qa-test-user"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_user_identity",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "list_personas",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_portfolio_status",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_portfolio_config",
+      "params": {},
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "create_persona",
+      "params": {
+        "name": "QA Test Persona",
+        "description": "A test persona for QA validation",
+        "category": "testing",
+        "instructions": "You are a helpful QA testing assistant."
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "list_elements",
+      "params": {
+        "type": "invalid_type"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "activate_persona",
+      "params": {
+        "name": "NonExistentPersona"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_marketplace_persona",
+      "params": {
+        "path": "invalid/path"
+      },
+      "error": "HTTP 401: Unauthorized",
+      "duration": 0
+    }
+  ]
+}

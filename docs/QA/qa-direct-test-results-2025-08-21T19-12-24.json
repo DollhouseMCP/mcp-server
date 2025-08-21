@@ -1,0 +1,318 @@
+{
+  "timestamp": "2025-08-21T19:12:24.637Z",
+  "duration": "215ms",
+  "summary": {
+    "total": 16,
+    "successful": 8,
+    "failed": 8,
+    "success_rate": "50.0%"
+  },
+  "test_details": [
+    {
+      "tool": "list_elements",
+      "success": true,
+      "duration": "4ms",
+      "params": {
+        "type": "personas"
+      },
+      "error": null
+    },
+    {
+      "tool": "list_elements",
+      "success": true,
+      "duration": "11ms",
+      "params": {
+        "type": "skills"
+      },
+      "error": null
+    },
+    {
+      "tool": "list_elements",
+      "success": true,
+      "duration": "5ms",
+      "params": {
+        "type": "templates"
+      },
+      "error": null
+    },
+    {
+      "tool": "list_elements",
+      "success": true,
+      "duration": "11ms",
+      "params": {
+        "type": "agents"
+      },
+      "error": null
+    },
+    {
+      "tool": "browse_marketplace",
+      "success": false,
+      "duration": "0ms",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace"
+    },
+    {
+      "tool": "browse_marketplace",
+      "success": false,
+      "duration": "0ms",
+      "params": {
+        "category": "personas"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace"
+    },
+    {
+      "tool": "browse_marketplace",
+      "success": false,
+      "duration": "1ms",
+      "params": {
+        "query": "creative"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace"
+    },
+    {
+      "tool": "get_user_identity",
+      "success": true,
+      "duration": "0ms",
+      "params": {},
+      "error": null
+    },
+    {
+      "tool": "set_user_identity",
+      "success": true,
+      "duration": "0ms",
+      "params": {
+        "username": "qa-test-user"
+      },
+      "error": null
+    },
+    {
+      "tool": "get_user_identity",
+      "success": true,
+      "duration": "0ms",
+      "params": {},
+      "error": null
+    },
+    {
+      "tool": "get_active_persona",
+      "success": false,
+      "duration": "1ms",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: get_active_persona"
+    },
+    {
+      "tool": "activate_persona",
+      "success": false,
+      "duration": "0ms",
+      "params": {
+        "name": "Creative Writer"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: activate_persona"
+    },
+    {
+      "tool": "get_active_persona",
+      "success": false,
+      "duration": "0ms",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: get_active_persona"
+    },
+    {
+      "tool": "deactivate_persona",
+      "success": false,
+      "duration": "0ms",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: deactivate_persona"
+    },
+    {
+      "tool": "list_elements",
+      "success": true,
+      "duration": "0ms",
+      "params": {
+        "type": "invalid_type"
+      },
+      "error": null
+    },
+    {
+      "tool": "activate_persona",
+      "success": false,
+      "duration": "0ms",
+      "params": {
+        "name": "NonExistentPersona"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: activate_persona"
+    }
+  ],
+  "full_results": [
+    {
+      "success": true,
+      "tool": "list_elements",
+      "params": {
+        "type": "personas"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "Available Personas (1):\n\n▫️ **blog-copy-editor** (blog-copy-editor_20250812-152639_anon-bright-wolf-u06x)\n   A professional blog copy editor specializing in transforming stream-of-consciousness content into polished, engaging blog posts\n   📁 general | 🎭 anon-cool-cat-6cg7 | 🔖 free | 🤖 AI\n   Age: all | Version: 1.0\n   Triggers: None\n"
+        }
+      ],
+      "duration": 4
+    },
+    {
+      "success": true,
+      "tool": "list_elements",
+      "params": {
+        "type": "skills"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "📚 Available Skills:\n\n🛠️ advanced-github-security-scanner (v1.0.0) - Advanced GitHub repository security scanner with automated URL generation, source code fetching, and comprehensive security validation using dollhouse security framework\n   Complexity: beginner | Domains: general\n\n🛠️ automated-security-workflow (v1.0.0) - Advanced workflow automation skill that orchestrates comprehensive security validation processes with intelligent threat response and seamless user experience management\n   Complexity: beginner | Domains: general\n\n🛠️ complete-security-validation-engine (v1.0.0) - Complete programmatic security validation engine with all threat detection capabilities, repository analysis, AI tool validation, and automated response generation\n   Complexity: beginner | Domains: general\n\n🛠️ Concurrent Test (v1.0.1) - Testing concurrent updates\n   Complexity: beginner | Domains: general\n\n🛠️ content-polish-skill (v1.0.0) - Provides final polish and enhancement for blog content including SEO optimization and readability improvements\n   Complexity: beginner | Domains: general\n\n🛠️ content-safety-validator (v1.0.0) - Comprehensive content safety validation skill that analyzes web content, GitHub repositories, and AI tools for potential security risks, prompt injections, and malicious patterns\n   Complexity: beginner | Domains: general\n\n🛠️ content-structure-analyzer (v1.0.0) - Analyzes raw content structure and provides detailed recommendations for blog post organization\n   Complexity: beginner | Domains: general\n\n🛠️ encoding-pattern-detection (v1.0.0) - Pattern recognition skill for detecting encoding-based jailbreak attempts and TIP techniques\n   Complexity: advanced | Domains: security, cryptography, pattern_recognition\n\n🛠️ github-url-generator (v1.0.0) - Generates raw GitHub URLs for repository files to enable direct source code analysis and security validation\n   Complexity: beginner | Domains: general\n\n🛠️ message-monitor-hook (v1.0.0) - A hook-style element that monitors all messages and triggers reactions based on configurable conditions\n   Complexity: intermediate | Domains: development, automation, workflow\n\n🛠️ Metadata Test (v2.0.0) - Testing undefined metadata\n   Complexity: beginner | Domains: general\n\n🛠️ new-skill (v1.0.0) - \n   Complexity: beginner | Domains: general\n\n🛠️ No Version Skill (v1.0.0) - Skill without version\n   Complexity: beginner | Domains: general\n\n🛠️ programmatic-security-validator (v1.0.0) - Advanced programmatic security validation skill that uses Claudes analysis tool to execute real JavaScript-based security checks on websites, repositories, and AI tools with precise threat detection\n   Complexity: beginner | Domains: general\n\n🛠️ question-classifier (v1.0.0) - Evaluates whether questions are basic/stupid vs legitimate to prevent AI dependency\n   Complexity: beginner | Domains: general\n\n🛠️ Safe Roundtrip Tester (v1.0.0) - A security-safe test skill for validating the complete MCP roundtrip workflow without triggering security alerts\n   Complexity: beginner | Domains: general\n\n🛠️ security-validation-system-summary (v1.0.0) - Comprehensive summary and demonstration of the complete programmatic security validation system with real-world testing capabilities\n   Complexity: beginner | Domains: general\n\n🛠️ session-notes-tracker (v1.0.0) - An element that automatically tracks and summarizes session conversations for context continuity across chat sessions\n   Complexity: beginner | Domains: general\n\n🛠️ Test skill (v1.0.0) - Valid skills element\n   Complexity: beginner | Domains: general\n\n🛠️ smart-github-file-discovery (v1.0.0) - Smart GitHub repository file discovery that verifies actual file existence before URL generation, eliminating false positives and hallucinated file paths\n   Complexity: beginner | Domains: general\n\n🛠️ time-query (v1.0.0) - A skill for querying the current system time and date\n   Complexity: beginner | Domains: general\n\n🛠️ todo-system-skills (v1.0.0) - Specialized skills for managing software development todo systems with AI agent collaboration\n   Complexity: beginner | Domains: general\n\n🛠️ Version Sync Test (v1.5.4) - Testing version sync\n   Complexity: beginner | Domains: general\n\n🛠️ web-content-analyzer (v1.0.0) - Advanced web content analysis skill for detecting security threats, prompt injections, malicious scripts, and privacy violations in real-time browsing scenarios\n   Complexity: beginner | Domains: general"
+        }
+      ],
+      "duration": 11
+    },
+    {
+      "success": true,
+      "tool": "list_elements",
+      "params": {
+        "type": "templates"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "📝 Available Templates:\n\n📄 blog-post-template (v1.0.0) - A comprehensive blog post template with placeholders for structured content creation\n   Variables: none\n\n📄 Code Documentation (v1.0.0) - Technical documentation template for code modules, APIs, and functions\n   Variables: none\n\n📄 dev-todo-system (v1.0.0) - A comprehensive to-do system template designed for software development projects, optimized for both human developers and AI agents to collaborate effectively\n   Variables: none\n\n📄 Professional Email (v1.0.0) - Business email template with proper formatting and tone\n   Variables: none\n\n📄 Meeting Notes (v1.0.0) - Structured template for capturing and organizing meeting information\n   Variables: none\n\n📄 programmatic-analysis-template (v1.0.0) - Structured template for executing programmatic security analysis through Claudes analysis tool with automated response classification and DollhouseMCP integration\n   Variables: none\n\n📄 Project Brief (v1.0.0) - Comprehensive project overview template for planning and communication\n   Variables: none\n\n📄 Executive Report (v1.0.0) - High-level report template for executive audiences with focus on insights and recommendations\n   Variables: none\n\n📄 security-incident-report (v1.0.0) - Template for documenting security incidents involving encoding-based jailbreak attempts\n   Variables: none\n\n📄 security-validation-report (v1.0.0) - Comprehensive security validation report template for documenting analysis results, risk assessments, and recommendations for tools, websites, and repositories\n   Variables: none\n\n📄 Security Vulnerability Report (v1.0.0) - Comprehensive vulnerability assessment report with technical details and remediation guidance\n   Variables: none\n\n📄 session-context-transfer (v1.0.0) - Handlebars template for generating context transfer files between sessions\n   Variables: none\n\n📄 Test template (v1.0.0) - Valid templates element\n   Variables: none\n\n📄 Threat Assessment Report (v1.0.0) - Comprehensive threat modeling and risk assessment report with mitigation strategies\n   Variables: none\n\n📄 tough-love-config (v1.0.0) - Configuration template for customizing AI dependency prevention settings\n   Variables: none\n\n📄 tough-love-coordinator (v1.0.0) - Master coordinator template for the tough love AI dependency prevention system\n   Variables: none"
+        }
+      ],
+      "duration": 5
+    },
+    {
+      "success": true,
+      "tool": "list_elements",
+      "params": {
+        "type": "agents"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "🤖 Available Agents:\n\n🤖 Test agent (v1.0.0) - Valid agents element\n   Status: inactive | Specializations: general\n\n🤖 blog-copy-editor-agent (v1.0.0) - Orchestrates the complete blog editing workflow from raw content to polished publication\n   Status: inactive | Specializations: general\n\n🤖 Code Reviewer (v1.0.0) - Automated code review agent with security, performance, and quality analysis\n   Status: inactive | Specializations: general\n\n🤖 dev-task-manager (v1.0.1) - An AI agent specialized in managing and executing software development tasks using the dev-todo-system template\n   Status: inactive | Specializations: general\n\n🤖 hook-reaction-agent (v1.0.0) - Autonomous agent that implements software development hook patterns for monitoring and conditional reactions\n   Status: inactive | Specializations: general\n\n🤖 jailbreak-detection-agent (v1.0.0) - Security monitoring agent that detects encoding-based jailbreak attempts by pausing when decoding processes occur\n   Status: inactive | Specializations: general\n\n🤖 programmatic-analysis-agent (v1.0.0) - Advanced agent that executes real-time programmatic security analysis using Claudes analysis tool for code-based validation with precise threat detection and measurable confidence metrics\n   Status: inactive | Specializations: general\n\n🤖 Research Assistant (v1.0.0) - Autonomous agent for conducting thorough research and synthesizing findings\n   Status: inactive | Specializations: general\n\n🤖 security-workflow-orchestrator (v1.0.0) - Master orchestration agent that coordinates comprehensive security validation workflows, manages intelligent notifications, and provides seamless user experience for tool and website evaluation\n   Status: inactive | Specializations: general\n\n🤖 session-notes-agent (v1.0.0) - Autonomous agent for maintaining session summaries and enabling conversation continuity\n   Status: inactive | Specializations: general\n\n🤖 Task Manager (v1.0.0) - Goal-oriented agent for managing tasks, priorities, and project execution\n   Status: inactive | Specializations: general\n\n🤖 timeout-agent (v1.0.0) - Manages timeouts and coordinates question classification to prevent AI dependency\n   Status: inactive | Specializations: general\n\n🤖 timestamp-agent (v1.0.0) - An autonomous agent that provides timestamp functionality for conversations\n   Status: inactive | Specializations: general"
+        }
+      ],
+      "duration": 11
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {
+        "category": "personas"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "browse_marketplace",
+      "params": {
+        "query": "creative"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: browse_marketplace",
+      "duration": 1
+    },
+    {
+      "success": true,
+      "tool": "get_user_identity",
+      "params": {},
+      "result": [
+        {
+          "type": "text",
+          "text": "👤 **User Identity: Anonymous**\n\n🔒 **Status:** Anonymous mode\n📝 **Attribution:** Personas will use anonymous IDs\n\n**To set your identity:**\n• Use: `set_user_identity \"your-username\"`\n• Or set environment variable: `DOLLHOUSE_USER=your-username`"
+        }
+      ],
+      "duration": 0
+    },
+    {
+      "success": true,
+      "tool": "set_user_identity",
+      "params": {
+        "username": "qa-test-user"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "✅ **User Identity Set**\n\n👤 **Username:** qa-test-user\n\n🎯 **Next Steps:**\n• New personas you create will be attributed to \"qa-test-user\"\n• Set environment variable `DOLLHOUSE_USER=qa-test-user` to persist this setting\n• Use `clear_user_identity` to return to anonymous mode"
+        }
+      ],
+      "duration": 0
+    },
+    {
+      "success": true,
+      "tool": "get_user_identity",
+      "params": {},
+      "result": [
+        {
+          "type": "text",
+          "text": "👤 **User Identity: qa-test-user**\n\n✅ **Status:** Authenticated\n👤 **Username:** qa-test-user\n📝 **Attribution:** New personas will be credited to \"qa-test-user\"\n\n**Environment Variables:**\n• `DOLLHOUSE_USER=qa-test-user`\n\n**Management:**\n• Use `clear_user_identity` to return to anonymous mode\n• Use `set_user_identity \"new-username\"` to change username"
+        }
+      ],
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_active_persona",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: get_active_persona",
+      "duration": 1
+    },
+    {
+      "success": false,
+      "tool": "activate_persona",
+      "params": {
+        "name": "Creative Writer"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: activate_persona",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "get_active_persona",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: get_active_persona",
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "deactivate_persona",
+      "params": {},
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: deactivate_persona",
+      "duration": 0
+    },
+    {
+      "success": true,
+      "tool": "list_elements",
+      "params": {
+        "type": "invalid_type"
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "❌ Unknown element type 'invalid_type'. Available types: personas, skills, templates, agents, memories, ensembles (or legacy plural forms: personas, skills, templates, agents)"
+        }
+      ],
+      "duration": 0
+    },
+    {
+      "success": false,
+      "tool": "activate_persona",
+      "params": {
+        "name": "NonExistentPersona"
+      },
+      "error": "MCP error -32601: MCP error -32601: Unknown tool: activate_persona",
+      "duration": 0
+    }
+  ]
+}
