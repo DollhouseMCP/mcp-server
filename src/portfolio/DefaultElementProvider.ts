@@ -472,7 +472,8 @@ export class DefaultElementProvider {
         const header = buffer.subarray(0, result.bytesRead).toString('utf-8');
         
         // Look for YAML frontmatter between --- markers
-        const match = header.match(/^---\n([\s\S]*?)\n---/);
+        // Support both Unix (\n) and Windows (\r\n) line endings
+        const match = header.match(/^---\r?\n([\s\S]*?)\r?\n---/);
         if (!match) {
           return null; // No frontmatter found
         }
