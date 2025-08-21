@@ -62,6 +62,8 @@ describe('Metadata Test Detection - Integration Tests', () => {
     } else {
       delete process.env.NODE_ENV;
     }
+    // CRITICAL MEMORY LEAK FIX: Clean up static caches to prevent memory accumulation
+    DefaultElementProvider.cleanup();
   });
 
   describe('Complete Migration Workflow', () => {

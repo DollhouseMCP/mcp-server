@@ -20,6 +20,8 @@ describe('Metadata Detection Security Tests', () => {
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
+    // CRITICAL MEMORY LEAK FIX: Clean up static caches to prevent memory accumulation
+    DefaultElementProvider.cleanup();
   });
 
   describe('Buffer Limit Enforcement', () => {
