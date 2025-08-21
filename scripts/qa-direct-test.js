@@ -18,6 +18,7 @@ import {
   createTestResult,
   logTestResult
 } from './qa-utils.js';
+import { CONFIG } from '../test-config.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -66,9 +67,9 @@ class DirectMCPTestRunner {
     }
     
     try {
-      // Set a 10 second timeout
+      // Set server connection timeout
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Tool call timed out after 10s')), 10000)
+        setTimeout(() => reject(new Error(`Tool call timed out after ${CONFIG.timeouts.server_connection/1000}s`)), CONFIG.timeouts.server_connection)
       );
       
       const result = await Promise.race([

@@ -8,6 +8,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
+import { CONFIG } from '../test-config.js';
 
 class ElementTestRunner {
   constructor() {
@@ -52,7 +53,7 @@ class ElementTestRunner {
     }
   }
 
-  async callToolSafe(toolName, args = {}, timeout = 3000) {
+  async callToolSafe(toolName, args = {}, timeout = CONFIG.timeouts.benchmark_timeout) {
     const startTime = Date.now();
     
     try {
@@ -87,13 +88,13 @@ class ElementTestRunner {
     console.log('\n👤 Testing User Identity...');
     
     // Get current identity (should be fast)
-    let result = await this.callToolSafe('get_user_identity', {}, 2000);
+    let result = await this.callToolSafe('get_user_identity', {}, CONFIG.timeouts.tool_call);
     this.results.push(result);
     const status = result.success ? '✅' : '❌';
     console.log(`  ${status} Get Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
     // Set test identity
-    result = await this.callToolSafe('set_user_identity', { username: 'sonnet-1-qa-tester' }, 2000);
+    result = await this.callToolSafe('set_user_identity', { username: 'sonnet-1-qa-tester' }, CONFIG.timeouts.tool_call);
     this.results.push(result);
     const status2 = result.success ? '✅' : '❌';
     console.log(`  ${status2} Set Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
@@ -108,7 +109,7 @@ class ElementTestRunner {
     let passed = 0;
     
     for (const type of elementTypes) {
-      const result = await this.callToolSafe('list_elements', { type }, 2000);
+      const result = await this.callToolSafe('list_elements', { type }, CONFIG.timeouts.tool_call);
       this.results.push(result);
       
       if (result.success) {
@@ -129,7 +130,7 @@ class ElementTestRunner {
     let total = 0;
     
     // Test collection browsing
-    const browseResult = await this.callToolSafe('browse_collection', {}, 3000);
+    const browseResult = await this.callToolSafe('browse_collection', {}, CONFIG.timeouts.benchmark_timeout);
     this.results.push(browseResult);
     total++;
     if (browseResult.success) {
@@ -140,7 +141,7 @@ class ElementTestRunner {
     }
 
     // Test collection search
-    const searchResult = await this.callToolSafe('search_collection', { query: 'creative' }, 3000);
+    const searchResult = await this.callToolSafe('search_collection', { query: 'creative' }, CONFIG.timeouts.benchmark_timeout);
     this.results.push(searchResult);
     total++;
     if (searchResult.success) {
@@ -160,7 +161,7 @@ class ElementTestRunner {
     let total = 0;
     
     // Test getting active elements
-    const activeResult = await this.callToolSafe('get_active_elements', { type: 'personas' }, 2000);
+    const activeResult = await this.callToolSafe('get_active_elements', { type: 'personas' }, CONFIG.timeouts.tool_call);
     this.results.push(activeResult);
     total++;
     if (activeResult.success) {
@@ -171,7 +172,7 @@ class ElementTestRunner {
     }
 
     // Test collection cache health
-    const cacheResult = await this.callToolSafe('get_collection_cache_health', {}, 2000);
+    const cacheResult = await this.callToolSafe('get_collection_cache_health', {}, CONFIG.timeouts.tool_call);
     this.results.push(cacheResult);
     total++;
     if (cacheResult.success) {
@@ -191,7 +192,7 @@ class ElementTestRunner {
     let total = 0;
 
     // Test with invalid element type
-    const invalidTypeResult = await this.callToolSafe('list_elements', { type: 'invalid_type' }, 2000);
+    const invalidTypeResult = await this.callToolSafe('list_elements', { type: 'invalid_type' }, CONFIG.timeouts.tool_call);
     this.results.push(invalidTypeResult);
     total++;
     if (!invalidTypeResult.success) {
@@ -203,7 +204,7 @@ class ElementTestRunner {
 
     // Test with non-existent element
     const noElementResult = await this.callToolSafe('get_element_details', 
-      { name: 'NonExistentElement', type: 'personas' }, 2000);
+      { name: 'NonExistentElement', type: 'personas' }, CONFIG.timeouts.tool_call);
     this.results.push(noElementResult);
     total++;
     if (!noElementResult.success) {
