@@ -1,14 +1,14 @@
 # SONNET-1 Element Testing Report
 
-**Generated:** 2025-08-21T18:24:50.037Z  
+**Generated:** 2025-08-21T22:13:39.593Z  
 **Agent:** SONNET-1 - Element Testing Specialist  
-**Duration:** 30215ms
+**Duration:** 30207ms
 
 ## Executive Summary
 
 0/14 tests passed (0.0% success rate)
 
-- **Average Response Time:** 2144.1ms
+- **Average Response Time:** 2143.9ms
 - **Maximum Response Time:** 3001ms
 - **Timeout Rate:** 100.0%
 
@@ -23,8 +23,8 @@
 
 ## Performance Analysis
 
-- **Fastest Operation:** set_user_identity
-- **Slowest Operation:** browse_collection
+- **Fastest Operation:** list_elements
+- **Slowest Operation:** search_collection
 - **Timeout Rate:** 100.0%
 
 ## Key Findings
@@ -33,7 +33,7 @@
 
 
 ### ❌ Failed Operations  
-- get_user_identity: Timeout after 2000ms (2002ms)\n- set_user_identity: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2002ms)\n- browse_collection: Timeout after 3000ms (3001ms)\n- search_collection: Timeout after 3000ms (3001ms)\n- get_active_elements: Timeout after 2000ms (2002ms)\n- get_collection_cache_health: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2002ms)\n- get_element_details: Timeout after 2000ms (2001ms)
+- get_user_identity: Timeout after 2000ms (2001ms)\n- set_user_identity: Timeout after 2000ms (2002ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2002ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2000ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- browse_collection: Timeout after 3000ms (3000ms)\n- search_collection: Timeout after 3000ms (3001ms)\n- get_active_elements: Timeout after 2000ms (2002ms)\n- get_collection_cache_health: Timeout after 2000ms (2001ms)\n- list_elements: Timeout after 2000ms (2001ms)\n- get_element_details: Timeout after 2000ms (2001ms)
 
 ## Recommendations
 
@@ -42,7 +42,7 @@
 **Recommendation:** Investigate slow operations and consider increasing timeout limits or optimizing performance\n\n### MEDIUM: Reliability
 **Issue:** Success rate is 0.0%  
 **Recommendation:** Investigate failed operations and improve error handling\n\n### MEDIUM: Performance
-**Issue:** Average response time is 2144.1ms  
+**Issue:** Average response time is 2143.9ms  
 **Recommendation:** Consider optimizing slow operations for better user experience
 
 ## Element System Status

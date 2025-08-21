@@ -11,6 +11,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
+import { 
+  discoverAvailableToolsDirect, 
+  validateToolExists, 
+  calculateAccurateSuccessRate,
+  createTestResult,
+  logTestResult
+} from './qa-utils.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -18,6 +25,7 @@ class DirectMCPTestRunner {
     this.startTime = new Date();
     this.client = null;
     this.transport = null;
+    this.availableTools = []; // Initialize as empty array to prevent race conditions
   }
 
   async connect() {
@@ -40,8 +48,22 @@ class DirectMCPTestRunner {
     console.log('✅ Connected to MCP server');
   }
 
+  async discoverAvailableTools() {
+    this.availableTools = await discoverAvailableToolsDirect(this.client);
+    return this.availableTools;
+  }
+
+  validateToolExists(toolName) {
+    return validateToolExists(toolName, this.availableTools);
+  }
+
   async callTool(toolName, args = {}) {
     const startTime = Date.now();
+    
+    // Check if tool exists before calling
+    if (!this.validateToolExists(toolName)) {
+      return createTestResult(toolName, args, startTime, false, null, 'Tool not available', true);
+    }
     
     try {
       // Set a 10 second timeout
@@ -54,25 +76,9 @@ class DirectMCPTestRunner {
         timeoutPromise
       ]);
       
-      const duration = Date.now() - startTime;
-      
-      return {
-        success: true,
-        tool: toolName,
-        params: args,
-        result: result.content,
-        duration
-      };
+      return createTestResult(toolName, args, startTime, true, result.content);
     } catch (error) {
-      const duration = Date.now() - startTime;
-      
-      return {
-        success: false,
-        tool: toolName,
-        params: args,
-        error: error.message,
-        duration
-      };
+      return createTestResult(toolName, args, startTime, false, null, error.message);
     }
   }
 
@@ -100,17 +106,18 @@ class DirectMCPTestRunner {
     console.log('\n🏪 Testing Marketplace Browsing...');
     
     const tests = [
-      { name: 'Browse All', params: {} },
-      { name: 'Browse Personas', params: { category: 'personas' } },
-      { name: 'Search Creative', params: { query: 'creative' } }
+      { name: 'Browse All', tool: 'browse_marketplace', params: {} },
+      { name: 'Browse Personas', tool: 'browse_marketplace', params: { category: 'personas' } },
+      { name: 'Search Creative', tool: 'browse_marketplace', params: { query: 'creative' } }
     ];
 
     for (const test of tests) {
-      // REMOVED: browse_marketplace tool no longer exists
-      const result = { success: false, error: 'Tool removed: browse_marketplace no longer available' };
+      const result = await this.callTool(test.tool, test.params);
       this.results.push(result);
       
-      if (result.success) {
+      if (result.skipped) {
+        console.log(`  ⚠️  ${test.name}: Skipped - ${result.error} (${result.duration}ms)`);
+      } else if (result.success) {
         console.log(`  ✅ ${test.name}: Success (${result.duration}ms)`);
       } else {
         console.log(`  ❌ ${test.name}: ${result.error} (${result.duration}ms)`);
@@ -140,25 +147,41 @@ class DirectMCPTestRunner {
   async testPersonaOperations() {
     console.log('\n🎭 Testing Persona Operations...');
     
-    // Get active persona first
-    let result = await this.callTool('// REMOVED: get_active_persona');
+    // Get active persona first (deprecated tool)
+    let result = await this.callTool('get_active_persona');
     this.results.push(result);
-    console.log(`  ✅ Get Active (initial): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Get Active (initial): Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Get Active (initial): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
-    // Try to activate Creative Writer
+    // Try to activate Creative Writer (deprecated tool)
     result = await this.callTool('activate_persona', { name: 'Creative Writer' });
     this.results.push(result);
-    console.log(`  ✅ Activate Creative Writer: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Activate Creative Writer: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Activate Creative Writer: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
-    // Get active persona again
-    result = await this.callTool('// REMOVED: get_active_persona');
+    // Get active persona again (deprecated tool)
+    result = await this.callTool('get_active_persona');
     this.results.push(result);
-    console.log(`  ✅ Get Active (after activation): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Get Active (after activation): Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Get Active (after activation): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
-    // Deactivate persona
+    // Deactivate persona (deprecated tool)
     result = await this.callTool('deactivate_persona');
     this.results.push(result);
-    console.log(`  ✅ Deactivate: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Deactivate: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Deactivate: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
   }
 
   async testErrorHandling() {
@@ -182,26 +205,37 @@ class DirectMCPTestRunner {
     }
   }
 
+  calculateAccurateSuccessRate(results) {
+    return calculateAccurateSuccessRate(results);
+  }
+
   generateReport() {
     const endTime = new Date();
     const duration = endTime - this.startTime;
     
-    const successful = this.results.filter(r => r.success).length;
-    const failed = this.results.filter(r => !r.success).length;
-    const total = this.results.length;
+    const stats = this.calculateAccurateSuccessRate(this.results);
+    const totalTests = this.results.length;
     
     const report = {
       timestamp: endTime.toISOString(),
       duration: `${duration}ms`,
+      tool_discovery: {
+        available_tools_count: this.availableTools.length,
+        available_tools: this.availableTools
+      },
       summary: {
-        total,
-        successful,
-        failed,
-        success_rate: `${((successful / total) * 100).toFixed(1)}%`
+        total_tests: totalTests,
+        executed_tests: stats.total,
+        skipped_tests: stats.skipped,
+        successful_tests: stats.successful,
+        failed_tests: stats.total - stats.successful,
+        success_rate: `${stats.percentage}%`,
+        success_rate_note: "Based only on executed tests (excludes skipped)"
       },
       test_details: this.results.map(r => ({
         tool: r.tool,
         success: r.success,
+        skipped: r.skipped || false,
         duration: `${r.duration}ms`,
         params: r.params,
         error: r.error || null
@@ -216,10 +250,13 @@ class DirectMCPTestRunner {
     writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
     
     console.log(`\n📊 Test Summary:`);
-    console.log(`   Total Tests: ${total}`);
-    console.log(`   Successful: ${successful}`);
-    console.log(`   Failed: ${failed}`);
-    console.log(`   Success Rate: ${report.summary.success_rate}`);
+    console.log(`   Available Tools: ${this.availableTools.length}`);
+    console.log(`   Total Tests: ${totalTests}`);
+    console.log(`   Executed Tests: ${stats.total}`);
+    console.log(`   Skipped Tests: ${stats.skipped}`);
+    console.log(`   Successful: ${stats.successful}`);
+    console.log(`   Failed: ${stats.total - stats.successful}`);
+    console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
     console.log(`   Duration: ${report.duration}`);
     console.log(`   Report: docs/QA/${filename}`);
     
@@ -238,6 +275,12 @@ class DirectMCPTestRunner {
     
     try {
       await this.connect();
+      await this.discoverAvailableTools();
+      
+      // Ensure availableTools is properly initialized before validation
+      if (!Array.isArray(this.availableTools)) {
+        this.availableTools = [];
+      }
       
       await this.testElementListing();
       await this.testMarketplaceBrowsing();

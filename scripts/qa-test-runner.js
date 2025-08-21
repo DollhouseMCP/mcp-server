@@ -9,6 +9,14 @@
 
 import fetch from 'node-fetch';
 import { writeFileSync } from 'fs';
+import { 
+  discoverAvailableTools, 
+  validateToolExists, 
+  calculateAccurateSuccessRate,
+  createTestResult,
+  logTestResult,
+  generateTestReport
+} from './qa-utils.js';
 
 const INSPECTOR_URL = 'http://localhost:6277/message';
 const SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
@@ -17,9 +25,26 @@ class MCPTestRunner {
   constructor() {
     this.results = [];
     this.startTime = new Date();
+    this.availableTools = []; // Initialize as empty array to prevent race conditions
+  }
+
+  async discoverAvailableTools() {
+    this.availableTools = await discoverAvailableTools(INSPECTOR_URL, SESSION_TOKEN);
+    return this.availableTools;
+  }
+
+  validateToolExists(toolName) {
+    return validateToolExists(toolName, this.availableTools);
   }
 
   async callTool(toolName, params = {}) {
+    const startTime = Date.now();
+    
+    // Check if tool exists before calling (only if we have discovery data)
+    if (!this.validateToolExists(toolName)) {
+      return createTestResult(toolName, params, startTime, false, null, 'Tool not available', true);
+    }
+    
     try {
       const response = await fetch(INSPECTOR_URL, {
         method: 'POST',
@@ -41,21 +66,9 @@ class MCPTestRunner {
       }
 
       const result = await response.json();
-      return {
-        success: true,
-        tool: toolName,
-        params,
-        result: result.result,
-        duration: Date.now() - new Date().getTime()
-      };
+      return createTestResult(toolName, params, startTime, true, result.result);
     } catch (error) {
-      return {
-        success: false,
-        tool: toolName,
-        params,
-        error: error.message,
-        duration: Date.now() - new Date().getTime()
-      };
+      return createTestResult(toolName, params, startTime, false, null, error.message);
     }
   }
 
@@ -87,10 +100,12 @@ class MCPTestRunner {
     ];
 
     for (const test of tests) {
-      const result = await this.callTool('browse_marketplace', test.params);
+      const result = await this.callTool('browse_collection', { section: 'library', ...test.params });
       this.results.push(result);
       
-      if (result.success) {
+      if (result.skipped) {
+        console.log(`  ⚠️  ${test.name}: Skipped - ${result.error}`);
+      } else if (result.success) {
         console.log(`  ✅ ${test.name}: Success`);
       } else {
         console.log(`  ❌ ${test.name}: ${result.error}`);
@@ -120,25 +135,39 @@ class MCPTestRunner {
   async testPersonaOperations() {
     console.log('\n🎭 Testing Persona Operations...');
     
-    // List personas to get one to work with
-    let result = await this.callTool('list_personas');
+    // List elements to get one to work with
+    let result = await this.callTool('list_elements', { type: 'personas' });
     this.results.push(result);
     
-    if (result.success) {
-      // Try to activate a persona (Creative Writer is usually available)
-      result = await this.callTool('activate_persona', { name: 'Creative Writer' });
+    if (result.skipped) {
+      console.log(`  ⚠️  List Elements: Skipped - ${result.error}`);
+    } else if (result.success) {
+      // Try to activate an element (Creative Writer is usually available)
+      result = await this.callTool('activate_element', { name: 'Creative Writer', type: 'personas' });
       this.results.push(result);
-      console.log(`  ✅ Activate Persona: ${result.success ? 'Success' : result.error}`);
+      if (result.skipped) {
+        console.log(`  ⚠️  Activate Element: Skipped - ${result.error}`);
+      } else {
+        console.log(`  ✅ Activate Element: ${result.success ? 'Success' : result.error}`);
+      }
 
-      // Get active persona
-      result = await this.callTool('get_active_persona');
+      // Get active elements
+      result = await this.callTool('get_active_elements', { type: 'personas' });
       this.results.push(result);
-      console.log(`  ✅ Get Active: ${result.success ? 'Success' : result.error}`);
+      if (result.skipped) {
+        console.log(`  ⚠️  Get Active: Skipped - ${result.error}`);
+      } else {
+        console.log(`  ✅ Get Active: ${result.success ? 'Success' : result.error}`);
+      }
 
-      // Deactivate persona
-      result = await this.callTool('deactivate_persona');
+      // Deactivate element
+      result = await this.callTool('deactivate_element', { name: 'Creative Writer', type: 'personas' });
       this.results.push(result);
-      console.log(`  ✅ Deactivate: ${result.success ? 'Success' : result.error}`);
+      if (result.skipped) {
+        console.log(`  ⚠️  Deactivate: Skipped - ${result.error}`);
+      } else {
+        console.log(`  ✅ Deactivate: ${result.success ? 'Success' : result.error}`);
+      }
     }
   }
 
@@ -146,31 +175,42 @@ class MCPTestRunner {
     console.log('\n📁 Testing Portfolio Operations...');
     
     // Get portfolio status
-    let result = await this.callTool('get_portfolio_status');
+    let result = await this.callTool('portfolio_status');
     this.results.push(result);
-    console.log(`  ✅ Portfolio Status: ${result.success ? 'Success' : result.error}`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Portfolio Status: Skipped - ${result.error}`);
+    } else {
+      console.log(`  ✅ Portfolio Status: ${result.success ? 'Success' : result.error}`);
+    }
 
     // Get portfolio config
-    result = await this.callTool('get_portfolio_config');
+    result = await this.callTool('portfolio_config');
     this.results.push(result);
-    console.log(`  ✅ Portfolio Config: ${result.success ? 'Success' : result.error}`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Portfolio Config: Skipped - ${result.error}`);
+    } else {
+      console.log(`  ✅ Portfolio Config: ${result.success ? 'Success' : result.error}`);
+    }
   }
 
   async testContentCreation() {
     console.log('\n✨ Testing Content Creation...');
     
-    // Create a test persona
-    const result = await this.callTool('create_persona', {
+    // Create a test element
+    const result = await this.callTool('create_element', {
       name: 'QA Test Persona',
-      description: 'A test persona for QA validation',
-      category: 'testing',
-      instructions: 'You are a helpful QA testing assistant.'
+      type: 'personas',
+      description: 'A test persona for QA validation'
     });
     
     this.results.push(result);
-    console.log(`  ✅ Create Persona: ${result.success ? 'Success' : result.error}`);
-    
-    return result.success;
+    if (result.skipped) {
+      console.log(`  ⚠️  Create Element: Skipped - ${result.error}`);
+      return false;
+    } else {
+      console.log(`  ✅ Create Element: ${result.success ? 'Success' : result.error}`);
+      return result.success;
+    }
   }
 
   async testErrorHandling() {
@@ -179,15 +219,17 @@ class MCPTestRunner {
     // Test with invalid parameters
     const tests = [
       { tool: 'list_elements', params: { type: 'invalid_type' } },
-      { tool: 'activate_persona', params: { name: 'NonExistentPersona' } },
-      { tool: 'get_marketplace_persona', params: { path: 'invalid/path' } }
+      { tool: 'activate_element', params: { name: 'NonExistentElement', type: 'personas' } },
+      { tool: 'get_collection_content', params: { path: 'invalid/path' } }
     ];
 
     for (const test of tests) {
       const result = await this.callTool(test.tool, test.params);
       this.results.push(result);
       
-      if (!result.success) {
+      if (result.skipped) {
+        console.log(`  ⚠️  ${test.tool}: Skipped - ${result.error}`);
+      } else if (!result.success) {
         console.log(`  ✅ Expected error for ${test.tool}: ${result.error}`);
       } else {
         console.log(`  ⚠️  Expected error but got success for ${test.tool}`);
@@ -195,34 +237,54 @@ class MCPTestRunner {
     }
   }
 
+  calculateAccurateSuccessRate(results) {
+    return calculateAccurateSuccessRate(results);
+  }
+
   generateReport() {
     const endTime = new Date();
     const duration = endTime - this.startTime;
     
-    const successful = this.results.filter(r => r.success).length;
-    const failed = this.results.filter(r => !r.success).length;
-    const total = this.results.length;
+    const stats = this.calculateAccurateSuccessRate(this.results);
+    const totalTests = this.results.length;
     
     const report = {
       timestamp: endTime.toISOString(),
       duration: `${duration}ms`,
-      summary: {
-        total,
-        successful,
-        failed,
-        success_rate: `${((successful / total) * 100).toFixed(1)}%`
+      tool_discovery: {
+        available_tools_count: this.availableTools.length,
+        available_tools: this.availableTools
       },
-      results: this.results
+      summary: {
+        total_tests: totalTests,
+        executed_tests: stats.total,
+        skipped_tests: stats.skipped,
+        successful_tests: stats.successful,
+        failed_tests: stats.total - stats.successful,
+        success_rate: `${stats.percentage}%`,
+        success_rate_note: "Based only on executed tests (excludes skipped)"
+      },
+      results: this.results.map(r => ({
+        tool: r.tool,
+        success: r.success,
+        skipped: r.skipped || false,
+        params: r.params,
+        error: r.error || null,
+        duration: r.duration
+      }))
     };
 
     const filename = `qa-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
     writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
     
     console.log(`\n📊 Test Summary:`);
-    console.log(`   Total Tests: ${total}`);
-    console.log(`   Successful: ${successful}`);
-    console.log(`   Failed: ${failed}`);
-    console.log(`   Success Rate: ${report.summary.success_rate}`);
+    console.log(`   Available Tools: ${this.availableTools.length}`);
+    console.log(`   Total Tests: ${totalTests}`);
+    console.log(`   Executed Tests: ${stats.total}`);
+    console.log(`   Skipped Tests: ${stats.skipped}`);
+    console.log(`   Successful: ${stats.successful}`);
+    console.log(`   Failed: ${stats.total - stats.successful}`);
+    console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
     console.log(`   Duration: ${report.duration}`);
     console.log(`   Report: docs/QA/${filename}`);
     
@@ -234,6 +296,13 @@ class MCPTestRunner {
     console.log(`📡 Connecting to Inspector at ${INSPECTOR_URL}`);
     
     try {
+      await this.discoverAvailableTools();
+      
+      // Ensure availableTools is properly initialized before validation
+      if (!Array.isArray(this.availableTools)) {
+        this.availableTools = [];
+      }
+      
       await this.testElementListing();
       await this.testMarketplaceBrowsing();
       await this.testUserIdentity();

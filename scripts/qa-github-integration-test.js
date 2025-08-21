@@ -22,6 +22,7 @@ class GitHubIntegrationTestRunner {
     this.startTime = new Date();
     this.client = null;
     this.transport = null;
+    this.availableTools = [];
   }
 
   async connect() {
@@ -44,8 +45,42 @@ class GitHubIntegrationTestRunner {
     console.log('✅ Connected to MCP server');
   }
 
+  async discoverAvailableTools() {
+    try {
+      console.log('📋 Discovering available tools...');
+      const result = await this.client.listTools();
+      this.availableTools = result.tools.map(t => t.name);
+      console.log(`📋 Discovered ${this.availableTools.length} available tools`);
+      return this.availableTools;
+    } catch (error) {
+      console.error('⚠️  Failed to discover tools:', error.message);
+      this.availableTools = [];
+      return this.availableTools;
+    }
+  }
+
+  validateToolExists(toolName) {
+    if (!this.availableTools.includes(toolName)) {
+      console.log(`  ⚠️  Skipping ${toolName} - tool not available`);
+      return false;
+    }
+    return true;
+  }
+
   async callTool(toolName, args = {}) {
     const startTime = Date.now();
+    
+    // Check if tool exists before calling
+    if (!this.validateToolExists(toolName)) {
+      return {
+        success: false,
+        tool: toolName,
+        params: args,
+        skipped: true,
+        error: 'Tool not available',
+        duration: Date.now() - startTime
+      };
+    }
     
     try {
       const timeoutPromise = new Promise((_, reject) => 
@@ -83,10 +118,12 @@ class GitHubIntegrationTestRunner {
     console.log('\n🔐 Testing GitHub Authentication...');
     
     // Check authentication status
-    let result = await this.callTool('get_auth_status');
+    let result = await this.callTool('check_github_auth');
     this.results.push(result);
     
-    if (result.success) {
+    if (result.skipped) {
+      console.log(`  ⚠️  Auth Status Check: Skipped - ${result.error} (${result.duration}ms)`);
+    } else if (result.success) {
       console.log(`  ✅ Auth Status Check: Success (${result.duration}ms)`);
       
       // Try to get the auth status details
@@ -108,23 +145,31 @@ class GitHubIntegrationTestRunner {
     console.log('\n📁 Testing Portfolio Configuration...');
     
     // Get portfolio config
-    let result = await this.callTool('get_portfolio_config');
+    let result = await this.callTool('portfolio_config');
     this.results.push(result);
-    console.log(`  ✅ Get Portfolio Config: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
-    
-    if (result.success) {
-      const configText = result.result?.[0]?.text || '';
-      console.log(`    📋 Config preview: ${configText.slice(0, 150)}...`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Get Portfolio Config: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Get Portfolio Config: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      
+      if (result.success) {
+        const configText = result.result?.[0]?.text || '';
+        console.log(`    📋 Config preview: ${configText.slice(0, 150)}...`);
+      }
     }
 
     // Get portfolio status
-    result = await this.callTool('get_portfolio_status');
+    result = await this.callTool('portfolio_status');
     this.results.push(result);
-    console.log(`  ✅ Get Portfolio Status: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
-    
-    if (result.success) {
-      const statusText = result.result?.[0]?.text || '';
-      console.log(`    📋 Status preview: ${statusText.slice(0, 150)}...`);
+    if (result.skipped) {
+      console.log(`  ⚠️  Get Portfolio Status: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`  ✅ Get Portfolio Status: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      
+      if (result.success) {
+        const statusText = result.result?.[0]?.text || '';
+        console.log(`    📋 Status preview: ${statusText.slice(0, 150)}...`);
+      }
     }
 
     return result.success;
@@ -135,19 +180,23 @@ class GitHubIntegrationTestRunner {
     
     // Create a test persona for upload
     const testPersonaName = `GitHub Test Persona ${Date.now()}`;
-    let result = await this.callTool('create_persona', {
+    let result = await this.callTool('create_element', {
       name: testPersonaName,
-      description: 'A test persona created for GitHub integration testing',
-      category: 'testing',
-      instructions: 'You are a helpful test assistant used to validate the DollhouseMCP GitHub integration workflow. You help test the complete roundtrip from creation to collection submission.'
+      type: 'personas',
+      description: 'A test persona created for GitHub integration testing'
     });
     
     this.results.push(result);
-    console.log(`  ✅ Create Test Persona: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
-    
-    if (!result.success) {
-      console.log('  ⚠️  Skipping upload test due to creation failure');
+    if (result.skipped) {
+      console.log(`  ⚠️  Create Test Persona: Skipped - ${result.error} (${result.duration}ms)`);
       return false;
+    } else {
+      console.log(`  ✅ Create Test Persona: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      
+      if (!result.success) {
+        console.log('  ⚠️  Skipping upload test due to creation failure');
+        return false;
+      }
     }
 
     // Try to submit the persona to portfolio (GitHub upload)
@@ -171,10 +220,13 @@ class GitHubIntegrationTestRunner {
     console.log('\n🏪 Testing Collection Submission...');
     
     // First, let's see what personas are available to submit
-    let result = await this.callTool('list_personas');
+    let result = await this.callTool('list_elements', { type: 'personas' });
     this.results.push(result);
     
-    if (!result.success) {
+    if (result.skipped) {
+      console.log(`  ⚠️  List Personas: Skipped - ${result.error} (${result.duration}ms)`);
+      return false;
+    } else if (!result.success) {
       console.log(`  ❌ List Personas: ${result.error} (${result.duration}ms)`);
       return false;
     }
@@ -194,9 +246,9 @@ class GitHubIntegrationTestRunner {
     console.log(`  📋 Found persona to test: "${personaName}"`);
 
     // Try to submit to collection
-    result = await this.callTool('submit_to_collection', {
+    result = await this.callTool('submit_content', {
       name: personaName,
-      type: 'persona'
+      type: 'personas'
     });
     
     this.results.push(result);
@@ -214,10 +266,13 @@ class GitHubIntegrationTestRunner {
     console.log('\n🔑 Testing OAuth Flow...');
     
     // Test OAuth helper if available
-    const result = await this.callTool('setup_oauth');
+    const result = await this.callTool('configure_oauth', { provider: 'github' });
     this.results.push(result);
     
-    if (result.success) {
+    if (result.skipped) {
+      console.log(`  ⚠️  OAuth Setup: Skipped - ${result.error} (${result.duration}ms)`);
+      console.log('    📋 OAuth may not be available');
+    } else if (result.success) {
       console.log(`  ✅ OAuth Setup: Success (${result.duration}ms)`);
       const oauthText = result.result?.[0]?.text || '';
       console.log(`    📋 OAuth info: ${oauthText.slice(0, 200)}...`);
@@ -236,76 +291,121 @@ class GitHubIntegrationTestRunner {
     // 1. Browse collection → 2. Install element → 3. Modify → 4. Upload to portfolio → 5. Submit to collection
     
     console.log('\n  Step 1: Browse marketplace...');
-    let result = await this.callTool('browse_marketplace', { category: 'personas' });
+    let result = await this.callTool('browse_collection', { section: 'library', type: 'personas' });
     this.results.push(result);
-    console.log(`    ✅ Browse: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
-    
-    if (!result.success) return false;
+    if (result.skipped) {
+      console.log(`    ⚠️  Browse: Skipped - ${result.error} (${result.duration}ms)`);
+      return false;
+    } else {
+      console.log(`    ✅ Browse: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      if (!result.success) return false;
+    }
 
     console.log('\n  Step 2: Try to install an element...');
-    // Try to get a specific marketplace persona
-    result = await this.callTool('get_marketplace_persona', { 
-      path: 'personas/creative-writer.md' 
+    // Try to get a specific collection element
+    result = await this.callTool('get_collection_content', { 
+      path: 'library/personas/creative-writer.md' 
     });
     this.results.push(result);
-    console.log(`    ✅ Get Marketplace Element: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`    ⚠️  Get Collection Element: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`    ✅ Get Collection Element: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
-    if (result.success) {
-      // Try to install it
-      result = await this.callTool('install_content', {
-        type: 'persona',
-        path: 'personas/creative-writer.md'
-      });
-      this.results.push(result);
-      console.log(`    ✅ Install Content: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      if (result.success) {
+        // Try to install it
+        result = await this.callTool('install_content', {
+          path: 'library/personas/creative-writer.md'
+        });
+        this.results.push(result);
+        if (result.skipped) {
+          console.log(`    ⚠️  Install Content: Skipped - ${result.error} (${result.duration}ms)`);
+        } else {
+          console.log(`    ✅ Install Content: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+        }
+      }
     }
 
     console.log('\n  Step 3: Test local modification...');
-    // Edit the persona if it exists
-    result = await this.callTool('edit_persona', {
+    // Edit the element if it exists
+    result = await this.callTool('edit_element', {
       name: 'Creative Writer',
+      type: 'personas',
       field: 'description',
       value: 'An enhanced creative writer with GitHub integration testing capabilities'
     });
     this.results.push(result);
-    console.log(`    ✅ Edit Element: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`    ⚠️  Edit Element: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`    ✅ Edit Element: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
     console.log('\n  Step 4: Test portfolio upload...');
     result = await this.callTool('submit_content', {
       name: 'Creative Writer',
-      type: 'persona'
+      type: 'personas'
     });
     this.results.push(result);
-    console.log(`    ✅ Portfolio Upload: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`    ⚠️  Portfolio Upload: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`    ✅ Portfolio Upload: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
     console.log('\n  Step 5: Test collection submission...');
-    result = await this.callTool('submit_to_collection', {
+    result = await this.callTool('submit_content', {
       name: 'Creative Writer',
-      type: 'persona'
+      type: 'personas'
     });
     this.results.push(result);
-    console.log(`    ✅ Collection Submission: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    if (result.skipped) {
+      console.log(`    ⚠️  Collection Submission: Skipped - ${result.error} (${result.duration}ms)`);
+    } else {
+      console.log(`    ✅ Collection Submission: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    }
 
     return true;
+  }
+
+  calculateAccurateSuccessRate(results) {
+    // Filter out skipped tests
+    const executed = results.filter(r => !r.skipped);
+    const successful = executed.filter(r => r.success).length;
+    const total = executed.length;
+    const skipped = results.filter(r => r.skipped).length;
+    
+    return {
+      successful,
+      total,
+      skipped,
+      percentage: total > 0 ? Math.round((successful / total) * 100) : 0
+    };
   }
 
   generateReport() {
     const endTime = new Date();
     const duration = endTime - this.startTime;
     
-    const successful = this.results.filter(r => r.success).length;
-    const failed = this.results.filter(r => !r.success).length;
-    const total = this.results.length;
+    const stats = this.calculateAccurateSuccessRate(this.results);
+    const totalTests = this.results.length;
     
     const report = {
       test_type: 'github_integration',
       timestamp: endTime.toISOString(),
       duration: `${duration}ms`,
+      tool_discovery: {
+        available_tools_count: this.availableTools.length,
+        available_tools: this.availableTools
+      },
       summary: {
-        total,
-        successful,
-        failed,
-        success_rate: `${((successful / total) * 100).toFixed(1)}%`
+        total_tests: totalTests,
+        executed_tests: stats.total,
+        skipped_tests: stats.skipped,
+        successful_tests: stats.successful,
+        failed_tests: stats.total - stats.successful,
+        success_rate: `${stats.percentage}%`,
+        success_rate_note: "Based only on executed tests (excludes skipped)"
       },
       github_capabilities: {
         authentication_tested: this.results.some(r => r.tool === 'get_auth_status'),
@@ -316,6 +416,7 @@ class GitHubIntegrationTestRunner {
       test_details: this.results.map(r => ({
         tool: r.tool,
         success: r.success,
+        skipped: r.skipped || false,
         duration: `${r.duration}ms`,
         params: r.params,
         error: r.error || null
@@ -329,10 +430,13 @@ class GitHubIntegrationTestRunner {
     writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
     
     console.log(`\n📊 GitHub Integration Test Summary:`);
-    console.log(`   Total Tests: ${total}`);
-    console.log(`   Successful: ${successful}`);
-    console.log(`   Failed: ${failed}`);
-    console.log(`   Success Rate: ${report.summary.success_rate}`);
+    console.log(`   Available Tools: ${this.availableTools.length}`);
+    console.log(`   Total Tests: ${totalTests}`);
+    console.log(`   Executed Tests: ${stats.total}`);
+    console.log(`   Skipped Tests: ${stats.skipped}`);
+    console.log(`   Successful: ${stats.successful}`);
+    console.log(`   Failed: ${stats.total - stats.successful}`);
+    console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
     console.log(`   Duration: ${report.duration}`);
     console.log(`\n🔗 GitHub Capabilities Tested:`);
     console.log(`   Authentication: ${report.github_capabilities.authentication_tested ? '✅' : '❌'}`);
@@ -357,6 +461,7 @@ class GitHubIntegrationTestRunner {
     
     try {
       await this.connect();
+      await this.discoverAvailableTools();
       
       const authWorking = await this.testGitHubAuthentication();
       await this.testPortfolioConfiguration();

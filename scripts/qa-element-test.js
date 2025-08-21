@@ -15,6 +15,7 @@ class ElementTestRunner {
     this.startTime = new Date();
     this.client = null;
     this.transport = null;
+    this.availableTools = [];
   }
 
   async connect() {
@@ -35,6 +36,20 @@ class ElementTestRunner {
 
     await this.client.connect(this.transport);
     console.log('✅ Connected to MCP server');
+  }
+
+  async discoverAvailableTools() {
+    try {
+      console.log('📋 Discovering available tools...');
+      const result = await this.client.listTools();
+      this.availableTools = result.tools.map(t => t.name);
+      console.log(`📋 Discovered ${this.availableTools.length} available tools`);
+      return this.availableTools;
+    } catch (error) {
+      console.error('⚠️  Failed to discover tools:', error.message);
+      this.availableTools = [];
+      return this.availableTools;
+    }
   }
 
   async callToolSafe(toolName, args = {}, timeout = 3000) {
@@ -397,6 +412,7 @@ Based on testing, the DollhouseMCP element system shows:
     
     try {
       await this.connect();
+      await this.discoverAvailableTools();
       
       const userTests = await this.testUserIdentity();
       const elementTests = await this.testElementListing();
