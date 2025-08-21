@@ -8,7 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 // SECURITY FIX (DMCP-SEC-004): Import UnicodeValidator for input normalization
 // Prevents homograph attacks, direction override, and mixed script attacks
-import { UnicodeValidator } from "./dist/security/validators/unicodeValidator.js";
+import { UnicodeValidator } from "./src/security/validators/unicodeValidator.js";
 
 // Create a minimal server that only responds to one tool
 const server = new Server({

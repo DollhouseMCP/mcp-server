@@ -45,7 +45,7 @@ jobs:
         run: |
           # Create security audit script
           cat > run-audit.js << 'EOF'
-          import { SecurityAuditor } from './dist/security/audit/index.js';
+          import { SecurityAuditor } from './src/security/audit/index.js';
           
           async function runAudit() {
             const config = SecurityAuditor.getDefaultConfig();

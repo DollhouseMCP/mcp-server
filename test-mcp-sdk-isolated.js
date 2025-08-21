@@ -10,7 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 // SECURITY FIX (DMCP-SEC-004): Import UnicodeValidator for input normalization
 // Prevents homograph attacks, direction override, and mixed script attacks
-import { UnicodeValidator } from "./dist/security/validators/unicodeValidator.js";
+import { UnicodeValidator } from "./src/security/validators/unicodeValidator.js";
 // ACCURACY FIX (SECURE-3): Import test configuration for timeout management
 import { CONFIG } from "./test-config.js";
 

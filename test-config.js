@@ -151,7 +151,8 @@ const TEST_ARGUMENTS = {
   'set_user_identity': { username: 'qa-test-user' },
   'get_user_identity': {},
   'clear_user_identity': {},
-  'setup_github_auth': { token: 'test-token' },
+  // Fixed: Removed hardcoded token for security - use environment variable or test placeholder
+  'setup_github_auth': { token: process.env.GITHUB_TEST_TOKEN || 'PLACEHOLDER_TEST_TOKEN' },
   'check_github_auth': {},
   'clear_github_auth': {},
   'configure_oauth': { provider: 'github' },

@@ -87,7 +87,7 @@ const syncInit = `
       // Use sync fs methods
       const fs = require('fs');
       const path = require('path');
-      const { UnicodeValidator } = require('../dist/security/unicodeValidator.js');
+      const { UnicodeValidator } = require('../src/security/validators/unicodeValidator.js');
       
       // Check if migration is needed (sync version)
       const homeDir = UnicodeValidator.normalize(require('os').homedir()).normalizedContent;

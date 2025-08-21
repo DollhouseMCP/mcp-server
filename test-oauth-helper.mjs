@@ -19,7 +19,7 @@ async function testOAuthHelper() {
   // Import required modules
   const { GitHubAuthManager } = await import('./dist/auth/GitHubAuthManager.js');
   const { APICache } = await import('./dist/cache/APICache.js');
-  const { TokenManager } = await import('./dist/security/tokenManager.js');
+  const { TokenManager } = await import('./src/security/tokenManager.js');
   
   try {
     // Check current token status
@@ -94,7 +94,7 @@ async function testOAuthHelper() {
     console.log('\n📝 To check status, run:');
     console.log('  cat ~/.dollhouse/oauth-helper.log');
     console.log('\n📝 To check if authenticated, run:');
-    console.log('  node -c "const {TokenManager} = require(\'./dist/security/tokenManager.js\'); TokenManager.getGitHubTokenAsync().then(t => console.log(\'Authenticated:\', !!t))"');
+    console.log('  node -c "const {TokenManager} = require(\'./src/security/tokenManager.js\'); TokenManager.getGitHubTokenAsync().then(t => console.log(\'Authenticated:\', !!t))"');
     
   } catch (error) {
     console.error('\n❌ Error:', error.message);

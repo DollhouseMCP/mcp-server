@@ -10,10 +10,10 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { performance } from 'perf_hooks';
 // SECURITY FIX (DMCP-SEC-004): Import UnicodeValidator for input normalization
 // Prevents homograph attacks, direction override, and mixed script attacks
-import { UnicodeValidator } from "./dist/security/validators/unicodeValidator.js";
+import { UnicodeValidator } from "./src/security/validators/unicodeValidator.js";
 // SECURITY FIX (DMCP-SEC-006): Import SecurityMonitor for audit logging
 // Enables comprehensive security monitoring and audit trail for QA operations
-import { SecurityMonitor } from "./dist/security/securityMonitor.js";
+import { SecurityMonitor } from "./src/security/securityMonitor.js";
 // ACCURACY FIX (SECURE-3): Import test configuration for accurate tool testing
 // Replaces hardcoded values and ensures only existing tools are tested
 import { CONFIG, validateToolExists, getToolTestConfig, calculateAccurateSuccessRate } from "./test-config.js";
