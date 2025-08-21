@@ -643,7 +643,8 @@ export class DefaultElementProvider {
         }
         
         // Production safety check: Block DollhouseMCP test elements in production environments
-        if (this.isProductionEnvironment()) {
+        // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
+        if (!this.config.loadTestData && this.isProductionEnvironment()) {
           const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
           
           if (isDollhouseTest) {

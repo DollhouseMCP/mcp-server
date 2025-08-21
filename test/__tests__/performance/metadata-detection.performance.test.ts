@@ -363,6 +363,11 @@ ${hasMetadata ? '_dollhouseMCPTest: true' : ''}
 
   describe('Memory Usage', () => {
     it('should not leak memory during repeated operations', async () => {
+      // CRITICAL: Reset buffer pool stats before test to get accurate measurements
+      // Other tests in the suite may have created buffers
+      DefaultElementProvider.cleanup();
+      provider = new DefaultElementProvider();
+      
       const memoryFile = path.join(tempDir, 'memory-test.md');
       const content = `---
 name: Memory Test
