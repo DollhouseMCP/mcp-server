@@ -44,7 +44,7 @@ describe('DefaultElementProvider - Test Data Safety', () => {
       
       delete process.env.DOLLHOUSE_LOAD_TEST_DATA;
       
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       // Try to populate defaults
       await provider.populateDefaults(tempDir);
@@ -68,7 +68,7 @@ describe('DefaultElementProvider - Test Data Safety', () => {
     it('should load test data when environment variable is set', async () => {
       process.env.DOLLHOUSE_LOAD_TEST_DATA = 'true';
       
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       // This would attempt to populate, but might not find data in test environment
       // The important part is that it doesn't skip due to development mode
@@ -135,7 +135,7 @@ describe('DefaultElementProvider - Test Data Safety', () => {
   describe('Environment Variable Parsing', () => {
     it('should accept "true" as enabling test data', async () => {
       process.env.DOLLHOUSE_LOAD_TEST_DATA = 'true';
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       // The provider should be configured to load test data
       expect(provider['config'].loadTestData).toBe(true);
@@ -143,7 +143,7 @@ describe('DefaultElementProvider - Test Data Safety', () => {
 
     it('should accept "1" as enabling test data', async () => {
       process.env.DOLLHOUSE_LOAD_TEST_DATA = '1';
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       // The provider should be configured to load test data
       expect(provider['config'].loadTestData).toBe(true);
@@ -151,7 +151,7 @@ describe('DefaultElementProvider - Test Data Safety', () => {
 
     it('should treat other values as false', async () => {
       process.env.DOLLHOUSE_LOAD_TEST_DATA = 'false';
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       // In dev mode with non-true value, should not load test data
       // This depends on whether we're in dev mode

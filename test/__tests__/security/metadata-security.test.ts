@@ -15,7 +15,7 @@ describe('Metadata Detection Security Tests', () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'metadata-security-test-'));
-    provider = new DefaultElementProvider();
+    provider = new DefaultElementProvider({ loadTestData: true });
   });
 
   afterEach(async () => {

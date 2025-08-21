@@ -155,7 +155,7 @@ describe('DefaultElementProvider', () => {
       await fs.writeFile(sourceFile, 'Test content');
       
       // Create a corrupted copy by writing after copy
-      const provider = new DefaultElementProvider();
+      const provider = new DefaultElementProvider({ loadTestData: true });
       
       // Override copyFile on the instance
       const originalMethod = provider['copyFileWithVerification'];

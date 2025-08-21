@@ -14,7 +14,7 @@ describe('Metadata Detection - Performance Benchmarks', () => {
 
   beforeAll(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'metadata-perf-test-'));
-    provider = new DefaultElementProvider();
+    provider = new DefaultElementProvider({ loadTestData: true });
   });
 
   afterAll(async () => {
@@ -366,7 +366,7 @@ ${hasMetadata ? '_dollhouseMCPTest: true' : ''}
       // CRITICAL: Reset buffer pool stats before test to get accurate measurements
       // Other tests in the suite may have created buffers
       DefaultElementProvider.cleanup();
-      provider = new DefaultElementProvider();
+      provider = new DefaultElementProvider({ loadTestData: true });
       
       const memoryFile = path.join(tempDir, 'memory-test.md');
       const content = `---

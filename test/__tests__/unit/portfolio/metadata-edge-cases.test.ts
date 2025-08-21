@@ -15,7 +15,7 @@ describe('Metadata Detection - Edge Cases', () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'metadata-edge-test-'));
-    provider = new DefaultElementProvider();
+    provider = new DefaultElementProvider({ loadTestData: true });
   });
 
   afterEach(async () => {
