@@ -254,8 +254,21 @@ export class DefaultElementProvider {
       // SECURITY: Normalize path to prevent traversal attempts
       const normalizedPath = path.normalize(filePath);
       
+      // ADD: Debug logging for Windows CI investigation
+      console.log('[DefaultElementProvider] validateFilePath called', {
+        originalPath: filePath,
+        normalizedPath,
+        allowedBasePaths,
+        platform: process.platform
+      });
+      
       // SECURITY: Reject paths containing traversal patterns
       if (normalizedPath.includes('..') || normalizedPath.includes('~')) {
+        console.log('[DefaultElementProvider] Path validation failed: traversal patterns', {
+          filePath,
+          normalizedPath,
+          reason: 'contains .. or ~'
+        });
         logger.warn(`[DefaultElementProvider] Path traversal attempt blocked: ${filePath}`);
         return false;
       }
@@ -264,10 +277,28 @@ export class DefaultElementProvider {
       if (path.isAbsolute(normalizedPath) && allowedBasePaths) {
         const isAllowed = allowedBasePaths.some(basePath => {
           const normalizedBase = path.normalize(basePath);
-          return normalizedPath.startsWith(normalizedBase);
+          const starts = normalizedPath.startsWith(normalizedBase);
+          console.log('[DefaultElementProvider] Checking allowed base path', {
+            normalizedPath,
+            normalizedBase,
+            startsWith: starts
+          });
+          return starts;
+        });
+        
+        console.log('[DefaultElementProvider] Absolute path check result', {
+          filePath,
+          normalizedPath,
+          allowedBasePaths,
+          isAllowed
         });
         
         if (!isAllowed) {
+          console.log('[DefaultElementProvider] Path validation failed: outside allowed directories', {
+            filePath,
+            normalizedPath,
+            allowedBasePaths
+          });
           logger.warn(`[DefaultElementProvider] Absolute path outside allowed directories: ${filePath}`);
           return false;
         }
@@ -275,12 +306,24 @@ export class DefaultElementProvider {
       
       // SECURITY: Reject null bytes and other dangerous characters
       if (normalizedPath.includes('\0') || normalizedPath.includes('\x00')) {
+        console.log('[DefaultElementProvider] Path validation failed: null bytes', {
+          filePath,
+          normalizedPath
+        });
         logger.warn(`[DefaultElementProvider] Null byte in path blocked: ${filePath}`);
         return false;
       }
       
+      console.log('[DefaultElementProvider] Path validation passed', {
+        filePath,
+        normalizedPath
+      });
       return true;
     } catch (error) {
+      console.log('[DefaultElementProvider] Path validation error', {
+        filePath,
+        error: error instanceof Error ? error.message : error
+      });
       logger.warn(`[DefaultElementProvider] Path validation error: ${error}`);
       return false;
     }
@@ -572,9 +615,25 @@ export class DefaultElementProvider {
   private async isDollhouseMCPTestElement(filePath: string): Promise<boolean> {
     try {
       const metadata = await this.readMetadataOnly(filePath);
-      return !!(metadata && metadata._dollhouseMCPTest === true);
+      const isTest = !!(metadata && metadata._dollhouseMCPTest === true);
+      
+      // ADD: Debug logging for Windows CI investigation
+      console.log('[DefaultElementProvider] isDollhouseMCPTestElement result', {
+        filePath,
+        hasMetadata: !!metadata,
+        metadata,
+        isTest,
+        testProperty: metadata ? metadata._dollhouseMCPTest : 'metadata is null'
+      });
+      
+      return isTest;
     } catch (error) {
       // If we can't read the metadata, assume it's not a test file
+      console.log('[DefaultElementProvider] Failed to read metadata for test detection', {
+        filePath,
+        error: error instanceof Error ? error.message : error,
+        willBlock: false
+      });
       logger.debug(`[DefaultElementProvider] Error checking test metadata for ${filePath}: ${error}`);
       return false;
     }
@@ -600,8 +659,15 @@ export class DefaultElementProvider {
       hasUserHomeDir: (process.env.HOME && (process.env.HOME.includes('/Users/') || process.env.HOME.includes('/home/'))) || 
                       !!process.env.USERPROFILE,
       isProductionNode: process.env.NODE_ENV === 'production',
-      notInTestDir: !process.cwd().includes('/test') && !process.cwd().includes('/__tests__') && !process.cwd().includes('/temp') &&
-                    !process.cwd().includes('/dist/test'), // Also check for compiled test directory
+      notInTestDir: (() => {
+        const cwd = process.cwd().toLowerCase();
+        // Normalize path separators for cross-platform checking (Windows uses \ but checks use /)
+        const normalizedCwd = cwd.replace(/\\/g, '/');
+        return !normalizedCwd.includes('/test') && 
+               !normalizedCwd.includes('/__tests__') && 
+               !normalizedCwd.includes('/temp') &&
+               !normalizedCwd.includes('/dist/test');
+      })(),
       
       // Moderate indicators (weight: 1)
       notInCI: !process.env.CI,
@@ -644,6 +710,20 @@ export class DefaultElementProvider {
   private async copyElementFiles(sourceDir: string, destDir: string, elementType: string): Promise<number> {
     let copiedCount = 0;
     
+    // ADD: Debug logging for Windows CI investigation
+    console.log('[DefaultElementProvider] Starting copyElementFiles', {
+      sourceDir,
+      destDir, 
+      elementType,
+      platform: process.platform,
+      cwd: process.cwd(),
+      isProduction: this.isProductionEnvironment(),
+      loadTestData: this.config.loadTestData,
+      nodeEnv: process.env.NODE_ENV,
+      ciEnv: process.env.CI,
+      forceProduction: process.env.FORCE_PRODUCTION_MODE
+    });
+    
     try {
       // Ensure destination directory exists
       await fs.mkdir(destDir, { recursive: true });
@@ -651,9 +731,15 @@ export class DefaultElementProvider {
       // Read source directory
       const files = await fs.readdir(sourceDir);
       
+      // ADD: Log file discovery
+      console.log('[DefaultElementProvider] Files discovered', { files, count: files.length });
+      
       for (const file of files) {
+        console.log('[DefaultElementProvider] Processing file', { file });
+        
         // Only copy markdown files
         if (!file.endsWith(FILE_CONSTANTS.ELEMENT_EXTENSION)) {
+          console.log('[DefaultElementProvider] Skipped non-markdown file', { file });
           continue;
         }
         
@@ -667,10 +753,36 @@ export class DefaultElementProvider {
         const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
         const destPath = path.join(destDir, normalizedFile.normalizedContent);
         
+        // ADD: Log path details
+        console.log('[DefaultElementProvider] Path details', { 
+          file: normalizedFile.normalizedContent,
+          sourcePath, 
+          destPath,
+          sourceExists: await fs.access(sourcePath).then(() => true).catch(() => false)
+        });
+        
         // SECURITY FIX: Validate file paths to prevent path traversal attacks
         // This prevents malicious files from escaping the intended directory structure
-        if (!this.validateFilePath(sourcePath, [sourceDir]) || 
-            !this.validateFilePath(destPath, [destDir])) {
+        const sourceValid = this.validateFilePath(sourcePath, [sourceDir]);
+        const destValid = this.validateFilePath(destPath, [destDir]);
+        
+        // ADD: Log validation results
+        console.log('[DefaultElementProvider] Path validation', { 
+          file: normalizedFile.normalizedContent,
+          sourceValid,
+          destValid,
+          sourceDir,
+          destDir
+        });
+        
+        if (!sourceValid || !destValid) {
+          console.log('[DefaultElementProvider] Path validation failed', { 
+            file: normalizedFile.normalizedContent,
+            sourcePath, 
+            destPath, 
+            sourceValid,
+            destValid 
+          });
           logger.warn(
             `[DefaultElementProvider] Skipping file with invalid path: ${normalizedFile.normalizedContent}`,
             { sourcePath, destPath, elementType }
@@ -682,6 +794,15 @@ export class DefaultElementProvider {
         // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
         if (!this.config.loadTestData && this.isProductionEnvironment()) {
           const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
+          
+          // ADD: Log production check results  
+          console.log('[DefaultElementProvider] Production safety check', {
+            file: normalizedFile.normalizedContent,
+            isDollhouseTest,
+            isProduction: this.isProductionEnvironment(),
+            loadTestData: this.config.loadTestData,
+            willBlock: isDollhouseTest
+          });
           
           if (isDollhouseTest) {
             logger.warn(
@@ -714,10 +835,16 @@ export class DefaultElementProvider {
         try {
           // Check if destination file already exists
           await fs.access(destPath);
+          console.log('[DefaultElementProvider] File already exists, skipping', { 
+            file: normalizedFile.normalizedContent 
+          });
           logger.debug(`[DefaultElementProvider] Skipping existing file: ${normalizedFile.normalizedContent}`);
           continue;
         } catch {
           // File doesn't exist, proceed with copy
+          console.log('[DefaultElementProvider] File does not exist, proceeding with copy', {
+            file: normalizedFile.normalizedContent
+          });
         }
         
         try {
@@ -740,8 +867,20 @@ export class DefaultElementProvider {
           }
           
           // Copy the file with verification
+          console.log('[DefaultElementProvider] About to copy file', { 
+            file: normalizedFile.normalizedContent,
+            sourcePath,
+            destPath 
+          });
+          
           await this.copyFileWithVerification(sourcePath, destPath);
           copiedCount++;
+          
+          console.log('[DefaultElementProvider] Successfully copied file', {
+            file: normalizedFile.normalizedContent,
+            copiedCount
+          });
+          
           logger.debug(`[DefaultElementProvider] Copied ${elementType}: ${normalizedFile.normalizedContent}`);
           
           // Log security event for each file copied
@@ -772,6 +911,13 @@ export class DefaultElementProvider {
           // Continue with other files instead of failing completely
         }
       }
+      
+      // ADD: Final summary
+      console.log('[DefaultElementProvider] Copy operation completed', {
+        elementType,
+        copiedCount,
+        totalProcessed: files.length
+      });
       
       if (copiedCount > 0) {
         logger.info(`[DefaultElementProvider] Copied ${copiedCount} ${elementType} file(s)`);
