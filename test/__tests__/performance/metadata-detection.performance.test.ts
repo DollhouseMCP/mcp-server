@@ -238,7 +238,7 @@ This is batch file number ${i} for performance testing.`;
       console.log(`Detected ${detectedCount} test files`);
 
       expect(avgTimePerFile).toBeLessThan(50);
-      expect(detectedCount).toBe(Math.floor(fileCount / 3)); // Every 3rd file
+      expect(detectedCount).toBe(Math.ceil(fileCount / 3)); // Every 3rd file (0-based indexing)
       expect(totalTimeMs).toBeLessThan(fileCount * 50); // Total should be reasonable
     }, 30000); // 30 second timeout
 

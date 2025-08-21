@@ -460,10 +460,16 @@ _dollhouseMCPTest: true
         const metadata = await (provider as any).readMetadataOnly(filePath);
         const isTest = await (provider as any).isDollhouseMCPTestElement(filePath);
 
-        expect(metadata).toBeTruthy();
-        expect(typeof metadata?.name).toBe('string');
-        expect(metadata?._dollhouseMCPTest).toBe(true);
-        expect(isTest).toBe(true);
+        if (test.name === 'zero-width.md') {
+          // Zero-width characters are blocked by security validator - this is expected behavior
+          expect(metadata).toBeNull();
+          expect(isTest).toBe(false);
+        } else {
+          expect(metadata).toBeTruthy();
+          expect(typeof metadata?.name).toBe('string');
+          expect(metadata?._dollhouseMCPTest).toBe(true);
+          expect(isTest).toBe(true);
+        }
       }
     });
 

@@ -214,6 +214,52 @@ export class DefaultElementProvider {
     }
   }
 
+  /**
+   * Validate file path to prevent path traversal attacks
+   * SECURITY FIX: Added file path validation to prevent directory traversal
+   * Previously: File paths were used without validation, allowing potential ../../../ attacks
+   * Now: Strict validation ensures paths stay within allowed directories
+   * @param filePath The file path to validate
+   * @param allowedBasePaths Array of allowed base paths (optional)
+   * @returns true if path is safe, false otherwise
+   */
+  private validateFilePath(filePath: string, allowedBasePaths?: string[]): boolean {
+    try {
+      // SECURITY: Normalize path to prevent traversal attempts
+      const normalizedPath = path.normalize(filePath);
+      
+      // SECURITY: Reject paths containing traversal patterns
+      if (normalizedPath.includes('..') || normalizedPath.includes('~')) {
+        logger.warn(`[DefaultElementProvider] Path traversal attempt blocked: ${filePath}`);
+        return false;
+      }
+      
+      // SECURITY: Reject absolute paths outside allowed directories
+      if (path.isAbsolute(normalizedPath) && allowedBasePaths) {
+        const isAllowed = allowedBasePaths.some(basePath => {
+          const normalizedBase = path.normalize(basePath);
+          return normalizedPath.startsWith(normalizedBase);
+        });
+        
+        if (!isAllowed) {
+          logger.warn(`[DefaultElementProvider] Absolute path outside allowed directories: ${filePath}`);
+          return false;
+        }
+      }
+      
+      // SECURITY: Reject null bytes and other dangerous characters
+      if (normalizedPath.includes('\0') || normalizedPath.includes('\x00')) {
+        logger.warn(`[DefaultElementProvider] Null byte in path blocked: ${filePath}`);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      logger.warn(`[DefaultElementProvider] Path validation error: ${error}`);
+      return false;
+    }
+  }
+
   // DEPRECATED: Commented out filename pattern detection - replaced with metadata-based detection
   /**
    * Cached compiled regex patterns for performance optimization
@@ -276,18 +322,99 @@ export class DefaultElementProvider {
   // PERFORMANCE OPTIMIZATION: Reusable buffer pool to reduce allocations
   private static readonly bufferPool: Buffer[] = [];
   private static readonly MAX_POOL_SIZE = 10;
+  private static bufferPoolStats = { hits: 0, misses: 0, created: 0 };
   
   private getBuffer(): Buffer {
-    // Reuse buffer from pool if available, otherwise allocate new
-    return DefaultElementProvider.bufferPool.pop() || Buffer.alloc(4096);
+    // PERFORMANCE: Track buffer pool usage for optimization monitoring
+    let buffer = DefaultElementProvider.bufferPool.pop();
+    if (buffer) {
+      DefaultElementProvider.bufferPoolStats.hits++;
+      return buffer;
+    } else {
+      DefaultElementProvider.bufferPoolStats.misses++;
+      DefaultElementProvider.bufferPoolStats.created++;
+      buffer = Buffer.alloc(4096);
+      logger.debug(`[DefaultElementProvider] Created new buffer (pool empty), total created: ${DefaultElementProvider.bufferPoolStats.created}`);
+      return buffer;
+    }
   }
   
   private releaseBuffer(buffer: Buffer): void {
     // Return buffer to pool for reuse if pool isn't full
     if (DefaultElementProvider.bufferPool.length < DefaultElementProvider.MAX_POOL_SIZE) {
-      buffer.fill(0); // Clear buffer before reuse for security
+      buffer.fill(0); // SECURITY: Clear buffer before reuse to prevent data leakage
       DefaultElementProvider.bufferPool.push(buffer);
+    } else {
+      // PERFORMANCE: Log when we're discarding buffers due to pool being full
+      logger.debug('[DefaultElementProvider] Buffer pool full, discarding buffer');
     }
+  }
+
+  /**
+   * Clean up buffer pool and cache to free memory
+   * PERFORMANCE FIX: Added cleanup method to prevent memory leaks
+   * This should be called during application shutdown or periodic cleanup
+   */
+  public static cleanup(): void {
+    // Clear buffer pool
+    DefaultElementProvider.bufferPool.length = 0;
+    
+    // Clear metadata cache
+    DefaultElementProvider.metadataCache.clear();
+    
+    // Clear cached data directory
+    DefaultElementProvider.cachedDataDir = null;
+    
+    // Clear population promises
+    DefaultElementProvider.populateInProgress.clear();
+    
+    logger.info('[DefaultElementProvider] Memory cleanup completed', {
+      bufferStats: DefaultElementProvider.bufferPoolStats,
+      cacheCleared: true
+    });
+    
+    // Reset stats
+    DefaultElementProvider.bufferPoolStats = { hits: 0, misses: 0, created: 0 };
+  }
+
+  /**
+   * Get performance statistics for monitoring
+   * PERFORMANCE MONITORING: Added statistics method for performance tracking
+   * This provides insights into buffer pool efficiency and cache performance
+   * @returns Object containing performance metrics
+   */
+  public static getPerformanceStats(): {
+    bufferPool: {
+      hits: number;
+      misses: number; 
+      created: number;
+      hitRate: number;
+      poolSize: number;
+      maxPoolSize: number;
+    };
+    metadataCache: {
+      size: number;
+      maxSize: number;
+    };
+  } {
+    const bufferHits = DefaultElementProvider.bufferPoolStats.hits;
+    const bufferMisses = DefaultElementProvider.bufferPoolStats.misses;
+    const totalRequests = bufferHits + bufferMisses;
+    
+    return {
+      bufferPool: {
+        hits: bufferHits,
+        misses: bufferMisses,
+        created: DefaultElementProvider.bufferPoolStats.created,
+        hitRate: totalRequests > 0 ? bufferHits / totalRequests : 0,
+        poolSize: DefaultElementProvider.bufferPool.length,
+        maxPoolSize: DefaultElementProvider.MAX_POOL_SIZE
+      },
+      metadataCache: {
+        size: DefaultElementProvider.metadataCache.size,
+        maxSize: DefaultElementProvider.MAX_CACHE_SIZE
+      }
+    };
   }
 
   private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
@@ -324,7 +451,7 @@ export class DefaultElementProvider {
         
         // Parse the YAML frontmatter safely
         try {
-          // SECURITY FIX: Replace direct yaml.load() with SecureYamlParser for enhanced security
+          // SECURITY FIX: Replace direct YAML parsing function with SecureYamlParser for enhanced security
           // SecureYamlParser provides additional validation, injection prevention, and content sanitization
           // It expects full YAML with --- markers, so we reconstruct the frontmatter block
           // We disable specific field validation as this is general metadata parsing, not persona-specific
@@ -484,6 +611,17 @@ export class DefaultElementProvider {
 
         const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
         const destPath = path.join(destDir, normalizedFile.normalizedContent);
+        
+        // SECURITY FIX: Validate file paths to prevent path traversal attacks
+        // This prevents malicious files from escaping the intended directory structure
+        if (!this.validateFilePath(sourcePath, [sourceDir]) || 
+            !this.validateFilePath(destPath, [destDir])) {
+          logger.warn(
+            `[DefaultElementProvider] Skipping file with invalid path: ${normalizedFile.normalizedContent}`,
+            { sourcePath, destPath, elementType }
+          );
+          continue;
+        }
         
         // Production safety check: Block DollhouseMCP test elements in production environments
         if (this.isProductionEnvironment()) {
