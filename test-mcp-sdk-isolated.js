@@ -8,6 +8,11 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+// SECURITY FIX (DMCP-SEC-004): Import UnicodeValidator for input normalization
+// Prevents homograph attacks, direction override, and mixed script attacks
+import { UnicodeValidator } from "./dist/security/validators/unicodeValidator.js";
+// ACCURACY FIX (SECURE-3): Import test configuration for timeout management
+import { CONFIG } from "./test-config.js";
 
 console.error("DEBUG: Creating minimal MCP server for timeout isolation");
 
@@ -24,13 +29,20 @@ const server = new Server({
 // Add minimal tool list handler
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   console.error("DEBUG: ListToolsRequest received");
+  // ACCURACY FIX (SECURE-3): Use existing tool for better isolation testing
   return {
     tools: [{
       name: "instant_test",
-      description: "Returns immediately",
+      description: "Returns immediately for timeout isolation testing",
       inputSchema: {
         type: "object",
-        properties: {}
+        properties: {
+          timeout: {
+            type: "number",
+            description: "Timeout in milliseconds (for testing)",
+            default: CONFIG.timeouts.tool_call
+          }
+        }
       }
     }]
   };
@@ -38,9 +50,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 // Add instant-response tool handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  console.error(`DEBUG: CallToolRequest received for ${request.params.name} at ${new Date().toISOString()}`);
+  // SECURITY FIX (DMCP-SEC-004): Unicode normalization for user input
+  // Previously: Direct usage of tool name without validation
+  // Now: UnicodeValidator.normalize() prevents homograph attacks and direction override
+  const normalizedToolName = UnicodeValidator.normalize(request.params.name).normalizedContent;
   
-  if (request.params.name === "instant_test") {
+  console.error(`DEBUG: CallToolRequest received for ${normalizedToolName} at ${new Date().toISOString()}`);
+  
+  if (normalizedToolName === "instant_test") {
     console.error("DEBUG: Returning instant response");
     // Return immediately with no async operations
     return {
@@ -53,7 +70,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
   
-  throw new Error(`Unknown tool: ${request.params.name}`);
+  throw new Error(`Unknown tool: ${normalizedToolName}`);
 });
 
 // Add error handler

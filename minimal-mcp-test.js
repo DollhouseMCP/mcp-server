@@ -6,6 +6,9 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+// SECURITY FIX (DMCP-SEC-004): Import UnicodeValidator for input normalization
+// Prevents homograph attacks, direction override, and mixed script attacks
+import { UnicodeValidator } from "./dist/security/validators/unicodeValidator.js";
 
 // Create a minimal server that only responds to one tool
 const server = new Server({
@@ -33,9 +36,14 @@ server.setRequestHandler("tools/list", async () => {
 });
 
 server.setRequestHandler("tools/call", async (request) => {
-  console.error(`DEBUG: tools/call received for ${request.params.name}`);
+  // SECURITY FIX (DMCP-SEC-004): Unicode normalization for user input
+  // Previously: Direct usage of tool name without validation
+  // Now: UnicodeValidator.normalize() prevents homograph attacks and direction override
+  const normalizedToolName = UnicodeValidator.normalize(request.params.name).normalizedContent;
   
-  if (request.params.name === "test_tool") {
+  console.error(`DEBUG: tools/call received for ${normalizedToolName}`);
+  
+  if (normalizedToolName === "test_tool") {
     console.error("DEBUG: Executing test_tool");
     return {
       content: [
@@ -47,7 +55,7 @@ server.setRequestHandler("tools/call", async (request) => {
     };
   }
   
-  throw new Error(`Unknown tool: ${request.params.name}`);
+  throw new Error(`Unknown tool: ${normalizedToolName}`);
 });
 
 // Add proper error handling
