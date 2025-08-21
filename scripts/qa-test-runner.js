@@ -9,6 +9,14 @@
 
 import fetch from 'node-fetch';
 import { writeFileSync } from 'fs';
+import { 
+  discoverAvailableTools, 
+  validateToolExists, 
+  calculateAccurateSuccessRate,
+  createTestResult,
+  logTestResult,
+  generateTestReport
+} from './qa-utils.js';
 
 const INSPECTOR_URL = 'http://localhost:6277/message';
 const SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
@@ -17,44 +25,16 @@ class MCPTestRunner {
   constructor() {
     this.results = [];
     this.startTime = new Date();
-    this.availableTools = [];
+    this.availableTools = []; // Initialize as empty array to prevent race conditions
   }
 
   async discoverAvailableTools() {
-    try {
-      console.log('📋 Discovering available tools via Inspector API...');
-      const response = await fetch(INSPECTOR_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SESSION_TOKEN}`
-        },
-        body: JSON.stringify({
-          method: 'tools/list'
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      this.availableTools = result.result?.tools?.map(t => t.name) || [];
-      console.log(`📋 Discovered ${this.availableTools.length} available tools`);
-      return this.availableTools;
-    } catch (error) {
-      console.error('⚠️  Failed to discover tools:', error.message);
-      this.availableTools = [];
-      return this.availableTools;
-    }
+    this.availableTools = await discoverAvailableTools(INSPECTOR_URL, SESSION_TOKEN);
+    return this.availableTools;
   }
 
   validateToolExists(toolName) {
-    if (this.availableTools.length > 0 && !this.availableTools.includes(toolName)) {
-      console.log(`  ⚠️  Skipping ${toolName} - tool not available`);
-      return false;
-    }
-    return true;
+    return validateToolExists(toolName, this.availableTools);
   }
 
   async callTool(toolName, params = {}) {
@@ -62,14 +42,7 @@ class MCPTestRunner {
     
     // Check if tool exists before calling (only if we have discovery data)
     if (!this.validateToolExists(toolName)) {
-      return {
-        success: false,
-        tool: toolName,
-        params,
-        skipped: true,
-        error: 'Tool not available',
-        duration: Date.now() - startTime
-      };
+      return createTestResult(toolName, params, startTime, false, null, 'Tool not available', true);
     }
     
     try {
@@ -93,21 +66,9 @@ class MCPTestRunner {
       }
 
       const result = await response.json();
-      return {
-        success: true,
-        tool: toolName,
-        params,
-        result: result.result,
-        duration: Date.now() - startTime
-      };
+      return createTestResult(toolName, params, startTime, true, result.result);
     } catch (error) {
-      return {
-        success: false,
-        tool: toolName,
-        params,
-        error: error.message,
-        duration: Date.now() - startTime
-      };
+      return createTestResult(toolName, params, startTime, false, null, error.message);
     }
   }
 
@@ -277,18 +238,7 @@ class MCPTestRunner {
   }
 
   calculateAccurateSuccessRate(results) {
-    // Filter out skipped tests
-    const executed = results.filter(r => !r.skipped);
-    const successful = executed.filter(r => r.success).length;
-    const total = executed.length;
-    const skipped = results.filter(r => r.skipped).length;
-    
-    return {
-      successful,
-      total,
-      skipped,
-      percentage: total > 0 ? Math.round((successful / total) * 100) : 0
-    };
+    return calculateAccurateSuccessRate(results);
   }
 
   generateReport() {
@@ -347,6 +297,11 @@ class MCPTestRunner {
     
     try {
       await this.discoverAvailableTools();
+      
+      // Ensure availableTools is properly initialized before validation
+      if (!Array.isArray(this.availableTools)) {
+        this.availableTools = [];
+      }
       
       await this.testElementListing();
       await this.testMarketplaceBrowsing();

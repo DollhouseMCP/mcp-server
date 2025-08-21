@@ -11,6 +11,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
+import { 
+  discoverAvailableToolsDirect, 
+  validateToolExists, 
+  calculateAccurateSuccessRate,
+  createTestResult,
+  logTestResult
+} from './qa-utils.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -18,7 +25,7 @@ class DirectMCPTestRunner {
     this.startTime = new Date();
     this.client = null;
     this.transport = null;
-    this.availableTools = [];
+    this.availableTools = []; // Initialize as empty array to prevent race conditions
   }
 
   async connect() {
@@ -42,25 +49,12 @@ class DirectMCPTestRunner {
   }
 
   async discoverAvailableTools() {
-    try {
-      console.log('📋 Discovering available tools...');
-      const result = await this.client.listTools();
-      this.availableTools = result.tools.map(t => t.name);
-      console.log(`📋 Discovered ${this.availableTools.length} available tools`);
-      return this.availableTools;
-    } catch (error) {
-      console.error('⚠️  Failed to discover tools:', error.message);
-      this.availableTools = [];
-      return this.availableTools;
-    }
+    this.availableTools = await discoverAvailableToolsDirect(this.client);
+    return this.availableTools;
   }
 
   validateToolExists(toolName) {
-    if (!this.availableTools.includes(toolName)) {
-      console.log(`  ⚠️  Skipping ${toolName} - tool not available`);
-      return false;
-    }
-    return true;
+    return validateToolExists(toolName, this.availableTools);
   }
 
   async callTool(toolName, args = {}) {
@@ -68,14 +62,7 @@ class DirectMCPTestRunner {
     
     // Check if tool exists before calling
     if (!this.validateToolExists(toolName)) {
-      return {
-        success: false,
-        tool: toolName,
-        params: args,
-        skipped: true,
-        error: 'Tool not available',
-        duration: Date.now() - startTime
-      };
+      return createTestResult(toolName, args, startTime, false, null, 'Tool not available', true);
     }
     
     try {
@@ -89,25 +76,9 @@ class DirectMCPTestRunner {
         timeoutPromise
       ]);
       
-      const duration = Date.now() - startTime;
-      
-      return {
-        success: true,
-        tool: toolName,
-        params: args,
-        result: result.content,
-        duration
-      };
+      return createTestResult(toolName, args, startTime, true, result.content);
     } catch (error) {
-      const duration = Date.now() - startTime;
-      
-      return {
-        success: false,
-        tool: toolName,
-        params: args,
-        error: error.message,
-        duration
-      };
+      return createTestResult(toolName, args, startTime, false, null, error.message);
     }
   }
 
@@ -235,18 +206,7 @@ class DirectMCPTestRunner {
   }
 
   calculateAccurateSuccessRate(results) {
-    // Filter out skipped tests
-    const executed = results.filter(r => !r.skipped);
-    const successful = executed.filter(r => r.success).length;
-    const total = executed.length;
-    const skipped = results.filter(r => r.skipped).length;
-    
-    return {
-      successful,
-      total,
-      skipped,
-      percentage: total > 0 ? Math.round((successful / total) * 100) : 0
-    };
+    return calculateAccurateSuccessRate(results);
   }
 
   generateReport() {
@@ -316,6 +276,11 @@ class DirectMCPTestRunner {
     try {
       await this.connect();
       await this.discoverAvailableTools();
+      
+      // Ensure availableTools is properly initialized before validation
+      if (!Array.isArray(this.availableTools)) {
+        this.availableTools = [];
+      }
       
       await this.testElementListing();
       await this.testMarketplaceBrowsing();
