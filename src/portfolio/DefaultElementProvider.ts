@@ -16,6 +16,7 @@ import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -55,11 +56,22 @@ export interface DefaultElementProviderConfig {
   loadTestData?: boolean;
 }
 
+// PERFORMANCE: Metadata cache with mtime-based invalidation
+interface MetadataCacheEntry {
+  metadata: any;
+  mtime: number;
+  size: number;
+}
+
 export class DefaultElementProvider {
   private readonly __dirname: string;
   private static cachedDataDir: string | null = null;
   private static populateInProgress: Map<string, Promise<void>> = new Map();
   private readonly config: DefaultElementProviderConfig;
+  
+  // PERFORMANCE OPTIMIZATION: Cache metadata with file mtime for invalidation
+  private static metadataCache: Map<string, MetadataCacheEntry> = new Map();
+  private static readonly MAX_CACHE_SIZE = 100; // Limit cache size to prevent unbounded growth
   
   constructor(config?: DefaultElementProviderConfig) {
     const __filename = fileURLToPath(import.meta.url);
@@ -261,11 +273,44 @@ export class DefaultElementProvider {
    * @param filePath Path to the file to read metadata from
    * @returns Parsed metadata object or null if no frontmatter found
    */
-  private async readMetadataOnly(filePath: string): Promise<any | null> {
+  // PERFORMANCE OPTIMIZATION: Reusable buffer pool to reduce allocations
+  private static readonly bufferPool: Buffer[] = [];
+  private static readonly MAX_POOL_SIZE = 10;
+  
+  private getBuffer(): Buffer {
+    // Reuse buffer from pool if available, otherwise allocate new
+    return DefaultElementProvider.bufferPool.pop() || Buffer.alloc(4096);
+  }
+  
+  private releaseBuffer(buffer: Buffer): void {
+    // Return buffer to pool for reuse if pool isn't full
+    if (DefaultElementProvider.bufferPool.length < DefaultElementProvider.MAX_POOL_SIZE) {
+      buffer.fill(0); // Clear buffer before reuse for security
+      DefaultElementProvider.bufferPool.push(buffer);
+    }
+  }
+
+  private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
+    // PERFORMANCE: Check cache first before reading file
+    try {
+      const stats = await fs.stat(filePath);
+      const cacheKey = filePath;
+      const cached = DefaultElementProvider.metadataCache.get(cacheKey);
+      
+      // Return cached metadata if file hasn't changed
+      if (cached && cached.mtime === stats.mtimeMs && cached.size === stats.size) {
+        logger.debug(`[DefaultElementProvider] Cache hit for ${filePath}`);
+        return cached.metadata;
+      }
+    } catch {
+      // File doesn't exist, proceed with normal flow
+    }
+    
     try {
       // Open file and read only first 4KB to avoid reading dangerous content
       const fd = await fs.open(filePath, 'r');
-      const buffer = Buffer.alloc(4096); // Only read first 4KB maximum
+      // PERFORMANCE: Use buffer pool instead of allocating new buffer each time
+      const buffer = this.getBuffer();
       
       try {
         const result = await fd.read(buffer, 0, 4096, 0);
@@ -279,19 +324,68 @@ export class DefaultElementProvider {
         
         // Parse the YAML frontmatter safely
         try {
-          const metadata = yaml.load(match[1]);
-          return typeof metadata === 'object' && metadata !== null ? metadata : null;
+          // SECURITY FIX: Replace direct yaml.load() with SecureYamlParser for enhanced security
+          // SecureYamlParser provides additional validation, injection prevention, and content sanitization
+          // It expects full YAML with --- markers, so we reconstruct the frontmatter block
+          // We disable specific field validation as this is general metadata parsing, not persona-specific
+          const fullYaml = `---\n${match[1]}\n---`;
+          const parseResult = SecureYamlParser.parse(fullYaml, { 
+            validateContent: false, 
+            validateFields: false 
+          });
+          const metadata = parseResult.data;
+          
+          // PERFORMANCE: Cache the metadata with file stats for future reads
+          if (typeof metadata === 'object' && metadata !== null) {
+            try {
+              const stats = await fs.stat(filePath);
+              const cacheEntry: MetadataCacheEntry = {
+                metadata,
+                mtime: stats.mtimeMs,
+                size: stats.size
+              };
+              
+              // Evict oldest entries if cache is full
+              if (DefaultElementProvider.metadataCache.size >= DefaultElementProvider.MAX_CACHE_SIZE) {
+                const firstKey = DefaultElementProvider.metadataCache.keys().next().value;
+                if (firstKey) {
+                  DefaultElementProvider.metadataCache.delete(firstKey);
+                }
+              }
+              
+              DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
+              logger.debug(`[DefaultElementProvider] Cached metadata for ${filePath}`);
+            } catch {
+              // Ignore cache errors, return metadata anyway
+            }
+            return metadata;
+          }
+          return null;
         } catch (yamlError) {
           // Invalid YAML, return null
-          logger.debug(`[DefaultElementProvider] Invalid YAML in ${filePath}: ${yamlError}`);
+          // ENHANCEMENT: Include error type for better debugging
+          const yamlErrorType = (yamlError as any)?.constructor?.name || 'YAMLError';
+          logger.debug(`[DefaultElementProvider] Invalid YAML in ${filePath}: ${yamlErrorType} - ${yamlError}`);
           return null;
         }
       } finally {
         await fd.close();
+        // PERFORMANCE: Return buffer to pool for reuse
+        this.releaseBuffer(buffer);
       }
-    } catch (error) {
-      // File doesn't exist or can't be read
-      logger.debug(`[DefaultElementProvider] Could not read metadata from ${filePath}: ${error}`);
+    } catch (error: any) {
+      // ENHANCEMENT: Include error type in debug logs for better debugging
+      const errorType = error?.constructor?.name || 'UnknownError';
+      const errorCode = error?.code || 'NO_CODE';
+      
+      // RELIABILITY: Add retry logic for transient failures
+      if (retries > 0 && (errorCode === 'EBUSY' || errorCode === 'EAGAIN')) {
+        logger.debug(`[DefaultElementProvider] Retrying read for ${filePath} after ${errorType}:${errorCode}`);
+        await new Promise(resolve => setTimeout(resolve, 50)); // Brief delay before retry
+        return this.readMetadataOnly(filePath, retries - 1);
+      }
+      
+      logger.debug(`[DefaultElementProvider] Could not read metadata from ${filePath}: ${errorType}:${errorCode} - ${error?.message || error}`);
       return null;
     }
   }

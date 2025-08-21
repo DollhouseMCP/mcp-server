@@ -193,7 +193,9 @@ function extractFrontmatter(content: string): { frontmatter: string; body: strin
 function addTestMetadata(content: string, filePath: string): string {
   const suite = determineTestSuite(filePath);
   const purpose = determineTestPurpose(filePath, content);
-  const relativePath = path.relative(ROOT_DIR, filePath);
+  // CROSS-PLATFORM FIX: Normalize path separators for consistent behavior across Windows/Unix
+  // Use forward slashes in metadata for consistency regardless of platform
+  const relativePath = path.relative(ROOT_DIR, filePath).replace(/\\/g, '/');
   
   const testMetadata: TestMetadata = {
     _dollhouseMCPTest: true,

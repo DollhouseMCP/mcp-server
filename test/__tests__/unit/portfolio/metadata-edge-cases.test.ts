@@ -522,7 +522,8 @@ _dollhouseMCPTest: true
       const isTest2 = await (provider as any).isDollhouseMCPTestElement(testFile2);
 
       expect(metadata1?.name).toContain('é');
-      expect(metadata2?.name).toContain('é'); // Both should contain the same visual character
+      // Fix: normalize Unicode for comparison since char2 is decomposed form (e + combining acute)
+      expect(metadata2?.name?.normalize('NFC')).toContain('é');
       expect(isTest1).toBe(true);
       expect(isTest2).toBe(true);
     });

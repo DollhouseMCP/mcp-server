@@ -18,6 +18,7 @@ export interface SecureParseOptions {
   maxContentSize?: number;
   allowedKeys?: string[];
   validateContent?: boolean;
+  validateFields?: boolean; // Whether to apply field-specific validators (for persona metadata)
 }
 
 export interface ParsedContent {
@@ -30,11 +31,12 @@ export class SecureYamlParser {
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
     maxYamlSize: 64 * 1024,      // 64KB for YAML
     maxContentSize: 1024 * 1024,  // 1MB for content
-    validateContent: true
+    validateContent: true,
+    validateFields: true         // By default, apply field validators
   };
 
-  // Allowed YAML types - using FAILSAFE_SCHEMA as base
-  private static readonly SAFE_SCHEMA = yaml.FAILSAFE_SCHEMA;
+  // Allowed YAML types - using CORE_SCHEMA (safe subset with basic types like booleans and integers)
+  private static readonly SAFE_SCHEMA = yaml.CORE_SCHEMA;
 
   // Additional validation for specific persona fields
   private static readonly FIELD_VALIDATORS: Record<string, (value: any) => boolean> = {
@@ -149,8 +151,8 @@ export class SecureYamlParser {
 
     // 8. Validate field types and content
     for (const [key, value] of Object.entries(data)) {
-      // Check field-specific validators
-      if (this.FIELD_VALIDATORS[key] && !this.FIELD_VALIDATORS[key](value)) {
+      // Check field-specific validators only if field validation is enabled
+      if (opts.validateFields && this.FIELD_VALIDATORS[key] && !this.FIELD_VALIDATORS[key](value)) {
         throw new SecurityError(`Invalid value for field '${key}'`, 'medium');
       }
 

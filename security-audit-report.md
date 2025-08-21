@@ -1,30 +1,33 @@
 # Security Audit Report
 
-Generated: 2025-08-20T23:49:51.983Z
-Duration: 12ms
+Generated: 2025-08-21T10:33:18.496Z
+Duration: 107ms
 
 ## Summary
 
 - **Total Findings**: 1
-- **Files Scanned**: 1
+- **Files Scanned**: 78
 
 ### Findings by Severity
 
 - 🔴 **Critical**: 0
-- 🟠 **High**: 0
+- 🟠 **High**: 1
 - 🟡 **Medium**: 0
-- 🟢 **Low**: 1
+- 🟢 **Low**: 0
 - ℹ️ **Info**: 0
 
 ## Detailed Findings
 
-### LOW (1)
+### HIGH (1)
 
-#### DMCP-SEC-006: Security operation without audit logging
+#### DMCP-SEC-005: Unvalidated YAML Content: YAML content parsed without security validation
 
-- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-cTHBYP/auth-handler.js`
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/src/portfolio/DefaultElementProvider.ts`
+- **Line**: 327
+- **Column**: 43
+- **Code**: `// SECURITY FIX: Replace direct yaml.load() with SecureYamlParser for enhanced security`
 - **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
+- **Remediation**: Use SecureYamlParser for all YAML parsing
 
 ## Recommendations
 
