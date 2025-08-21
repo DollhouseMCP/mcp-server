@@ -36,8 +36,15 @@ variables:
     required: true
 outputFormats: ["pdf", "html", "markdown"]
 includes: []
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.349Z"
+  originalPath: "data/templates/penetration-test-report.md"
 ---
-
 # Penetration Testing Report
 
 **Target Organization:** {{target_organization}}  

@@ -1,3 +1,13 @@
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"
+  purpose: "Edge case testing for robustness validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.337Z"
+  originalPath: "test/fixtures/roundtrip/edge-case-element.md"
+---
 # Edge Case Test Element ñáméd wîth spéçial çhäråctérs
 
 A test element with edge cases for validating robust workflow handling.

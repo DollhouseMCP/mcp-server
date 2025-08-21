@@ -44,7 +44,8 @@ describe('Simple Roundtrip Workflow Tests', () => {
       const content = await fs.readFile(skillPath, 'utf-8');
       
       // Check for required metadata
-      expect(content).toMatch(/^# Test Code Review/);
+      // Fix: removed ^ anchor since content starts with YAML frontmatter, not the heading
+      expect(content).toMatch(/# Test Code Review/);
       expect(content).toMatch(/- Type: skill/);
       expect(content).toMatch(/- Version: 1\.0\.0/);
       expect(content).toMatch(/- Author: test-suite/);

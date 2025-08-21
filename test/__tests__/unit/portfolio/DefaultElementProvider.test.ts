@@ -76,7 +76,10 @@ describe('DefaultElementProvider', () => {
     // Clear static cache
     (DefaultElementProvider as any).cachedDataDir = null;
     
-    provider = new DefaultElementProvider();
+    // Create provider with test data loading enabled for tests
+    provider = new DefaultElementProvider({
+      loadTestData: true
+    });
   });
   
   afterEach(async () => {
@@ -152,7 +155,7 @@ describe('DefaultElementProvider', () => {
       await fs.writeFile(sourceFile, 'Test content');
       
       // Create a corrupted copy by writing after copy
-      const provider = new DefaultElementProvider();
+      const provider = new DefaultElementProvider({ loadTestData: true });
       
       // Override copyFile on the instance
       const originalMethod = provider['copyFileWithVerification'];

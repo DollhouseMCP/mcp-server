@@ -146,6 +146,20 @@ submit_content name="code-review"
 
 > **📖 Learn More**: See our [Element Detection Guide](docs/guides/ELEMENT_DETECTION_GUIDE.md) for detailed usage examples and troubleshooting tips.
 
+### Complete Naming Freedom
+
+DollhouseMCP gives you **complete freedom** to name your elements whatever you want. There are no naming restrictions or forbidden words.
+
+**✅ You can create elements named**:
+- "Test Assistant" - Previously blocked, now fully supported
+- "Sample Code Reviewer" - No restrictions
+- "テスト" (Japanese for "test") - Unicode supported
+- "My Debugging Helper" - Any descriptive name
+
+**How it works**: DollhouseMCP uses metadata-based test detection instead of filename patterns, so only internal DollhouseMCP test files are filtered (those with `_dollhouseMCPTest: true` metadata). Your personal elements are never affected.
+
+> **📘 Technical Details**: See our [Test Metadata Convention](docs/TEST_METADATA_CONVENTION.md) for information about how DollhouseMCP identifies its own test files without affecting user content.
+
 ### Specialized Element Tools
 
 Some portfolio elements have specialized operations:

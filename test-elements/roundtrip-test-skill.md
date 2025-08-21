@@ -24,8 +24,15 @@ parameters:
     description: Test iteration number
 created_date: 2025-08-11
 modified_date: 2025-08-11
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "roundtrip-testing"
+  purpose: "End-to-end roundtrip workflow testing"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.351Z"
+  originalPath: "test-elements/roundtrip-test-skill.md"
 ---
-
 # Roundtrip Test Skill
 
 This skill is designed to test the complete roundtrip workflow for the DollhouseMCP collection system.

@@ -30,8 +30,15 @@ parameters:
     type: "boolean"
     description: "Verify claims and cross-reference"
     default: true
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.347Z"
+  originalPath: "data/skills/research.md"
 ---
-
 # Research Skill
 
 This skill provides systematic research capabilities for investigating topics, validating information, and synthesizing knowledge from multiple sources.

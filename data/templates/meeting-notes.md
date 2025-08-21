@@ -32,8 +32,15 @@ variables:
     default: "60 minutes"
 outputFormats: ["markdown", "html", "pdf"]
 includes: []
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.348Z"
+  originalPath: "data/templates/meeting-notes.md"
 ---
-
 # {{meeting_title}}
 
 **Date:** {{meeting_date}}  

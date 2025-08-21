@@ -33,8 +33,15 @@ parameters:
     description: "How to handle missing values"
     default: "interpolate"
     enum: ["ignore", "interpolate", "drop", "flag"]
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.346Z"
+  originalPath: "data/skills/data-analysis.md"
 ---
-
 # Data Analysis Skill
 
 This skill provides comprehensive data analysis capabilities for extracting insights, identifying patterns, and making data-driven recommendations.

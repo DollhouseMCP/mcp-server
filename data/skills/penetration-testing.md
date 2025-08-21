@@ -31,8 +31,15 @@ parameters:
     description: "How stealthy to be"
     default: "normal"
     enum: ["aggressive", "normal", "stealth", "passive"]
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.347Z"
+  originalPath: "data/skills/penetration-testing.md"
 ---
-
 # Penetration Testing Skill
 
 This skill provides systematic penetration testing capabilities using industry-standard methodologies to identify security vulnerabilities through controlled, ethical attacks.

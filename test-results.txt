@@ -1,0 +1,1461 @@
+npm warn Unknown cli config "--coverage". This will stop working in the next major version of npm.
+
+> @dollhousemcp/mcp-server@1.6.0 test
+> cross-env "NODE_OPTIONS=--experimental-vm-modules --no-warnings" jest --config test/jest.config.cjs
+
+PASS test/__tests__/unit/security/yamlValidator.test.ts
+PASS test/__tests__/security/tests/security-validators.test.ts
+PASS test/__tests__/unit/server/tools/GenericElementTools.integration.test.ts
+PASS test/__tests__/unit/submitContentMethod.test.ts
+PASS test/__tests__/security/metadata-security.test.ts
+  ● Console
+
+    console.log
+      Memory growth: -2.10MB for 100 files
+
+      at Object.<anonymous> (test/__tests__/security/metadata-security.test.ts:327:15)
+
+PASS test/__tests__/unit/security/fileLockManager.test.ts
+PASS test/__tests__/unit/tools/PersonaToolsDeprecation.test.ts
+  ● Console
+
+    console.log
+      PersonaTools operations completed in 27ms
+
+      at Object.<anonymous> (test/__tests__/unit/tools/PersonaToolsDeprecation.test.ts:391:21)
+
+    console.log
+      ✓ All PersonaTools functionality verified as available through server methods
+
+      at Object.<anonymous> (test/__tests__/unit/tools/PersonaToolsDeprecation.test.ts:453:21)
+
+PASS test/__tests__/unit/server/content-size-validation.test.ts
+PASS test/__tests__/performance/metadata-detection.performance.test.ts
+  ● Console
+
+    console.log
+      Average metadata read time: 0.13ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:75:15)
+
+    console.log
+      Average test detection time: 0.07ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:107:15)
+
+    console.log
+      Average large frontmatter read time: 0.14ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:156:15)
+
+    console.log
+      Average large content file read time: 0.13ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:189:15)
+
+    console.log
+      Batch processing 100 files:
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:237:15)
+
+    console.log
+      Total time: 53.67ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:238:15)
+
+    console.log
+      Average per file: 0.54ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:239:15)
+
+    console.log
+      Detected 34 test files
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:240:15)
+
+    console.log
+      Concurrent processing 50 files:
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:284:15)
+
+    console.log
+      Total time: 10.30ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:285:15)
+
+    console.log
+      Average per file: 0.21ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:286:15)
+
+    console.log
+      Detected 25 test files
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:287:15)
+
+    console.log
+      Performance Comparison (50 files):
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:347:15)
+
+    console.log
+      Metadata detection: 23.08ms (17 detected)
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:348:15)
+
+    console.log
+      Pattern detection: 0.26ms (25 detected)
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:349:15)
+
+    console.log
+      Metadata avg: 0.46ms per file
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:350:15)
+
+    console.log
+      Pattern avg: 0.01ms per file
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:351:15)
+
+    console.log
+      Iteration 0: Cache size: 1, Buffer pool: 1
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:403:21)
+
+    console.log
+      Iteration 500: Cache size: 1, Buffer pool: 1
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:403:21)
+
+    console.log
+      Memory usage after 1000 operations:
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:419:15)
+
+    console.log
+      Initial: 48.73MB
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:420:15)
+
+    console.log
+      Final: 42.80MB
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:421:15)
+
+    console.log
+      Increase: -6077.87KB
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:422:15)
+
+    console.log
+      Final cache size: 1/20
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:423:15)
+
+    console.log
+      Final buffer pool size: 1/20
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:424:15)
+
+    console.log
+      Buffer pool hit rate: 0.00%
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:425:15)
+
+    console.log
+      Buffers created: 1
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:426:15)
+
+    console.log
+      Average boundary case read time: 0.15ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:472:15)
+
+    console.log
+      Average malformed file read time: 0.55ms
+
+      at Object.<anonymous> (test/__tests__/performance/metadata-detection.performance.test.ts:511:15)
+
+PASS test/__tests__/unit/portfolio/portfolio-filtering.integration.test.ts
+PASS test/__tests__/security/tests/mcp-tools-security.test.ts
+  ● Console
+
+    console.log
+      
+      🔒 Running Command Injection Tests (CRITICAL)...
+
+      at SecurityTestFramework.runSecuritySuite (test/__tests__/security/framework/SecurityTestFramework.ts:189:15)
+
+    console.log
+      
+      🔒 Running Path Traversal Tests (CRITICAL)...
+
+      at SecurityTestFramework.runSecuritySuite (test/__tests__/security/framework/SecurityTestFramework.ts:189:15)
+
+    console.log
+      
+      🔒 Running YAML Injection Tests (CRITICAL)...
+
+      at SecurityTestFramework.runSecuritySuite (test/__tests__/security/framework/SecurityTestFramework.ts:189:15)
+
+PASS test/__tests__/unit/services/BuildInfoService.test.ts
+PASS test/__tests__/unit/server/tools/DeleteElementTool.integration.test.ts
+PASS test/__tests__/unit/security/audit/SecurityAuditor.test.ts
+  ● Console
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 0
+        Files scanned: 0
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      ✅ No security issues found!
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 15ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 2
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 2
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+       CRITICAL  (2)
+      
+        🔴 Hardcoded Secrets: Potential hardcoded secret or API key detected
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-NM4YkB/vulnerable.js:2
+           📝 const apiKey = "sk-1234567890abcdef1234567890abcdef";
+           💡 Use environment variables or secure key management services instead of hardcoding secrets
+           🏷️  OWASP-A01-001 (high confidence)
+      
+        🔴 Hardcoded Secrets: Potential hardcoded secret or API key detected
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-NM4YkB/vulnerable.js:3
+           📝 const password = "super_secret_password_123";
+           💡 Use environment variables or secure key management services instead of hardcoding secrets
+           🏷️  OWASP-A01-001 (high confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 18ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 2
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 1
+          HIGH: 0
+          MEDIUM: 1
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+       CRITICAL  (1)
+      
+        🔴 SQL String Concatenation: SQL query built using string concatenation
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-siqC2M/sql-injection.js:2
+           📝 const query = "SELECT * FROM users WHERE id = " + userId;
+           💡 Use parameterized queries instead of string concatenation
+           🏷️  CWE-89-001 (low confidence)
+      
+      MEDIUM (1)
+      
+        🟡 User input processed without Unicode normalization
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-siqC2M/sql-injection.js
+           💡 Use UnicodeValidator.normalize() on all user input
+           🏷️  DMCP-SEC-004 (medium confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 13ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 1
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 1
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+       CRITICAL  (1)
+      
+        🔴 Command Injection: Potential command injection vulnerability
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-TOkVDh/command-injection.js:3
+           📝 exec('ls ' + userInput);
+           💡 Validate and sanitize all user input before using in system commands
+           🏷️  OWASP-A03-002 (low confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 5ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 2
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 1
+          MEDIUM: 1
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+      HIGH (1)
+      
+        🟠 Path Traversal: Potential path traversal vulnerability
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-3XYHOt/path-traversal.js:3
+           📝 const content = fs.readFileSync('../../../' + filename);
+           💡 Validate and sanitize file paths, use path.resolve() and check against allowed directories
+           🏷️  OWASP-A03-003 (low confidence)
+      
+      MEDIUM (1)
+      
+        🟡 User input processed without Unicode normalization
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-3XYHOt/path-traversal.js
+           💡 Use UnicodeValidator.normalize() on all user input
+           🏷️  DMCP-SEC-004 (medium confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 9ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 1
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 1
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+      MEDIUM (1)
+      
+        🟡 MCP tool handler without rate limiting
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-67qnrT/mcp-handler.ts
+           💡 Add rate limiting to prevent abuse
+           🏷️  DMCP-SEC-003 (high confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 6ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 1
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 1
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+      MEDIUM (1)
+      
+        🟡 User input processed without Unicode normalization
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-Yi5QHz/input-handler.ts
+           💡 Use UnicodeValidator.normalize() on all user input
+           🏷️  DMCP-SEC-004 (medium confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 9ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 0
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      ✅ No security issues found!
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 11ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 1
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 1
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      📋 Findings:
+      
+       CRITICAL  (1)
+      
+        🔴 Hardcoded Secrets: Potential hardcoded secret or API key detected
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-ppEVuZ/critical.js:1
+           📝 const password = "hardcoded_password_123";
+           💡 Use environment variables or secure key management services instead of hardcoding secrets
+           🏷️  OWASP-A01-001 (high confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 9ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 1
+        Files scanned: 1
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 1
+          INFO: 0
+      
+      📋 Findings:
+      
+      LOW (1)
+      
+        🔵 Security operation without audit logging
+           📁 /var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-UiaD9w/auth-handler.js
+           💡 Add SecurityMonitor.logSecurityEvent() for audit trail
+           🏷️  DMCP-SEC-006 (medium confidence)
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 4ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+    console.log
+      
+      🔒 Security Audit Report
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      📊 Summary:
+        Total findings: 0
+        Files scanned: 0
+      
+        By severity:
+           CRITICAL : 0
+          HIGH: 0
+          MEDIUM: 0
+          LOW: 0
+          INFO: 0
+      
+      ✅ No security issues found!
+      
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      Scan completed in 65ms
+
+      at SecurityAuditor.generateReports (src/security/audit/SecurityAuditor.ts:245:21)
+
+PASS test/__tests__/security/download-validation.test.ts
+PASS test/__tests__/unit/GitHubClient.test.ts
+PASS test/__tests__/unit/portfolio/MigrationManager.test.ts
+PASS test/__tests__/performance/PersonaToolsRemoval.perf.test.ts
+  ● Console
+
+    console.log
+      📊 Server Initialization Metrics:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:93:21)
+
+    console.log
+        Init Time: 4.95ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:94:21)
+
+    console.log
+        Target: <1000ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:95:21)
+
+    console.log
+        Status: ✅ PASS
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:96:21)
+
+    console.log
+      📊 Operation Performance Metrics:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:105:21)
+
+    console.log
+        First Operation: 27.41ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:106:21)
+
+    console.log
+        Average Operation: 0.01ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:107:21)
+
+    console.log
+      📊 Memory Usage Metrics:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:117:21)
+
+    console.log
+        Memory Usage: 4.65MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:118:21)
+
+    console.log
+        Target: <100MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:119:21)
+
+    console.log
+        Status: ✅ PASS
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:120:21)
+
+    console.log
+      📊 Consistency Test (3 runs):
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:132:21)
+
+    console.log
+        Run 1: 0.17ms init, 11.78ms first op
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:137:25)
+
+    console.log
+        Run 2: 0.15ms init, 22.03ms first op
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:137:25)
+
+    console.log
+        Run 3: 0.13ms init, 37.85ms first op
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:137:25)
+
+    console.log
+        Average Init: 0.15ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:146:21)
+
+    console.log
+        Range: 0.13ms - 0.17ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:147:21)
+
+    console.log
+        Variance: 0.03ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:148:21)
+
+    console.log
+      📊 Memory Leak Detection:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:171:21)
+
+    console.log
+        Initial Memory: 60.25MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:172:21)
+
+    console.log
+        Final Memory: 68.47MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:173:21)
+
+    console.log
+        Memory Delta: 8.23MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:174:21)
+
+    console.log
+        Target: <50MB increase
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:175:21)
+
+    console.log
+      📊 Performance Improvement Verification:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:198:21)
+
+    console.log
+        Init Time: 0.21ms (target: <800ms)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:199:21)
+
+    console.log
+        First Op: 38.21ms (target: <400ms)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:200:21)
+
+    console.log
+        Avg Op: 0.01ms (target: <80ms)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:201:21)
+
+    console.log
+        Memory: -11.12MB (target: <80MB)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:202:21)
+
+    console.log
+      ✅ All performance targets met - PersonaTools removal shows positive impact
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:210:21)
+
+    console.log
+      📊 Efficiency Analysis:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:220:21)
+
+    console.log
+        Operations per second: 111731.8
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:221:21)
+
+    console.log
+        Memory per operation: 0.00MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:222:21)
+
+    console.log
+        Efficiency score: 7112.47 ops/MB
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:223:21)
+
+    console.log
+      📈 Efficiency Baseline: 7112.47 (higher is better)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:231:21)
+
+    console.log
+      📊 Tool Reduction Impact:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:244:21)
+
+    console.log
+        Original tool count: 51
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:245:21)
+
+    console.log
+        Current tool count: 42 (estimated)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:246:21)
+
+    console.log
+        Reduction: 9 tools (17.6%)
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:247:21)
+
+    console.log
+        Performance per tool: 0.00ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:248:21)
+
+    console.log
+      ✅ Tool reduction shows positive impact on performance
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:254:21)
+
+    console.log
+      📊 Performance Baseline (Post PersonaTools Removal):
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:273:21)
+
+    console.log
+      {
+        "timestamp": "2025-08-21T13:12:16.267Z",
+        "personaToolsRemoved": true,
+        "toolCount": 42,
+        "initTime": 0.10837500000002365,
+        "firstOpTime": 31.240332999999964,
+        "avgOpTime": 0.009058200000026773,
+        "memoryUsage": -7.191963195800781,
+        "nodeVersion": "v24.1.0",
+        "platform": "darwin"
+      }
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:274:21)
+
+    console.log
+      ✅ Performance baseline established for future regression testing
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:282:21)
+
+    console.log
+      📊 Concurrent Operations:
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:314:21)
+
+    console.log
+        5 concurrent operations: 276.22ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:315:21)
+
+    console.log
+        Average per operation: 55.24ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:316:21)
+
+    console.log
+      📊 Load Testing (10 operations):
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:352:21)
+
+    console.log
+        Average: 0.00ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:353:21)
+
+    console.log
+        Min: 0.00ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:354:21)
+
+    console.log
+        Max: 0.00ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:355:21)
+
+    console.log
+        Variance: 0.00ms
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:356:21)
+
+    console.log
+      ✅ Performance remains consistent under load
+
+      at Object.<anonymous> (test/__tests__/performance/PersonaToolsRemoval.perf.test.ts:363:21)
+
+PASS test/__tests__/unit/elements/agents/AgentManager.test.ts
+PASS test/__tests__/unit/server/tools/BuildInfoTools.test.ts
+PASS test/__tests__/unit/portfolio/metadata-edge-cases.test.ts
+  ● Console
+
+    console.log
+      Processed 50 mixed files in 132ms (avg: 2.64ms/file)
+
+      at Object.<anonymous> (test/__tests__/unit/portfolio/metadata-edge-cases.test.ts:582:15)
+
+    console.log
+      Memory pressure test: 0.50ms/op, memory growth: 10.52MB
+
+      at Object.<anonymous> (test/__tests__/unit/portfolio/metadata-edge-cases.test.ts:633:15)
+
+PASS test/__tests__/unit/PersonaImporter.test.ts
+PASS test/__tests__/unit/elements/skills/SkillManager.test.ts
+PASS test/__tests__/security/inputLengthValidation.test.ts
+PASS test/__tests__/performance/portfolio-filtering.performance.test.ts
+  ● Console
+
+    console.log
+      Pattern matching: 10000 calls in 166.17ms (0.0166ms per call)
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:73:15)
+
+    console.log
+      Multi-pattern: 10000 calls in 6.40ms (0.0006ms per call)
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:108:15)
+
+    console.log
+      Large file filtering: 1000 files filtered in 1.11ms
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:154:15)
+
+    console.log
+      Filtered down to 900 legitimate files from 1000 total
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:155:15)
+
+    console.log
+      Creating 5000 test files...
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:178:15)
+
+    console.log
+      Starting filtering performance test...
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:189:15)
+
+    console.log
+      Very large directory: 5000 files filtered in 5.50ms
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:205:15)
+
+    console.log
+      Filtered to 4800 legitimate files (expected ~4800)
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:206:15)
+
+    console.log
+      Filtering rate: 908471 files/second
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:207:15)
+
+    console.log
+      ReDoS resistance: 400 calls in 0.56ms
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:236:15)
+
+    console.log
+      Unicode handling: 2500 calls in 1.14ms
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:263:15)
+
+    console.log
+      Memory test: 5000 operations
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:305:15)
+
+    console.log
+      Memory change: 10.65MB
+
+      at Object.<anonymous> (test/__tests__/performance/portfolio-filtering.performance.test.ts:306:15)
+
+PASS test/e2e/simple-roundtrip.test.ts
+PASS test/__tests__/unit/scripts/generate-version.test.ts
+PASS test/__tests__/unit/InputValidator.test.ts
+PASS test/__tests__/unit/scripts/migrate-test-metadata.test.ts
+PASS test/__tests__/unit/security/errorHandler.test.ts
+  ● Console
+
+    console.error
+      [2025-08-21T13:12:16.688Z] [ERROR] Error occurred: {"error":{"code":"ENOENT"},"stack":"Error: File not found: /Users/john/secret/data.txt\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:36:26)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)","code":"ENOENT"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:39:41)
+
+    console.error
+      [2025-08-21T13:12:16.692Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Cannot read file /home/user/project/secret.json\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:50:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:52:41)
+
+    console.error
+      [2025-08-21T13:12:16.693Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Access denied: C:\\Users\\Admin\\Documents\\config.ini\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:62:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:64:41)
+
+    console.error
+      [2025-08-21T13:12:16.693Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Connection failed to 192.168.1.100:8080\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:74:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:76:41)
+
+    console.error
+      [2025-08-21T13:12:16.693Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Cannot load file://localhost/Users/test/data.db\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:84:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:86:41)
+
+    console.error
+      [2025-08-21T13:12:16.693Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Missing $HOME or $USER environment variable\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:94:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:96:41)
+
+    console.error
+      [2025-08-21T13:12:16.694Z] [ERROR] Error occurred: {"error":{"code":"EACCES"},"code":"EACCES"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:106:41)
+
+    console.error
+      [2025-08-21T13:12:16.694Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Error: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:115:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:117:41)
+
+    console.error
+      [2025-08-21T13:12:16.694Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Failed to write /tmp/node-12345/test.tmp\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:138:22)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:139:42)
+
+    console.error
+      [2025-08-21T13:12:16.694Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Cannot access /var/folders/y6/nj790rtn62l/T/test\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:142:22)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:143:42)
+
+    console.error
+      [2025-08-21T13:12:16.695Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Cannot access \\\\server\\share\\secret.txt\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:150:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:151:41)
+
+    console.error
+      [2025-08-21T13:12:16.695Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Connection failed to 192.168.001.100\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:158:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:159:41)
+
+    console.error
+      [2025-08-21T13:12:16.695Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Cannot load file:///c:/Users/admin/secret.txt\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:166:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:167:41)
+
+    console.error
+      [2025-08-21T13:12:16.696Z] [ERROR] Error occurred: {"error":{"name":"ValidationError"},"stack":"ValidationError: Invalid input\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:174:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:177:41)
+
+    console.error
+      [2025-08-21T13:12:16.696Z] [ERROR] Error occurred: {"error":{},"stack":"TypeError: Cannot read property of undefined\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:185:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:187:41)
+
+    console.error
+      [2025-08-21T13:12:16.696Z] [ERROR] Error occurred: {"error":{"code":"TEST"},"stack":"Error: Test error\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:195:21)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)","code":"TEST","requestId":"req-456"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at SecureErrorHandler.createErrorResponse (src/security/errorHandler.ts:180:19)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:198:43)
+
+    console.error
+      [2025-08-21T13:12:16.698Z] [ERROR] Error occurred: {"error":{},"stack":"Error: Secret path: /home/user/password.txt\n    at asyncFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:214:15)\n    at /Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/src/security/errorHandler.ts:193:22\n    at Object.<anonymous> (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/__tests__/unit/security/errorHandler.test.ts:219:20)\n    at Promise.finally.completed (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1559:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1499:10)\n    at _callCircusTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1009:40)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at _runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:949:3)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:839:13)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at _runTestsForDescribeBlock (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:829:11)\n    at run (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:757:3)\n    at runAndTransformResultsToJestFormat (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/jestAdapterInit.js:1920:21)\n    at jestAdapter (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-circus/build/runner.js:101:19)\n    at runTestInternal (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:272:16)\n    at runTest (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:340:7)\n    at Object.worker (/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/node_modules/jest-runner/build/testWorker.js:494:12)"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at src/security/errorHandler.ts:195:32
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:219:7)
+
+    console.error
+      [2025-08-21T13:12:16.698Z] [ERROR] Error occurred: {"error":{"code":"ENOENT"},"code":"ENOENT"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.698Z] [ERROR] Error occurred: {"error":{"code":"EACCES"},"code":"EACCES"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.698Z] [ERROR] Error occurred: {"error":{"code":"EEXIST"},"code":"EEXIST"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.699Z] [ERROR] Error occurred: {"error":{"code":"EMFILE"},"code":"EMFILE"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.699Z] [ERROR] Error occurred: {"error":{"code":"ECONNREFUSED"},"code":"ECONNREFUSED"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.699Z] [ERROR] Error occurred: {"error":{"code":"ETIMEDOUT"},"code":"ETIMEDOUT"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+    console.error
+      [2025-08-21T13:12:16.699Z] [ERROR] Error occurred: {"error":{"code":"RATE_LIMITED"},"code":"RATE_LIMITED"}
+
+      59 |         // During initialization, we can use console
+      60 |         if (level === 'error') {
+    > 61 |           console.error(fullMessage);
+         |                   ^
+      62 |         } else if (level === 'warn') {
+      63 |           console.warn(fullMessage);
+      64 |         } else {
+
+      at MCPLogger.log (src/utils/logger.ts:61:19)
+      at MCPLogger.error (src/utils/logger.ts:85:10)
+      at SecureErrorHandler.sanitizeError (src/security/errorHandler.ts:76:12)
+      at Object.<anonymous> (test/__tests__/unit/security/errorHandler.test.ts:247:43)
+
+PASS test/__tests__/unit/elements/version-persistence.test.ts
+PASS test/__tests__/unit/elements/agents/Agent.test.ts
+PASS test/__tests__/unit/elements/emptyDirectoryHandling.test.ts
+PASS test/__tests__/unit/portfolio/PortfolioManager.test.ts
+PASS test/__tests__/security/RateLimiterSecurity.test.ts
+PASS test/__tests__/security/tests/command-injection.test.ts
+PASS test/__tests__/unit/elements/templates/Template.test.ts
+PASS test/__tests__/unit/config/ConfigManager.test.ts
+  ● Console
+
+    console.warn
+      Config file corrupted, creating new config
+
+      100 |       } catch (parseError) {
+      101 |         // Handle corrupted JSON - create new config
+    > 102 |         console.warn('Config file corrupted, creating new config');
+          |                 ^
+      103 |         this.config = { version: '1.0.0' };
+      104 |         await this.saveConfig();
+      105 |       }
+
+      at ConfigManager.loadConfig (src/config/ConfigManager.ts:102:17)
+      at Object.<anonymous> (test/__tests__/unit/config/ConfigManager.test.ts:154:7)
+
+    console.warn
+      Config file corrupted, creating new config
+
+      100 |       } catch (parseError) {
+      101 |         // Handle corrupted JSON - create new config
+    > 102 |         console.warn('Config file corrupted, creating new config');
+          |                 ^
+      103 |         this.config = { version: '1.0.0' };
+      104 |         await this.saveConfig();
+      105 |       }
+
+      at ConfigManager.loadConfig (src/config/ConfigManager.ts:102:17)
+      at Object.<anonymous> (test/__tests__/unit/config/ConfigManager.test.ts:481:7)
+
+    console.warn
+      Config file corrupted, creating new config
+
+      100 |       } catch (parseError) {
+      101 |         // Handle corrupted JSON - create new config
+    > 102 |         console.warn('Config file corrupted, creating new config');
+          |                 ^
+      103 |         this.config = { version: '1.0.0' };
+      104 |         await this.saveConfig();
+      105 |       }
+
+      at ConfigManager.loadConfig (src/config/ConfigManager.ts:102:17)
+      at Object.<anonymous> (test/__tests__/unit/config/ConfigManager.test.ts:498:7)
+
+PASS test/__tests__/security/contentValidator.test.ts
+PASS test/__tests__/unit/elements/BaseElement.test.ts
+PASS test/__tests__/unit/PersonaSharer.test.ts
+PASS test/__tests__/unit/portfolio/PortfolioManager.security.test.ts
+PASS test/__tests__/security/secureYamlParser.test.ts
+PASS test/__tests__/unit/portfolio/UnifiedIndexManager.test.ts
+PASS test/__tests__/ci-environment.test.ts
+PASS test/__tests__/security/regexValidator.test.ts
+PASS test/__tests__/unit/security/tokenManager.storage.test.ts
+PASS test/__tests__/security/redos-pathological-inputs.test.ts
+PASS test/__tests__/unit/PersonaManager.test.ts
+PASS test/__tests__/security/tests/input-validation-security.test.ts
+PASS test/__tests__/workflow-validation.test.ts
+  ● Console
+
+    console.log
+      Docker workflow validation skipped
+
+      at Object.<anonymous> (test/__tests__/workflow-validation.test.ts:225:17)
+
+PASS test/__tests__/unit/server/tools/ElementTools.test.ts
+PASS test/__tests__/unit/elements/markdown-serialization.test.ts
+PASS test/__tests__/unit/tools/portfolio/PortfolioElementAdapter.test.ts
+PASS test/__tests__/integration.test.ts
+PASS test/__tests__/unit/security/unicode-normalization.test.ts
+PASS test/__tests__/unit/github-workflow-validation.test.ts
+PASS test/__tests__/unit/portfolio/PortfolioRepoManager.test.ts
+PASS test/__tests__/unit/security/audit/suppressions.test.ts
+PASS test/__tests__/unit/portfolio/GitHubPortfolioIndexer.test.ts
+PASS test/__tests__/security/PersonaSharerSecurity.test.ts
+PASS test/__tests__/security/tests/path-traversal.test.ts
+PASS test/__tests__/unit/tools/PortfolioTools.test.ts
+PASS test/__tests__/unit/elements/templates/TemplateManager.test.ts
+PASS test/__tests__/unit/MCPInputValidator.test.ts
+PASS test/__tests__/unit/utils/ErrorHandler.test.ts
+PASS test/__tests__/unit/portfolio/DefaultElementProvider.safety.test.ts
+PASS test/__tests__/unit/persona/PersonaElement.test.ts
+PASS test/__tests__/security/tests/yaml-deserialization-expanded.test.ts
+PASS test/__tests__/unit/security/tokenManager.rateLimit.test.ts
+PASS test/__tests__/performance.test.ts
+PASS test/__tests__/unit/collection/CollectionIndexCache.test.ts
+PASS test/__tests__/unit/collection/CollectionBrowser.mcp-filtering.test.ts
+PASS test/__tests__/security/tests/unicode-normalization.test.ts
+PASS test/__tests__/unit/PersonaExporter.test.ts
+PASS test/__tests__/unit/security/unicodeValidator.test.ts
+PASS test/__tests__/basic.test.ts
+PASS test/__tests__/security/backtick-validation.test.ts
+PASS test/__tests__/unit/logger.test.ts
+PASS test/__tests__/performance/redos-regression.test.ts
+  ● Console
+
+    console.log
+      Optimized version completed 100 iterations in 0.52ms
+
+      at Object.<anonymous> (test/__tests__/performance/redos-regression.test.ts:237:15)
+
+PASS test/__tests__/unit/TokenManager.test.ts
+PASS test/__tests__/unit/elements/FeedbackProcessor.test.ts
+PASS test/__tests__/security/tests/yaml-deserialization.test.ts
+PASS test/__tests__/unit/scripts/version-generation.test.ts
+PASS test/__tests__/unit/ci-environment-validation.test.ts
+  ● Console
+
+    console.log
+      Skipping shell compatibility test outside CI
+
+      at Object.<anonymous> (test/__tests__/unit/ci-environment-validation.test.ts:96:17)
+
+    console.log
+      Skipping redirection test outside CI
+
+      at Object.<anonymous> (test/__tests__/unit/ci-environment-validation.test.ts:111:17)
+
+    console.log
+      Skipping bash conditional test outside CI
+
+      at Object.<anonymous> (test/__tests__/unit/ci-environment-validation.test.ts:126:17)
+
+    console.log
+      Skipping command substitution test outside CI
+
+      at Object.<anonymous> (test/__tests__/unit/ci-environment-validation.test.ts:141:17)
+
+PASS test/__tests__/unit/security/yamlBombDetection.test.ts
+PASS test/__tests__/unit/tools/submitToPortfolioTool.test.ts
+PASS test/__tests__/unit/execution-detection.test.ts
+PASS test/__tests__/indicator-config.test.ts
+PASS test/__tests__/unit/security/audit/suppressions-regex-safety.test.ts
+PASS test/__tests__/security/securityMonitor.test.ts
+PASS test/__tests__/unit/collection/PersonaSubmitter.test.ts
+PASS test/__tests__/unit/portfolio/DefaultElementProvider.test.ts
+  ● Console
+
+    console.log
+      Logger calls: []
+
+      at Object.<anonymous> (test/__tests__/unit/portfolio/DefaultElementProvider.test.ts:344:17)
+
+    console.log
+      Warn calls: []
+
+      at Object.<anonymous> (test/__tests__/unit/portfolio/DefaultElementProvider.test.ts:345:17)
+
+PASS test/__tests__/unit/portfolio/DefaultElementProvider.metadata.test.ts
+PASS test/__tests__/security/docker-security.test.ts (6.799 s)
+PASS test/__tests__/performance/IndexOptimization.test.ts (7.488 s)
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+Test Suites: 2 skipped, 96 passed, 96 of 98 total
+Tests:       39 skipped, 1815 passed, 1854 total
+Snapshots:   0 total
+Time:        8.293 s, estimated 9 s
+Ran all test suites.

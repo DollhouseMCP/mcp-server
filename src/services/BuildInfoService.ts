@@ -180,12 +180,34 @@ export class BuildInfoService {
     try {
       const __filename = fileURLToPath(import.meta.url);
       const __dirname = path.dirname(__filename);
-      const packagePath = path.join(__dirname, '..', '..', 'package.json');
       
-      // SECURITY NOTE: Reading our own package.json file - not user input
-      // This file is controlled by the application, no Unicode normalization needed
-      const content = await fs.readFile(packagePath, 'utf-8');
-      const pkg = JSON.parse(content);
+      // Try multiple paths to find package.json
+      // This handles both normal execution and compiled test scenarios
+      const possiblePaths = [
+        path.join(__dirname, '..', '..', 'package.json'), // Normal: dist/services -> root
+        path.join(__dirname, '..', '..', '..', 'package.json'), // Test: dist/test/services -> root
+        path.join(__dirname, '..', '..', '..', '..', 'package.json'), // Deep test: dist/test/deep/services -> root
+        path.join(process.cwd(), 'package.json') // Fallback to current working directory
+      ];
+      
+      let pkg: any = null;
+      
+      for (const packagePath of possiblePaths) {
+        try {
+          // SECURITY NOTE: Reading our own package.json file - not user input
+          // This file is controlled by the application, no Unicode normalization needed
+          const content = await fs.readFile(packagePath, 'utf-8');
+          pkg = JSON.parse(content);
+          break;
+        } catch {
+          // Try next path
+          continue;
+        }
+      }
+      
+      if (!pkg) {
+        throw new Error('Could not find package.json in any expected location');
+      }
       
       this.packageInfo = {
         name: pkg.name || 'unknown',
@@ -207,12 +229,28 @@ export class BuildInfoService {
     try {
       const __filename = fileURLToPath(import.meta.url);
       const __dirname = path.dirname(__filename);
-      const versionPath = path.join(__dirname, '..', '..', 'dist', 'version.json');
       
-      const content = await fs.readFile(versionPath, 'utf-8');
-      const version = JSON.parse(content);
+      // Try multiple paths to find version.json
+      // This handles both normal execution and compiled test scenarios
+      const possiblePaths = [
+        path.join(__dirname, '..', '..', 'dist', 'version.json'), // Normal location
+        path.join(__dirname, '..', '..', '..', 'dist', 'version.json'), // Test scenario
+        path.join(process.cwd(), 'dist', 'version.json') // Fallback to cwd
+      ];
       
-      return version.buildTime || version.timestamp;
+      for (const versionPath of possiblePaths) {
+        try {
+          const content = await fs.readFile(versionPath, 'utf-8');
+          const version = JSON.parse(content);
+          return version.buildTime || version.timestamp;
+        } catch {
+          // Try next path
+          continue;
+        }
+      }
+      
+      // Version file might not exist, that's okay
+      return undefined;
     } catch {
       // Version file might not exist, that's okay
       return undefined;

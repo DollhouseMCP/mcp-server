@@ -57,8 +57,15 @@ elements:
     priority: 90
     activation: "always"
     purpose: "Maintain creative continuity and style preferences"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.341Z"
+  originalPath: "data/ensembles/creative-studio.md"
 ---
-
 # Creative Studio Ensemble
 
 A dynamic creative ensemble that combines storytelling expertise, writing skills, research capabilities, and cultural adaptation to produce compelling content across multiple formats and languages.

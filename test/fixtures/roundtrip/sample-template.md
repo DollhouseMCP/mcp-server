@@ -1,3 +1,13 @@
+---
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "test-fixtures"
+  purpose: "Test fixture for workflow validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.339Z"
+  originalPath: "test/fixtures/roundtrip/sample-template.md"
+---
 # Test Meeting Notes Template
 
 A test template for validating the roundtrip workflow.

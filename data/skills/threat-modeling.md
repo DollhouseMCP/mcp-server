@@ -32,8 +32,15 @@ parameters:
     description: "Regulatory requirements to consider"
     default: []
     enum: ["PCI-DSS", "HIPAA", "GDPR", "SOX", "ISO27001", "NIST"]
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.347Z"
+  originalPath: "data/skills/threat-modeling.md"
 ---
-
 # Threat Modeling Skill
 
 This skill provides systematic threat modeling capabilities using industry-standard methodologies to identify, analyze, and prioritize security threats in complex systems.
