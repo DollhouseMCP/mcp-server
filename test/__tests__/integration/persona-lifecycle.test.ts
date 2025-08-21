@@ -260,8 +260,15 @@ describe('Persona Lifecycle Integration', () => {
         expect(result.success).toBe(false);
         expect(result.message).toContain('Failed to edit persona');
       } finally {
-        // ALWAYS restore permissions for cleanup
-        await fs.chmod(filePath, 0o644);
+        // ALWAYS restore permissions for cleanup (if file still exists)
+        try {
+          await fs.chmod(filePath, 0o644);
+        } catch (error: any) {
+          // File may not exist anymore, ignore ENOENT errors
+          if (error.code !== 'ENOENT') {
+            throw error;
+          }
+        }
       }
     });
     

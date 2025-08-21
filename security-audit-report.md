@@ -1,30 +1,108 @@
 # Security Audit Report
 
-Generated: 2025-08-21T13:50:09.436Z
-Duration: 6ms
+Generated: 2025-08-21T20:41:57.934Z
+Duration: 134ms
 
 ## Summary
 
-- **Total Findings**: 1
-- **Files Scanned**: 1
+- **Total Findings**: 14
+- **Files Scanned**: 96
 
 ### Findings by Severity
 
 - 🔴 **Critical**: 0
 - 🟠 **High**: 0
-- 🟡 **Medium**: 0
-- 🟢 **Low**: 1
+- 🟡 **Medium**: 14
+- 🟢 **Low**: 0
 - ℹ️ **Info**: 0
 
 ## Detailed Findings
 
-### LOW (1)
+### MEDIUM (14)
 
-#### DMCP-SEC-006: Security operation without audit logging
+#### DMCP-SEC-004: User input processed without Unicode normalization
 
-- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-185mkr/auth-handler.js`
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/simple-test-results-2025-08-21T19-14-50.json`
 - **Confidence**: medium
-- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/simple-test-results-2025-08-21T19-12-18.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/simple-test-results-2025-08-21T19-01-02.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/simple-test-results-2025-08-21T18-33-19.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/simple-test-results-2025-08-21T18-22-44.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-test-results-2025-08-21T19-15-17.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-test-results-2025-08-21T18-21-44.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-test-results-2025-08-21T17-55-33.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-test-results-2025-08-21T17-55-13.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-github-integration-2025-08-21T19-15-11.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-direct-test-results-2025-08-21T19-14-55.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/qa-direct-test-results-2025-08-21T19-12-24.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/agent-reports/SONNET-2-GitHub-Integration-Results.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
+
+#### DMCP-SEC-004: User input processed without Unicode normalization
+
+- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/agent-reports/SONNET-1-Element-Testing-Results.json`
+- **Confidence**: medium
+- **Remediation**: Use UnicodeValidator.normalize() on all user input
 
 ## Recommendations
 

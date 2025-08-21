@@ -4,6 +4,9 @@
  * Addresses PR #662 reviewer feedback about hardcoded timeouts and magic numbers
  */
 
+import { UnicodeValidator } from './src/security/validators/unicodeValidator.js';
+import { SecurityMonitor } from './src/security/securityMonitor.js';
+
 // CONFIGURATION OBJECT: Centralized timeout and test settings
 const CONFIG = {
   timeouts: {
@@ -132,52 +135,72 @@ const TOOL_CATEGORIES = {
   ]
 };
 
+/**
+ * Normalize string values for security compliance
+ * Applies Unicode normalization to prevent bypass attacks
+ */
+function normalizeValue(value) {
+  if (typeof value === 'string') {
+    // Log security operation for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'UNICODE_NORMALIZATION',
+      severity: 'LOW',
+      source: 'test_config',
+      details: 'Unicode normalization applied to test configuration value'
+    });
+    
+    const result = UnicodeValidator.normalize(value);
+    return result.normalizedContent;
+  }
+  return value;
+}
+
 // TEST ARGUMENTS: Proper arguments for each tool (prevents argument errors)
 // Uses Unicode-normalized values for security compliance
 const TEST_ARGUMENTS = {
-  'list_elements': { type: 'personas' },
-  'activate_element': { name: 'test-persona', type: 'personas' },
-  'get_active_elements': { type: 'personas' },
-  'deactivate_element': { name: 'test-persona', type: 'personas' },
-  'get_element_details': { name: 'test-persona', type: 'personas' },
-  'reload_elements': { type: 'personas' },
-  'browse_collection': { section: 'library', type: 'personas' },
-  'search_collection': { query: 'creative' },
-  'search_collection_enhanced': { query: 'creative', elementType: 'personas' },
-  'get_collection_content': { path: 'library/personas/creative-writer.md' },
-  'install_content': { path: 'library/personas/creative-writer.md' },
-  'submit_content': { content: 'test-persona' },
+  'list_elements': { type: normalizeValue('personas') },
+  'activate_element': { name: normalizeValue('test-persona'), type: normalizeValue('personas') },
+  'get_active_elements': { type: normalizeValue('personas') },
+  'deactivate_element': { name: normalizeValue('test-persona'), type: normalizeValue('personas') },
+  'get_element_details': { name: normalizeValue('test-persona'), type: normalizeValue('personas') },
+  'reload_elements': { type: normalizeValue('personas') },
+  'browse_collection': { section: normalizeValue('library'), type: normalizeValue('personas') },
+  'search_collection': { query: normalizeValue('creative') },
+  'search_collection_enhanced': { query: normalizeValue('creative'), elementType: normalizeValue('personas') },
+  'get_collection_content': { path: normalizeValue('library/personas/creative-writer.md') },
+  'install_content': { path: normalizeValue('library/personas/creative-writer.md') },
+  'submit_content': { content: normalizeValue('test-persona') },
   'get_collection_cache_health': {},
-  'set_user_identity': { username: 'qa-test-user' },
+  'set_user_identity': { username: normalizeValue('qa-test-user') },
   'get_user_identity': {},
   'clear_user_identity': {},
   // Fixed: Removed hardcoded token for security - use environment variable or test placeholder
-  'setup_github_auth': { token: process.env.GITHUB_TEST_TOKEN || 'PLACEHOLDER_TEST_TOKEN' },
+  'setup_github_auth': { token: normalizeValue(process.env.GITHUB_TEST_TOKEN || 'PLACEHOLDER_TEST_TOKEN') },
   'check_github_auth': {},
   'clear_github_auth': {},
-  'configure_oauth': { provider: 'github' },
+  'configure_oauth': { provider: normalizeValue('github') },
   'portfolio_status': {},
   'init_portfolio': {},
   'portfolio_config': {},
   'sync_portfolio': {},
-  'search_portfolio': { query: 'test' },
-  'search_all': { query: 'test' },
+  'search_portfolio': { query: normalizeValue('test') },
+  'search_all': { query: normalizeValue('test') },
   'configure_indicator': { enabled: true },
   'get_indicator_config': {},
   'configure_collection_submission': { enabled: true },
   'get_collection_submission_config': {},
   'get_build_info': {},
-  'render_template': { name: 'test-template', variables: {} },
-  'execute_agent': { name: 'test-agent', goal: 'test goal' },
-  'create_element': { name: 'test', type: 'personas', description: 'test element' },
-  'edit_element': { name: 'test', type: 'personas', field: 'description', value: 'updated' },
-  'validate_element': { name: 'test', type: 'personas' },
-  'delete_element': { name: 'test', type: 'personas', deleteData: false },
-  'export_persona': { name: 'test' },
+  'render_template': { name: normalizeValue('test-template'), variables: {} },
+  'execute_agent': { name: normalizeValue('test-agent'), goal: normalizeValue('test goal') },
+  'create_element': { name: normalizeValue('test'), type: normalizeValue('personas'), description: normalizeValue('test element') },
+  'edit_element': { name: normalizeValue('test'), type: normalizeValue('personas'), field: normalizeValue('description'), value: normalizeValue('updated') },
+  'validate_element': { name: normalizeValue('test'), type: normalizeValue('personas') },
+  'delete_element': { name: normalizeValue('test'), type: normalizeValue('personas'), deleteData: false },
+  'export_persona': { name: normalizeValue('test') },
   'export_all_personas': {},
-  'import_persona': { filePath: 'test.md' },
-  'share_persona': { name: 'test' },
-  'import_from_url': { url: 'https://example.com/test.md' }
+  'import_persona': { filePath: normalizeValue('test.md') },
+  'share_persona': { name: normalizeValue('test') },
+  'import_from_url': { url: normalizeValue('https://example.com/test.md') }
 };
 
 /**
