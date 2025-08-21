@@ -559,13 +559,19 @@ export class DefaultElementProvider {
    * @returns true if this appears to be a production environment
    */
   private isProductionEnvironment(): boolean {
+    // If we're explicitly running in Jest, we're definitely in a test environment
+    if (typeof jest !== 'undefined' || process.env.JEST_WORKER_ID) {
+      return false;
+    }
+    
     // Weighted indicators for production detection
     const indicators = {
       // Strong indicators (weight: 2)
       hasUserHomeDir: (process.env.HOME && (process.env.HOME.includes('/Users/') || process.env.HOME.includes('/home/'))) || 
                       !!process.env.USERPROFILE,
       isProductionNode: process.env.NODE_ENV === 'production',
-      notInTestDir: !process.cwd().includes('/test') && !process.cwd().includes('/__tests__') && !process.cwd().includes('/temp'),
+      notInTestDir: !process.cwd().includes('/test') && !process.cwd().includes('/__tests__') && !process.cwd().includes('/temp') &&
+                    !process.cwd().includes('/dist/test'), // Also check for compiled test directory
       
       // Moderate indicators (weight: 1)
       notInCI: !process.env.CI,
