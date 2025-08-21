@@ -76,7 +76,10 @@ describe('DefaultElementProvider', () => {
     // Clear static cache
     (DefaultElementProvider as any).cachedDataDir = null;
     
-    provider = new DefaultElementProvider();
+    // Create provider with test data loading enabled for tests
+    provider = new DefaultElementProvider({
+      loadTestData: true
+    });
   });
   
   afterEach(async () => {

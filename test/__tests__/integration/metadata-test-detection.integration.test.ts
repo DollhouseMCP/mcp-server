@@ -51,7 +51,9 @@ describe('Metadata Test Detection - Integration Tests', () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'metadata-integration-test-'));
-    provider = new DefaultElementProvider();
+    provider = new DefaultElementProvider({
+      loadTestData: true  // Enable test data loading for tests
+    });
     originalEnv = process.env.NODE_ENV;
   });
 

@@ -14,7 +14,9 @@ describe('DefaultElementProvider - Metadata-based Test Detection', () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-metadata-test-'));
-    provider = new DefaultElementProvider();
+    provider = new DefaultElementProvider({
+      loadTestData: true  // Enable test data loading for tests
+    });
   });
 
   afterEach(async () => {
