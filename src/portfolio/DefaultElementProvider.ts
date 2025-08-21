@@ -78,18 +78,44 @@ export class DefaultElementProvider {
     this.__dirname = path.dirname(__filename);
     
     // Check environment variable for test data loading
-    const loadTestDataFromEnv = process.env.DOLLHOUSE_LOAD_TEST_DATA === 'true' || 
-                                process.env.DOLLHOUSE_LOAD_TEST_DATA === '1';
+    const envLoadTestData = process.env.DOLLHOUSE_LOAD_TEST_DATA;
+    const loadTestDataFromEnv = envLoadTestData === 'true' || envLoadTestData === '1';
+    const disableTestDataFromEnv = envLoadTestData === 'false' || envLoadTestData === '0';
+    
+    // Check if we're in development mode (with respect to FORCE_PRODUCTION_MODE override)
+    const isDevMode = (() => {
+      // Respect FORCE_PRODUCTION_MODE override first
+      if (process.env.FORCE_PRODUCTION_MODE === 'true') {
+        return false; // Force production mode
+      }
+      if (process.env.FORCE_PRODUCTION_MODE === 'false') {
+        return true; // Force development mode
+      }
+      // Fall back to git detection
+      return IS_DEVELOPMENT_MODE;
+    })();
+    
+    // Determine loadTestData value
+    let computedLoadTestData: boolean;
+    if (loadTestDataFromEnv) {
+      // Environment explicitly enables test data
+      computedLoadTestData = true;
+    } else if (disableTestDataFromEnv) {
+      // Environment explicitly disables test data
+      computedLoadTestData = false;
+    } else {
+      // Default logic: enable in production, disable in development unless config overrides
+      computedLoadTestData = !isDevMode && (config?.loadTestData ?? true);
+    }
     
     this.config = {
       useDefaultPaths: true,
-      // In development mode, don't load test data unless explicitly enabled
-      loadTestData: loadTestDataFromEnv || 
-                   (!IS_DEVELOPMENT_MODE && (config?.loadTestData ?? true)),
-      ...config
+      ...config,
+      // Apply final loadTestData logic - environment variables and development mode take precedence
+      loadTestData: loadTestDataFromEnv ? true : disableTestDataFromEnv ? false : computedLoadTestData
     };
     
-    if (IS_DEVELOPMENT_MODE && !this.config.loadTestData) {
+    if (isDevMode && !this.config.loadTestData) {
       logger.info('[DefaultElementProvider] Development mode detected - test data loading disabled');
       logger.info('[DefaultElementProvider] To enable test data, set DOLLHOUSE_LOAD_TEST_DATA=true');
     }
@@ -559,8 +585,11 @@ export class DefaultElementProvider {
    * @returns true if this appears to be a production environment
    */
   private isProductionEnvironment(): boolean {
-    // If we're explicitly running in Jest, we're definitely in a test environment
-    if (typeof jest !== 'undefined' || process.env.JEST_WORKER_ID) {
+    // Allow tests to explicitly override production mode detection
+    if (process.env.FORCE_PRODUCTION_MODE === 'true') {
+      return true;
+    }
+    if (process.env.FORCE_PRODUCTION_MODE === 'false') {
       return false;
     }
     
@@ -598,7 +627,7 @@ export class DefaultElementProvider {
     if (score >= 3) {
       logger.debug(
         '[DefaultElementProvider] Production environment detected',
-        { score, activeIndicators }
+        { score, activeIndicators, forceMode: 'not set' }
       );
     }
     
@@ -905,7 +934,11 @@ export class DefaultElementProvider {
     // Check if test data loading is disabled
     // Note: This check is needed even though constructor sets config, because
     // config can be overridden after construction
-    if (IS_DEVELOPMENT_MODE && !this.config.loadTestData) {
+    
+    // Use production environment detection that respects FORCE_PRODUCTION_MODE
+    const isDevelopmentMode = !this.isProductionEnvironment();
+    
+    if (isDevelopmentMode && !this.config.loadTestData) {
       logger.info(
         '[DefaultElementProvider] Skipping default element population in development mode',
         { 

@@ -209,13 +209,17 @@ Content`;
 
   describe('integration with copyElementFiles', () => {
     it('should block test elements in production environment', async () => {
-      // Mock production environment
-      const originalEnv = process.env.NODE_ENV;
-      const originalHome = process.env.HOME;
-      process.env.NODE_ENV = 'production';
-      process.env.HOME = '/Users/testuser';
+      // Force production environment using FORCE_PRODUCTION_MODE
+      const originalForceMode = process.env.FORCE_PRODUCTION_MODE;
+      process.env.FORCE_PRODUCTION_MODE = 'true';
 
       try {
+        // Create a new provider AFTER setting the environment variable
+        // This ensures the production detection override is applied
+        const productionProvider = new DefaultElementProvider({
+          loadTestData: false  // Must be false for production safety check to activate
+        });
+
         // Create test data structure
         const sourceDir = path.join(tempDir, 'source');
         const destDir = path.join(tempDir, 'dest');
@@ -243,12 +247,8 @@ This is a regular element.`;
         await fs.writeFile(path.join(sourceDir, 'test-element.md'), testElementContent);
         await fs.writeFile(path.join(sourceDir, 'regular-element.md'), regularElementContent);
 
-        // Mock isProductionEnvironment to return true
-        const originalMethod = (provider as any).isProductionEnvironment;
-        (provider as any).isProductionEnvironment = jest.fn().mockReturnValue(true);
-
-        // Copy elements
-        const copiedCount = await (provider as any).copyElementFiles(sourceDir, destDir, 'personas');
+        // Copy elements using the production provider
+        const copiedCount = await (productionProvider as any).copyElementFiles(sourceDir, destDir, 'personas');
 
         // Should only copy the regular element (test element blocked)
         expect(copiedCount).toBe(1);
@@ -256,13 +256,13 @@ This is a regular element.`;
         // Verify only regular element was copied
         const destFiles = await fs.readdir(destDir);
         expect(destFiles).toEqual(['regular-element.md']);
-
-        // Restore original method
-        (provider as any).isProductionEnvironment = originalMethod;
       } finally {
         // Restore environment
-        process.env.NODE_ENV = originalEnv;
-        process.env.HOME = originalHome;
+        if (originalForceMode === undefined) {
+          delete process.env.FORCE_PRODUCTION_MODE;
+        } else {
+          process.env.FORCE_PRODUCTION_MODE = originalForceMode;
+        }
       }
     });
 
