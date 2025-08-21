@@ -453,22 +453,16 @@ export class DefaultElementProvider {
         
         // Parse the YAML frontmatter safely
         try {
-          // CRITICAL MEMORY LEAK FIX: SecureYamlParser was causing memory leaks in repeated operations
-          // For now, use simple yaml.load with proper error handling and input validation
-          // TODO: Investigate and fix SecureYamlParser memory issues for future versions
-          
-          // Basic input validation before parsing
-          if (match[1].length > 8192) { // Reasonable limit for frontmatter
-            logger.debug(`[DefaultElementProvider] Frontmatter too large: ${match[1].length} bytes`);
-            return null;
-          }
-          
-          const metadata = yaml.load(match[1], {
-            // Security options for js-yaml
-            json: false,        // Disable JSON parsing
-            onWarning: null,    // Disable warnings to prevent memory accumulation
-            schema: yaml.CORE_SCHEMA // Use safe schema
+          // SECURITY FIX: Replace direct YAML parsing function with SecureYamlParser for enhanced security
+          // SecureYamlParser provides additional validation, injection prevention, and content sanitization
+          // It expects full YAML with --- markers, so we reconstruct the frontmatter block
+          // We disable specific field validation as this is general metadata parsing, not persona-specific
+          const fullYaml = `---\n${match[1]}\n---`;
+          const parseResult = SecureYamlParser.parse(fullYaml, { 
+            validateContent: false, 
+            validateFields: false 
           });
+          const metadata = parseResult.data;
           
           // PERFORMANCE: Cache the metadata with file stats for future reads
           if (typeof metadata === 'object' && metadata !== null) {
