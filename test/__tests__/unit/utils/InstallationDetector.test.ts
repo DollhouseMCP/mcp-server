@@ -55,6 +55,9 @@ describe('InstallationDetector', () => {
         // Mock realpath to return same path
         mockRealpathSync.mockReturnValue(path.dirname(npmPath));
         
+        // Mock fs.existsSync to return false for .git directories (ensure npm detection takes precedence)
+        mockExistsSync.mockReturnValue(false);
+        
         const result = InstallationDetector.getInstallationType();
         
         expect(result).toBe('npm');
@@ -70,6 +73,9 @@ describe('InstallationDetector', () => {
         
         // Mock realpath to return same path
         mockRealpathSync.mockReturnValue(path.dirname(npmPath));
+        
+        // Mock fs.existsSync to return false for .git directories (ensure npm detection takes precedence)
+        mockExistsSync.mockReturnValue(false);
         
         const result = InstallationDetector.getInstallationType();
         
@@ -88,6 +94,9 @@ describe('InstallationDetector', () => {
         
         // Mock realpath to resolve symlink
         mockRealpathSync = jest.fn().mockReturnValue(path.dirname(realPath));
+        
+        // Mock fs.existsSync to return false for .git directories (ensure npm detection takes precedence)
+        mockExistsSync.mockReturnValue(false);
         
         const result = InstallationDetector.getInstallationType();
         

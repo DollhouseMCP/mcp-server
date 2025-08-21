@@ -171,7 +171,7 @@ async function storeToken(token) {
   
   try {
     // Import the compiled TokenManager
-    const { TokenManager } = await import('./dist/security/tokenManager.js');
+    const { TokenManager } = await import('./src/security/tokenManager.js');
     
     // Store the token using the secure storage mechanism
     await TokenManager.storeGitHubToken(token);

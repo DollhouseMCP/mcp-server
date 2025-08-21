@@ -66,3 +66,11 @@ install.ps1
 
 # Security audit reports (keep private)
 .security-audit/
+
+# QA test output files (generated, not source code)
+docs/QA/*-test-results-*.json
+docs/QA/simple-test-results-*.json
+docs/QA/qa-test-results-*.json
+docs/QA/qa-direct-test-results-*.json
+docs/QA/qa-github-integration-*.json
+docs/QA/agent-reports/*-Results.json
