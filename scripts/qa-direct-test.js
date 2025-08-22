@@ -103,13 +103,13 @@ class DirectMCPTestRunner {
     }
   }
 
-  async testMarketplaceBrowsing() {
-    console.log('\n🏪 Testing Marketplace Browsing...');
+  async testCollectionBrowsing() {
+    console.log('\n🏪 Testing Collection Browsing...');
     
     const tests = [
-      { name: 'Browse All', tool: 'browse_marketplace', params: {} },
-      { name: 'Browse Personas', tool: 'browse_marketplace', params: { category: 'personas' } },
-      { name: 'Search Creative', tool: 'browse_marketplace', params: { query: 'creative' } }
+      { name: 'Browse All Elements', tool: 'browse_collection', params: {} },
+      { name: 'Browse Personas', tool: 'browse_collection', params: { type: 'personas' } },
+      { name: 'Search Creative', tool: 'search_collection', params: { query: 'creative' } }
     ];
 
     for (const test of tests) {
@@ -145,20 +145,20 @@ class DirectMCPTestRunner {
     console.log(`  ✅ Verify Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
   }
 
-  async testPersonaOperations() {
-    console.log('\n🎭 Testing Persona Operations...');
+  async testElementOperations() {
+    console.log('\n🎭 Testing Element Operations (Personas)...');
     
-    // Get active persona first (deprecated tool)
-    let result = await this.callTool('get_active_persona');
+    // Get active elements first (new tool)
+    let result = await this.callTool('get_active_elements', { type: 'personas' });
     this.results.push(result);
     if (result.skipped) {
-      console.log(`  ⚠️  Get Active (initial): Skipped - ${result.error} (${result.duration}ms)`);
+      console.log(`  ⚠️  Get Active Elements (initial): Skipped - ${result.error} (${result.duration}ms)`);
     } else {
-      console.log(`  ✅ Get Active (initial): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      console.log(`  ✅ Get Active Elements (initial): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
     }
 
-    // Try to activate Creative Writer (deprecated tool)
-    result = await this.callTool('activate_persona', { name: 'Creative Writer' });
+    // Try to activate Creative Writer (new tool)
+    result = await this.callTool('activate_element', { name: 'Creative Writer', type: 'personas' });
     this.results.push(result);
     if (result.skipped) {
       console.log(`  ⚠️  Activate Creative Writer: Skipped - ${result.error} (${result.duration}ms)`);
@@ -166,22 +166,22 @@ class DirectMCPTestRunner {
       console.log(`  ✅ Activate Creative Writer: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
     }
 
-    // Get active persona again (deprecated tool)
-    result = await this.callTool('get_active_persona');
+    // Get active elements again (new tool)
+    result = await this.callTool('get_active_elements', { type: 'personas' });
     this.results.push(result);
     if (result.skipped) {
-      console.log(`  ⚠️  Get Active (after activation): Skipped - ${result.error} (${result.duration}ms)`);
+      console.log(`  ⚠️  Get Active Elements (after activation): Skipped - ${result.error} (${result.duration}ms)`);
     } else {
-      console.log(`  ✅ Get Active (after activation): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      console.log(`  ✅ Get Active Elements (after activation): ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
     }
 
-    // Deactivate persona (deprecated tool)
-    result = await this.callTool('deactivate_persona');
+    // Deactivate element (new tool)
+    result = await this.callTool('deactivate_element', { name: 'Creative Writer', type: 'personas' });
     this.results.push(result);
     if (result.skipped) {
-      console.log(`  ⚠️  Deactivate: Skipped - ${result.error} (${result.duration}ms)`);
+      console.log(`  ⚠️  Deactivate Element: Skipped - ${result.error} (${result.duration}ms)`);
     } else {
-      console.log(`  ✅ Deactivate: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      console.log(`  ✅ Deactivate Element: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
     }
   }
 
@@ -191,7 +191,7 @@ class DirectMCPTestRunner {
     // Test with invalid parameters
     const tests = [
       { tool: 'list_elements', params: { type: 'invalid_type' } },
-      { tool: 'activate_persona', params: { name: 'NonExistentPersona' } }
+      { tool: 'activate_element', params: { name: 'NonExistentElement', type: 'personas' } }
     ];
 
     for (const test of tests) {
@@ -284,9 +284,9 @@ class DirectMCPTestRunner {
       }
       
       await this.testElementListing();
-      await this.testMarketplaceBrowsing();
+      await this.testCollectionBrowsing();
       await this.testUserIdentity();
-      await this.testPersonaOperations();
+      await this.testElementOperations();
       await this.testErrorHandling();
       
       const report = this.generateReport();
