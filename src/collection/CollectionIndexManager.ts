@@ -50,14 +50,25 @@ export class CollectionIndexManager {
   private circuitBreakerLastFailure = 0;
   private readonly CIRCUIT_BREAKER_THRESHOLD = 5;
   private readonly CIRCUIT_BREAKER_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly REFRESH_THRESHOLD = 0.8; // Refresh when 80% of TTL has passed
+  private readonly JITTER_FACTOR = 0.25; // ±25% randomness for jitter
+  
+  // Default configuration constants
+  private readonly DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
+  private readonly DEFAULT_MAX_RETRIES = 3;
+  private readonly DEFAULT_BASE_RETRY_DELAY_MS = 1000;
+  private readonly DEFAULT_MAX_RETRY_DELAY_MS = 30000;
+  private readonly DEFAULT_FETCH_TIMEOUT_MS = 5000; // 5 seconds
+  private readonly CHECKSUM_LENGTH = 8;
+  private readonly JSON_INDENT = 2;
   
   constructor(config: CollectionIndexManagerConfig = {}) {
     // Configuration with environment variable overrides
-    this.TTL_MS = config.ttlMs || 60 * 60 * 1000; // 1 hour default
+    this.TTL_MS = config.ttlMs || this.DEFAULT_TTL_MS;
     this.FETCH_TIMEOUT_MS = this.parseFetchTimeout(config.fetchTimeoutMs);
-    this.MAX_RETRIES = config.maxRetries || 3;
-    this.BASE_RETRY_DELAY_MS = config.baseRetryDelayMs || 1000;
-    this.MAX_RETRY_DELAY_MS = config.maxRetryDelayMs || 30000;
+    this.MAX_RETRIES = config.maxRetries || this.DEFAULT_MAX_RETRIES;
+    this.BASE_RETRY_DELAY_MS = config.baseRetryDelayMs || this.DEFAULT_BASE_RETRY_DELAY_MS;
+    this.MAX_RETRY_DELAY_MS = config.maxRetryDelayMs || this.DEFAULT_MAX_RETRY_DELAY_MS;
     
     // Cache directory - use ~/.dollhouse/cache/collection-index.json as specified
     const cacheDir = config.cacheDir || path.join(os.homedir(), '.dollhouse', 'cache');
@@ -86,8 +97,8 @@ export class CollectionIndexManager {
       logger.warn(`Invalid COLLECTION_FETCH_TIMEOUT value: ${envTimeout}, using default`);
     }
     
-    // Fall back to config value or default (5 seconds)
-    return configValue || 5000;
+    // Fall back to config value or default
+    return configValue || this.DEFAULT_FETCH_TIMEOUT_MS;
   }
   
   /**
@@ -177,7 +188,7 @@ export class CollectionIndexManager {
     if (!this.cachedIndex) return true;
     
     const age = Date.now() - this.cachedIndex.timestamp;
-    const refreshThreshold = this.TTL_MS * 0.8; // Refresh when 80% of TTL has passed
+    const refreshThreshold = this.TTL_MS * this.REFRESH_THRESHOLD;
     
     return age > refreshThreshold;
   }
@@ -277,10 +288,16 @@ export class CollectionIndexManager {
     // Cap at maximum delay
     const cappedDelay = Math.min(exponentialDelay, this.MAX_RETRY_DELAY_MS);
     
-    // Add jitter (±25% randomness) to prevent thundering herd
-    const jitter = cappedDelay * 0.25 * (Math.random() - 0.5);
-    
-    return Math.max(0, cappedDelay + jitter);
+    // Add jitter to prevent thundering herd
+    return this.addJitter(cappedDelay);
+  }
+  
+  /**
+   * Add jitter (±25% randomness) to a delay to prevent thundering herd problems
+   */
+  private addJitter(delay: number): number {
+    const jitter = delay * this.JITTER_FACTOR * (Math.random() - 0.5);
+    return Math.max(0, delay + jitter);
   }
   
   /**
@@ -425,7 +442,7 @@ export class CollectionIndexManager {
       generated: data.generated,
       total_elements: data.total_elements
     };
-    return Buffer.from(JSON.stringify(checksumData)).toString('base64').substring(0, 8);
+    return Buffer.from(JSON.stringify(checksumData)).toString('base64').substring(0, this.CHECKSUM_LENGTH);
   }
   
   /**
@@ -480,7 +497,7 @@ export class CollectionIndexManager {
       // Ensure cache directory exists
       await fs.mkdir(path.dirname(this.CACHE_FILE), { recursive: true });
       
-      const cacheData = JSON.stringify(this.cachedIndex, null, 2);
+      const cacheData = JSON.stringify(this.cachedIndex, null, this.JSON_INDENT);
       await fs.writeFile(this.CACHE_FILE, cacheData, 'utf8');
       
       logger.debug('Collection index cache saved to disk');

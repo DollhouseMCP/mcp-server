@@ -15,6 +15,7 @@ import { getPortfolioTools } from './tools/PortfolioTools.js';
 import { getBuildInfoTools } from './tools/BuildInfoTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ToolDiscoveryCache } from '../utils/ToolCache.js';
 
@@ -201,6 +202,14 @@ export class ServerSetup {
   invalidateToolCache(): void {
     this.toolCache.invalidateToolList();
     logger.info('ToolDiscoveryCache: Cache manually invalidated');
+    
+    // Log security event for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'TOOL_CACHE_INVALIDATED',
+      severity: 'LOW',
+      source: 'ServerSetup.invalidateToolCache',
+      details: 'Tool discovery cache manually invalidated'
+    });
   }
   
   /**
@@ -208,5 +217,14 @@ export class ServerSetup {
    */
   logCachePerformance(): void {
     this.toolCache.logPerformance();
+  }
+  
+  /**
+   * Get cache statistics for monitoring
+   */
+  getCacheStatistics() {
+    return {
+      toolCache: this.toolCache.getStats()
+    };
   }
 }
