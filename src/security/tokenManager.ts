@@ -34,11 +34,15 @@ export interface TokenValidationResult {
  */
 export class TokenManager {
   private static readonly GITHUB_TOKEN_PATTERNS = {
-    PERSONAL_ACCESS_TOKEN: /^ghp_[A-Za-z0-9_]{36,}$/,
-    INSTALLATION_TOKEN: /^ghs_[A-Za-z0-9_]{36,}$/,
-    USER_ACCESS_TOKEN: /^ghu_[A-Za-z0-9_]{36,}$/,
-    REFRESH_TOKEN: /^ghr_[A-Za-z0-9_]{36,}$/,
-    OAUTH_ACCESS_TOKEN: /^gho_[A-Za-z0-9_]{16,}$/  // OAuth device flow tokens
+    // More flexible patterns - accept any content after the prefix
+    PERSONAL_ACCESS_TOKEN: /^ghp_.+$/,      // Personal access tokens
+    FINE_GRAINED_PAT: /^github_pat_.+$/,    // Fine-grained personal access tokens
+    INSTALLATION_TOKEN: /^ghs_.+$/,         // GitHub App installation tokens
+    USER_ACCESS_TOKEN: /^ghu_.+$/,          // GitHub App user-to-server tokens
+    REFRESH_TOKEN: /^ghr_.+$/,              // Refresh tokens
+    OAUTH_ACCESS_TOKEN: /^gho_.+$/,         // OAuth device flow tokens
+    // Generic pattern to catch ALL GitHub tokens (gh + any letter + underscore + anything)
+    GENERIC_GITHUB_TOKEN: /^gh[a-z]_.+$/i   // Catch-all for any gh*_ pattern
   };
 
   // Secure storage configuration
@@ -141,6 +145,10 @@ export class TokenManager {
    * Get token type from format
    */
   static getTokenType(token: string): string {
+    // Check fine-grained PAT first since it's more specific
+    if (this.GITHUB_TOKEN_PATTERNS.FINE_GRAINED_PAT.test(token)) {
+      return 'Fine-grained Personal Access Token';
+    }
     if (this.GITHUB_TOKEN_PATTERNS.PERSONAL_ACCESS_TOKEN.test(token)) {
       return 'Personal Access Token';
     }
@@ -155,6 +163,10 @@ export class TokenManager {
     }
     if (this.GITHUB_TOKEN_PATTERNS.OAUTH_ACCESS_TOKEN.test(token)) {
       return 'OAuth Access Token';
+    }
+    // Check generic pattern last
+    if (this.GITHUB_TOKEN_PATTERNS.GENERIC_GITHUB_TOKEN.test(token)) {
+      return 'GitHub Token';
     }
     return 'Unknown';
   }
@@ -302,12 +314,15 @@ export class TokenManager {
    */
   static createSafeErrorMessage(error: string, token?: string): string {
     // Remove any potential token data from error messages
+    // Using flexible patterns to catch any token format
     let safeMessage = error
-      .replace(/ghp_[A-Za-z0-9_]{36,}/g, '[REDACTED_PAT]')
-      .replace(/ghs_[A-Za-z0-9_]{36,}/g, '[REDACTED_INSTALL]')
-      .replace(/ghu_[A-Za-z0-9_]{36,}/g, '[REDACTED_USER]')
-      .replace(/ghr_[A-Za-z0-9_]{36,}/g, '[REDACTED_REFRESH]')
-      .replace(/gho_[A-Za-z0-9_]{16,}/g, '[REDACTED_OAUTH]');
+      .replace(/ghp_.+/g, '[REDACTED_PAT]')
+      .replace(/github_pat_.+/g, '[REDACTED_FINE_PAT]')
+      .replace(/ghs_.+/g, '[REDACTED_INSTALL]')
+      .replace(/ghu_.+/g, '[REDACTED_USER]')
+      .replace(/ghr_.+/g, '[REDACTED_REFRESH]')
+      .replace(/gho_.+/g, '[REDACTED_OAUTH]')
+      .replace(/gh[a-z]_.+/gi, '[REDACTED_TOKEN]');  // Catch any other gh*_ pattern
 
     if (token) {
       const tokenPrefix = this.getTokenPrefix(token);

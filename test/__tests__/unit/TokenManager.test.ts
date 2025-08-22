@@ -35,10 +35,19 @@ describe('TokenManager - GitHub Token Security', () => {
     });
     
     test('should reject invalid token formats', () => {
+      // These should be rejected as they don't match GitHub patterns
       expect(TokenManager.validateTokenFormat('invalid_token')).toBe(false);
-      expect(TokenManager.validateTokenFormat('ghp_short')).toBe(false);
       expect(TokenManager.validateTokenFormat('')).toBe(false);
       expect(TokenManager.validateTokenFormat('abc_1234567890123456789012345678901234567890')).toBe(false);
+      expect(TokenManager.validateTokenFormat('gh_missing_letter')).toBe(false);
+      expect(TokenManager.validateTokenFormat('ghp')).toBe(false);  // Missing underscore and content
+      expect(TokenManager.validateTokenFormat('ghp_')).toBe(false); // Missing content after underscore
+      
+      // These should now pass with our flexible validation
+      expect(TokenManager.validateTokenFormat('ghp_short')).toBe(true);  // Any content after ghp_ is valid
+      expect(TokenManager.validateTokenFormat('gho_abc123')).toBe(true); // Short OAuth token
+      expect(TokenManager.validateTokenFormat('ghx_future_token')).toBe(true); // Future token types
+      expect(TokenManager.validateTokenFormat('github_pat_11ABCDEF')).toBe(true); // Fine-grained PAT
     });
 
     test('should reject null or undefined tokens', () => {
