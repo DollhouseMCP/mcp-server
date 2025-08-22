@@ -16,12 +16,15 @@ import { getBuildInfoTools } from './tools/BuildInfoTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
+import { ToolDiscoveryCache } from '../utils/ToolCache.js';
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
+  private toolCache: ToolDiscoveryCache;
   
   constructor() {
     this.toolRegistry = new ToolRegistry();
+    this.toolCache = new ToolDiscoveryCache();
   }
   
   /**
@@ -37,7 +40,7 @@ export class ServerSetup {
   }
   
   /**
-   * Register all tool categories
+   * Register all tool categories and invalidate cache
    */
   private registerTools(instance: IToolHandler): void {
     // Register element tools (new generic tools for all element types)
@@ -64,16 +67,45 @@ export class ServerSetup {
     
     // Register build info tools
     this.toolRegistry.registerMany(getBuildInfoTools(instance));
+    
+    // Invalidate cache since tools have changed
+    this.toolCache.invalidateToolList();
+    logger.debug('ToolDiscoveryCache: Cache invalidated due to tool registration');
   }
   
   /**
-   * Setup the ListToolsRequest handler
+   * Setup the ListToolsRequest handler with caching
    */
   private setupListToolsHandler(server: Server): void {
     server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: this.toolRegistry.getAllTools()
-      };
+      const startTime = Date.now();
+      
+      // Try to get cached tools first
+      let tools = this.toolCache.getToolList();
+      
+      if (!tools) {
+        // Cache miss - fetch tools from registry
+        tools = this.toolRegistry.getAllTools();
+        
+        // Cache the results for future requests
+        this.toolCache.setToolList(tools);
+        
+        const duration = Date.now() - startTime;
+        logger.info('ToolDiscoveryCache: Cache miss - fetched and cached tools', {
+          toolCount: tools.length,
+          duration: `${duration}ms`,
+          source: 'registry'
+        });
+      } else {
+        const duration = Date.now() - startTime;
+        logger.debug('ToolDiscoveryCache: Cache hit - returned cached tools', {
+          toolCount: tools.length,
+          duration: `${duration}ms`,
+          source: 'cache'
+        });
+      }
+      
+      return { tools };
     });
   }
   
@@ -154,5 +186,27 @@ export class ServerSetup {
    */
   getToolRegistry(): ToolRegistry {
     return this.toolRegistry;
+  }
+  
+  /**
+   * Get the tool discovery cache
+   */
+  getToolCache(): ToolDiscoveryCache {
+    return this.toolCache;
+  }
+  
+  /**
+   * Invalidate the tool discovery cache (useful for external tool changes)
+   */
+  invalidateToolCache(): void {
+    this.toolCache.invalidateToolList();
+    logger.info('ToolDiscoveryCache: Cache manually invalidated');
+  }
+  
+  /**
+   * Log current cache performance metrics
+   */
+  logCachePerformance(): void {
+    this.toolCache.logPerformance();
   }
 }
