@@ -91,21 +91,39 @@ jobs:
         run: |
           echo "🚀 Starting QA test suite..."
           
-          # Run the direct SDK test runner which works reliably
-          # (Inspector API approach had issues, direct SDK is simpler and more reliable)
-          timeout 540 node scripts/qa-direct-test.js || {
+          # Run BOTH test approaches for comprehensive validation:
+          
+          # 1. Direct SDK tests (internal validation - fast and reliable)
+          echo "📌 Running Direct SDK Tests (internal validation)..."
+          timeout 270 node scripts/qa-direct-test.js || {
             exit_code=$?
             if [ $exit_code -eq 124 ]; then
-              echo "⏰ QA tests timed out after 9 minutes"
-              echo "qa_status=timeout" >> $GITHUB_OUTPUT
+              echo "⏰ Direct SDK tests timed out after 4.5 minutes"
+              echo "direct_status=timeout" >> $GITHUB_OUTPUT
             else
-              echo "❌ QA tests failed with exit code: $exit_code"
-              echo "qa_status=failed" >> $GITHUB_OUTPUT
+              echo "❌ Direct SDK tests failed with exit code: $exit_code"
+              echo "direct_status=failed" >> $GITHUB_OUTPUT
             fi
-            exit $exit_code
+            # Don't exit yet - run Inspector tests too
           }
           
-          echo "✅ QA tests completed successfully"
+          # 2. Inspector CLI tests (CRITICAL: external client validation for protocol compliance)
+          echo ""
+          echo "📌 Running Inspector CLI Tests (EXTERNAL validation - protocol compliance)..."
+          timeout 270 npx @modelcontextprotocol/inspector --version && \
+          node scripts/qa-inspector-cli-test.js || {
+            exit_code=$?
+            if [ $exit_code -eq 124 ]; then
+              echo "⏰ Inspector CLI tests timed out after 4.5 minutes"
+              echo "inspector_status=timeout" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Inspector CLI tests failed with exit code: $exit_code"
+              echo "inspector_status=failed" >> $GITHUB_OUTPUT
+            fi
+            # Don't fail the job yet - we want to see both results
+          }
+          
+          echo "✅ QA test suite completed"
           echo "qa_status=success" >> $GITHUB_OUTPUT
 
       - name: Verify test results
