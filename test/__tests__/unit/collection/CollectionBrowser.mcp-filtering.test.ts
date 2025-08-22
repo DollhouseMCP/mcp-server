@@ -6,17 +6,20 @@
 import { CollectionBrowser } from '../../../../src/collection/CollectionBrowser.js';
 import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../../../../src/cache/CollectionCache.js';
+import { CollectionIndexManager } from '../../../../src/collection/CollectionIndexManager.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { describe, expect, it, beforeEach, jest } from '@jest/globals';
 
 // Mock the dependencies
 jest.mock('../../../../src/collection/GitHubClient.js');
 jest.mock('../../../../src/cache/CollectionCache.js');
+jest.mock('../../../../src/collection/CollectionIndexManager.js');
 
 describe('CollectionBrowser MCP Filtering', () => {
   let collectionBrowser: CollectionBrowser;
   let mockGitHubClient: jest.Mocked<GitHubClient>;
   let mockCollectionCache: jest.Mocked<CollectionCache>;
+  let mockCollectionIndexManager: jest.Mocked<CollectionIndexManager>;
 
   // Test data - includes both supported and unsupported types
   const mockGitHubDirectoryResponse = [
@@ -53,7 +56,12 @@ describe('CollectionBrowser MCP Filtering', () => {
       saveCache: jest.fn()
     } as any;
 
-    collectionBrowser = new CollectionBrowser(mockGitHubClient, mockCollectionCache);
+    mockCollectionIndexManager = {
+      getIndex: jest.fn().mockRejectedValue(new Error('No index available for testing')),
+      refreshIndex: jest.fn()
+    } as any;
+
+    collectionBrowser = new CollectionBrowser(mockGitHubClient, mockCollectionCache, mockCollectionIndexManager);
   });
 
   describe('browseCollection - GitHub API filtering', () => {
