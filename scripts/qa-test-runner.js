@@ -11,6 +11,9 @@
 import fetch from 'node-fetch';
 import { writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import { 
   discoverAvailableTools, 
   validateToolExists, 
@@ -22,9 +25,12 @@ import {
   ensureDirectoryExists
 } from './qa-utils.js';
 import { TestDataCleanup } from './qa-cleanup-manager.js';
+import { QAMetricsCollector, withMetrics } from './qa-metrics-collector.js';
+import DashboardGenerator from './qa-dashboard-generator.js';
 
-const INSPECTOR_URL = 'http://localhost:6277/message';
-const SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
+let INSPECTOR_URL = 'http://localhost:6277';
+let MESSAGE_ENDPOINT = '/message';
+let SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
 
 // CI Environment Detection
 const CI_ENVIRONMENT = isCI();
@@ -37,9 +43,14 @@ class MCPTestRunner {
     this.availableTools = []; // Initialize as empty array to prevent race conditions
     this.isCI = CI_ENVIRONMENT;
     this.cleanup = []; // Track cleanup operations for CI (legacy - replaced by TestDataCleanup)
+    this.mcpProcess = null; // Track the MCP server process
+    this.serverReady = false; // Track server readiness
     
     // Initialize cleanup manager with unique test run ID
     this.testCleanup = new TestDataCleanup(`QA_TEST_RUNNER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    
+    // Initialize metrics collector
+    this.metricsCollector = new QAMetricsCollector(`QA_RUNNER_${Date.now()}`);
     
     // Set up CI-specific configurations
     if (this.isCI) {
@@ -53,8 +64,191 @@ class MCPTestRunner {
     }
   }
 
+  async startMCPServer() {
+    console.log('🚀 Starting MCP Inspector for QA testing...');
+    const serverStartTime = Date.now();
+    
+    // Check if dist/index.js exists
+    const serverPath = 'dist/index.js';
+    if (!existsSync(serverPath)) {
+      throw new Error('MCP server build not found at dist/index.js. Run "npm run build" first.');
+    }
+    
+    // Start the MCP Inspector process (which wraps the server) with auth disabled for testing
+    this.mcpProcess = spawn('npx', ['@modelcontextprotocol/inspector', 'node', serverPath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { 
+        ...process.env, 
+        TEST_MODE: 'true',
+        NODE_ENV: 'test',
+        DANGEROUSLY_OMIT_AUTH: 'true'  // Disable auth for testing
+      }
+    });
+    
+    // Set up process event handlers
+    this.mcpProcess.on('error', (error) => {
+      console.error('❌ Failed to start MCP Inspector:', error.message);
+      throw error;
+    });
+    
+    this.mcpProcess.on('exit', (code, signal) => {
+      if (code !== 0 && code !== null) {
+        console.warn(`⚠️ MCP Inspector exited with code ${code}`);
+      }
+    });
+    
+    // Capture output to extract session token and port
+    let output = '';
+    this.mcpProcess.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      output += chunk;
+      
+      // Look for session token in output
+      const tokenMatch = chunk.match(/🔑 Session token: ([a-f0-9]+)/);
+      if (tokenMatch) {
+        SESSION_TOKEN = tokenMatch[1];
+        console.log('🔑 Extracted session token from Inspector');
+      }
+      
+      // Look for port in output
+      const portMatch = chunk.match(/Proxy server listening on localhost:(\d+)/);
+      if (portMatch) {
+        const port = portMatch[1];
+        INSPECTOR_URL = `http://localhost:${port}`;
+        console.log(`📡 Inspector running on port ${port}`);
+        
+        // Give the Inspector a moment to fully initialize the HTTP server
+        setTimeout(() => {
+          console.log('   Inspector HTTP server should be ready now');
+        }, 3000);
+      }
+    });
+    
+    this.mcpProcess.stderr.on('data', (data) => {
+      const stderr = data.toString();
+      console.warn('Inspector stderr:', stderr);
+      
+      // If there's a critical error, fail fast
+      if (stderr.includes('Failed to connect to MCP server') || 
+          stderr.includes('Server process exited') ||
+          stderr.includes('ENOENT')) {
+        console.error('❌ Critical Inspector error detected');
+        throw new Error(`Inspector startup failed: ${stderr.trim()}`);
+      }
+    });
+    
+    // Wait for server to be ready
+    await this.waitForServerReady();
+    const serverEndTime = Date.now();
+    this.metricsCollector.recordServerStartup(serverStartTime, serverEndTime);
+    console.log('✅ MCP Inspector started and ready');
+  }
+  
+  async waitForServerReady(maxRetries = 20, delay = 2000) {
+    console.log('⏳ Waiting for MCP Inspector to be ready...');
+    
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        // Try different common endpoints until one works
+        const endpoints = ['/message', '/api/message', '/sessions', '/rpc'];
+        let response = null;
+        let workingEndpoint = null;
+        
+        for (const endpoint of endpoints) {
+          try {
+            const fullUrl = INSPECTOR_URL + endpoint;
+            response = await fetch(fullUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                method: 'tools/list'
+              })
+            });
+            
+            if (response.ok || response.status !== 404) {
+              workingEndpoint = endpoint;
+              MESSAGE_ENDPOINT = endpoint;
+              console.log(`🔍 Found working endpoint: ${endpoint}`);
+              break;
+            }
+          } catch (error) {
+            // Continue trying other endpoints
+          }
+        }
+        
+        if (!response) {
+          throw new Error('No working endpoint found');
+        }
+        
+        if (response.ok) {
+          console.log(`✅ Inspector ready after ${(i + 1) * delay}ms`);
+          console.log(`📡 Using Inspector URL: ${INSPECTOR_URL}${MESSAGE_ENDPOINT}`);
+          this.serverReady = true;
+          return;
+        } else {
+          console.log(`   HTTP ${response.status}: ${response.statusText}`);
+        }
+      } catch (error) {
+        // Inspector not ready yet, continue waiting
+        if (i === 0) {
+          console.log(`   Connecting to: ${INSPECTOR_URL}${MESSAGE_ENDPOINT}`);
+        }
+        if (i < 3) {
+          console.log(`   Connection error: ${error.message}`);
+          // More detailed error for the first few attempts
+          if (error.code) {
+            console.log(`   Error code: ${error.code}`);
+          }
+        }
+      }
+      
+      console.log(`   Attempt ${i + 1}/${maxRetries}: Inspector not ready, waiting ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    
+    console.error('\n🔍 Debug Info:');
+    console.error('   Inspector URL:', INSPECTOR_URL + MESSAGE_ENDPOINT);
+    console.error('   Session Token length:', SESSION_TOKEN.length);
+    console.error('   Process still running:', this.mcpProcess && !this.mcpProcess.killed);
+    
+    throw new Error(`MCP Inspector failed to become ready after ${maxRetries * delay}ms`);
+  }
+  
+  async stopMCPServer() {
+    if (this.mcpProcess) {
+      console.log('🛑 Stopping MCP Inspector...');
+      
+      // Try graceful shutdown first
+      this.mcpProcess.kill('SIGTERM');
+      
+      // Wait a bit for graceful shutdown
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Force kill if still running
+      if (!this.mcpProcess.killed) {
+        console.log('🔨 Force killing MCP Inspector...');
+        this.mcpProcess.kill('SIGKILL');
+      }
+      
+      this.mcpProcess = null;
+      this.serverReady = false;
+      console.log('✅ MCP Inspector stopped');
+    }
+  }
+
   async discoverAvailableTools() {
-    this.availableTools = await discoverAvailableTools(INSPECTOR_URL, SESSION_TOKEN);
+    if (!this.serverReady) {
+      throw new Error('Cannot discover tools: MCP Inspector is not ready');
+    }
+    
+    const toolDiscoveryStartTime = Date.now();
+    // Use empty token since auth is disabled and full URL
+    this.availableTools = await discoverAvailableTools(INSPECTOR_URL + MESSAGE_ENDPOINT, '');
+    const toolDiscoveryEndTime = Date.now();
+    
+    this.metricsCollector.recordToolDiscovery(toolDiscoveryStartTime, toolDiscoveryEndTime, this.availableTools.length);
     return this.availableTools;
   }
 
@@ -64,18 +258,23 @@ class MCPTestRunner {
 
   async callTool(toolName, params = {}) {
     const startTime = Date.now();
-    
-    // Check if tool exists before calling (only if we have discovery data)
-    if (!this.validateToolExists(toolName)) {
-      return createTestResult(toolName, params, startTime, false, null, 'Tool not available', true);
-    }
+    let success = false;
+    let error = null;
+    let result = null;
+    let skipped = false;
     
     try {
-      const response = await fetch(INSPECTOR_URL, {
+      // Check if tool exists before calling (only if we have discovery data)
+      if (!this.validateToolExists(toolName)) {
+        skipped = true;
+        error = 'Tool not available';
+        return createTestResult(toolName, params, startTime, false, null, error, true);
+      }
+      
+      const response = await fetch(INSPECTOR_URL + MESSAGE_ENDPOINT, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SESSION_TOKEN}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           method: 'tools/call',
@@ -90,10 +289,16 @@ class MCPTestRunner {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const result = await response.json();
+      result = await response.json();
+      success = true;
       return createTestResult(toolName, params, startTime, true, result.result);
-    } catch (error) {
-      return createTestResult(toolName, params, startTime, false, null, error.message);
+    } catch (err) {
+      success = false;
+      error = err.message;
+      return createTestResult(toolName, params, startTime, false, null, error);
+    } finally {
+      const endTime = Date.now();
+      this.metricsCollector.recordTestExecution(toolName, params, startTime, endTime, success, error, skipped);
     }
   }
 
@@ -411,8 +616,11 @@ class MCPTestRunner {
 
   async runFullTestSuite() {
     console.log('🚀 Starting DollhouseMCP QA Test Suite...');
-    console.log(`📡 Connecting to Inspector at ${INSPECTOR_URL}`);
     console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
+    console.log(`📊 Metrics collector ID: ${this.metricsCollector.testRunId}`);
+    
+    // Start metrics collection
+    this.metricsCollector.startCollection();
     
     if (this.isCI) {
       console.log('🤖 CI Environment Configuration:');
@@ -422,6 +630,11 @@ class MCPTestRunner {
     
     let report = null;
     try {
+      // Start the MCP server before running tests
+      await this.startMCPServer();
+      
+      console.log(`📡 Connected to Inspector at ${INSPECTOR_URL}`);
+      
       await this.discoverAvailableTools();
       
       // Ensure availableTools is properly initialized before validation
@@ -438,9 +651,47 @@ class MCPTestRunner {
       await this.testErrorHandling();
       
       report = this.generateReport();
+      
+      // End metrics collection and generate metrics report
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Performance metrics saved to: ${metricsReport.filepath}`);
+        
+        // Auto-generate dashboard after metrics are saved
+        try {
+          console.log('🔄 Auto-updating QA metrics dashboard...');
+          const dashboardGenerator = new DashboardGenerator();
+          await dashboardGenerator.generateDashboard();
+          console.log('✅ Dashboard updated automatically');
+        } catch (dashboardError) {
+          console.warn(`⚠️  Dashboard generation failed: ${dashboardError.message}`);
+          // Don't fail the entire test run if dashboard generation fails
+        }
+      }
+      
       return report;
     } catch (error) {
       console.error('❌ Test suite failed:', error.message);
+      
+      // End metrics collection even on failure to capture partial data
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Partial metrics saved despite failure: ${metricsReport.filepath}`);
+        
+        // Auto-generate dashboard even for partial metrics (test failures)
+        try {
+          console.log('🔄 Updating dashboard with partial metrics...');
+          const dashboardGenerator = new DashboardGenerator();
+          await dashboardGenerator.generateDashboard();
+          console.log('✅ Dashboard updated with available data');
+        } catch (dashboardError) {
+          console.warn(`⚠️  Dashboard generation failed: ${dashboardError.message}`);
+        }
+      }
       
       // Log CI-specific error details
       if (this.isCI) {
@@ -453,6 +704,13 @@ class MCPTestRunner {
       
       return null;
     } finally {
+      // CRITICAL: Always stop the MCP server and cleanup
+      try {
+        await this.stopMCPServer();
+      } catch (serverError) {
+        console.error(`❌ CRITICAL: Failed to stop MCP server: ${serverError.message}`);
+      }
+      
       // CRITICAL: Always attempt cleanup, especially in CI
       // This ensures test artifacts are cleaned up even if tests fail
       try {

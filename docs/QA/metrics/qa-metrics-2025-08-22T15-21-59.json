@@ -1,0 +1,178 @@
+{
+  "timestamp": "2025-08-22T15:21:59.471Z",
+  "test_run_id": "TEST_METRICS_1755876119471",
+  "pr_number": null,
+  "commit_sha": null,
+  "branch": null,
+  "environment": {
+    "ci": false,
+    "node_version": "v24.1.0",
+    "platform": "darwin",
+    "test_personas_dir": null,
+    "github_token_available": false
+  },
+  "performance": {
+    "total_duration_ms": 153,
+    "tool_discovery_ms": 50,
+    "server_startup_ms": 100,
+    "tests": {
+      "list_elements": {
+        "executions": [
+          85,
+          120
+        ],
+        "total_duration_ms": 205,
+        "avg_duration_ms": 102.5,
+        "success_count": 2,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "activate_element": {
+        "executions": [
+          150
+        ],
+        "total_duration_ms": 150,
+        "avg_duration_ms": 150,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "invalid_tool": {
+        "executions": [
+          10
+        ],
+        "total_duration_ms": 10,
+        "avg_duration_ms": 10,
+        "success_count": 0,
+        "failure_count": 0,
+        "skip_count": 1
+      },
+      "browse_collection": {
+        "executions": [
+          300
+        ],
+        "total_duration_ms": 300,
+        "avg_duration_ms": 300,
+        "success_count": 0,
+        "failure_count": 1,
+        "skip_count": 0
+      }
+    },
+    "percentiles": {
+      "p50": 120,
+      "p95": 300,
+      "p99": 300,
+      "min": 10,
+      "max": 300,
+      "avg": 133,
+      "total_samples": 5
+    },
+    "memory_usage": {
+      "peak_rss": 46465024,
+      "min_rss": 46202880,
+      "avg_rss": 46344875,
+      "peak_heap": 5370360,
+      "min_heap": 4541528,
+      "avg_heap": 4852157,
+      "snapshots_count": 3,
+      "detailed_snapshots": [
+        {
+          "label": "test_start",
+          "timestamp": 1755876119471,
+          "rss": 46202880,
+          "heap_used": 4541528,
+          "heap_total": 6094848,
+          "external": 1776700,
+          "array_buffers": 32001
+        },
+        {
+          "label": "mid_test",
+          "timestamp": 1755876119573,
+          "rss": 46366720,
+          "heap_used": 5370360,
+          "heap_total": 6094848,
+          "external": 1776740,
+          "array_buffers": 32001
+        },
+        {
+          "label": "test_end",
+          "timestamp": 1755876119624,
+          "rss": 46465024,
+          "heap_used": 4644584,
+          "heap_total": 6094848,
+          "external": 1776740,
+          "array_buffers": 32001
+        }
+      ]
+    }
+  },
+  "success_metrics": {
+    "total_tests": 5,
+    "successful_tests": 3,
+    "failed_tests": 1,
+    "skipped_tests": 1,
+    "success_rate": 75,
+    "tools_available": 42
+  },
+  "test_details": [
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "personas"
+      },
+      "duration_ms": 85,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:21:59.573Z"
+    },
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "skills"
+      },
+      "duration_ms": 120,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:21:59.573Z"
+    },
+    {
+      "tool": "activate_element",
+      "params": {
+        "name": "Creative Writer"
+      },
+      "duration_ms": 150,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:21:59.573Z"
+    },
+    {
+      "tool": "invalid_tool",
+      "params": {},
+      "duration_ms": 10,
+      "success": false,
+      "error": "Tool not found",
+      "skipped": true,
+      "timestamp": "2025-08-22T15:21:59.573Z"
+    },
+    {
+      "tool": "browse_collection",
+      "params": {},
+      "duration_ms": 300,
+      "success": false,
+      "error": "Timeout",
+      "skipped": false,
+      "timestamp": "2025-08-22T15:21:59.573Z"
+    }
+  ],
+  "insights": [
+    {
+      "type": "reliability",
+      "severity": "high",
+      "message": "Success rate is 75%, indicating reliability issues",
+      "recommendation": "Investigate failed tests and improve error handling"
+    }
+  ]
+}

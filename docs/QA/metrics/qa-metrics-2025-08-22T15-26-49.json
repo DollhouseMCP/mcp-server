@@ -1,0 +1,108 @@
+{
+  "timestamp": "2025-08-22T15:26:48.863Z",
+  "test_run_id": "QA_SIMPLE_1755876408863",
+  "pr_number": null,
+  "commit_sha": null,
+  "branch": null,
+  "environment": {
+    "ci": false,
+    "node_version": "v24.1.0",
+    "platform": "darwin",
+    "test_personas_dir": null,
+    "github_token_available": false
+  },
+  "performance": {
+    "total_duration_ms": 297,
+    "tool_discovery_ms": 202,
+    "server_startup_ms": 0,
+    "tests": {
+      "direct_connection": {
+        "executions": [
+          95
+        ],
+        "total_duration_ms": 95,
+        "avg_duration_ms": 95,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "tools_availability": {
+        "executions": [
+          202
+        ],
+        "total_duration_ms": 202,
+        "avg_duration_ms": 202,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      }
+    },
+    "percentiles": {
+      "p50": 95,
+      "p95": 202,
+      "p99": 202,
+      "min": 95,
+      "max": 202,
+      "avg": 149,
+      "total_samples": 2
+    },
+    "memory_usage": {
+      "peak_rss": 81281024,
+      "min_rss": 73596928,
+      "avg_rss": 77438976,
+      "peak_heap": 13979768,
+      "min_heap": 13467640,
+      "avg_heap": 13723704,
+      "snapshots_count": 2,
+      "detailed_snapshots": [
+        {
+          "label": "test_start",
+          "timestamp": 1755876408863,
+          "rss": 73596928,
+          "heap_used": 13467640,
+          "heap_total": 19480576,
+          "external": 3998072,
+          "array_buffers": 229277
+        },
+        {
+          "label": "test_end",
+          "timestamp": 1755876409160,
+          "rss": 81281024,
+          "heap_used": 13979768,
+          "heap_total": 22724608,
+          "external": 3870620,
+          "array_buffers": 269632
+        }
+      ]
+    }
+  },
+  "success_metrics": {
+    "total_tests": 2,
+    "successful_tests": 2,
+    "failed_tests": 0,
+    "skipped_tests": 0,
+    "success_rate": 100,
+    "tools_available": 42
+  },
+  "test_details": [
+    {
+      "tool": "direct_connection",
+      "params": {},
+      "duration_ms": 95,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:26:48.958Z"
+    },
+    {
+      "tool": "tools_availability",
+      "params": {},
+      "duration_ms": 202,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:26:49.160Z"
+    }
+  ],
+  "insights": []
+}

@@ -17,6 +17,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG } from '../test-config.js';
 import { TestDataCleanup } from './qa-cleanup-manager.js';
+import { QAMetricsCollector } from './qa-metrics-collector.js';
 
 class GitHubIntegrationTestRunner {
   constructor() {
@@ -28,6 +29,9 @@ class GitHubIntegrationTestRunner {
     
     // Initialize cleanup manager with unique test run ID
     this.testCleanup = new TestDataCleanup(`QA_GITHUB_INTEGRATION_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    
+    // Initialize metrics collector
+    this.metricsCollector = new QAMetricsCollector(`QA_GITHUB_${Date.now()}`);
   }
 
   async connect() {
@@ -53,8 +57,12 @@ class GitHubIntegrationTestRunner {
   async discoverAvailableTools() {
     try {
       console.log('📋 Discovering available tools...');
+      const toolDiscoveryStartTime = Date.now();
       const result = await this.client.listTools();
       this.availableTools = result.tools.map(t => t.name);
+      const toolDiscoveryEndTime = Date.now();
+      
+      this.metricsCollector.recordToolDiscovery(toolDiscoveryStartTime, toolDiscoveryEndTime, this.availableTools.length);
       console.log(`📋 Discovered ${this.availableTools.length} available tools`);
       return this.availableTools;
     } catch (error) {
@@ -74,29 +82,36 @@ class GitHubIntegrationTestRunner {
 
   async callTool(toolName, args = {}) {
     const startTime = Date.now();
-    
-    // Check if tool exists before calling
-    if (!this.validateToolExists(toolName)) {
-      return {
-        success: false,
-        tool: toolName,
-        params: args,
-        skipped: true,
-        error: 'Tool not available',
-        duration: Date.now() - startTime
-      };
-    }
+    let success = false;
+    let error = null;
+    let result = null;
+    let skipped = false;
     
     try {
+      // Check if tool exists before calling
+      if (!this.validateToolExists(toolName)) {
+        skipped = true;
+        error = 'Tool not available';
+        return {
+          success: false,
+          tool: toolName,
+          params: args,
+          skipped: true,
+          error,
+          duration: Date.now() - startTime
+        };
+      }
+      
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error(`Tool call timed out after ${CONFIG.timeouts.github_operations/1000}s`)), CONFIG.timeouts.github_operations)
       );
       
-      const result = await Promise.race([
+      result = await Promise.race([
         this.client.callTool({ name: toolName, arguments: args }),
         timeoutPromise
       ]);
       
+      success = true;
       const duration = Date.now() - startTime;
       
       return {
@@ -106,16 +121,21 @@ class GitHubIntegrationTestRunner {
         result: result.content,
         duration
       };
-    } catch (error) {
+    } catch (err) {
+      success = false;
+      error = err.message;
       const duration = Date.now() - startTime;
       
       return {
         success: false,
         tool: toolName,
         params: args,
-        error: error.message,
+        error: error,
         duration
       };
+    } finally {
+      const endTime = Date.now();
+      this.metricsCollector.recordTestExecution(toolName, args, startTime, endTime, success, error, skipped);
     }
   }
 
@@ -492,6 +512,10 @@ class GitHubIntegrationTestRunner {
     console.log('🚀 Starting DollhouseMCP GitHub Integration QA Tests...');
     console.log('📋 This tests the complete portfolio → GitHub → collection workflow');
     console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
+    console.log(`📊 Metrics collector ID: ${this.metricsCollector.testRunId}`);
+    
+    // Start metrics collection
+    this.metricsCollector.startCollection();
     
     let report = null;
     try {
@@ -512,9 +536,27 @@ class GitHubIntegrationTestRunner {
       await this.testCompleteWorkflow();
       
       report = this.generateReport();
+      
+      // End metrics collection and generate metrics report
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 GitHub integration test metrics saved to: ${metricsReport.filepath}`);
+      }
+      
       return report;
     } catch (error) {
       console.error('❌ GitHub integration test suite failed:', error.message);
+      
+      // End metrics collection even on failure
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Partial GitHub integration test metrics saved: ${metricsReport.filepath}`);
+      }
+      
       return null;
     } finally {
       // CRITICAL: Always attempt cleanup and disconnection

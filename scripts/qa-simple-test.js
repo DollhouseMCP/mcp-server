@@ -11,6 +11,8 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG, isCI } from '../test-config.js';
 import { ensureDirectoryExists } from './qa-utils.js';
 import { TestDataCleanup } from './qa-cleanup-manager.js';
+import { QAMetricsCollector } from './qa-metrics-collector.js';
+import DashboardGenerator from './qa-dashboard-generator.js';
 
 class SimpleMCPTest {
   constructor() {
@@ -19,10 +21,14 @@ class SimpleMCPTest {
     
     // Initialize cleanup manager with unique test run ID
     this.testCleanup = new TestDataCleanup(`QA_SIMPLE_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    
+    // Initialize metrics collector
+    this.metricsCollector = new QAMetricsCollector(`QA_SIMPLE_${Date.now()}`);
   }
 
   async testDirectConnection() {
     console.log('🔧 Testing Direct MCP Connection...');
+    const testStartTime = Date.now();
     
     try {
       // Create a simple transport with minimal options
@@ -52,16 +58,25 @@ class SimpleMCPTest {
       console.log('✅ Tool call successful:', result.content?.[0]?.text?.substring(0, 100) || 'No text content');
       
       await client.close();
+      
+      const testEndTime = Date.now();
+      this.metricsCollector.recordTestExecution('direct_connection', {}, testStartTime, testEndTime, true);
+      
       return { success: true, result };
       
     } catch (error) {
       console.log('❌ Connection failed:', error.message);
+      
+      const testEndTime = Date.now();
+      this.metricsCollector.recordTestExecution('direct_connection', {}, testStartTime, testEndTime, false, error.message);
+      
       return { success: false, error: error.message };
     }
   }
 
   async testToolsAvailability() {
     console.log('🛠️  Testing Tool Availability...');
+    const testStartTime = Date.now();
     
     try {
       const transport = new StdioClientTransport({
@@ -95,10 +110,20 @@ class SimpleMCPTest {
       }
 
       await client.close();
-      return { success: true, toolCount: result.tools?.length || 0, tools: result.tools };
+      
+      const testEndTime = Date.now();
+      const toolCount = result.tools?.length || 0;
+      this.metricsCollector.recordTestExecution('tools_availability', {}, testStartTime, testEndTime, true);
+      this.metricsCollector.recordToolDiscovery(testStartTime, testEndTime, toolCount);
+      
+      return { success: true, toolCount, tools: result.tools };
       
     } catch (error) {
       console.log('❌ Tools test failed:', error.message);
+      
+      const testEndTime = Date.now();
+      this.metricsCollector.recordTestExecution('tools_availability', {}, testStartTime, testEndTime, false, error.message);
+      
       return { success: false, error: error.message };
     }
   }
@@ -117,6 +142,10 @@ class SimpleMCPTest {
   async runTests() {
     console.log('🚀 Starting Simple MCP Tests...');
     console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
+    console.log(`📊 Metrics collector ID: ${this.metricsCollector.testRunId}`);
+    
+    // Start metrics collection
+    this.metricsCollector.startCollection();
     
     let results = null;
     try {
@@ -127,10 +156,48 @@ class SimpleMCPTest {
       this.results.push({ test: 'tools_availability', ...toolsTest });
       
       this.generateReport();
+      
+      // End metrics collection and generate metrics report
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Simple test metrics saved to: ${metricsReport.filepath}`);
+        
+        // Auto-update dashboard
+        try {
+          console.log('🔄 Auto-updating QA metrics dashboard...');
+          const dashboardGenerator = new DashboardGenerator();
+          await dashboardGenerator.generateDashboard();
+          console.log('✅ Dashboard updated automatically');
+        } catch (dashboardError) {
+          console.warn(`⚠️  Dashboard generation failed: ${dashboardError.message}`);
+        }
+      }
+      
       results = this.results;
       return results;
     } catch (error) {
       console.error('❌ Simple tests failed:', error.message);
+      
+      // End metrics collection even on failure
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Partial simple test metrics saved: ${metricsReport.filepath}`);
+        
+        // Auto-update dashboard with partial data
+        try {
+          console.log('🔄 Updating dashboard with partial metrics...');
+          const dashboardGenerator = new DashboardGenerator();
+          await dashboardGenerator.generateDashboard();
+          console.log('✅ Dashboard updated with available data');
+        } catch (dashboardError) {
+          console.warn(`⚠️  Dashboard generation failed: ${dashboardError.message}`);
+        }
+      }
+      
       return null;
     } finally {
       // CRITICAL: Always attempt cleanup

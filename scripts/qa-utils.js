@@ -18,12 +18,18 @@ import { mkdirSync, existsSync } from 'fs';
 export async function discoverAvailableTools(inspectorUrl, sessionToken) {
   try {
     console.log('📋 Discovering available tools via Inspector API...');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    // Only add Authorization header if token is provided
+    if (sessionToken && sessionToken.trim()) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    
     const response = await fetch(inspectorUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${sessionToken}`
-      },
+      headers,
       body: JSON.stringify({
         method: 'tools/list'
       })
