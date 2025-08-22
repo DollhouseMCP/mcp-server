@@ -15,11 +15,11 @@ async function testTokenValidation() {
   console.log('🔍 Testing Token Validation Patterns...\n');
   
   const testCases = [
-    { token: 'gho_16C7e42F292c6912E7710c838347Ae178B4a', expected: true, name: 'Standard OAuth token' },
-    { token: 'gho_abc123', expected: true, name: 'Short OAuth token' },
-    { token: 'ghp_short', expected: true, name: 'Short PAT' },
-    { token: 'github_pat_11ABCDEF', expected: true, name: 'Fine-grained PAT' },
-    { token: 'ghx_future123', expected: true, name: 'Future token type' },
+    { token: 'gho_' + 'x'.repeat(36), expected: true, name: 'Standard OAuth token' },
+    { token: 'gho_test123', expected: true, name: 'Short OAuth token' },
+    { token: 'ghp_test', expected: true, name: 'Short PAT' },
+    { token: 'github_pat_test', expected: true, name: 'Fine-grained PAT' },
+    { token: 'ghx_test123', expected: true, name: 'Future token type' },
     { token: 'invalid_token', expected: false, name: 'Invalid token' },
     { token: '', expected: false, name: 'Empty token' },
   ];
