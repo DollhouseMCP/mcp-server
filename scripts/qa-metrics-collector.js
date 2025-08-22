@@ -267,8 +267,13 @@ export class QAMetricsCollector {
     const filename = `qa-metrics-${timestamp}.json`;
     const filepath = resolve(metricsDir, filename);
 
-    // Add performance insights
-    this.metrics.insights = this.generateInsights();
+    // Add performance insights (wrapped in try-catch to ensure metrics save isn't blocked)
+    try {
+      this.metrics.insights = this.generateInsights();
+    } catch (error) {
+      console.warn('⚠️  Failed to generate insights:', error.message);
+      this.metrics.insights = [];
+    }
 
     try {
       writeFileSync(filepath, JSON.stringify(this.metrics, null, 2));

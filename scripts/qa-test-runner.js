@@ -30,7 +30,7 @@ import DashboardGenerator from './qa-dashboard-generator.js';
 
 let INSPECTOR_URL = 'http://localhost:6277';
 let MESSAGE_ENDPOINT = '/message';
-let SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
+let SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '';
 
 // CI Environment Detection
 const CI_ENVIRONMENT = isCI();
@@ -81,7 +81,7 @@ class MCPTestRunner {
         ...process.env, 
         TEST_MODE: 'true',
         NODE_ENV: 'test',
-        DANGEROUSLY_OMIT_AUTH: 'true'  // Disable auth for testing
+        DANGEROUSLY_OMIT_AUTH: 'true'  // WARNING: Test-only configuration - NEVER use in production
       }
     });
     
