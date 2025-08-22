@@ -38,10 +38,15 @@ describe('CollectionIndexManager - Essential Tests', () => {
   let mockCollectionIndex: CollectionIndex;
   const mockCacheDir = '/mock/cache/dir';
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     resetAllMocks();
     mockFetch.mockClear();
+    
+    // Clear any existing cache and reset instance state
+    if (manager) {
+      await manager.clearCache();
+    }
     
     // Mock collection index data
     mockCollectionIndex = {
@@ -80,6 +85,15 @@ describe('CollectionIndexManager - Essential Tests', () => {
       maxRetries: 3,
       cacheDir: mockCacheDir
     });
+  });
+  
+  afterEach(async () => {
+    // Clean up after each test
+    if (manager) {
+      await manager.clearCache();
+    }
+    jest.clearAllMocks();
+    resetAllMocks();
   });
 
   describe('constructor', () => {
