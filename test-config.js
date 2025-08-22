@@ -4,8 +4,8 @@
  * Addresses PR #662 reviewer feedback about hardcoded timeouts and magic numbers
  */
 
-import { UnicodeValidator } from './src/security/validators/unicodeValidator.js';
-import { SecurityMonitor } from './src/security/securityMonitor.js';
+import { UnicodeValidator } from './dist/security/validators/unicodeValidator.js';
+import { SecurityMonitor } from './dist/security/securityMonitor.js';
 
 // CONFIGURATION OBJECT: Centralized timeout and test settings
 const CONFIG = {

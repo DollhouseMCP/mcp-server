@@ -8,6 +8,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
+import { CONFIG } from '../test-config.js';
 
 class SimpleMCPTest {
   constructor() {
@@ -37,10 +38,10 @@ class SimpleMCPTest {
       await client.connect(transport);
       console.log('✅ Connected successfully');
 
-      // Test a simple tool call with shorter timeout
+      // Test a simple tool call with tool call timeout
       const result = await Promise.race([
         client.callTool({ name: 'get_user_identity', arguments: {} }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${CONFIG.timeouts.tool_call/1000}s`)), CONFIG.timeouts.tool_call))
       ]);
 
       console.log('✅ Tool call successful:', result.content?.[0]?.text?.substring(0, 100) || 'No text content');
@@ -76,7 +77,7 @@ class SimpleMCPTest {
       // Get list of available tools
       const result = await Promise.race([
         client.listTools(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${CONFIG.timeouts.benchmark_timeout/1000}s`)), CONFIG.timeouts.benchmark_timeout))
       ]);
 
       console.log('✅ Tools available:', result.tools?.length || 0);

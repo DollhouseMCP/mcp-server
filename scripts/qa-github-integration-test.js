@@ -15,6 +15,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
+import { CONFIG } from '../test-config.js';
 
 class GitHubIntegrationTestRunner {
   constructor() {
@@ -84,7 +85,7 @@ class GitHubIntegrationTestRunner {
     
     try {
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Tool call timed out after 15s')), 15000)
+        setTimeout(() => reject(new Error(`Tool call timed out after ${CONFIG.timeouts.github_operations/1000}s`)), CONFIG.timeouts.github_operations)
       );
       
       const result = await Promise.race([
