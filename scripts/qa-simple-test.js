@@ -10,11 +10,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG, isCI } from '../test-config.js';
 import { ensureDirectoryExists } from './qa-utils.js';
+import { TestDataCleanup } from './qa-cleanup-manager.js';
 
 class SimpleMCPTest {
   constructor() {
     this.results = [];
     this.startTime = new Date();
+    
+    // Initialize cleanup manager with unique test run ID
+    this.testCleanup = new TestDataCleanup(`QA_SIMPLE_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   }
 
   async testDirectConnection() {
@@ -99,17 +103,43 @@ class SimpleMCPTest {
     }
   }
 
+  async performCleanup() {
+    console.log('\n🧹 Performing simple test cleanup...');
+    
+    try {
+      const cleanupResults = await this.testCleanup.cleanupAll();
+      console.log(`✅ Simple test cleanup completed: ${cleanupResults.cleaned} items cleaned, ${cleanupResults.failed} failed`);
+    } catch (error) {
+      console.warn(`⚠️  Simple test cleanup failed: ${error.message}`);
+    }
+  }
+
   async runTests() {
     console.log('🚀 Starting Simple MCP Tests...');
+    console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
     
-    const connectionTest = await this.testDirectConnection();
-    this.results.push({ test: 'connection', ...connectionTest });
-    
-    const toolsTest = await this.testToolsAvailability();
-    this.results.push({ test: 'tools_availability', ...toolsTest });
-    
-    this.generateReport();
-    return this.results;
+    let results = null;
+    try {
+      const connectionTest = await this.testDirectConnection();
+      this.results.push({ test: 'connection', ...connectionTest });
+      
+      const toolsTest = await this.testToolsAvailability();
+      this.results.push({ test: 'tools_availability', ...toolsTest });
+      
+      this.generateReport();
+      results = this.results;
+      return results;
+    } catch (error) {
+      console.error('❌ Simple tests failed:', error.message);
+      return null;
+    } finally {
+      // CRITICAL: Always attempt cleanup
+      try {
+        await this.performCleanup();
+      } catch (cleanupError) {
+        console.error(`❌ CRITICAL: Simple test cleanup failed: ${cleanupError.message}`);
+      }
+    }
   }
 
   generateReport() {
@@ -131,9 +161,16 @@ class SimpleMCPTest {
     ensureDirectoryExists('docs/QA');
     
     const filename = `simple-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+    const filepath = `docs/QA/${filename}`;
+    
+    // Track test result file for cleanup
+    this.testCleanup.trackArtifact('result', filename, filepath, {
+      type: 'test_results',
+      created_by: 'qa-simple-test'
+    });
     
     try {
-      writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
+      writeFileSync(filepath, JSON.stringify(report, null, 2));
       
       console.log(`\n📊 Simple Test Summary:`);
       console.log(`   Environment: ${isCI() ? 'CI' : 'Local'}`);

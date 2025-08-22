@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG } from '../test-config.js';
+import { TestDataCleanup } from './qa-cleanup-manager.js';
 
 class ElementTestRunner {
   constructor() {
@@ -17,6 +18,9 @@ class ElementTestRunner {
     this.client = null;
     this.transport = null;
     this.availableTools = [];
+    
+    // Initialize cleanup manager with unique test run ID
+    this.testCleanup = new TestDataCleanup(`QA_ELEMENT_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   }
 
   async connect() {
@@ -93,11 +97,20 @@ class ElementTestRunner {
     const status = result.success ? '✅' : '❌';
     console.log(`  ${status} Get Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
-    // Set test identity
-    result = await this.callToolSafe('set_user_identity', { username: 'sonnet-1-qa-tester' }, CONFIG.timeouts.tool_call);
+    // Set test identity with QA_TEST_ prefix
+    const testUsername = 'QA_TEST_USER_sonnet-1-qa-tester';
+    result = await this.callToolSafe('set_user_identity', { username: testUsername }, CONFIG.timeouts.tool_call);
     this.results.push(result);
     const status2 = result.success ? '✅' : '❌';
     console.log(`  ${status2} Set Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    
+    // Track test user identity for cleanup
+    if (result.success) {
+      this.testCleanup.trackArtifact('persona', testUsername, null, { 
+        type: 'test_user_identity',
+        created_by: 'qa-element-test' 
+      });
+    }
 
     return { passed: 2, total: 2 };
   }
@@ -273,9 +286,23 @@ class ElementTestRunner {
     
     const filename = `SONNET-1-Element-Testing-Report.md`;
     const jsonFilename = `SONNET-1-Element-Testing-Results.json`;
+    const jsonFilepath = `docs/QA/agent-reports/${jsonFilename}`;
+    const mdFilepath = `docs/QA/agent-reports/${filename}`;
+    
+    // Track test result files for cleanup
+    this.testCleanup.trackArtifact('result', jsonFilename, jsonFilepath, {
+      type: 'test_results',
+      format: 'json',
+      created_by: 'qa-element-test'
+    });
+    this.testCleanup.trackArtifact('result', filename, mdFilepath, {
+      type: 'test_results', 
+      format: 'markdown',
+      created_by: 'qa-element-test'
+    });
     
     // Write JSON results
-    writeFileSync(`docs/QA/agent-reports/${jsonFilename}`, JSON.stringify(report, null, 2));
+    writeFileSync(jsonFilepath, JSON.stringify(report, null, 2));
     
     // Write markdown report
     this.writeMarkdownReport(report, filename);
@@ -401,6 +428,17 @@ Based on testing, the DollhouseMCP element system shows:
     writeFileSync(`docs/QA/agent-reports/${filename}`, content);
   }
 
+  async performCleanup() {
+    console.log('\n🧹 Performing element test cleanup...');
+    
+    try {
+      const cleanupResults = await this.testCleanup.cleanupAll();
+      console.log(`✅ Element test cleanup completed: ${cleanupResults.cleaned} items cleaned, ${cleanupResults.failed} failed`);
+    } catch (error) {
+      console.warn(`⚠️  Element test cleanup failed: ${error.message}`);
+    }
+  }
+
   async disconnect() {
     if (this.client && this.transport) {
       await this.client.close();
@@ -410,7 +448,9 @@ Based on testing, the DollhouseMCP element system shows:
 
   async runFullTestSuite() {
     console.log('🚀 SONNET-1 Element Testing Specialist Starting...');
+    console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
     
+    let testResult = null;
     try {
       await this.connect();
       await this.discoverAvailableTools();
@@ -422,9 +462,8 @@ Based on testing, the DollhouseMCP element system shows:
       const errorTests = await this.testErrorHandling();
       
       const report = this.generateReport();
-      await this.disconnect();
       
-      return {
+      testResult = {
         report,
         summary: {
           user_identity: userTests,
@@ -434,10 +473,24 @@ Based on testing, the DollhouseMCP element system shows:
           error_handling: errorTests
         }
       };
+      
+      return testResult;
     } catch (error) {
       console.error('❌ Element testing failed:', error.message);
-      await this.disconnect();
       return null;
+    } finally {
+      // CRITICAL: Always attempt cleanup and disconnection
+      try {
+        await this.performCleanup();
+      } catch (cleanupError) {
+        console.error(`❌ CRITICAL: Element test cleanup failed: ${cleanupError.message}`);
+      }
+      
+      try {
+        await this.disconnect();
+      } catch (disconnectError) {
+        console.error(`⚠️  Disconnect error: ${disconnectError.message}`);
+      }
     }
   }
 }

@@ -16,6 +16,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG } from '../test-config.js';
+import { TestDataCleanup } from './qa-cleanup-manager.js';
 
 class GitHubIntegrationTestRunner {
   constructor() {
@@ -24,6 +25,9 @@ class GitHubIntegrationTestRunner {
     this.client = null;
     this.transport = null;
     this.availableTools = [];
+    
+    // Initialize cleanup manager with unique test run ID
+    this.testCleanup = new TestDataCleanup(`QA_GITHUB_INTEGRATION_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   }
 
   async connect() {
@@ -179,12 +183,12 @@ class GitHubIntegrationTestRunner {
   async testContentCreationAndUpload() {
     console.log('\n✨ Testing Content Creation & Upload...');
     
-    // Create a test persona for upload
-    const testPersonaName = `GitHub Test Persona ${Date.now()}`;
+    // Create a test persona for upload with QA_TEST_ prefix
+    const testPersonaName = `QA_TEST_PERSONA_GitHub_Integration_${Date.now()}`;
     let result = await this.callTool('create_element', {
       name: testPersonaName,
       type: 'personas',
-      description: 'A test persona created for GitHub integration testing'
+      description: 'A test persona created for GitHub integration testing - created by qa-github-integration-test'
     });
     
     this.results.push(result);
@@ -193,6 +197,15 @@ class GitHubIntegrationTestRunner {
       return false;
     } else {
       console.log(`  ✅ Create Test Persona: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+      
+      // Track test persona for cleanup
+      if (result.success) {
+        this.testCleanup.trackArtifact('persona', testPersonaName, null, {
+          type: 'test_persona',
+          created_by: 'qa-github-integration-test',
+          description: 'GitHub integration test persona'
+        });
+      }
       
       if (!result.success) {
         console.log('  ⚠️  Skipping upload test due to creation failure');
@@ -428,7 +441,15 @@ class GitHubIntegrationTestRunner {
     mkdirSync('docs/QA', { recursive: true });
     
     const filename = `qa-github-integration-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
-    writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
+    const filepath = `docs/QA/${filename}`;
+    
+    // Track test result file for cleanup
+    this.testCleanup.trackArtifact('result', filename, filepath, {
+      type: 'test_results',
+      created_by: 'qa-github-integration-test'
+    });
+    
+    writeFileSync(filepath, JSON.stringify(report, null, 2));
     
     console.log(`\n📊 GitHub Integration Test Summary:`);
     console.log(`   Available Tools: ${this.availableTools.length}`);
@@ -449,6 +470,17 @@ class GitHubIntegrationTestRunner {
     return report;
   }
 
+  async performCleanup() {
+    console.log('\n🧹 Performing GitHub integration test cleanup...');
+    
+    try {
+      const cleanupResults = await this.testCleanup.cleanupAll();
+      console.log(`✅ GitHub integration cleanup completed: ${cleanupResults.cleaned} items cleaned, ${cleanupResults.failed} failed`);
+    } catch (error) {
+      console.warn(`⚠️  GitHub integration cleanup failed: ${error.message}`);
+    }
+  }
+
   async disconnect() {
     if (this.client && this.transport) {
       await this.client.close();
@@ -459,7 +491,9 @@ class GitHubIntegrationTestRunner {
   async runGitHubIntegrationTests() {
     console.log('🚀 Starting DollhouseMCP GitHub Integration QA Tests...');
     console.log('📋 This tests the complete portfolio → GitHub → collection workflow');
+    console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
     
+    let report = null;
     try {
       await this.connect();
       await this.discoverAvailableTools();
@@ -477,14 +511,24 @@ class GitHubIntegrationTestRunner {
       await this.testOAuthFlow();
       await this.testCompleteWorkflow();
       
-      const report = this.generateReport();
-      await this.disconnect();
-      
+      report = this.generateReport();
       return report;
     } catch (error) {
       console.error('❌ GitHub integration test suite failed:', error.message);
-      await this.disconnect();
       return null;
+    } finally {
+      // CRITICAL: Always attempt cleanup and disconnection
+      try {
+        await this.performCleanup();
+      } catch (cleanupError) {
+        console.error(`❌ CRITICAL: GitHub integration cleanup failed: ${cleanupError.message}`);
+      }
+      
+      try {
+        await this.disconnect();
+      } catch (disconnectError) {
+        console.error(`⚠️  Disconnect error: ${disconnectError.message}`);
+      }
     }
   }
 }

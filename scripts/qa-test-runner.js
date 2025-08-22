@@ -21,6 +21,7 @@ import {
   isCI,
   ensureDirectoryExists
 } from './qa-utils.js';
+import { TestDataCleanup } from './qa-cleanup-manager.js';
 
 const INSPECTOR_URL = 'http://localhost:6277/message';
 const SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
@@ -35,7 +36,10 @@ class MCPTestRunner {
     this.startTime = new Date();
     this.availableTools = []; // Initialize as empty array to prevent race conditions
     this.isCI = CI_ENVIRONMENT;
-    this.cleanup = []; // Track cleanup operations for CI
+    this.cleanup = []; // Track cleanup operations for CI (legacy - replaced by TestDataCleanup)
+    
+    // Initialize cleanup manager with unique test run ID
+    this.testCleanup = new TestDataCleanup(`QA_TEST_RUNNER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
     
     // Set up CI-specific configurations
     if (this.isCI) {
@@ -142,10 +146,16 @@ class MCPTestRunner {
     this.results.push(result);
     console.log(`  ✅ Get Identity: ${result.success ? 'Success' : result.error}`);
 
-    // Set test identity
-    result = await this.callTool('set_user_identity', { username: 'qa-test-user' });
+    // Set test identity with QA_TEST_ prefix
+    const testUsername = 'QA_TEST_USER_qa-test-user';
+    result = await this.callTool('set_user_identity', { username: testUsername });
     this.results.push(result);
     console.log(`  ✅ Set Identity: ${result.success ? 'Success' : result.error}`);
+    
+    // Track test user identity for cleanup
+    if (result.success) {
+      this.testCleanup.trackArtifact('persona', testUsername, null, { type: 'test_user_identity' });
+    }
 
     // Verify identity was set
     result = await this.callTool('get_user_identity');
@@ -230,11 +240,12 @@ class MCPTestRunner {
       return false;
     }
     
-    // Create a test element
+    // Create a test element with QA_TEST_ prefix
+    const testPersonaName = 'QA_TEST_PERSONA_Test_Persona';
     const result = await this.callTool('create_element', {
-      name: 'QA Test Persona',
+      name: testPersonaName,
       type: 'personas',
-      description: 'A test persona for QA validation'
+      description: 'A test persona for QA validation - created by qa-test-runner'
     });
     
     this.results.push(result);
@@ -244,9 +255,18 @@ class MCPTestRunner {
     } else {
       console.log(`  ✅ Create Element: ${result.success ? 'Success' : result.error}`);
       
-      // Track cleanup in CI
-      if (this.isCI && result.success) {
-        this.cleanup.push(() => this.callTool('delete_element', { name: 'QA Test Persona', type: 'personas', deleteData: true }));
+      // Track test persona for cleanup
+      if (result.success) {
+        this.testCleanup.trackArtifact('persona', testPersonaName, null, { 
+          type: 'test_persona',
+          created_by: 'qa-test-runner',
+          description: 'Test persona created for QA validation' 
+        });
+        
+        // Legacy cleanup tracking (will be replaced by testCleanup)
+        if (this.isCI) {
+          this.cleanup.push(() => this.callTool('delete_element', { name: testPersonaName, type: 'personas', deleteData: true }));
+        }
       }
       
       return result.success;
@@ -282,13 +302,24 @@ class MCPTestRunner {
   }
 
   async performCleanup() {
+    console.log('\n🧹 Performing comprehensive cleanup operations...');
+    
+    try {
+      // Run new cleanup system
+      const cleanupResults = await this.testCleanup.cleanupAll();
+      console.log(`✅ Cleanup completed: ${cleanupResults.cleaned} items cleaned, ${cleanupResults.failed} failed`);
+    } catch (error) {
+      console.warn(`⚠️  New cleanup system failed: ${error.message}`);
+    }
+    
+    // Legacy cleanup as fallback
     if (this.cleanup.length > 0) {
-      console.log('\n🧹 Performing cleanup operations...');
+      console.log('🧹 Running legacy cleanup operations...');
       for (const cleanupFn of this.cleanup) {
         try {
           await cleanupFn();
         } catch (error) {
-          console.warn(`⚠️  Cleanup failed: ${error.message}`);
+          console.warn(`⚠️  Legacy cleanup failed: ${error.message}`);
         }
       }
     }
@@ -339,6 +370,12 @@ class MCPTestRunner {
     const filename = `qa-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
     const filepath = `${outputDir}/${filename}`;
     
+    // Track test result file for cleanup
+    this.testCleanup.trackArtifact('result', filename, filepath, {
+      type: 'test_results',
+      created_by: 'qa-test-runner'
+    });
+    
     try {
       writeFileSync(filepath, JSON.stringify(report, null, 2));
       
@@ -375,6 +412,7 @@ class MCPTestRunner {
   async runFullTestSuite() {
     console.log('🚀 Starting DollhouseMCP QA Test Suite...');
     console.log(`📡 Connecting to Inspector at ${INSPECTOR_URL}`);
+    console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
     
     if (this.isCI) {
       console.log('🤖 CI Environment Configuration:');
@@ -382,6 +420,7 @@ class MCPTestRunner {
       console.log(`   GitHub Token: ${process.env.GITHUB_TEST_TOKEN ? 'Available' : 'Not Available'}`);
     }
     
+    let report = null;
     try {
       await this.discoverAvailableTools();
       
@@ -398,7 +437,8 @@ class MCPTestRunner {
       await this.testContentCreation();
       await this.testErrorHandling();
       
-      return this.generateReport();
+      report = this.generateReport();
+      return report;
     } catch (error) {
       console.error('❌ Test suite failed:', error.message);
       
@@ -413,11 +453,16 @@ class MCPTestRunner {
       
       return null;
     } finally {
-      // Always attempt cleanup, especially in CI
+      // CRITICAL: Always attempt cleanup, especially in CI
+      // This ensures test artifacts are cleaned up even if tests fail
       try {
         await this.performCleanup();
       } catch (cleanupError) {
-        console.warn(`⚠️  Cleanup error: ${cleanupError.message}`);
+        console.error(`❌ CRITICAL: Cleanup failed: ${cleanupError.message}`);
+        // In CI, cleanup failure is serious as it can cause test data accumulation
+        if (this.isCI) {
+          console.error('🤖 CI CLEANUP FAILURE - Test data may accumulate!');
+        }
       }
     }
   }
