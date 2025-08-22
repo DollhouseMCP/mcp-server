@@ -1,0 +1,338 @@
+{
+  "timestamp": "2025-08-22T15:49:17.144Z",
+  "test_run_id": "QA_DIRECT_1755877757144",
+  "pr_number": null,
+  "commit_sha": null,
+  "branch": null,
+  "environment": {
+    "ci": false,
+    "node_version": "v24.1.0",
+    "platform": "darwin",
+    "test_personas_dir": null,
+    "github_token_available": false
+  },
+  "performance": {
+    "total_duration_ms": 453,
+    "tool_discovery_ms": 6,
+    "server_startup_ms": 0,
+    "tests": {
+      "list_elements": {
+        "executions": [
+          1,
+          11,
+          4,
+          13,
+          0
+        ],
+        "total_duration_ms": 29,
+        "avg_duration_ms": 5.8,
+        "success_count": 5,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "browse_collection": {
+        "executions": [
+          154,
+          6
+        ],
+        "total_duration_ms": 160,
+        "avg_duration_ms": 80,
+        "success_count": 2,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "search_collection": {
+        "executions": [
+          49
+        ],
+        "total_duration_ms": 49,
+        "avg_duration_ms": 49,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "get_user_identity": {
+        "executions": [
+          0,
+          0
+        ],
+        "total_duration_ms": 0,
+        "avg_duration_ms": 0,
+        "success_count": 2,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "set_user_identity": {
+        "executions": [
+          0
+        ],
+        "total_duration_ms": 0,
+        "avg_duration_ms": 0,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "get_active_elements": {
+        "executions": [
+          1,
+          0
+        ],
+        "total_duration_ms": 1,
+        "avg_duration_ms": 0.5,
+        "success_count": 2,
+        "failure_count": 0,
+        "skip_count": 0
+      },
+      "activate_element": {
+        "executions": [
+          0,
+          0
+        ],
+        "total_duration_ms": 0,
+        "avg_duration_ms": 0,
+        "success_count": 1,
+        "failure_count": 1,
+        "skip_count": 0
+      },
+      "deactivate_element": {
+        "executions": [
+          0
+        ],
+        "total_duration_ms": 0,
+        "avg_duration_ms": 0,
+        "success_count": 1,
+        "failure_count": 0,
+        "skip_count": 0
+      }
+    },
+    "percentiles": {
+      "p50": 0,
+      "p95": 154,
+      "p99": 154,
+      "min": 0,
+      "max": 154,
+      "avg": 15,
+      "total_samples": 16
+    },
+    "memory_usage": {
+      "peak_rss": 79527936,
+      "min_rss": 73826304,
+      "avg_rss": 76677120,
+      "peak_heap": 14370944,
+      "min_heap": 13358896,
+      "avg_heap": 13864920,
+      "snapshots_count": 2,
+      "detailed_snapshots": [
+        {
+          "label": "test_start",
+          "timestamp": 1755877757144,
+          "rss": 73826304,
+          "heap_used": 13358896,
+          "heap_total": 19480576,
+          "external": 4002449,
+          "array_buffers": 224154
+        },
+        {
+          "label": "test_end",
+          "timestamp": 1755877757597,
+          "rss": 79527936,
+          "heap_used": 14370944,
+          "heap_total": 22347776,
+          "external": 3893661,
+          "array_buffers": 292746
+        }
+      ]
+    }
+  },
+  "success_metrics": {
+    "total_tests": 16,
+    "successful_tests": 15,
+    "failed_tests": 1,
+    "skipped_tests": 0,
+    "success_rate": 94,
+    "tools_available": 42
+  },
+  "test_details": [
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "personas"
+      },
+      "duration_ms": 1,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.356Z"
+    },
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "skills"
+      },
+      "duration_ms": 11,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.367Z"
+    },
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "templates"
+      },
+      "duration_ms": 4,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.371Z"
+    },
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "agents"
+      },
+      "duration_ms": 13,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.384Z"
+    },
+    {
+      "tool": "browse_collection",
+      "params": {},
+      "duration_ms": 154,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.538Z"
+    },
+    {
+      "tool": "browse_collection",
+      "params": {
+        "type": "personas"
+      },
+      "duration_ms": 6,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.544Z"
+    },
+    {
+      "tool": "search_collection",
+      "params": {
+        "query": "creative"
+      },
+      "duration_ms": 49,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.593Z"
+    },
+    {
+      "tool": "get_user_identity",
+      "params": {},
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.594Z"
+    },
+    {
+      "tool": "set_user_identity",
+      "params": {
+        "username": "QA_TEST_USER_qa-direct-test-user"
+      },
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.594Z"
+    },
+    {
+      "tool": "get_user_identity",
+      "params": {},
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.594Z"
+    },
+    {
+      "tool": "get_active_elements",
+      "params": {
+        "type": "personas"
+      },
+      "duration_ms": 1,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.595Z"
+    },
+    {
+      "tool": "activate_element",
+      "params": {
+        "name": "Creative Writer",
+        "type": "personas"
+      },
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.595Z"
+    },
+    {
+      "tool": "get_active_elements",
+      "params": {
+        "type": "personas"
+      },
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.595Z"
+    },
+    {
+      "tool": "deactivate_element",
+      "params": {
+        "name": "Creative Writer",
+        "type": "personas"
+      },
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.596Z"
+    },
+    {
+      "tool": "list_elements",
+      "params": {
+        "type": "invalid_type"
+      },
+      "duration_ms": 0,
+      "success": true,
+      "error": null,
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.596Z"
+    },
+    {
+      "tool": "activate_element",
+      "params": {
+        "name": "NonExistentElement",
+        "type": "personas"
+      },
+      "duration_ms": 0,
+      "success": false,
+      "error": "MCP error -32602: MCP error -32602: Persona not found: NonExistentElement",
+      "skipped": false,
+      "timestamp": "2025-08-22T15:49:17.596Z"
+    }
+  ],
+  "insights": [
+    {
+      "type": "reliability",
+      "severity": "medium",
+      "message": "Success rate is 94%, could be improved",
+      "recommendation": "Review failing tests for potential improvements"
+    }
+  ]
+}
