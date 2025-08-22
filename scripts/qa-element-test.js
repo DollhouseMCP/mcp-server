@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { writeFileSync, mkdirSync } from 'fs';
 import { CONFIG } from '../test-config.js';
 import { TestDataCleanup } from './qa-cleanup-manager.js';
+import { QAMetricsCollector } from './qa-metrics-collector.js';
 
 class ElementTestRunner {
   constructor() {
@@ -21,6 +22,9 @@ class ElementTestRunner {
     
     // Initialize cleanup manager with unique test run ID
     this.testCleanup = new TestDataCleanup(`QA_ELEMENT_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    
+    // Initialize metrics collector
+    this.metricsCollector = new QAMetricsCollector(`QA_ELEMENT_${Date.now()}`);
   }
 
   async connect() {
@@ -46,8 +50,12 @@ class ElementTestRunner {
   async discoverAvailableTools() {
     try {
       console.log('📋 Discovering available tools...');
+      const toolDiscoveryStartTime = Date.now();
       const result = await this.client.listTools();
       this.availableTools = result.tools.map(t => t.name);
+      const toolDiscoveryEndTime = Date.now();
+      
+      this.metricsCollector.recordToolDiscovery(toolDiscoveryStartTime, toolDiscoveryEndTime, this.availableTools.length);
       console.log(`📋 Discovered ${this.availableTools.length} available tools`);
       return this.availableTools;
     } catch (error) {
@@ -59,15 +67,19 @@ class ElementTestRunner {
 
   async callToolSafe(toolName, args = {}, timeout = CONFIG.timeouts.benchmark_timeout) {
     const startTime = Date.now();
+    let success = false;
+    let error = null;
+    let result = null;
     
     try {
-      const result = await Promise.race([
+      result = await Promise.race([
         this.client.callTool(toolName, args),
         new Promise((_, reject) => 
           setTimeout(() => reject(new Error(`Timeout after ${timeout}ms`)), timeout)
         )
       ]);
       
+      success = true;
       const duration = Date.now() - startTime;
       return {
         success: true,
@@ -76,15 +88,20 @@ class ElementTestRunner {
         result: result.content,
         duration
       };
-    } catch (error) {
+    } catch (err) {
+      success = false;
+      error = err.message;
       const duration = Date.now() - startTime;
       return {
         success: false,
         tool: toolName,
         params: args,
-        error: error.message,
+        error: error,
         duration
       };
+    } finally {
+      const endTime = Date.now();
+      this.metricsCollector.recordTestExecution(toolName, args, startTime, endTime, success, error, false);
     }
   }
 
@@ -449,6 +466,10 @@ Based on testing, the DollhouseMCP element system shows:
   async runFullTestSuite() {
     console.log('🚀 SONNET-1 Element Testing Specialist Starting...');
     console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
+    console.log(`📊 Metrics collector ID: ${this.metricsCollector.testRunId}`);
+    
+    // Start metrics collection
+    this.metricsCollector.startCollection();
     
     let testResult = null;
     try {
@@ -462,6 +483,14 @@ Based on testing, the DollhouseMCP element system shows:
       const errorTests = await this.testErrorHandling();
       
       const report = this.generateReport();
+      
+      // End metrics collection and generate metrics report
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Element test metrics saved to: ${metricsReport.filepath}`);
+      }
       
       testResult = {
         report,
@@ -477,6 +506,15 @@ Based on testing, the DollhouseMCP element system shows:
       return testResult;
     } catch (error) {
       console.error('❌ Element testing failed:', error.message);
+      
+      // End metrics collection even on failure
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Partial element test metrics saved: ${metricsReport.filepath}`);
+      }
+      
       return null;
     } finally {
       // CRITICAL: Always attempt cleanup and disconnection

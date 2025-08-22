@@ -46,7 +46,11 @@
     "test:e2e:verbose": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs --verbose",
     "test:roundtrip": "npm run test:e2e",
     "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
-    "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup"
+    "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup",
+    "qa:direct": "node scripts/qa-direct-test.js",
+    "qa:inspector": "node scripts/qa-inspector-cli-test.js",
+    "qa:all": "npm run qa:direct && npm run qa:inspector",
+    "qa:simple": "node scripts/qa-simple-test.js"
   },
   "keywords": [
     "mcp",
@@ -117,6 +121,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
+    "@modelcontextprotocol/inspector": "^0.16.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",

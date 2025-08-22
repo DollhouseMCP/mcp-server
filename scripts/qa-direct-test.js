@@ -22,6 +22,7 @@ import {
 } from './qa-utils.js';
 import { CONFIG, isCI as configIsCI } from '../test-config.js';
 import { TestDataCleanup } from './qa-cleanup-manager.js';
+import { QAMetricsCollector } from './qa-metrics-collector.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -34,6 +35,9 @@ class DirectMCPTestRunner {
     
     // Initialize cleanup manager with unique test run ID
     this.testCleanup = new TestDataCleanup(`QA_DIRECT_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    
+    // Initialize metrics collector
+    this.metricsCollector = new QAMetricsCollector(`QA_DIRECT_${Date.now()}`);
     
     if (this.isCI) {
       console.log('🤖 Running in CI environment');
@@ -62,7 +66,11 @@ class DirectMCPTestRunner {
   }
 
   async discoverAvailableTools() {
+    const toolDiscoveryStartTime = Date.now();
     this.availableTools = await discoverAvailableToolsDirect(this.client);
+    const toolDiscoveryEndTime = Date.now();
+    
+    this.metricsCollector.recordToolDiscovery(toolDiscoveryStartTime, toolDiscoveryEndTime, this.availableTools.length);
     return this.availableTools;
   }
 
@@ -72,26 +80,38 @@ class DirectMCPTestRunner {
 
   async callTool(toolName, args = {}) {
     const startTime = Date.now();
-    
-    // Check if tool exists before calling
-    if (!this.validateToolExists(toolName)) {
-      return createTestResult(toolName, args, startTime, false, null, 'Tool not available', true);
-    }
+    let success = false;
+    let error = null;
+    let result = null;
+    let skipped = false;
     
     try {
+      // Check if tool exists before calling
+      if (!this.validateToolExists(toolName)) {
+        skipped = true;
+        error = 'Tool not available';
+        return createTestResult(toolName, args, startTime, false, null, error, true);
+      }
+      
       // Set server connection timeout
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error(`Tool call timed out after ${CONFIG.timeouts.server_connection/1000}s`)), CONFIG.timeouts.server_connection)
       );
       
-      const result = await Promise.race([
+      result = await Promise.race([
         this.client.callTool({ name: toolName, arguments: args }),
         timeoutPromise
       ]);
       
+      success = true;
       return createTestResult(toolName, args, startTime, true, result.content);
-    } catch (error) {
-      return createTestResult(toolName, args, startTime, false, null, error.message);
+    } catch (err) {
+      success = false;
+      error = err.message;
+      return createTestResult(toolName, args, startTime, false, null, error);
+    } finally {
+      const endTime = Date.now();
+      this.metricsCollector.recordTestExecution(toolName, args, startTime, endTime, success, error, skipped);
     }
   }
 
@@ -314,6 +334,10 @@ class DirectMCPTestRunner {
   async runFullTestSuite() {
     console.log('🚀 Starting Direct MCP QA Test Suite...');
     console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
+    console.log(`📊 Metrics collector ID: ${this.metricsCollector.testRunId}`);
+    
+    // Start metrics collection
+    this.metricsCollector.startCollection();
     
     let report = null;
     try {
@@ -332,9 +356,27 @@ class DirectMCPTestRunner {
       await this.testErrorHandling();
       
       report = this.generateReport();
+      
+      // End metrics collection and generate metrics report
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Direct test metrics saved to: ${metricsReport.filepath}`);
+      }
+      
       return report;
     } catch (error) {
       console.error('❌ Test suite failed:', error.message);
+      
+      // End metrics collection even on failure
+      this.metricsCollector.endCollection();
+      const metricsReport = this.metricsCollector.generateReport();
+      
+      if (metricsReport.filepath) {
+        console.log(`📊 Partial direct test metrics saved: ${metricsReport.filepath}`);
+      }
+      
       return null;
     } finally {
       // CRITICAL: Always attempt cleanup and disconnection

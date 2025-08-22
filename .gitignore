@@ -51,6 +51,12 @@ pids/
 tmp/
 temp/
 
+# QA test results and metrics (generated during testing)
+docs/QA/qa-*-test-results-*.json
+docs/QA/qa-*-results-*.json
+docs/QA/metrics/qa-metrics-*.json
+docs/QA/agent-reports/*.json
+
 # Development and testing
 test-personas/
 # __tests__/  # Tests should be tracked in version control
