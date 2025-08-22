@@ -21,6 +21,7 @@ import {
   ensureDirectoryExists
 } from './qa-utils.js';
 import { CONFIG, isCI as configIsCI } from '../test-config.js';
+import { TestDataCleanup } from './qa-cleanup-manager.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -30,6 +31,9 @@ class DirectMCPTestRunner {
     this.transport = null;
     this.availableTools = []; // Initialize as empty array to prevent race conditions
     this.isCI = isCI();
+    
+    // Initialize cleanup manager with unique test run ID
+    this.testCleanup = new TestDataCleanup(`QA_DIRECT_TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
     
     if (this.isCI) {
       console.log('🤖 Running in CI environment');
@@ -142,10 +146,19 @@ class DirectMCPTestRunner {
     this.results.push(result);
     console.log(`  ✅ Get Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
 
-    // Set test identity
-    result = await this.callTool('set_user_identity', { username: 'qa-test-user' });
+    // Set test identity with QA_TEST_ prefix
+    const testUsername = 'QA_TEST_USER_qa-direct-test-user';
+    result = await this.callTool('set_user_identity', { username: testUsername });
     this.results.push(result);
     console.log(`  ✅ Set Identity: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
+    
+    // Track test user identity for cleanup
+    if (result.success) {
+      this.testCleanup.trackArtifact('persona', testUsername, null, {
+        type: 'test_user_identity',
+        created_by: 'qa-direct-test'
+      });
+    }
 
     // Verify identity was set
     result = await this.callTool('get_user_identity');
@@ -256,7 +269,15 @@ class DirectMCPTestRunner {
     mkdirSync('docs/QA', { recursive: true });
     
     const filename = `qa-direct-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
-    writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
+    const filepath = `docs/QA/${filename}`;
+    
+    // Track test result file for cleanup
+    this.testCleanup.trackArtifact('result', filename, filepath, {
+      type: 'test_results',
+      created_by: 'qa-direct-test'
+    });
+    
+    writeFileSync(filepath, JSON.stringify(report, null, 2));
     
     console.log(`\n📊 Test Summary:`);
     console.log(`   Available Tools: ${this.availableTools.length}`);
@@ -272,6 +293,17 @@ class DirectMCPTestRunner {
     return report;
   }
 
+  async performCleanup() {
+    console.log('\n🧹 Performing direct test cleanup...');
+    
+    try {
+      const cleanupResults = await this.testCleanup.cleanupAll();
+      console.log(`✅ Direct test cleanup completed: ${cleanupResults.cleaned} items cleaned, ${cleanupResults.failed} failed`);
+    } catch (error) {
+      console.warn(`⚠️  Direct test cleanup failed: ${error.message}`);
+    }
+  }
+
   async disconnect() {
     if (this.client && this.transport) {
       await this.client.close();
@@ -281,7 +313,9 @@ class DirectMCPTestRunner {
 
   async runFullTestSuite() {
     console.log('🚀 Starting Direct MCP QA Test Suite...');
+    console.log(`🧹 Test cleanup ID: ${this.testCleanup.testRunId}`);
     
+    let report = null;
     try {
       await this.connect();
       await this.discoverAvailableTools();
@@ -297,14 +331,24 @@ class DirectMCPTestRunner {
       await this.testElementOperations();
       await this.testErrorHandling();
       
-      const report = this.generateReport();
-      await this.disconnect();
-      
+      report = this.generateReport();
       return report;
     } catch (error) {
       console.error('❌ Test suite failed:', error.message);
-      await this.disconnect();
       return null;
+    } finally {
+      // CRITICAL: Always attempt cleanup and disconnection
+      try {
+        await this.performCleanup();
+      } catch (cleanupError) {
+        console.error(`❌ CRITICAL: Direct test cleanup failed: ${cleanupError.message}`);
+      }
+      
+      try {
+        await this.disconnect();
+      } catch (disconnectError) {
+        console.error(`⚠️  Disconnect error: ${disconnectError.message}`);
+      }
     }
   }
 }
