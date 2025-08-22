@@ -41,8 +41,10 @@ export class InstallationDetector {
       
       // Check if we're in a node_modules directory (npm installation)
       // Use path separator to ensure we match the exact package name
-      const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
-      if (currentDir.includes(npmPattern)) {
+      // Normalize the path to handle both Windows and Unix separators
+      const normalizedCurrentDir = path.normalize(currentDir);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      if (normalizedCurrentDir.includes(npmPattern)) {
         logger.debug('[InstallationDetector] Detected npm installation');
         this.cachedType = 'npm';
         return 'npm';
@@ -95,7 +97,9 @@ export class InstallationDetector {
       let currentDir = path.dirname(currentFilePath);
       
       // Find the root of the npm package
-      while (currentDir.includes('node_modules/@dollhousemcp/mcp-server')) {
+      // Normalize paths to handle Windows and Unix separators
+      const npmPackagePattern = path.normalize('node_modules/@dollhousemcp/mcp-server');
+      while (path.normalize(currentDir).includes(npmPackagePattern)) {
         const packageJsonPath = path.join(currentDir, 'package.json');
         if (fs.existsSync(packageJsonPath)) {
           return currentDir;

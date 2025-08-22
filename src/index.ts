@@ -33,7 +33,7 @@ import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
+import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
@@ -79,6 +79,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private indicatorConfig: IndicatorConfig;
   private githubClient: GitHubClient;
   private githubAuthManager: GitHubAuthManager;
+  private collectionIndexManager: CollectionIndexManager;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
   private personaDetails: PersonaDetails;
@@ -138,7 +139,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.githubAuthManager = new GitHubAuthManager(this.apiCache);
-    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache);
+    this.collectionIndexManager = new CollectionIndexManager();
+    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache, this.collectionIndexManager);
     this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.elementInstaller = new ElementInstaller(this.githubClient);

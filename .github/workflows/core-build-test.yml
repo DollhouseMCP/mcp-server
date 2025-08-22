@@ -14,7 +14,6 @@ permissions:
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
-  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
 
 jobs:
   core-test:
@@ -38,6 +37,21 @@ jobs:
         shell: bash
         run: git fetch --tags --force
 
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Set cross-platform TEST_PERSONAS_DIR
+        shell: bash
+        run: |
+          # Use Node.js to create proper cross-platform path with escaped quotes for shell safety
+          TEST_PERSONAS_DIR=$(node -e "console.log(require('path').join(process.argv[1], 'test-personas'))" "${{ github.workspace }}")
+          echo "TEST_PERSONAS_DIR=$TEST_PERSONAS_DIR" >> $GITHUB_ENV
+          echo "Set TEST_PERSONAS_DIR to: $TEST_PERSONAS_DIR"
+
       - name: Validate environment
         # Use bash for cross-platform compatibility (Windows/macOS/Linux)
         shell: bash
@@ -59,13 +73,6 @@ jobs:
           echo "Current directory: $(pwd)"
           
           echo "✅ Environment validation passed"
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
 
       # Temporarily disabled TypeScript cache to debug CI issues
       # - name: Cache TypeScript build

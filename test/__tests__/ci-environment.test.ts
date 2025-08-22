@@ -235,8 +235,10 @@ describe('CI Environment Tests', () => {
     it('should provide necessary environment for integration tests', () => {
       if (isCI) {
         // Check that integration tests have what they need
+        // Windows uses USERPROFILE instead of HOME
+        const homeVar = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
         const requiredEnvVars = [
-          'HOME',
+          homeVar,
           'PATH'
         ];
         

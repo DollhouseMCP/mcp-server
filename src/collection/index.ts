@@ -4,6 +4,7 @@
 
 export * from './GitHubClient.js';
 export * from './CollectionBrowser.js';
+export * from './CollectionIndexManager.js';
 export * from './CollectionSearch.js';
 export * from './CollectionSeeder.js';
 export * from './PersonaDetails.js';

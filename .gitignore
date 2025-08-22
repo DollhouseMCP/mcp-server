@@ -37,6 +37,9 @@ test/coverage-integration/
 # Integration test temporary files
 .test-tmp/
 
+# Performance test temp directories 
+test/temp/*/
+
 # Logs
 logs/
 *.log
