@@ -13,7 +13,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { CollectionIndex } from '../types/collection.js';
+import { CollectionIndex } from '../types/collection';
 import { logger } from '../utils/logger.js';
 
 export interface CollectionIndexCacheEntry {
