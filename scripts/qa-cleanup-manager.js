@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readdirSync, unlinkSync, statSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { isCI, ensureDirectoryExists } from './qa-utils.js';
 
@@ -60,6 +60,7 @@ export class TestDataCleanup {
     this.startTime = new Date();
     this.dryRun = CLEANUP_CONFIG.DRY_RUN;
     this.safetyMode = CLEANUP_CONFIG.SAFETY_MODE;
+    this.maxAge = CLEANUP_CONFIG.MAX_AGE_MS; // Instance variable to avoid race conditions
     
     this.log(`🧹 TestDataCleanup initialized for run: ${this.testRunId}`);
     this.log(`   Environment: ${this.isCI ? 'CI' : 'Local'}`);
@@ -268,6 +269,12 @@ export class TestDataCleanup {
 
     let cleaned = false;
     for (const file of personaFiles) {
+      // Validate path is within safe directories
+      if (!this.isPathWithinSafeDirectories(file)) {
+        this.log(`Path validation failed - skipping persona file: ${file}`, 'warn');
+        continue;
+      }
+      
       if (this.dryRun) {
         this.log(`[DRY RUN] Would delete persona file: ${file}`);
         cleaned = true;
@@ -286,6 +293,21 @@ export class TestDataCleanup {
   }
 
   /**
+   * Check if a path is within safe directories for deletion
+   * @param {string} filePath - Path to validate
+   * @returns {boolean} True if path is within safe directories
+   */
+  isPathWithinSafeDirectories(filePath) {
+    const safePaths = [
+      resolve(process.cwd(), 'docs/QA'),
+      resolve(process.cwd(), 'test'),
+      resolve(process.env.TEST_PERSONAS_DIR || join(homedir(), '.dollhouse/portfolio/personas'))
+    ];
+    const resolvedPath = resolve(filePath);
+    return safePaths.some(safe => resolvedPath.startsWith(safe));
+  }
+
+  /**
    * Clean up file artifacts
    * @param {Object} artifact - File artifact to clean
    * @returns {Promise<boolean>} True if cleaned successfully
@@ -293,6 +315,12 @@ export class TestDataCleanup {
   async cleanupFileArtifact(artifact) {
     if (!artifact.path || !existsSync(artifact.path)) {
       this.log(`File not found: ${artifact.path || 'no path specified'}`);
+      return false;
+    }
+
+    // Validate path is within safe directories
+    if (!this.isPathWithinSafeDirectories(artifact.path)) {
+      this.log(`Path validation failed - not within safe directories: ${artifact.path}`, 'error');
       return false;
     }
 
@@ -339,6 +367,12 @@ export class TestDataCleanup {
 
     let cleaned = false;
     for (const file of resultFiles) {
+      // Validate path is within safe directories
+      if (!this.isPathWithinSafeDirectories(file)) {
+        this.log(`Path validation failed - skipping result file: ${file}`, 'warn');
+        continue;
+      }
+      
       if (this.dryRun) {
         this.log(`[DRY RUN] Would delete result file: ${file}`);
         cleaned = true;
@@ -383,6 +417,12 @@ export class TestDataCleanup {
     let cleaned = 0;
 
     for (const file of personaFiles) {
+      // Validate path is within safe directories
+      if (!this.isPathWithinSafeDirectories(file)) {
+        this.log(`Path validation failed - skipping persona: ${file}`, 'warn');
+        continue;
+      }
+      
       if (this.dryRun) {
         this.log(`[DRY RUN] Would delete test persona: ${file}`);
         cleaned++;
@@ -445,7 +485,7 @@ export class TestDataCleanup {
     this.log('📊 Cleaning old test results...');
     
     const now = Date.now();
-    const maxAge = CLEANUP_CONFIG.MAX_AGE_MS;
+    const maxAge = this.maxAge;
     let cleaned = 0;
 
     try {
@@ -463,6 +503,12 @@ export class TestDataCleanup {
 
         // Only clean old files to avoid interfering with current tests
         if (age > maxAge) {
+          // Validate path is within safe directories
+          if (!this.isPathWithinSafeDirectories(filePath)) {
+            this.log(`Path validation failed - skipping old result: ${filePath}`, 'warn');
+            continue;
+          }
+          
           if (this.dryRun) {
             this.log(`[DRY RUN] Would delete old test result: ${file} (age: ${Math.round(age / 1000 / 60)} minutes)`);
             cleaned++;
@@ -503,6 +549,12 @@ export class TestDataCleanup {
       for (const file of files) {
         if (this.isTestFile(file)) {
           const filePath = join(dirPath, file);
+          
+          // Validate path is within safe directories
+          if (!this.isPathWithinSafeDirectories(filePath)) {
+            this.log(`Path validation failed - skipping: ${filePath}`, 'warn');
+            continue;
+          }
           
           if (this.dryRun) {
             this.log(`[DRY RUN] Would delete test file: ${filePath}`);
@@ -635,12 +687,12 @@ export class TestDataCleanup {
     this.log('⚠️  FORCE CLEANUP: Bypassing safety checks and age limits', 'warn');
     
     const originalSafetyMode = this.safetyMode;
-    const originalMaxAge = CLEANUP_CONFIG.MAX_AGE_MS;
+    const originalMaxAge = this.maxAge;
     
     try {
-      // Temporarily disable safety mode and age checks
+      // Temporarily disable safety mode and age checks using instance variables
       this.safetyMode = false;
-      CLEANUP_CONFIG.MAX_AGE_MS = 0;
+      this.maxAge = 0;
       
       const results = await this.cleanupAll();
       
@@ -649,7 +701,7 @@ export class TestDataCleanup {
     } finally {
       // Restore original settings
       this.safetyMode = originalSafetyMode;
-      CLEANUP_CONFIG.MAX_AGE_MS = originalMaxAge;
+      this.maxAge = originalMaxAge;
     }
   }
 }
