@@ -5,27 +5,48 @@
  * 
  * Programmatically tests all MCP tools via the Inspector API
  * Addresses Issue #629 - Comprehensive QA Testing Process
+ * Updated for Issue #663 - CI/CD QA Integration
  */
 
 import fetch from 'node-fetch';
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
 import { 
   discoverAvailableTools, 
   validateToolExists, 
   calculateAccurateSuccessRate,
   createTestResult,
   logTestResult,
-  generateTestReport
+  generateTestReport,
+  isCI,
+  ensureDirectoryExists
 } from './qa-utils.js';
 
 const INSPECTOR_URL = 'http://localhost:6277/message';
 const SESSION_TOKEN = process.env.MCP_SESSION_TOKEN || '351ce3afd51944ef3c812bbb9651eff71c7f11a60108b00c2165ff335dd9efad';
+
+// CI Environment Detection
+const CI_ENVIRONMENT = isCI();
+const TEST_PERSONAS_DIR = process.env.TEST_PERSONAS_DIR || (CI_ENVIRONMENT ? '/tmp/test-personas' : undefined);
 
 class MCPTestRunner {
   constructor() {
     this.results = [];
     this.startTime = new Date();
     this.availableTools = []; // Initialize as empty array to prevent race conditions
+    this.isCI = CI_ENVIRONMENT;
+    this.cleanup = []; // Track cleanup operations for CI
+    
+    // Set up CI-specific configurations
+    if (this.isCI) {
+      console.log('🤖 Running in CI environment');
+      console.log(`📁 TEST_PERSONAS_DIR: ${TEST_PERSONAS_DIR}`);
+      
+      // Create test personas directory if needed
+      if (TEST_PERSONAS_DIR) {
+        ensureDirectoryExists(TEST_PERSONAS_DIR);
+      }
+    }
   }
 
   async discoverAvailableTools() {
@@ -135,6 +156,11 @@ class MCPTestRunner {
   async testPersonaOperations() {
     console.log('\n🎭 Testing Persona Operations...');
     
+    // Skip persona operations if no personas directory in CI
+    if (this.isCI && TEST_PERSONAS_DIR) {
+      console.log('  ℹ️  Using CI test personas directory');
+    }
+    
     // List elements to get one to work with
     let result = await this.callTool('list_elements', { type: 'personas' });
     this.results.push(result);
@@ -196,6 +222,14 @@ class MCPTestRunner {
   async testContentCreation() {
     console.log('\n✨ Testing Content Creation...');
     
+    // Skip content creation tests in CI that require GitHub tokens
+    if (this.isCI && !process.env.GITHUB_TEST_TOKEN) {
+      console.log('  ⚠️  Skipping content creation tests in CI (no GitHub token)');
+      const result = createTestResult('create_element', {}, Date.now(), false, null, 'CI: GitHub token required', true);
+      this.results.push(result);
+      return false;
+    }
+    
     // Create a test element
     const result = await this.callTool('create_element', {
       name: 'QA Test Persona',
@@ -209,6 +243,12 @@ class MCPTestRunner {
       return false;
     } else {
       console.log(`  ✅ Create Element: ${result.success ? 'Success' : result.error}`);
+      
+      // Track cleanup in CI
+      if (this.isCI && result.success) {
+        this.cleanup.push(() => this.callTool('delete_element', { name: 'QA Test Persona', type: 'personas', deleteData: true }));
+      }
+      
       return result.success;
     }
   }
@@ -241,6 +281,19 @@ class MCPTestRunner {
     return calculateAccurateSuccessRate(results);
   }
 
+  async performCleanup() {
+    if (this.cleanup.length > 0) {
+      console.log('\n🧹 Performing cleanup operations...');
+      for (const cleanupFn of this.cleanup) {
+        try {
+          await cleanupFn();
+        } catch (error) {
+          console.warn(`⚠️  Cleanup failed: ${error.message}`);
+        }
+      }
+    }
+  }
+
   generateReport() {
     const endTime = new Date();
     const duration = endTime - this.startTime;
@@ -251,6 +304,11 @@ class MCPTestRunner {
     const report = {
       timestamp: endTime.toISOString(),
       duration: `${duration}ms`,
+      environment: {
+        ci: this.isCI,
+        test_personas_dir: TEST_PERSONAS_DIR,
+        github_token_available: !!process.env.GITHUB_TEST_TOKEN
+      },
       tool_discovery: {
         available_tools_count: this.availableTools.length,
         available_tools: this.availableTools
@@ -274,26 +332,55 @@ class MCPTestRunner {
       }))
     };
 
+    // Ensure output directory exists
+    const outputDir = 'docs/QA';
+    ensureDirectoryExists(outputDir);
+    
     const filename = `qa-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
-    writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
+    const filepath = `${outputDir}/${filename}`;
     
-    console.log(`\n📊 Test Summary:`);
-    console.log(`   Available Tools: ${this.availableTools.length}`);
-    console.log(`   Total Tests: ${totalTests}`);
-    console.log(`   Executed Tests: ${stats.total}`);
-    console.log(`   Skipped Tests: ${stats.skipped}`);
-    console.log(`   Successful: ${stats.successful}`);
-    console.log(`   Failed: ${stats.total - stats.successful}`);
-    console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
-    console.log(`   Duration: ${report.duration}`);
-    console.log(`   Report: docs/QA/${filename}`);
-    
-    return report;
+    try {
+      writeFileSync(filepath, JSON.stringify(report, null, 2));
+      
+      console.log(`\n📊 Test Summary:`);
+      console.log(`   Environment: ${this.isCI ? 'CI' : 'Local'}`);
+      console.log(`   Available Tools: ${this.availableTools.length}`);
+      console.log(`   Total Tests: ${totalTests}`);
+      console.log(`   Executed Tests: ${stats.total}`);
+      console.log(`   Skipped Tests: ${stats.skipped}`);
+      console.log(`   Successful: ${stats.successful}`);
+      console.log(`   Failed: ${stats.total - stats.successful}`);
+      console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
+      console.log(`   Duration: ${report.duration}`);
+      console.log(`   Report: ${filepath}`);
+      
+      return report;
+    } catch (error) {
+      console.error(`❌ Failed to write report: ${error.message}`);
+      console.log(`\n📊 Test Summary (report save failed):`);
+      console.log(`   Environment: ${this.isCI ? 'CI' : 'Local'}`);
+      console.log(`   Available Tools: ${this.availableTools.length}`);
+      console.log(`   Total Tests: ${totalTests}`);
+      console.log(`   Executed Tests: ${stats.total}`);
+      console.log(`   Skipped Tests: ${stats.skipped}`);
+      console.log(`   Successful: ${stats.successful}`);
+      console.log(`   Failed: ${stats.total - stats.successful}`);
+      console.log(`   Success Rate: ${stats.percentage}% (based on executed tests only)`);
+      console.log(`   Duration: ${report.duration}`);
+      
+      return report;
+    }
   }
 
   async runFullTestSuite() {
     console.log('🚀 Starting DollhouseMCP QA Test Suite...');
     console.log(`📡 Connecting to Inspector at ${INSPECTOR_URL}`);
+    
+    if (this.isCI) {
+      console.log('🤖 CI Environment Configuration:');
+      console.log(`   TEST_PERSONAS_DIR: ${TEST_PERSONAS_DIR}`);
+      console.log(`   GitHub Token: ${process.env.GITHUB_TEST_TOKEN ? 'Available' : 'Not Available'}`);
+    }
     
     try {
       await this.discoverAvailableTools();
@@ -314,7 +401,24 @@ class MCPTestRunner {
       return this.generateReport();
     } catch (error) {
       console.error('❌ Test suite failed:', error.message);
+      
+      // Log CI-specific error details
+      if (this.isCI) {
+        console.error('🤖 CI Environment Details:');
+        console.error(`   Working Directory: ${process.cwd()}`);
+        console.error(`   Node Version: ${process.version}`);
+        console.error(`   Platform: ${process.platform}`);
+        console.error(`   Environment Variables: CI=${process.env.CI}`);
+      }
+      
       return null;
+    } finally {
+      // Always attempt cleanup, especially in CI
+      try {
+        await this.performCleanup();
+      } catch (cleanupError) {
+        console.warn(`⚠️  Cleanup error: ${cleanupError.message}`);
+      }
     }
   }
 }

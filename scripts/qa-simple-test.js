@@ -8,7 +8,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { writeFileSync, mkdirSync } from 'fs';
-import { CONFIG } from '../test-config.js';
+import { CONFIG, isCI } from '../test-config.js';
+import { ensureDirectoryExists } from './qa-utils.js';
 
 class SimpleMCPTest {
   constructor() {
@@ -118,17 +119,32 @@ class SimpleMCPTest {
     const report = {
       timestamp: endTime.toISOString(),
       duration: `${duration}ms`,
+      environment: {
+        ci: isCI(),
+        test_personas_dir: process.env.TEST_PERSONAS_DIR,
+        github_token_available: !!process.env.GITHUB_TEST_TOKEN
+      },
       tests: this.results
     };
 
-    mkdirSync('docs/QA', { recursive: true });
+    // Ensure output directory exists using CI-aware utility
+    ensureDirectoryExists('docs/QA');
     
     const filename = `simple-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
-    writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
     
-    console.log(`\n📊 Simple Test Summary:`);
-    console.log(`   Duration: ${report.duration}`);
-    console.log(`   Report: docs/QA/${filename}`);
+    try {
+      writeFileSync(`docs/QA/${filename}`, JSON.stringify(report, null, 2));
+      
+      console.log(`\n📊 Simple Test Summary:`);
+      console.log(`   Environment: ${isCI() ? 'CI' : 'Local'}`);
+      console.log(`   Duration: ${report.duration}`);
+      console.log(`   Report: docs/QA/${filename}`);
+    } catch (error) {
+      console.error(`❌ Failed to write report: ${error.message}`);
+      console.log(`\n📊 Simple Test Summary (report save failed):`);
+      console.log(`   Environment: ${isCI() ? 'CI' : 'Local'}`);
+      console.log(`   Duration: ${report.duration}`);
+    }
     
     return report;
   }

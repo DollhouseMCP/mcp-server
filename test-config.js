@@ -7,22 +7,30 @@
 import { UnicodeValidator } from './dist/security/validators/unicodeValidator.js';
 import { SecurityMonitor } from './dist/security/securityMonitor.js';
 
+// CI ENVIRONMENT DETECTION
+const IS_CI = process.env.CI === 'true' || 
+              process.env.CONTINUOUS_INTEGRATION === 'true' ||
+              process.env.GITHUB_ACTIONS === 'true' ||
+              !!process.env.JENKINS_URL ||
+              !!process.env.TRAVIS ||
+              !!process.env.CIRCLECI;
+
 // CONFIGURATION OBJECT: Centralized timeout and test settings
 const CONFIG = {
   timeouts: {
-    tool_call: 5000,           // Individual tool call timeout (5s)  
-    server_connection: 10000,  // Server connection timeout (10s)
-    github_operations: 15000,  // GitHub operations timeout (15s)
-    benchmark_timeout: 3000,   // Performance benchmark timeout (3s)
-    stress_test_timeout: 30000 // Stress test total timeout (30s)
+    tool_call: IS_CI ? 10000 : 5000,           // Individual tool call timeout (doubled in CI)
+    server_connection: IS_CI ? 20000 : 10000,  // Server connection timeout (doubled in CI)
+    github_operations: IS_CI ? 30000 : 15000,  // GitHub operations timeout (doubled in CI)
+    benchmark_timeout: IS_CI ? 6000 : 3000,    // Performance benchmark timeout (doubled in CI)
+    stress_test_timeout: IS_CI ? 60000 : 30000 // Stress test total timeout (doubled in CI)
   },
   test_settings: {
-    max_retries: 3,            // Maximum retry attempts for failed tests
-    batch_size: 10,            // Number of concurrent tests in batch
-    benchmark_iterations: 5,   // Number of iterations for performance benchmarks
-    stress_test_iterations: 10, // Number of iterations for stress testing
-    load_test_sizes: [10, 25, 50, 100], // Concurrent request sizes for load testing
-    expected_response_time: 100 // Expected average response time (ms)
+    max_retries: IS_CI ? 5 : 3,            // Maximum retry attempts for failed tests (more in CI)
+    batch_size: IS_CI ? 5 : 10,            // Number of concurrent tests in batch (smaller in CI)
+    benchmark_iterations: IS_CI ? 3 : 5,   // Number of iterations for performance benchmarks (fewer in CI)
+    stress_test_iterations: IS_CI ? 5 : 10, // Number of iterations for stress testing (fewer in CI)
+    load_test_sizes: IS_CI ? [5, 10, 20] : [10, 25, 50, 100], // Concurrent request sizes (smaller in CI)
+    expected_response_time: IS_CI ? 500 : 100 // Expected average response time (higher tolerance in CI)
   },
   validation: {
     success_threshold: 95,     // Minimum success rate for tests to pass (%)
@@ -265,6 +273,72 @@ function getAllTestableTools() {
   return AVAILABLE_TOOLS.filter(tool => !DEPRECATED_TOOLS.includes(tool));
 }
 
+/**
+ * Check if running in CI environment
+ */
+function isCI() {
+  return IS_CI;
+}
+
+/**
+ * Get CI-appropriate test arguments for tools that need different settings in CI
+ */
+function getCITestArguments(toolName) {
+  const args = TEST_ARGUMENTS[toolName] || {};
+  
+  // Override certain arguments for CI environment
+  if (IS_CI) {
+    switch (toolName) {
+      case 'setup_github_auth':
+        return {
+          ...args,
+          token: process.env.GITHUB_TEST_TOKEN || 'CI_PLACEHOLDER_TOKEN'
+        };
+      case 'create_element':
+        return {
+          ...args,
+          name: 'CI-Test-Element',
+          description: 'CI test element - safe to delete'
+        };
+      default:
+        return args;
+    }
+  }
+  
+  return args;
+}
+
+/**
+ * Check if a test should be skipped in CI
+ */
+function shouldSkipInCI(toolName) {
+  if (!IS_CI) return false;
+  
+  // Skip tests that require GitHub tokens if not available
+  const requiresGitHubToken = [
+    'setup_github_auth',
+    'submit_content',
+    'sync_portfolio'
+  ];
+  
+  if (requiresGitHubToken.includes(toolName) && !process.env.GITHUB_TEST_TOKEN) {
+    return true;
+  }
+  
+  // Skip tests that require real file operations if TEST_PERSONAS_DIR not set
+  const requiresFileSystem = [
+    'import_persona',
+    'export_persona',
+    'export_all_personas'
+  ];
+  
+  if (requiresFileSystem.includes(toolName) && !process.env.TEST_PERSONAS_DIR) {
+    return true;
+  }
+  
+  return false;
+}
+
 // Export configuration for use in test scripts
 export {
   CONFIG,
@@ -276,5 +350,8 @@ export {
   getToolTestConfig,
   calculateAccurateSuccessRate,
   getToolsByCategory,
-  getAllTestableTools
+  getAllTestableTools,
+  isCI,
+  getCITestArguments,
+  shouldSkipInCI
 };

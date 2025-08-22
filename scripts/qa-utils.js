@@ -3,9 +3,11 @@
  * 
  * Common functions used across all QA testing scripts to eliminate
  * code duplication and ensure consistent behavior.
+ * Updated for Issue #663 - CI/CD QA Integration
  */
 
 import fetch from 'node-fetch';
+import { mkdirSync, existsSync } from 'fs';
 
 /**
  * Discovers available MCP tools via the Inspector API
@@ -192,4 +194,94 @@ export function generateTestReport(results, availableTools, startTime) {
       duration: r.duration
     }))
   };
+}
+
+/**
+ * Detects if the script is running in a CI environment
+ * @returns {boolean} True if running in CI
+ */
+export function isCI() {
+  return process.env.CI === 'true' || 
+         process.env.CONTINUOUS_INTEGRATION === 'true' ||
+         process.env.GITHUB_ACTIONS === 'true' ||
+         !!process.env.JENKINS_URL ||
+         !!process.env.TRAVIS ||
+         !!process.env.CIRCLECI;
+}
+
+/**
+ * Ensures a directory exists, creating it if necessary
+ * @param {string} dirPath - Path to the directory
+ */
+export function ensureDirectoryExists(dirPath) {
+  try {
+    if (!existsSync(dirPath)) {
+      mkdirSync(dirPath, { recursive: true });
+      if (isCI()) {
+        console.log(`🤖 CI: Created directory ${dirPath}`);
+      }
+    }
+  } catch (error) {
+    if (isCI()) {
+      console.warn(`⚠️ CI: Failed to create directory ${dirPath}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Gets CI-appropriate timeout values
+ * @param {string} operation - Type of operation (tool_call, server_connection, etc.)
+ * @returns {number} Timeout in milliseconds
+ */
+export function getCITimeout(operation) {
+  const baseTimeouts = {
+    tool_call: 5000,
+    server_connection: 10000,
+    github_operations: 15000,
+    benchmark_timeout: 3000,
+    stress_test_timeout: 30000
+  };
+  
+  // Increase timeouts in CI environment
+  const ciMultiplier = isCI() ? 2 : 1;
+  return (baseTimeouts[operation] || 5000) * ciMultiplier;
+}
+
+/**
+ * Checks if a test should be skipped in CI environment
+ * @param {string} testName - Name of the test
+ * @param {Object} requirements - Test requirements
+ * @returns {Object} Skip status and reason
+ */
+export function shouldSkipInCI(testName, requirements = {}) {
+  if (!isCI()) {
+    return { skip: false, reason: null };
+  }
+  
+  // Skip tests that require GitHub tokens if not available
+  if (requirements.requiresGitHubToken && !process.env.GITHUB_TEST_TOKEN) {
+    return { 
+      skip: true, 
+      reason: 'CI: GitHub token required but not available' 
+    };
+  }
+  
+  // Skip tests that require real file system operations
+  if (requirements.requiresFileSystem && !process.env.TEST_PERSONAS_DIR) {
+    return { 
+      skip: true, 
+      reason: 'CI: File system operations require TEST_PERSONAS_DIR' 
+    };
+  }
+  
+  // Skip long-running tests in CI
+  if (requirements.longRunning && process.env.CI_SKIP_LONG_TESTS === 'true') {
+    return { 
+      skip: true, 
+      reason: 'CI: Long-running tests disabled' 
+    };
+  }
+  
+  return { skip: false, reason: null };
 }
