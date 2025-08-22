@@ -47,8 +47,8 @@ jobs:
       - name: Set cross-platform TEST_PERSONAS_DIR
         shell: bash
         run: |
-          # Use Node.js to create proper cross-platform path
-          TEST_PERSONAS_DIR=$(node -e "console.log(require('path').join('${{ github.workspace }}', 'test-personas'))")
+          # Use Node.js to create proper cross-platform path with escaped quotes for shell safety
+          TEST_PERSONAS_DIR=$(node -e "console.log(require('path').join(process.argv[1], 'test-personas'))" "${{ github.workspace }}")
           echo "TEST_PERSONAS_DIR=$TEST_PERSONAS_DIR" >> $GITHUB_ENV
           echo "Set TEST_PERSONAS_DIR to: $TEST_PERSONAS_DIR"
 
