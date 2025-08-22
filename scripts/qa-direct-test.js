@@ -16,9 +16,11 @@ import {
   validateToolExists, 
   calculateAccurateSuccessRate,
   createTestResult,
-  logTestResult
+  logTestResult,
+  isCI,
+  ensureDirectoryExists
 } from './qa-utils.js';
-import { CONFIG } from '../test-config.js';
+import { CONFIG, isCI as configIsCI } from '../test-config.js';
 
 class DirectMCPTestRunner {
   constructor() {
@@ -27,6 +29,12 @@ class DirectMCPTestRunner {
     this.client = null;
     this.transport = null;
     this.availableTools = []; // Initialize as empty array to prevent race conditions
+    this.isCI = isCI();
+    
+    if (this.isCI) {
+      console.log('🤖 Running in CI environment');
+      console.log(`📁 TEST_PERSONAS_DIR: ${process.env.TEST_PERSONAS_DIR}`);
+    }
   }
 
   async connect() {
