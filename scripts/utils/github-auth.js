@@ -18,7 +18,7 @@ import { homedir } from 'os';
  * Check if running in test mode (PAT available)
  */
 export function isTestMode() {
-  return !!process.env.GITHUB_TEST_TOKEN;
+  return !!process.env.TEST_GITHUB_TOKEN;
 }
 
 /**
@@ -27,9 +27,9 @@ export function isTestMode() {
  */
 export async function getAuthToken() {
   // WARNING: Test mode - using PAT instead of OAuth
-  if (process.env.GITHUB_TEST_TOKEN) {
+  if (process.env.TEST_GITHUB_TOKEN) {
     console.log('🧪 Using PAT for testing (not production OAuth flow)');
-    return process.env.GITHUB_TEST_TOKEN;
+    return process.env.TEST_GITHUB_TOKEN;
   }
   
   // Production mode - look for OAuth token

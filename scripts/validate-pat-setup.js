@@ -7,7 +7,7 @@
  * and provides clear instructions for proper configuration.
  * 
  * Checks performed:
- * - Environment variable GITHUB_TEST_TOKEN is set
+ * - Environment variable TEST_GITHUB_TOKEN is set
  * - Token format is valid
  * - Token works with GitHub API
  * - Required scopes are present (repo, read:user, user:email, read:org)
@@ -84,10 +84,10 @@ function printInstructions() {
   }
   console.log('');
   console.log('5. 💾 Copy the token and set it as an environment variable:');
-  console.log('   export GITHUB_TEST_TOKEN=<paste_your_token_here>');
+  console.log('   export TEST_GITHUB_TOKEN=<paste_your_token_here>');
   console.log('');
   console.log('   Or add to your shell profile (~/.zshrc, ~/.bashrc):');
-  console.log('   echo \'export GITHUB_TEST_TOKEN=<paste_your_token_here>\' >> ~/.zshrc');
+  console.log('   echo \'export TEST_GITHUB_TOKEN=<paste_your_token_here>\' >> ~/.zshrc');
   console.log('');
   console.log('6. ✅ Verify setup by running this script again');
   console.log('');

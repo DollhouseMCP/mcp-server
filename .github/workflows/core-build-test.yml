@@ -14,7 +14,7 @@ permissions:
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
-  GITHUB_TEST_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+  TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 
 jobs:
   core-test:
