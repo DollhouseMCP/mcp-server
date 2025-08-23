@@ -84,10 +84,10 @@ function printInstructions() {
   }
   console.log('');
   console.log('5. 💾 Copy the token and set it as an environment variable:');
-  console.log('   export GITHUB_TEST_TOKEN="your_token_here"');
+  console.log('   export GITHUB_TEST_TOKEN=<paste_your_token_here>');
   console.log('');
   console.log('   Or add to your shell profile (~/.zshrc, ~/.bashrc):');
-  console.log('   echo \'export GITHUB_TEST_TOKEN="your_token_here"\' >> ~/.zshrc');
+  console.log('   echo \'export GITHUB_TEST_TOKEN=<paste_your_token_here>\' >> ~/.zshrc');
   console.log('');
   console.log('6. ✅ Verify setup by running this script again');
   console.log('');
