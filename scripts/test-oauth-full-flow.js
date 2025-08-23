@@ -102,16 +102,17 @@ class MCPOAuthTester {
         throw new Error('No OAuth tools found in MCP server');
       }
       
-      console.log(chalk.green('✅ OAuth tools available:'));
-      oauthTools.forEach(tool => {
-        // Only log tool names to avoid leaking sensitive information
-        console.log(`   - ${tool.name}`);
-      });
+      // Log count only to avoid any potential sensitive information leakage
+      console.log(chalk.green(`✅ Found ${oauthTools.length} OAuth tools available`));
+      // Tool names are not logged to prevent information disclosure
       
       return true;
     } catch (error) {
       console.log(chalk.red('❌ Failed to connect to MCP server'));
-      throw error;
+      // Sanitize error before rethrowing to avoid leaking sensitive information
+      const sanitizedError = new Error('Failed to connect to MCP server');
+      sanitizedError.code = error.code || 'CONNECTION_FAILED';
+      throw sanitizedError;
     }
   }
 
@@ -271,17 +272,24 @@ class MCPOAuthTester {
       );
       
       if (githubTools.length > 0) {
-        console.log(chalk.green('Found GitHub-related tools:'));
+        console.log(chalk.green(`Found ${githubTools.length} GitHub-related tools`));
+        
+        // Test tools without logging their names to prevent information disclosure
+        let successCount = 0;
+        let failCount = 0;
+        
         for (const tool of githubTools) {
-          console.log(`  - ${tool.name}`);
-          
-          // Try to call the tool
           try {
-            const result = await this.callTool(tool.name);
-            console.log(chalk.green(`    ✅ ${tool.name} executed successfully`));
+            await this.callTool(tool.name);
+            successCount++;
           } catch (error) {
-            console.log(chalk.yellow(`    ⚠️ ${tool.name} failed: ${error.message}`));
+            failCount++;
           }
+        }
+        
+        console.log(chalk.green(`  ✅ ${successCount} tools executed successfully`));
+        if (failCount > 0) {
+          console.log(chalk.yellow(`  ⚠️ ${failCount} tools failed`));
         }
       }
       
@@ -386,7 +394,7 @@ class MCPOAuthTester {
       console.log(chalk.cyan('Summary:'));
       console.log(chalk.green('  ✅ MCP server connection successful'));
       console.log(chalk.green('  ✅ OAuth authentication completed'));
-      console.log(chalk.green('  ✅ OAuth tools verified'));
+      console.log(chalk.green('  ✅ OAuth functionality verified'));
       console.log(chalk.yellow('  ⚠️ Full API access requires additional MCP tools'));
       
     } catch (error) {
