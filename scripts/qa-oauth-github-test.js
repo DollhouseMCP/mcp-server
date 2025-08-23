@@ -10,7 +10,7 @@
  * 4. Accessing specific repository content
  */
 
-import { QATestRunner } from './qa-test-runner.js';
+import { MCPTestRunner } from './qa-test-runner.js';
 import chalk from 'chalk';
 import open from 'open';
 import readline from 'readline';
@@ -19,7 +19,7 @@ import { exec } from 'child_process';
 
 const execAsync = promisify(exec);
 
-class OAuthGitHubTest extends QATestRunner {
+class OAuthGitHubTest extends MCPTestRunner {
   constructor() {
     super('OAuth GitHub Access Test', 'qa-oauth-github');
     this.githubToken = null;
@@ -87,7 +87,8 @@ class OAuthGitHubTest extends QATestRunner {
     const setupText = setupResult.result?.[0]?.text || '';
     
     // Extract device code
-    const codeMatch = setupText.match(/Code:\*\*\s+([A-Z0-9]{4}-[A-Z0-9]{4})/);
+    const codeMatch = setupText.match(/Enter code:\s*\*\*([A-Z0-9]{4}-[A-Z0-9]{4})\*\*/) || 
+                      setupText.match(/code:\s*\*\*([A-Z0-9]{4}-[A-Z0-9]{4})\*\*/i);
     if (!codeMatch) {
       console.error(chalk.red('Failed to get device code'));
       return false;
@@ -273,10 +274,17 @@ class OAuthGitHubTest extends QATestRunner {
 // Run the test
 if (import.meta.url === `file://${process.argv[1]}`) {
   const test = new OAuthGitHubTest();
-  test.run().catch(error => {
-    console.error(chalk.red('Fatal error:'), error);
-    process.exit(1);
-  });
+  (async () => {
+    try {
+      await test.connectToMCP();
+      await test.runTests();
+    } catch (error) {
+      console.error(chalk.red('Fatal error:'), error);
+      process.exit(1);
+    } finally {
+      await test.cleanup();
+    }
+  })();
 }
 
 export default OAuthGitHubTest;

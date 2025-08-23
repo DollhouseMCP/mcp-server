@@ -17,7 +17,6 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { spawn, exec } from 'child_process';
 import open from 'open';
 import chalk from 'chalk';
-import ora from 'ora';
 import { promisify } from 'util';
 import readline from 'readline';
 
@@ -28,7 +27,6 @@ class MCPOAuthTester {
     this.client = null;
     this.transport = null;
     this.serverProcess = null;
-    this.spinner = null;
   }
 
   /**
@@ -71,7 +69,7 @@ class MCPOAuthTester {
    * Connect to the MCP server
    */
   async connectToMCP() {
-    this.spinner = ora('Connecting to MCP server...').start();
+    console.log(chalk.blue('🔄 Connecting to MCP server...'));
     
     try {
       // Spawn the MCP server process
@@ -96,7 +94,7 @@ class MCPOAuthTester {
 
       await this.client.connect(this.transport);
       
-      this.spinner.succeed('Connected to MCP server');
+      console.log(chalk.green('✅ Connected to MCP server'));
       
       // Discover available tools
       const tools = await this.client.listTools();
@@ -118,7 +116,7 @@ class MCPOAuthTester {
       
       return true;
     } catch (error) {
-      this.spinner.fail('Failed to connect to MCP server');
+      console.log(chalk.red('❌ Failed to connect to MCP server'));
       throw error;
     }
   }
@@ -146,9 +144,9 @@ class MCPOAuthTester {
     console.log(chalk.yellow('\n🔐 Starting OAuth Authentication Flow...\n'));
     
     // First check current auth status
-    this.spinner = ora('Checking current authentication status...').start();
+    console.log(chalk.blue('🔄 Checking current authentication status...'));
     const authStatus = await this.callTool('check_github_auth');
-    this.spinner.stop();
+    console.log(chalk.green('✅ Status check complete'));
     
     if (authStatus.content?.[0]?.text?.includes('✅')) {
       console.log(chalk.green('✅ Already authenticated with GitHub!'));
@@ -156,13 +154,14 @@ class MCPOAuthTester {
     }
     
     // Start OAuth setup
-    this.spinner = ora('Initiating GitHub OAuth...').start();
+    console.log(chalk.blue('🔄 Initiating GitHub OAuth...'));
     const setupResult = await this.callTool('setup_github_auth');
-    this.spinner.stop();
+    console.log(chalk.green('✅ OAuth initiated'));
     
     // Extract device code and verification URL
     const resultText = setupResult.content?.[0]?.text || '';
-    const codeMatch = resultText.match(/Code:\*\*\s+([A-Z0-9]{4}-[A-Z0-9]{4})/);
+    const codeMatch = resultText.match(/Enter code:\s*\*\*([A-Z0-9]{4}-[A-Z0-9]{4})\*\*/) || 
+                      resultText.match(/code:\s*\*\*([A-Z0-9]{4}-[A-Z0-9]{4})\*\*/i);
     const urlMatch = resultText.match(/https:\/\/github\.com\/login\/device/);
     
     if (!codeMatch || !urlMatch) {
@@ -207,7 +206,7 @@ class MCPOAuthTester {
     const maxAttempts = 60; // 5 minutes total
     let attempts = 0;
     
-    this.spinner = ora('Waiting for authentication...').start();
+    console.log(chalk.blue('🔄 Waiting for authentication...'));
     
     while (attempts < maxAttempts) {
       attempts++;
@@ -217,7 +216,7 @@ class MCPOAuthTester {
       const statusText = statusResult.content?.[0]?.text || '';
       
       if (statusText.includes('✅') && statusText.includes('Authenticated')) {
-        this.spinner.succeed('Authentication successful!');
+        console.log(chalk.green('✅ Authentication successful!'));
         console.log(chalk.green('\n✅ GitHub OAuth authentication completed!'));
         return true;
       }
@@ -227,20 +226,20 @@ class MCPOAuthTester {
       const helperText = helperStatus.content?.[0]?.text || '';
       
       if (helperText.includes('❌') || helperText.includes('FAILED')) {
-        this.spinner.fail('Authentication failed');
+        console.log(chalk.red('❌ Authentication failed'));
         console.log(chalk.red('\n❌ Authentication failed or was cancelled'));
         return false;
       }
       
-      // Update spinner with remaining time
+      // Show remaining time
       const remaining = Math.floor((maxAttempts - attempts) * 5 / 60);
-      this.spinner.text = `Waiting for authentication... (${remaining}m remaining)`;
+      process.stdout.write(`\r🔄 Waiting for authentication... (${remaining}m remaining)`);
       
       // Wait 5 seconds before next check
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
     
-    this.spinner.fail('Authentication timeout');
+    console.log(chalk.red('\n❌ Authentication timeout'));
     console.log(chalk.red('\n⏱️ Authentication timed out after 5 minutes'));
     return false;
   }
@@ -252,9 +251,9 @@ class MCPOAuthTester {
     console.log(chalk.yellow('\n🧪 Testing Authenticated GitHub API Access...\n'));
     
     // Test 1: Check authentication status
-    this.spinner = ora('Verifying authentication...').start();
+    console.log(chalk.blue('🔄 Verifying authentication...'));
     const authCheck = await this.callTool('check_github_auth');
-    this.spinner.succeed('Authentication verified');
+    console.log(chalk.green('✅ Authentication verified'));
     
     // Test 2: Get user information (this would use OAuth if properly integrated)
     console.log(chalk.blue('\n📊 Testing GitHub API Access through MCP...\n'));
