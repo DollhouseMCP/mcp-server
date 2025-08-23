@@ -29,6 +29,57 @@ class MCPOAuthTester {
   }
 
   /**
+   * Mask sensitive data for logging while preserving debugging value
+   */
+  maskSensitive(str, type = 'default') {
+    if (!str || typeof str !== 'string') return '***';
+    
+    switch (type) {
+      case 'tool':
+        // For tool names: show first 3 chars and mask the rest
+        if (str.length <= 3) return '***';
+        return str.substring(0, 3) + '*'.repeat(Math.min(str.length - 3, 10));
+      
+      case 'url':
+        // For URLs: mask domain but keep protocol and path structure
+        try {
+          const url = new URL(str);
+          const maskedHost = url.hostname.substring(0, 3) + '*'.repeat(Math.min(url.hostname.length - 3, 8));
+          return `${url.protocol}//${maskedHost}${url.pathname}`;
+        } catch {
+          // Fallback if not a valid URL
+          return this.maskSensitive(str, 'default');
+        }
+      
+      case 'token':
+        // For tokens: show first 4 chars only
+        if (str.length <= 4) return '****';
+        return str.substring(0, 4) + '*'.repeat(Math.min(str.length - 4, 16));
+      
+      default:
+        // General masking: show first 3 chars
+        if (str.length <= 3) return '***';
+        return str.substring(0, 3) + '*'.repeat(Math.min(str.length - 3, 10));
+    }
+  }
+
+  /**
+   * Sanitize error message while preserving useful debugging information
+   */
+  sanitizeError(error, context = '') {
+    if (!error) return new Error('Unknown error');
+    
+    const sanitizedError = new Error(`${context ? context + ': ' : ''}${error.message ? this.maskSensitive(error.message) : 'Unknown error'}`);
+    sanitizedError.code = error.code || 'UNKNOWN_ERROR';
+    sanitizedError.name = error.name || 'Error';
+    // Preserve non-sensitive properties
+    if (error.status) sanitizedError.status = error.status;
+    if (error.statusCode) sanitizedError.statusCode = error.statusCode;
+    
+    return sanitizedError;
+  }
+
+  /**
    * Create readline interface for user input
    */
   createReadlineInterface() {
@@ -102,16 +153,17 @@ class MCPOAuthTester {
         throw new Error('No OAuth tools found in MCP server');
       }
       
-      // Log count only to avoid any potential sensitive information leakage
-      console.log(chalk.green(`✅ Found ${oauthTools.length} OAuth tools available`));
-      // Tool names are not logged to prevent information disclosure
+      // Log with masked tool names for debugging while maintaining security
+      console.log(chalk.green(`✅ Found ${oauthTools.length} OAuth tools available:`));
+      oauthTools.forEach(tool => {
+        console.log(`   - ${this.maskSensitive(tool.name, 'tool')}`);
+      });
       
       return true;
     } catch (error) {
       console.log(chalk.red('❌ Failed to connect to MCP server'));
       // Sanitize error before rethrowing to avoid leaking sensitive information
-      const sanitizedError = new Error('Failed to connect to MCP server');
-      sanitizedError.code = error.code || 'CONNECTION_FAILED';
+      const sanitizedError = this.sanitizeError(error, 'MCP Connection Failed');
       throw sanitizedError;
     }
   }
@@ -127,8 +179,8 @@ class MCPOAuthTester {
       });
       return result;
     } catch (error) {
-      console.error(chalk.red(`Error calling tool ${toolName}:`, error.message));
-      throw error;
+      console.error(chalk.red(`Error calling tool ${this.maskSensitive(toolName, 'tool')}:`), this.maskSensitive(error.message || 'Unknown error'));
+      throw this.sanitizeError(error, 'Tool Call Failed');
     }
   }
 
@@ -274,22 +326,25 @@ class MCPOAuthTester {
       if (githubTools.length > 0) {
         console.log(chalk.green(`Found ${githubTools.length} GitHub-related tools`));
         
-        // Test tools without logging their names to prevent information disclosure
+        // Test tools with masked names for debugging purposes
         let successCount = 0;
         let failCount = 0;
         
+        console.log(chalk.blue('Testing GitHub tools:'));
         for (const tool of githubTools) {
           try {
             await this.callTool(tool.name);
+            console.log(chalk.green(`  ✅ ${this.maskSensitive(tool.name, 'tool')} - success`));
             successCount++;
           } catch (error) {
+            console.log(chalk.yellow(`  ⚠️ ${this.maskSensitive(tool.name, 'tool')} - failed: ${this.maskSensitive(error.message || 'unknown error')}`));
             failCount++;
           }
         }
         
-        console.log(chalk.green(`  ✅ ${successCount} tools executed successfully`));
+        console.log(chalk.green(`\n  Summary: ${successCount} tools executed successfully`));
         if (failCount > 0) {
-          console.log(chalk.yellow(`  ⚠️ ${failCount} tools failed`));
+          console.log(chalk.yellow(`  ${failCount} tools failed`));
         }
       }
       
