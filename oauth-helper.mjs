@@ -196,13 +196,22 @@ async function writePidFile() {
 }
 
 async function main() {
-  await log(`OAuth helper started - PID: ${process.pid}`);
-  await log(`Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
-  await log(`Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
+  await log(`[START] OAuth helper started - PID: ${process.pid}`);
+  await log(`[CONFIG] Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
+  await log(`[CONFIG] Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
+  await log(`[CONFIG] Node version: ${process.version}`);
+  await log(`[CONFIG] Platform: ${process.platform}`);
   // Never log client ID
   
   // Write PID file for tracking
   await writePidFile();
+  
+  // Write initial heartbeat
+  let lastHeartbeat = Date.now();
+  const heartbeatInterval = setInterval(async () => {
+    await log(`[HEARTBEAT] Process alive - Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+    lastHeartbeat = Date.now();
+  }, 30000); // Every 30 seconds
   
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
@@ -233,7 +242,8 @@ async function main() {
   
   while (Date.now() < timeout) {
     attempts++;
-    await log(`Polling attempt ${attempts}...`);
+    const timeElapsed = Math.round((Date.now() - startTime) / 1000);
+    await log(`[POLL] Attempt ${attempts} at ${timeElapsed}s elapsed...`);
     
     try {
       const response = await pollGitHub(deviceCode, clientId);
@@ -242,45 +252,50 @@ async function main() {
         switch (response.error) {
           case 'authorization_pending':
             // User hasn't authorized yet, keep polling
-            await log('Authorization pending, continuing to poll...');
+            await log('[STATUS] Authorization pending, user has not authorized yet...');
             break;
             
           case 'slow_down':
             // GitHub is asking us to slow down
-            await log(`Slowing down polling interval to ${pollInterval * 1.5}s`);
+            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${pollInterval * 1.5}s`);
             await sleep(pollInterval * 1500);
             continue;
             
           case 'expired_token':
-            await log('Device code expired');
+            await log('[ERROR] Device code expired - authentication window closed');
+            clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           case 'access_denied':
-            await log('User denied authorization');
+            await log('[ERROR] User denied authorization request');
+            clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           default:
-            await log(`Unknown error from GitHub: ${response.error}`);
-            await log(`Error description: ${response.error_description}`);
+            await log(`[ERROR] Unknown error from GitHub: ${response.error}`);
+            await log(`[ERROR] Error description: ${response.error_description}`);
         }
       } else if (response.access_token) {
         // Success! We got the token
-        await log('✅ Token received from GitHub!');
+        await log('[SUCCESS] ✅ Token received from GitHub!');
         consecutiveErrors = 0; // Reset error counter
         
         // Store the token
         const stored = await storeToken(response.access_token);
         
         if (stored) {
-          await log('✅ OAuth authentication completed successfully');
+          await log('[SUCCESS] ✅ OAuth authentication completed successfully');
+          await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
           console.log('✅ GitHub authentication successful! Token has been stored.');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(0);
         } else {
-          await log('❌ Failed to store token');
+          await log('[ERROR] ❌ Failed to store token');
           console.error('❌ Failed to store authentication token');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(1);
         }
@@ -289,7 +304,7 @@ async function main() {
         consecutiveErrors = 0;
       }
     } catch (error) {
-      await log(`Error during polling: ${error.message}`);
+      await log(`[ERROR] Polling error: ${error.message}`);
       
       // Classify error types
       const isNetworkError = error.message && (
@@ -302,16 +317,18 @@ async function main() {
       
       if (isNetworkError) {
         consecutiveErrors++;
-        await log(`Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
+        await log(`[NETWORK] Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
         
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          await log('Too many consecutive network errors, exiting');
+          await log('[FATAL] Too many consecutive network errors, exiting');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(1);
         }
       } else {
         // Non-network error, likely fatal
-        await log(`Fatal error: ${error.message}`);
+        await log(`[FATAL] Non-recoverable error: ${error.message}`);
+        clearInterval(heartbeatInterval);
         await cleanupPidFile();
         process.exit(1);
       }
@@ -322,8 +339,10 @@ async function main() {
   }
   
   // Timeout reached
-  await log('⏱️ OAuth authorization timed out');
+  await log('[TIMEOUT] ⏱️ OAuth authorization timed out');
+  await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
   console.error('⏱️ GitHub authorization timed out. Please try again.');
+  clearInterval(heartbeatInterval);
   await cleanupPidFile();
   process.exit(1);
 }
