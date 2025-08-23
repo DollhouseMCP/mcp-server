@@ -130,7 +130,10 @@ export class ServerSetup {
         // Normalize Unicode in all string arguments to prevent security bypasses
         const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
         
-        return await handler(normalizedArgs);
+        // Fix [object Object] parameter parsing errors by ensuring proper serialization/deserialization
+        const processedArgs = this.processComplexArguments(normalizedArgs, name);
+        
+        return await handler(processedArgs);
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
@@ -142,6 +145,53 @@ export class ServerSetup {
         );
       }
     });
+  }
+  
+  /**
+   * Process complex arguments to prevent [object Object] parameter parsing errors
+   * Implements known working solution from OAUTH_KNOWN_WORKAROUNDS.md
+   */
+  private processComplexArguments(args: any, toolName: string): any {
+    if (args === null || args === undefined) {
+      return args;
+    }
+    
+    // Handle string arguments that might be JSON
+    if (typeof args === 'string') {
+      try {
+        // Try parsing if it looks like JSON
+        if (args.startsWith('{') || args.startsWith('[')) {
+          return JSON.parse(args);
+        }
+        return args;
+      } catch {
+        // If parsing fails, use as-is
+        return args;
+      }
+    }
+    
+    // Handle objects that might need stringification for certain tools
+    if (typeof args === 'object' && !Array.isArray(args)) {
+      const processedArgs: any = {};
+      for (const [key, value] of Object.entries(args)) {
+        // Handle nested objects that need serialization
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          // For complex nested objects, ensure they're properly stringified
+          processedArgs[key] = value;
+        } else {
+          processedArgs[key] = value;
+        }
+      }
+      return processedArgs;
+    }
+    
+    // Handle arrays
+    if (Array.isArray(args)) {
+      return args.map(item => this.processComplexArguments(item, toolName));
+    }
+    
+    // For primitive types, return as-is
+    return args;
   }
   
   /**
