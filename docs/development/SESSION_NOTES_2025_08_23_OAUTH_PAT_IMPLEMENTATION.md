@@ -79,12 +79,12 @@ Created comprehensive PAT implementation:
 ## What We SHOULD Do Next
 
 ### ✅ After PR #724 Merges
-1. Add `GITHUB_TEST_TOKEN` to GitHub Actions secrets
+1. Add `TEST_GITHUB_TOKEN` to GitHub Actions secrets
 2. Verify CI/CD runs with PAT
 3. Document in team docs that PAT is for testing only
 
 ### ✅ Ongoing Testing Strategy
-1. **Automated (CI/CD)**: Use PAT via `GITHUB_TEST_TOKEN`
+1. **Automated (CI/CD)**: Use PAT via `TEST_GITHUB_TOKEN`
 2. **Manual (Pre-release)**: Test real OAuth device flow
 3. **Development**: Can use either mode
 
@@ -106,7 +106,7 @@ docs/development/OAUTH_TESTING_VS_PRODUCTION.md  # Critical docs
 ### Environment Detection
 ```javascript
 // System automatically detects mode based on:
-if (process.env.GITHUB_TEST_TOKEN) {
+if (process.env.TEST_GITHUB_TOKEN) {
   // TEST MODE - Use PAT
 } else {
   // PRODUCTION MODE - Use OAuth device flow
@@ -147,14 +147,14 @@ Coordination tracked in `PAT_IMPLEMENTATION_COORDINATION.md`
 
 ### To Test PAT Mode
 ```bash
-export GITHUB_TEST_TOKEN="ghp_your_token"
+export TEST_GITHUB_TOKEN="ghp_your_token"
 node scripts/validate-pat-setup.js
 node scripts/qa-oauth-github-test.js
 ```
 
 ### To Test OAuth Mode
 ```bash
-unset GITHUB_TEST_TOKEN
+unset TEST_GITHUB_TOKEN
 # Use MCP Inspector or run scripts
 # Manual device code entry required
 ```

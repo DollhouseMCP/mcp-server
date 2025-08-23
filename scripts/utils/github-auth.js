@@ -141,7 +141,7 @@ export async function showAuthStatus() {
   
   if (!token) {
     console.log('❌ Not authenticated');
-    console.log('   Set GITHUB_TEST_TOKEN for testing or use OAuth device flow for production');
+    console.log('   Set TEST_GITHUB_TOKEN for testing or use OAuth device flow for production');
     return false;
   }
   

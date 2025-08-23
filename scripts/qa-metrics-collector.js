@@ -33,7 +33,7 @@ export class QAMetricsCollector {
         node_version: process.version,
         platform: process.platform,
         test_personas_dir: process.env.TEST_PERSONAS_DIR || null,
-        github_token_available: !!process.env.GITHUB_TEST_TOKEN
+        github_token_available: !!process.env.TEST_GITHUB_TOKEN
       },
       performance: {
         total_duration_ms: 0,

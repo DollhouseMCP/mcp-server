@@ -26,8 +26,8 @@ const execAsync = promisify(exec);
 /**
  * WARNING: OAuth Testing Mode Support
  * This script supports both PAT (testing) and OAuth device flow (production)
- * - PAT Mode: Set GITHUB_TEST_TOKEN environment variable
- * - OAuth Mode: Leave GITHUB_TEST_TOKEN unset
+ * - PAT Mode: Set TEST_GITHUB_TOKEN environment variable
+ * - OAuth Mode: Leave TEST_GITHUB_TOKEN unset
  * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
  */
 
@@ -207,7 +207,7 @@ class MCPOAuthTester {
     if (isTestMode()) {
       console.log(chalk.blue('\n🧪 TEST MODE: Using Personal Access Token\n'));
       console.log(chalk.yellow('⚠️  Skipping OAuth device flow (used in production)'));
-      console.log(chalk.yellow('   To test the real OAuth flow, unset GITHUB_TEST_TOKEN'));
+      console.log(chalk.yellow('   To test the real OAuth flow, unset TEST_GITHUB_TOKEN'));
       
       const token = await getAuthToken();
       const validation = await validateToken(token);

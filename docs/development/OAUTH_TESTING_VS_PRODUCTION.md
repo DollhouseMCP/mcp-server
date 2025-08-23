@@ -23,14 +23,14 @@ This document explains the fundamental differences between OAuth testing (using 
 ### What It Is
 - Uses GitHub Personal Access Token for direct API authentication
 - Bypasses entire OAuth device flow
-- Enabled via `GITHUB_TEST_TOKEN` environment variable
+- Enabled via `TEST_GITHUB_TOKEN` environment variable
 
 ### How to Set Up
 1. Create PAT at https://github.com/settings/tokens/new
 2. Required scopes: `repo`, `read:user`, `user:email`, `read:org`
 3. Add to environment:
    ```bash
-   export GITHUB_TEST_TOKEN="ghp_your_token_here"
+   export TEST_GITHUB_TOKEN="ghp_your_token_here"
    ```
 
 ### What It Tests ✅
@@ -79,7 +79,7 @@ This document explains the fundamental differences between OAuth testing (using 
 ```yaml
 # GitHub Actions example
 env:
-  GITHUB_TEST_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+  TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 ```
 - Enables automated testing
 - No human interaction required
@@ -134,14 +134,14 @@ Even with 100% PAT test coverage, you must manually test OAuth because:
 ### Automated Testing (CI/CD)
 ```bash
 # With PAT (automated)
-export GITHUB_TEST_TOKEN="ghp_..."
+export TEST_GITHUB_TOKEN="ghp_..."
 npm test
 ```
 
 ### Manual Testing (Required Before Release)
 ```bash
 # Without PAT (real OAuth flow)
-unset GITHUB_TEST_TOKEN
+unset TEST_GITHUB_TOKEN
 
 # Start MCP Inspector
 npx @modelcontextprotocol/inspector dist/index.js
@@ -166,7 +166,7 @@ node scripts/utils/github-auth.js
 - Verify token hasn't expired
 - Check required scopes
 - Confirm environment variable is set
-- Test with curl: `curl -H "Authorization: token $GITHUB_TEST_TOKEN" https://api.github.com/user`
+- Test with curl: `curl -H "Authorization: token $TEST_GITHUB_TOKEN" https://api.github.com/user`
 
 ### OAuth Issues
 - Check helper process: `ps aux | grep oauth-helper`

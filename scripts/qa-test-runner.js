@@ -438,7 +438,7 @@ class MCPTestRunner {
     console.log('\n✨ Testing Content Creation...');
     
     // Skip content creation tests in CI that require GitHub tokens
-    if (this.isCI && !process.env.GITHUB_TEST_TOKEN) {
+    if (this.isCI && !process.env.TEST_GITHUB_TOKEN) {
       console.log('  ⚠️  Skipping content creation tests in CI (no GitHub token)');
       const result = createTestResult('create_element', {}, Date.now(), false, null, 'CI: GitHub token required', true);
       this.results.push(result);
@@ -543,7 +543,7 @@ class MCPTestRunner {
       environment: {
         ci: this.isCI,
         test_personas_dir: TEST_PERSONAS_DIR,
-        github_token_available: !!process.env.GITHUB_TEST_TOKEN
+        github_token_available: !!process.env.TEST_GITHUB_TOKEN
       },
       tool_discovery: {
         available_tools_count: this.availableTools.length,
@@ -625,7 +625,7 @@ class MCPTestRunner {
     if (this.isCI) {
       console.log('🤖 CI Environment Configuration:');
       console.log(`   TEST_PERSONAS_DIR: ${TEST_PERSONAS_DIR}`);
-      console.log(`   GitHub Token: ${process.env.GITHUB_TEST_TOKEN ? 'Available' : 'Not Available'}`);
+      console.log(`   GitHub Token: ${process.env.TEST_GITHUB_TOKEN ? 'Available' : 'Not Available'}`);
     }
     
     let report = null;
