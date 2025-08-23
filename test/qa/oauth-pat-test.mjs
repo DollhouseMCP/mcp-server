@@ -33,13 +33,13 @@ async function testPATAuthentication() {
   let failed = 0;
   
   // Test 1: Check if PAT is available
-  const hasPAT = !!process.env.GITHUB_TEST_TOKEN;
+  const hasPAT = !!process.env.TEST_GITHUB_TOKEN;
   console.log(`Test 1 - PAT Available: ${hasPAT ? '✅ Yes' : '⚠️  No'}`);
   if (hasPAT) {
     passed++;
-    console.log(`         Token prefix: ${process.env.GITHUB_TEST_TOKEN.substring(0, 8)}...`);
+    console.log(`         Token prefix: ${process.env.TEST_GITHUB_TOKEN.substring(0, 8)}...`);
   } else {
-    console.log('         Set GITHUB_TEST_TOKEN to test PAT functionality');
+    console.log('         Set TEST_GITHUB_TOKEN to test PAT functionality');
     failed++;
   }
   
@@ -88,7 +88,7 @@ async function testScopeValidation() {
   
   if (!token) {
     console.log('⚠️  No token available - skipping scope tests');
-    console.log('   Set GITHUB_TEST_TOKEN to test scope validation\n');
+    console.log('   Set TEST_GITHUB_TOKEN to test scope validation\n');
     return true; // Not a failure if no token
   }
   
@@ -148,8 +148,8 @@ async function testOAuthFallback() {
   console.log('🔄 Testing OAuth Fallback...\n');
   
   // Temporarily remove PAT to test fallback
-  const originalPAT = process.env.GITHUB_TEST_TOKEN;
-  delete process.env.GITHUB_TEST_TOKEN;
+  const originalPAT = process.env.TEST_GITHUB_TOKEN;
+  delete process.env.TEST_GITHUB_TOKEN;
   
   try {
     let passed = 0;
@@ -183,7 +183,7 @@ async function testOAuthFallback() {
   } finally {
     // Restore original PAT
     if (originalPAT) {
-      process.env.GITHUB_TEST_TOKEN = originalPAT;
+      process.env.TEST_GITHUB_TOKEN = originalPAT;
     }
   }
 }
@@ -274,7 +274,7 @@ async function testAuthHeaders() {
     
     if (!token) {
       console.log('⚠️  No token available - skipping header tests');
-      console.log('   Set GITHUB_TEST_TOKEN to test auth headers\n');
+      console.log('   Set TEST_GITHUB_TOKEN to test auth headers\n');
       return true;
     }
     
@@ -336,7 +336,7 @@ async function testRealGitHubAPI() {
   
   if (!token) {
     console.log('⚠️  No token available - skipping API tests');
-    console.log('   Set GITHUB_TEST_TOKEN to test GitHub API integration\n');
+    console.log('   Set TEST_GITHUB_TOKEN to test GitHub API integration\n');
     return true;
   }
   
@@ -401,7 +401,7 @@ async function runAllPATTests() {
     console.log(`\n✅ All PAT tests passed! (${passedCount}/${totalCount})\n`);
     console.log('PAT authentication system is working correctly.');
     
-    if (process.env.GITHUB_TEST_TOKEN) {
+    if (process.env.TEST_GITHUB_TOKEN) {
       console.log('🧪 Test mode is active with PAT.');
       console.log('   This is recommended for automated testing and CI.');
     } else {
@@ -411,10 +411,10 @@ async function runAllPATTests() {
   } else {
     console.log(`\n⚠️  Some PAT tests had issues. (${passedCount}/${totalCount} passed)\n`);
     
-    if (!process.env.GITHUB_TEST_TOKEN) {
+    if (!process.env.TEST_GITHUB_TOKEN) {
       console.log('💡 To test PAT functionality:');
       console.log('   1. Create a Personal Access Token on GitHub');
-      console.log('   2. Set it as GITHUB_TEST_TOKEN environment variable');
+      console.log('   2. Set it as TEST_GITHUB_TOKEN environment variable');
       console.log('   3. Ensure it has required scopes: repo, read:user, user:email, read:org');
     } else {
       console.log('💡 Check the failed tests above for specific issues.');

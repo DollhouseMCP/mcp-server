@@ -266,7 +266,7 @@ export function shouldSkipInCI(testName, requirements = {}) {
   }
   
   // Skip tests that require GitHub tokens if not available
-  if (requirements.requiresGitHubToken && !process.env.GITHUB_TEST_TOKEN) {
+  if (requirements.requiresGitHubToken && !process.env.TEST_GITHUB_TOKEN) {
     return { 
       skip: true, 
       reason: 'CI: GitHub token required but not available' 

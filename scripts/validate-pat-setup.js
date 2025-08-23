@@ -97,16 +97,16 @@ async function checkEnvironmentVariable() {
   printSection('Environment Variable Check');
   console.log('');
   
-  const token = process.env.GITHUB_TEST_TOKEN;
+  const token = process.env.TEST_GITHUB_TOKEN;
   
   if (!token) {
-    printStatus('error', 'GITHUB_TEST_TOKEN is not set');
+    printStatus('error', 'TEST_GITHUB_TOKEN is not set');
     console.log('   This environment variable is required for PAT authentication');
     return { hasToken: false, token: null };
   }
   
   if (token.length < 10) {
-    printStatus('error', 'GITHUB_TEST_TOKEN appears to be too short');
+    printStatus('error', 'TEST_GITHUB_TOKEN appears to be too short');
     console.log('   GitHub tokens are typically 40+ characters long');
     return { hasToken: false, token: null };
   }
@@ -121,7 +121,7 @@ async function checkEnvironmentVariable() {
     console.log('   Expected format: ghp_xxxx (classic) or github_pat_xxxx (fine-grained)');
     console.log('   Your token starts with:', token.substring(0, 8) + '...');
   } else {
-    printStatus('success', 'GITHUB_TEST_TOKEN is set and has correct format');
+    printStatus('success', 'TEST_GITHUB_TOKEN is set and has correct format');
     const tokenType = token.startsWith('ghp_') ? 'Classic PAT' : 
                      token.startsWith('github_pat_') ? 'Fine-grained PAT' : 
                      'OAuth token';
@@ -255,12 +255,12 @@ async function checkModeDetection() {
   
   if (testMode && token) {
     printStatus('success', 'Test mode is correctly detected');
-    console.log('   Using GITHUB_TEST_TOKEN for authentication');
+    console.log('   Using TEST_GITHUB_TOKEN for authentication');
     console.log('   This is the recommended mode for automated testing');
   } else if (!testMode && token) {
     printStatus('warning', 'Production mode detected');
     console.log('   Using OAuth token for authentication');
-    console.log('   Test mode would be activated if GITHUB_TEST_TOKEN is set');
+    console.log('   Test mode would be activated if TEST_GITHUB_TOKEN is set');
   } else if (!testMode && !token) {
     printStatus('warning', 'No authentication configured');
     console.log('   Neither PAT nor OAuth token available');

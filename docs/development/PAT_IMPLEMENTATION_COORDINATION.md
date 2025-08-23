@@ -49,8 +49,8 @@ Branch: feature/pat-testing-implementation
 ### Agent 2: CI/CD Integration
 **Status**: COMPLETE ✅
 **Files Updated**:
-- `.github/workflows/qa-tests.yml` - Added GITHUB_TEST_TOKEN
-- `.github/workflows/core-build-test.yml` - Added GITHUB_TEST_TOKEN
+- `.github/workflows/qa-tests.yml` - Added TEST_GITHUB_TOKEN
+- `.github/workflows/core-build-test.yml` - Added TEST_GITHUB_TOKEN
 - `.github/workflows/validate-oauth-pat.yml` - Created validation workflow
 - `docs/development/GITHUB_ACTIONS_PAT_SETUP.md` - Created setup docs
 **Task**: Update GitHub Actions workflows for PAT
@@ -78,16 +78,16 @@ Branch: feature/pat-testing-implementation
 **Issues to update**: #715, #520
 
 ## Environment Variables Required
-- `GITHUB_TEST_TOKEN`: PAT with scopes: repo, read:user, user:email, read:org
+- `TEST_GITHUB_TOKEN`: PAT with scopes: repo, read:user, user:email, read:org
 
 ## Testing Commands
 ```bash
 # Test with PAT
-export GITHUB_TEST_TOKEN="ghp_..."
+export TEST_GITHUB_TOKEN="ghp_..."
 node scripts/qa-oauth-github-test.js
 
 # Test without PAT
-unset GITHUB_TEST_TOKEN
+unset TEST_GITHUB_TOKEN
 node scripts/qa-oauth-github-test.js
 ```
 

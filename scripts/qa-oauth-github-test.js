@@ -25,8 +25,8 @@ const execAsync = promisify(exec);
 /**
  * WARNING: OAuth Testing Mode Support
  * This script supports both PAT (testing) and OAuth device flow (production)
- * - PAT Mode: Set GITHUB_TEST_TOKEN environment variable
- * - OAuth Mode: Leave GITHUB_TEST_TOKEN unset
+ * - PAT Mode: Set TEST_GITHUB_TOKEN environment variable
+ * - OAuth Mode: Leave TEST_GITHUB_TOKEN unset
  * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
  */
 

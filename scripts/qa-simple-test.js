@@ -219,7 +219,7 @@ class SimpleMCPTest {
       environment: {
         ci: isCI(),
         test_personas_dir: process.env.TEST_PERSONAS_DIR,
-        github_token_available: !!process.env.GITHUB_TEST_TOKEN
+        github_token_available: !!process.env.TEST_GITHUB_TOKEN
       },
       tests: this.results
     };
