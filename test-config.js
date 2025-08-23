@@ -183,7 +183,7 @@ const TEST_ARGUMENTS = {
   'get_user_identity': {},
   'clear_user_identity': {},
   // Fixed: Removed hardcoded token for security - use environment variable or test placeholder
-  'setup_github_auth': { token: normalizeValue(process.env.GITHUB_TEST_TOKEN || 'PLACEHOLDER_TEST_TOKEN') },
+  'setup_github_auth': { token: normalizeValue(process.env.TEST_GITHUB_TOKEN || 'PLACEHOLDER_TEST_TOKEN') },
   'check_github_auth': {},
   'clear_github_auth': {},
   'configure_oauth': { provider: normalizeValue('github') },
@@ -292,7 +292,7 @@ function getCITestArguments(toolName) {
       case 'setup_github_auth':
         return {
           ...args,
-          token: process.env.GITHUB_TEST_TOKEN || 'CI_PLACEHOLDER_TOKEN'
+          token: process.env.TEST_GITHUB_TOKEN || 'CI_PLACEHOLDER_TOKEN'
         };
       case 'create_element':
         return {
@@ -321,7 +321,7 @@ function shouldSkipInCI(toolName) {
     'sync_portfolio'
   ];
   
-  if (requiresGitHubToken.includes(toolName) && !process.env.GITHUB_TEST_TOKEN) {
+  if (requiresGitHubToken.includes(toolName) && !process.env.TEST_GITHUB_TOKEN) {
     return true;
   }
   

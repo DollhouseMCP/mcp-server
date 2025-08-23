@@ -109,10 +109,10 @@ For developers working on OAuth-related features or testing GitHub integration:
 #### Setting Up Your Environment
 ```bash
 # Set your GitHub PAT for testing
-export GITHUB_TEST_TOKEN="your_pat_token_here"
+export TEST_GITHUB_TOKEN="your_pat_token_here"
 
 # Verify your token works
-curl -H "Authorization: token $GITHUB_TEST_TOKEN" https://api.github.com/user
+curl -H "Authorization: token $TEST_GITHUB_TOKEN" https://api.github.com/user
 ```
 
 #### PAT Testing vs Production OAuth
@@ -123,11 +123,11 @@ curl -H "Authorization: token $GITHUB_TEST_TOKEN" https://api.github.com/user
 - **Production**: OAuth device flow provides better user experience and security
 
 **When to use each:**
-- Use PAT mode (`GITHUB_TEST_TOKEN` set) for:
+- Use PAT mode (`TEST_GITHUB_TOKEN` set) for:
   - Development and debugging
   - Automated testing
   - Quick feature validation
-- Use OAuth mode (`GITHUB_TEST_TOKEN` unset) for:
+- Use OAuth mode (`TEST_GITHUB_TOKEN` unset) for:
   - Production releases
   - User acceptance testing
   - Demonstrating real user flow
