@@ -187,6 +187,7 @@ export class UnicodeValidator {
       });
 
       // Fallback: return original content if normalization fails
+      // Always provide normalizedContent as per known workaround pattern
       return {
         isValid: false,
         normalizedContent: content,

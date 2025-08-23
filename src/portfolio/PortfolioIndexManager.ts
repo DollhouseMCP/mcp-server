@@ -117,13 +117,25 @@ export class PortfolioIndexManager {
   public async findByName(name: string, options: SearchOptions = {}): Promise<IndexEntry | null> {
     const index = await this.getIndex();
     
-    // Normalize input for security
+    // Normalize input for security - always use normalizedContent per Unicode fix #706
     const normalizedName = UnicodeValidator.normalize(name);
-    if (!normalizedName.isValid) {
-      logger.warn('Invalid Unicode in search name', {
-        issues: normalizedName.detectedIssues
+    if (normalizedName.detectedIssues && normalizedName.detectedIssues.length > 0) {
+      logger.debug('Unicode normalization applied to search name', {
+        issues: normalizedName.detectedIssues,
+        severity: normalizedName.severity
       });
-      return null;
+      // Only block truly dangerous patterns, not just confusable characters
+      const hasDangerousPatterns = normalizedName.detectedIssues.some(issue => 
+        issue.includes('Direction override') ||
+        issue.includes('Malformed surrogate') ||
+        issue.includes('Excessive Unicode escapes')
+      );
+      if (hasDangerousPatterns) {
+        logger.warn('Dangerous Unicode pattern blocked in search name', {
+          issues: normalizedName.detectedIssues
+        });
+        return null;
+      }
     }
     
     const safeName = normalizedName.normalizedContent;
@@ -165,13 +177,25 @@ export class PortfolioIndexManager {
   public async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const index = await this.getIndex();
     
-    // Normalize query for security
+    // Normalize query for security - always use normalizedContent per Unicode fix #706
     const normalizedQuery = UnicodeValidator.normalize(query);
-    if (!normalizedQuery.isValid) {
-      logger.warn('Invalid Unicode in search query', {
-        issues: normalizedQuery.detectedIssues
+    if (normalizedQuery.detectedIssues && normalizedQuery.detectedIssues.length > 0) {
+      logger.debug('Unicode normalization applied to search query', {
+        issues: normalizedQuery.detectedIssues,
+        severity: normalizedQuery.severity
       });
-      return [];
+      // Only block truly dangerous patterns, not just confusable characters
+      const hasDangerousPatterns = normalizedQuery.detectedIssues.some(issue => 
+        issue.includes('Direction override') ||
+        issue.includes('Malformed surrogate') ||
+        issue.includes('Excessive Unicode escapes')
+      );
+      if (hasDangerousPatterns) {
+        logger.warn('Dangerous Unicode pattern blocked in search query', {
+          issues: normalizedQuery.detectedIssues
+        });
+        return [];
+      }
     }
     
     const safeQuery = normalizedQuery.normalizedContent.toLowerCase().trim();
