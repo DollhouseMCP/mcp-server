@@ -49,6 +49,7 @@ export interface IToolHandler {
   checkGitHubAuth(): Promise<any>;
   clearGitHubAuth(): Promise<any>;
   configureOAuth(client_id?: string): Promise<any>;
+  getOAuthHelperStatus(verbose?: boolean): Promise<any>;
   
   
   // Config tools

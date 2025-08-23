@@ -16,8 +16,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -48,6 +46,9 @@ import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 
 
@@ -2679,23 +2680,48 @@ export class DollhouseMCPServer implements IToolHandler {
       // Initiate device flow
       const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
       
-      // Spawn detached OAuth helper process
+      // CRITICAL FIX: Use helper process approach from PR #518
+      // MCP servers are stateless and terminate after returning response
+      // The helper process survives MCP termination and can complete OAuth polling
+      
+      // Get the OAuth client ID
+      const configManager = ConfigManager.getInstance();
+      const clientId = await configManager.getGitHubClientId();
+      
+      if (!clientId) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Not Configured**\n\n` +
+                  `The server administrator needs to configure GitHub OAuth.\n\n` +
+                  `**Administrator Setup:**\n` +
+                  `1. Create OAuth app at: https://github.com/settings/applications/new\n` +
+                  `2. Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
+                  `3. Restart the MCP server\n\n` +
+                  `For details, see: /docs/setup/OAUTH_SETUP.md`
+          }]
+        };
+      }
+      
+      // Spawn the OAuth helper process
+      // The helper runs independently and survives MCP server termination
       try {
-        // Get the path to the oauth-helper script - handle both dev and production paths
-        const currentFileUrl = import.meta.url;
-        const currentDir = path.dirname(fileURLToPath(currentFileUrl));
+        // Get the directory where the compiled JS file is
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
         
-        // Try multiple possible locations for the helper script
+        // Find the oauth-helper.mjs file
+        // It should be in the root directory (one level up from dist/)
         const possiblePaths = [
-          path.join(currentDir, '..', 'oauth-helper.mjs'), // Production: dist/../oauth-helper.mjs
-          path.join(currentDir, '..', '..', 'oauth-helper.mjs'), // Dev: dist/subdir/../oauth-helper.mjs
-          path.join(process.cwd(), 'oauth-helper.mjs'), // Current working directory
+          path.join(__dirname, '..', 'oauth-helper.mjs'),  // From dist/index.js
+          path.join(process.cwd(), 'oauth-helper.mjs'),    // From CWD
+          path.join(__dirname, 'oauth-helper.mjs')         // Same directory
         ];
         
         let helperPath: string | null = null;
         for (const testPath of possiblePaths) {
           try {
-            await fs.access(testPath, fs.constants.R_OK);
+            await fs.access(testPath);
             helperPath = testPath;
             break;
           } catch {
@@ -2705,50 +2731,6 @@ export class DollhouseMCPServer implements IToolHandler {
         
         if (!helperPath) {
           throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
-        }
-        
-        // Get the client ID with ConfigManager fallback
-        let clientId: string | null = null;
-        
-        // Check environment variable first (for backward compatibility)
-        clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID || null;
-        
-        // If not found in environment, try ConfigManager
-        if (!clientId) {
-          try {
-            const configManager = ConfigManager.getInstance();
-            await configManager.loadConfig();
-            clientId = configManager.getGitHubClientId();
-          } catch (configError) {
-            logger.debug('Failed to load ConfigManager for client ID', { error: configError });
-          }
-        }
-        
-        if (!clientId) {
-          logger.error('GitHub OAuth client ID not configured in any source');
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Configuration Missing**\n\n` +
-                    `GitHub OAuth client ID not found in any of these sources:\n` +
-                    `• DOLLHOUSE_GITHUB_CLIENT_ID environment variable\n` +
-                    `• ~/.dollhouse/config.json file\n\n` +
-                    `**Setup Instructions:**\n\n` +
-                    `**Option 1 - Environment Variable:**\n` +
-                    `Set DOLLHOUSE_GITHUB_CLIENT_ID before starting the server.\n\n` +
-                    `**Option 2 - Config File:**\n` +
-                    `Create ~/.dollhouse/config.json with:\n` +
-                    `\`\`\`json\n` +
-                    `{\n` +
-                    `  "version": "1.0.0",\n` +
-                    `  "oauth": {\n` +
-                    `    "githubClientId": "your_client_id_here"\n` +
-                    `  }\n` +
-                    `}\n` +
-                    `\`\`\`\n\n` +
-                    `Contact your administrator for the client ID value.`
-            }]
-          };
         }
         
         // Spawn the helper as a detached process
@@ -2773,44 +2755,36 @@ export class DollhouseMCPServer implements IToolHandler {
           userCode: deviceResponse.user_code
         });
         
-        // Optional: Write helper state for tracking
-        const helperStateFile = path.join(process.env.HOME || process.env.USERPROFILE || '', '.dollhouse', '.auth', 'oauth-helper-state.json');
-        const helperState = {
+        // Write state file for monitoring
+        const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+        const stateDir = path.dirname(stateFile);
+        await fs.mkdir(stateDir, { recursive: true });
+        
+        const state = {
           pid: helper.pid,
           deviceCode: deviceResponse.device_code,
           userCode: deviceResponse.user_code,
-          startedAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + (deviceResponse.expires_in * 1000)).toISOString()
+          startTime: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
         };
         
-        // SECURITY FIX: Add JSON validation and use atomic write for helper state
-        // FIXED: CVE-2025-XXXX - Direct file write without validation for OAuth helper state
-        // Original issue: Line 2511 used direct fs.writeFile without JSON validation
-        // Security impact: Could allow malformed data to be written to auth state file
-        // Fix: Added JSON validation and replaced with atomic write operation
+        await fs.writeFile(stateFile, JSON.stringify(state, null, 2));
         
-        // Write state file (non-blocking, ignore errors)
-        fs.mkdir(path.dirname(helperStateFile), { recursive: true })
-          .then(async () => {
-            try {
-              // Validate JSON structure before write
-              const jsonContent = JSON.stringify(helperState, null, 2);
-              JSON.parse(jsonContent); // Validate JSON structure
-              
-              // Use atomic write to prevent race conditions
-              await FileLockManager.atomicWriteFile(helperStateFile, jsonContent);
-            } catch (validationError) {
-              logger.debug('Invalid helper state JSON or write failed', { 
-                error: validationError instanceof Error ? validationError.message : String(validationError) 
-              });
-            }
-          })
-          .catch(err => logger.debug('Could not write helper state file', { error: err.message }));
-          
       } catch (spawnError) {
-        logger.error('Failed to spawn OAuth helper process', { error: spawnError });
-        // Don't fail the whole auth process, just log the error
-        // The user can still complete auth manually if needed
+        logger.error('Failed to spawn OAuth helper', { error: spawnError });
+        // Fall back to informing user about the issue
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ **OAuth Helper Launch Failed**\n\n` +
+                  `Could not start background authentication process.\n\n` +
+                  `**Alternative Options:**\n` +
+                  `1. Try again: Run setup_github_auth again\n` +
+                  `2. Use GitHub CLI: gh auth login --web\n` +
+                  `3. Set token manually: export GITHUB_TOKEN=your_token\n\n` +
+                  `Error: ${spawnError instanceof Error ? spawnError.message : 'Unknown error'}`
+          }]
+        };
       }
       
       // Return instructions to user
@@ -2818,8 +2792,8 @@ export class DollhouseMCPServer implements IToolHandler {
         content: [{
           type: "text",
           text: this.githubAuthManager.formatAuthInstructions(deviceResponse) +
-                '\n\n📝 **Note**: Authentication is being handled in the background. ' +
-                'Once you authorize on GitHub, you\'ll be authenticated automatically!'
+                '\n\n📝 **Note**: Authentication will complete automatically once you authorize. ' +
+                'Your token will be stored securely for future use!'
         }]
       };
     } catch (error) {
@@ -2837,38 +2811,17 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async checkGitHubAuth() {
     try {
-      // First check for pending OAuth helper process
-      const helperStateFile = path.join(process.env.HOME || process.env.USERPROFILE || '', '.dollhouse', '.auth', 'oauth-helper-state.json');
-      let pendingAuth = false;
-      let pendingDetails = null;
-      
-      try {
-        const stateData = await fs.readFile(helperStateFile, 'utf-8');
-        const state = JSON.parse(stateData);
-        const expiresAt = new Date(state.expiresAt);
-        
-        if (expiresAt > new Date()) {
-          pendingAuth = true;
-          pendingDetails = {
-            userCode: state.userCode,
-            timeRemaining: Math.ceil((expiresAt.getTime() - Date.now()) / 1000),
-            pid: state.pid
-          };
-        } else {
-          // Expired, clean up the state file
-          await fs.unlink(helperStateFile).catch(() => {});
-        }
-      } catch (error) {
-        // No state file or invalid JSON, that's ok
-      }
-      
+      // First check for OAuth helper process health
+      const helperHealth = await this.checkOAuthHelperHealth();
       const status = await this.githubAuthManager.getAuthStatus();
       
       if (status.isAuthenticated) {
-        // Clean up state file if auth is successful
-        if (pendingAuth) {
-          await fs.unlink(helperStateFile).catch(() => {});
+        // Clean up helper state file if auth is successful
+        if (helperHealth.exists) {
+          const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+          await fs.unlink(stateFile).catch(() => {});
         }
+        
         return {
           content: [{
             type: "text",
@@ -2882,6 +2835,37 @@ export class DollhouseMCPServer implements IToolHandler {
                   `Everything is working properly!`
           }]
         };
+      } else if (helperHealth.isActive) {
+        // OAuth helper is actively polling
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⏳ **GitHub Authentication In Progress**\n\n` +
+                  `🔑 **User Code:** ${helperHealth.userCode}\n` +
+                  `⏱️ **Time Remaining:** ${Math.floor(helperHealth.timeRemaining / 60)}m ${helperHealth.timeRemaining % 60}s\n` +
+                  `🔄 **Process Status:** ${helperHealth.processAlive ? '✅ Running' : '⚠️ May have stopped'}\n` +
+                  `📁 **Log Available:** ${helperHealth.hasLog ? 'Yes' : 'No'}\n\n` +
+                  `**Waiting for you to:**\n` +
+                  `1. Go to: https://github.com/login/device\n` +
+                  `2. Enter code: **${helperHealth.userCode}**\n` +
+                  `3. Authorize the application\n\n` +
+                  `The authentication will complete automatically once you authorize.\n` +
+                  `Run this command again to check status.`
+          }]
+        };
+      } else if (helperHealth.exists && helperHealth.expired) {
+        // Helper state exists but expired
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⏱️ **Authentication Expired**\n\n` +
+                  `The GitHub authentication request has expired.\n` +
+                  `User code: ${helperHealth.userCode} (expired)\n\n` +
+                  `**To try again:**\n` +
+                  `Run: \`setup_github_auth\` to get a new code\n\n` +
+                  `${helperHealth.errorLog ? `**Error Log:**\n\`\`\`\n${helperHealth.errorLog}\n\`\`\`\n` : ''}`
+          }]
+        };
       } else if (status.hasToken) {
         return {
           content: [{
@@ -2892,23 +2876,6 @@ export class DollhouseMCPServer implements IToolHandler {
                   `1. Say "set up GitHub" to authenticate again\n` +
                   `2. Or check your GITHUB_TOKEN environment variable\n\n` +
                   `Note: Browse and install still work without authentication!`
-          }]
-        };
-      } else if (pendingAuth && pendingDetails) {
-        // OAuth helper is actively polling
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⏳ **GitHub Authentication In Progress**\n\n` +
-                  `🔑 **User Code:** ${pendingDetails.userCode}\n` +
-                  `⏱️ **Time Remaining:** ${Math.floor(pendingDetails.timeRemaining / 60)} minutes\n` +
-                  `📋 **Process ID:** ${pendingDetails.pid}\n\n` +
-                  `**Status:** Waiting for you to authorize on GitHub\n\n` +
-                  `If you haven't already:\n` +
-                  `1. Visit: https://github.com/login/device\n` +
-                  `2. Enter code: **${pendingDetails.userCode}**\n` +
-                  `3. Authorize 'DollhouseMCP Collection'\n\n` +
-                  `The authentication will complete automatically once you authorize!`
           }]
         };
       } else {
@@ -2935,6 +2902,199 @@ export class DollhouseMCPServer implements IToolHandler {
         }]
       };
     }
+  }
+  
+  // Public method for oauth_helper_status tool
+  async getOAuthHelperStatus(verbose: boolean = false) {
+    try {
+      const health = await this.checkOAuthHelperHealth();
+      const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+      const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
+      const pidFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+      
+      let statusText = `${this.getPersonaIndicator()}📊 **OAuth Helper Process Diagnostics**\n\n`;
+      
+      // Basic status
+      if (!health.exists) {
+        statusText += `**Status:** No OAuth process detected\n`;
+        statusText += `**State File:** Not found\n\n`;
+        statusText += `No active authentication process. Run \`setup_github_auth\` to start one.\n`;
+      } else if (health.isActive) {
+        statusText += `**Status:** 🟢 ACTIVE - Authentication in progress\n`;
+        statusText += `**User Code:** ${health.userCode}\n`;
+        statusText += `**Process ID:** ${health.pid}\n`;
+        statusText += `**Process Alive:** ${health.processAlive ? '✅ Yes' : '❌ No (may have crashed)'}\n`;
+        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
+        statusText += `**Expires:** ${health.expiresAt?.toLocaleString()}\n`;
+        statusText += `**Time Remaining:** ${Math.floor(health.timeRemaining / 60)}m ${health.timeRemaining % 60}s\n\n`;
+        
+        if (!health.processAlive) {
+          statusText += `⚠️ **WARNING:** Process appears to have stopped!\n`;
+          statusText += `The helper process (PID ${health.pid}) is not responding.\n`;
+          statusText += `You may need to run \`setup_github_auth\` again.\n\n`;
+        }
+      } else if (health.expired) {
+        statusText += `**Status:** 🔴 EXPIRED\n`;
+        statusText += `**User Code:** ${health.userCode} (expired)\n`;
+        statusText += `**Process ID:** ${health.pid}\n`;
+        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
+        statusText += `**Expired:** ${health.expiresAt?.toLocaleString()}\n\n`;
+        statusText += `The authentication request has expired. Run \`setup_github_auth\` to try again.\n\n`;
+      }
+      
+      // File locations
+      statusText += `**📁 File Locations:**\n`;
+      statusText += `• State: ${stateFile}\n`;
+      statusText += `• Log: ${logFile} ${health.hasLog ? '(exists)' : '(not found)'}\n`;
+      statusText += `• PID: ${pidFile}\n\n`;
+      
+      // Error log if available
+      if (health.errorLog) {
+        statusText += `**⚠️ Recent Errors:**\n\`\`\`\n${health.errorLog}\n\`\`\`\n\n`;
+      }
+      
+      // Verbose log output
+      if (verbose && health.hasLog) {
+        try {
+          const fullLog = await fs.readFile(logFile, 'utf-8');
+          const lines = fullLog.split('\n').filter(line => line.trim());
+          const recentLines = lines.slice(-20); // Last 20 lines
+          
+          statusText += `**📜 Recent Log Output (last 20 lines):**\n\`\`\`\n`;
+          statusText += recentLines.join('\n');
+          statusText += `\n\`\`\`\n\n`;
+        } catch (error) {
+          statusText += `**📜 Log:** Unable to read log file\n\n`;
+        }
+      }
+      
+      // Troubleshooting tips
+      if (health.exists && !health.processAlive && !health.expired) {
+        statusText += `**🔧 Troubleshooting Tips:**\n`;
+        statusText += `1. The helper process may have crashed\n`;
+        statusText += `2. Check the log file for errors: ${logFile}\n`;
+        statusText += `3. Try running \`setup_github_auth\` again\n`;
+        statusText += `4. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n`;
+        statusText += `5. Check your internet connection\n`;
+      }
+      
+      // Manual cleanup instructions
+      if (health.exists && (health.expired || !health.processAlive)) {
+        statusText += `\n**🧹 Manual Cleanup (if needed):**\n`;
+        statusText += `\`\`\`bash\n`;
+        statusText += `rm "${stateFile}"\n`;
+        statusText += `rm "${logFile}"\n`;
+        statusText += `rm "${pidFile}"\n`;
+        statusText += `\`\`\`\n`;
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+      
+    } catch (error) {
+      logger.error('Failed to get OAuth helper status', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **Failed to Get OAuth Helper Status**\n\n` +
+                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  // Helper method to check OAuth helper process health
+  private async checkOAuthHelperHealth() {
+    const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+    const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
+    
+    const health = {
+      exists: false,
+      isActive: false,
+      expired: false,
+      processAlive: false,
+      hasLog: false,
+      userCode: '',
+      timeRemaining: 0,
+      pid: 0,
+      startTime: null as Date | null,
+      expiresAt: null as Date | null,
+      errorLog: ''
+    };
+    
+    try {
+      // Check if state file exists
+      const stateData = await fs.readFile(stateFile, 'utf-8');
+      const state = JSON.parse(stateData);
+      health.exists = true;
+      health.pid = state.pid;
+      health.userCode = state.userCode;
+      health.startTime = new Date(state.startTime);
+      health.expiresAt = new Date(state.expiresAt);
+      
+      const now = new Date();
+      if (health.expiresAt > now) {
+        health.isActive = true;
+        health.timeRemaining = Math.ceil((health.expiresAt.getTime() - now.getTime()) / 1000);
+        
+        // Check if process is still alive (Unix/Linux/Mac)
+        if (process.platform !== 'win32') {
+          try {
+            // Send signal 0 to check if process exists
+            process.kill(health.pid, 0);
+            health.processAlive = true;
+          } catch {
+            health.processAlive = false;
+          }
+        } else {
+          // On Windows, we can't easily check, so assume it's alive if not expired
+          health.processAlive = true;
+        }
+      } else {
+        health.expired = true;
+      }
+      
+      // Check for log file
+      try {
+        await fs.access(logFile);
+        health.hasLog = true;
+        
+        // Read last few lines of log if there's an error
+        if (!health.processAlive || health.expired) {
+          const logContent = await fs.readFile(logFile, 'utf-8');
+          const lines = logContent.split('\n');
+          // Get last 10 lines that contain errors or important info
+          const importantLines = lines.filter(line => 
+            line.includes('error') || 
+            line.includes('Error') || 
+            line.includes('failed') ||
+            line.includes('Failed') ||
+            line.includes('❌') ||
+            line.includes('⏱️')
+          ).slice(-10);
+          
+          if (importantLines.length > 0) {
+            health.errorLog = importantLines.join('\n');
+          }
+        }
+      } catch {
+        // Log file doesn't exist
+      }
+      
+    } catch (error) {
+      // State file doesn't exist or is invalid
+      if (error instanceof Error && error.message.includes('ENOENT')) {
+        // File doesn't exist, that's ok
+      } else {
+        logger.debug('Error reading OAuth helper state', { error });
+      }
+    }
+    
+    return health;
   }
   
   async clearGitHubAuth() {

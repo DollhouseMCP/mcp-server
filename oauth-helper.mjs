@@ -28,62 +28,6 @@ const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
 
-// Config cache for performance optimization
-let cachedConfig = null;
-let configLastRead = 0;
-const CONFIG_CACHE_TTL = 30000; // 30 seconds cache
-
-/**
- * Get client ID from multiple sources in order of priority:
- * 1. Command line argument (highest priority)
- * 2. Environment variable (for backward compatibility)
- * 3. Config file (fallback) - with caching for performance
- */
-async function getClientId(providedClientId) {
-  // 1. Check command line argument first
-  if (providedClientId && providedClientId !== 'undefined') {
-    return providedClientId;
-  }
-  
-  // 2. Check environment variable
-  const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-  if (envClientId) {
-    return envClientId;
-  }
-  
-  // 3. Check config file as fallback (with caching for performance)
-  try {
-    const now = Date.now();
-    
-    // Use cached config if still valid
-    if (cachedConfig && (now - configLastRead) < CONFIG_CACHE_TTL) {
-      if (cachedConfig.oauth && cachedConfig.oauth.githubClientId) {
-        await log('Using GitHub client ID from cached config');
-        return cachedConfig.oauth.githubClientId;
-      }
-    }
-    
-    // Read fresh config
-    const configPath = join(homedir(), '.dollhouse', 'config.json');
-    const configContent = await fs.readFile(configPath, 'utf-8');
-    const config = JSON.parse(configContent);
-    
-    // Update cache
-    cachedConfig = config;
-    configLastRead = now;
-    
-    if (config.oauth && config.oauth.githubClientId) {
-      await log('Using GitHub client ID from config file');
-      return config.oauth.githubClientId;
-    }
-  } catch (error) {
-    // Config file doesn't exist or is invalid - this is OK
-    await log(`Config file not available: ${error.message}`);
-  }
-  
-  return null;
-}
-
 // Parse command line arguments
 const args = process.argv.slice(2);
 if (args.length < 4) {
@@ -91,11 +35,18 @@ if (args.length < 4) {
   process.exit(1);
 }
 
-const [deviceCode, intervalStr, expiresInStr, providedClientId] = args;
+const [deviceCode, intervalStr, expiresInStr, clientId] = args;
 const pollInterval = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
-// Note: Client ID resolution is now done inside main() function to handle async properly
+// Validate client ID is provided (no hardcoded fallback)
+if (!clientId || clientId === 'undefined') {
+  console.error('⚠️  GitHub OAuth Configuration Missing\n');
+  console.error('The server administrator needs to configure GitHub OAuth.');
+  console.error('Please contact your administrator to set up the DOLLHOUSE_GITHUB_CLIENT_ID.');
+  console.error('\nFor administrators: Set the environment variable before starting the server.');
+  process.exit(1);
+}
 
 // Log file for debugging (optional, can be disabled in production)
 const LOG_FILE = join(homedir(), '.dollhouse', 'oauth-helper.log');
@@ -171,7 +122,7 @@ async function storeToken(token) {
   
   try {
     // Import the compiled TokenManager
-    const { TokenManager } = await import('./src/security/tokenManager.js');
+    const { TokenManager } = await import('./dist/security/tokenManager.js');
     
     // Store the token using the secure storage mechanism
     await TokenManager.storeGitHubToken(token);
@@ -245,32 +196,22 @@ async function writePidFile() {
 }
 
 async function main() {
-  await log(`OAuth helper started - PID: ${process.pid}`);
-  await log(`Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
-  await log(`Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
-  
-  // Get client ID from multiple sources with proper fallback
-  const clientId = await getClientId(providedClientId);
-  
-  // Validate client ID is available from any source
-  if (!clientId) {
-    console.error('⚠️  GitHub OAuth Configuration Missing\n');
-    console.error('GitHub OAuth client ID not found in any of these sources:');
-    console.error('  • Command line argument');
-    console.error('  • DOLLHOUSE_GITHUB_CLIENT_ID environment variable');
-    console.error('  • ~/.dollhouse/config.json file\n');
-    console.error('To fix this:');
-    console.error('  1. Set DOLLHOUSE_GITHUB_CLIENT_ID environment variable, OR');
-    console.error('  2. Configure it in ~/.dollhouse/config.json\n');
-    console.error('For administrators: Contact DollhouseMCP support for setup instructions.');
-    process.exit(1);
-  }
-  
-  await log(`Client ID source: ${providedClientId && providedClientId !== 'undefined' ? 'command line' : process.env.DOLLHOUSE_GITHUB_CLIENT_ID ? 'environment' : 'config file'}`);
-  // Never log actual client ID value
+  await log(`[START] OAuth helper started - PID: ${process.pid}`);
+  await log(`[CONFIG] Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
+  await log(`[CONFIG] Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
+  await log(`[CONFIG] Node version: ${process.version}`);
+  await log(`[CONFIG] Platform: ${process.platform}`);
+  // Never log client ID
   
   // Write PID file for tracking
   await writePidFile();
+  
+  // Write initial heartbeat
+  let lastHeartbeat = Date.now();
+  const heartbeatInterval = setInterval(async () => {
+    await log(`[HEARTBEAT] Process alive - Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+    lastHeartbeat = Date.now();
+  }, 30000); // Every 30 seconds
   
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
@@ -301,7 +242,8 @@ async function main() {
   
   while (Date.now() < timeout) {
     attempts++;
-    await log(`Polling attempt ${attempts}...`);
+    const timeElapsed = Math.round((Date.now() - startTime) / 1000);
+    await log(`[POLL] Attempt ${attempts} at ${timeElapsed}s elapsed...`);
     
     try {
       const response = await pollGitHub(deviceCode, clientId);
@@ -310,45 +252,50 @@ async function main() {
         switch (response.error) {
           case 'authorization_pending':
             // User hasn't authorized yet, keep polling
-            await log('Authorization pending, continuing to poll...');
+            await log('[STATUS] Authorization pending, user has not authorized yet...');
             break;
             
           case 'slow_down':
             // GitHub is asking us to slow down
-            await log(`Slowing down polling interval to ${pollInterval * 1.5}s`);
+            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${pollInterval * 1.5}s`);
             await sleep(pollInterval * 1500);
             continue;
             
           case 'expired_token':
-            await log('Device code expired');
+            await log('[ERROR] Device code expired - authentication window closed');
+            clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           case 'access_denied':
-            await log('User denied authorization');
+            await log('[ERROR] User denied authorization request');
+            clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           default:
-            await log(`Unknown error from GitHub: ${response.error}`);
-            await log(`Error description: ${response.error_description}`);
+            await log(`[ERROR] Unknown error from GitHub: ${response.error}`);
+            await log(`[ERROR] Error description: ${response.error_description}`);
         }
       } else if (response.access_token) {
         // Success! We got the token
-        await log('✅ Token received from GitHub!');
+        await log('[SUCCESS] ✅ Token received from GitHub!');
         consecutiveErrors = 0; // Reset error counter
         
         // Store the token
         const stored = await storeToken(response.access_token);
         
         if (stored) {
-          await log('✅ OAuth authentication completed successfully');
+          await log('[SUCCESS] ✅ OAuth authentication completed successfully');
+          await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
           console.log('✅ GitHub authentication successful! Token has been stored.');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(0);
         } else {
-          await log('❌ Failed to store token');
+          await log('[ERROR] ❌ Failed to store token');
           console.error('❌ Failed to store authentication token');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(1);
         }
@@ -357,7 +304,7 @@ async function main() {
         consecutiveErrors = 0;
       }
     } catch (error) {
-      await log(`Error during polling: ${error.message}`);
+      await log(`[ERROR] Polling error: ${error.message}`);
       
       // Classify error types
       const isNetworkError = error.message && (
@@ -370,16 +317,18 @@ async function main() {
       
       if (isNetworkError) {
         consecutiveErrors++;
-        await log(`Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
+        await log(`[NETWORK] Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
         
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          await log('Too many consecutive network errors, exiting');
+          await log('[FATAL] Too many consecutive network errors, exiting');
+          clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(1);
         }
       } else {
         // Non-network error, likely fatal
-        await log(`Fatal error: ${error.message}`);
+        await log(`[FATAL] Non-recoverable error: ${error.message}`);
+        clearInterval(heartbeatInterval);
         await cleanupPidFile();
         process.exit(1);
       }
@@ -390,8 +339,10 @@ async function main() {
   }
   
   // Timeout reached
-  await log('⏱️ OAuth authorization timed out');
+  await log('[TIMEOUT] ⏱️ OAuth authorization timed out');
+  await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
   console.error('⏱️ GitHub authorization timed out. Please try again.');
+  clearInterval(heartbeatInterval);
   await cleanupPidFile();
   process.exit(1);
 }
