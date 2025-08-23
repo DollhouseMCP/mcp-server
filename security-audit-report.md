@@ -1,66 +1,28 @@
 # Security Audit Report
 
-Generated: 2025-08-22T20:28:30.155Z
-Duration: 106ms
+Generated: 2025-08-23T18:22:52.822Z
+Duration: 8ms
 
 ## Summary
 
-- **Total Findings**: 7
-- **Files Scanned**: 96
+- **Total Findings**: 1
+- **Files Scanned**: 1
 
 ### Findings by Severity
 
 - 🔴 **Critical**: 0
 - 🟠 **High**: 0
-- 🟡 **Medium**: 6
+- 🟡 **Medium**: 0
 - 🟢 **Low**: 1
 - ℹ️ **Info**: 0
 
 ## Detailed Findings
 
-### MEDIUM (6)
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/metrics/qa-metrics-2025-08-22T16-57-41.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/metrics/qa-metrics-2025-08-22T15-49-17.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/metrics/qa-metrics-2025-08-22T15-48-53.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/metrics/qa-metrics-2025-08-22T15-26-49.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/metrics/qa-metrics-2025-08-22T15-21-59.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/docs/QA/agent-reports/SONNET-1-Element-Testing-Results.json`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
 ### LOW (1)
 
 #### DMCP-SEC-006: Security operation without audit logging
 
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/qa/oauth-auth-test.js`
+- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-KgDoKy/auth-handler.js`
 - **Confidence**: medium
 - **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
 

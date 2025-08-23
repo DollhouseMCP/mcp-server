@@ -153,11 +153,15 @@ class MCPOAuthTester {
         throw new Error('No OAuth tools found in MCP server');
       }
       
-      // Log with masked tool names for debugging while maintaining security
-      console.log(chalk.green(`✅ Found ${oauthTools.length} OAuth tools available:`));
-      oauthTools.forEach(tool => {
-        console.log(`   - ${this.maskSensitive(tool.name, 'tool')}`);
-      });
+      // Use a safe, untainted count variable
+      const toolCount = Number(oauthTools.length);
+      
+      // Log only the count - no iteration over tainted data
+      if (toolCount > 0) {
+        console.log(chalk.green(`✅ OAuth authentication tools detected (${toolCount} available)`));
+      } else {
+        console.log(chalk.red('❌ No OAuth tools detected'));
+      }
       
       return true;
     } catch (error) {
@@ -330,14 +334,12 @@ class MCPOAuthTester {
         let successCount = 0;
         let failCount = 0;
         
-        console.log(chalk.blue('Testing GitHub tools:'));
+        console.log(chalk.blue('Testing GitHub tools...'));
         for (const tool of githubTools) {
           try {
             await this.callTool(tool.name);
-            console.log(chalk.green(`  ✅ ${this.maskSensitive(tool.name, 'tool')} - success`));
             successCount++;
           } catch (error) {
-            console.log(chalk.yellow(`  ⚠️ ${this.maskSensitive(tool.name, 'tool')} - failed: ${this.maskSensitive(error.message || 'unknown error')}`));
             failCount++;
           }
         }
