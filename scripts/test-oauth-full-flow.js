@@ -19,8 +19,17 @@ import open from 'open';
 import chalk from 'chalk';
 import { promisify } from 'util';
 import readline from 'readline';
+import { isTestMode, getAuthToken, validateToken } from './utils/github-auth.js';
 
 const execAsync = promisify(exec);
+
+/**
+ * WARNING: OAuth Testing Mode Support
+ * This script supports both PAT (testing) and OAuth device flow (production)
+ * - PAT Mode: Set GITHUB_TEST_TOKEN environment variable
+ * - OAuth Mode: Leave GITHUB_TEST_TOKEN unset
+ * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
+ */
 
 class MCPOAuthTester {
   constructor() {
@@ -192,6 +201,28 @@ class MCPOAuthTester {
    * Start OAuth authentication flow
    */
   async startOAuthFlow() {
+    // WARNING: This code path differs for TESTING (PAT) vs PRODUCTION (OAuth)
+    // See docs/development/OAUTH_TESTING_VS_PRODUCTION.md
+    
+    if (isTestMode()) {
+      console.log(chalk.blue('\n🧪 TEST MODE: Using Personal Access Token\n'));
+      console.log(chalk.yellow('⚠️  Skipping OAuth device flow (used in production)'));
+      console.log(chalk.yellow('   To test the real OAuth flow, unset GITHUB_TEST_TOKEN'));
+      
+      const token = await getAuthToken();
+      const validation = await validateToken(token);
+      
+      if (!validation.valid) {
+        console.error(chalk.red('❌ PAT validation failed:'), validation.error);
+        return false;
+      }
+      
+      console.log(chalk.green('✅ PAT authenticated as:'), validation.user);
+      console.log(chalk.gray('   Scopes:'), validation.scopes.join(', '));
+      console.log(chalk.green('\n✅ Authentication ready for testing!'));
+      return true;
+    }
+    
     console.log(chalk.yellow('\n🔐 Starting OAuth Authentication Flow...\n'));
     
     // First check current auth status
@@ -422,7 +453,8 @@ class MCPOAuthTester {
    */
   async run() {
     console.log(chalk.bold.cyan('\n' + '='.repeat(60)));
-    console.log(chalk.bold.white('  MCP Server OAuth Full Flow Test'));
+    const mode = isTestMode() ? '🧪 TEST MODE (PAT)' : '🔐 PRODUCTION MODE (OAuth)';
+    console.log(chalk.bold.white(`  MCP Server OAuth Full Flow Test - ${mode}`));
     console.log(chalk.bold.cyan('='.repeat(60) + '\n'));
     
     try {
@@ -450,8 +482,13 @@ class MCPOAuthTester {
       // Show summary
       console.log(chalk.cyan('Summary:'));
       console.log(chalk.green('  ✅ MCP server connection successful'));
-      console.log(chalk.green('  ✅ OAuth authentication completed'));
-      console.log(chalk.green('  ✅ OAuth functionality verified'));
+      if (isTestMode()) {
+        console.log(chalk.green('  ✅ PAT authentication verified (TEST MODE)'));
+        console.log(chalk.yellow('  ⚠️  OAuth device flow NOT tested'));
+      } else {
+        console.log(chalk.green('  ✅ OAuth authentication completed'));
+        console.log(chalk.green('  ✅ OAuth functionality verified'));
+      }
       console.log(chalk.yellow('  ⚠️ Full API access requires additional MCP tools'));
       
     } catch (error) {

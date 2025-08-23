@@ -92,13 +92,55 @@ npm test
 npm run dev
 ```
 
-### 4. Make Your Changes
+### 4. OAuth Testing Setup
+
+For developers working on OAuth-related features or testing GitHub integration:
+
+#### Creating a Personal Access Token (PAT)
+1. Go to [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/personal-access-tokens/fine-grained)
+2. Click "Generate new token" (Fine-grained tokens recommended)
+3. Set expiration and select the repository scope
+4. Grant the following permissions:
+   - **Contents**: Read (for repository access)
+   - **Issues**: Write (for issue management)
+   - **Pull requests**: Write (for PR management)
+   - **Metadata**: Read (required for repository access)
+
+#### Setting Up Your Environment
+```bash
+# Set your GitHub PAT for testing
+export GITHUB_TEST_TOKEN="your_pat_token_here"
+
+# Verify your token works
+curl -H "Authorization: token $GITHUB_TEST_TOKEN" https://api.github.com/user
+```
+
+#### PAT Testing vs Production OAuth
+**Important Differences:**
+- **PAT Mode**: Uses your token directly, no user interaction required
+- **OAuth Mode**: Uses GitHub's device flow, requires user authorization
+- **Testing**: PAT mode is ideal for development and automated testing
+- **Production**: OAuth device flow provides better user experience and security
+
+**When to use each:**
+- Use PAT mode (`GITHUB_TEST_TOKEN` set) for:
+  - Development and debugging
+  - Automated testing
+  - Quick feature validation
+- Use OAuth mode (`GITHUB_TEST_TOKEN` unset) for:
+  - Production releases
+  - User acceptance testing
+  - Demonstrating real user flow
+
+For detailed technical differences, see `docs/development/OAUTH_TESTING_VS_PRODUCTION.md`.
+
+### 5. Make Your Changes
 - Write clean, documented code
 - Follow existing code style
 - Add tests for new functionality
 - Update documentation as needed
 
-### 5. Test Your Changes
+### 6. Test Your Changes
 ```bash
 # Run all tests
 npm test
@@ -112,7 +154,7 @@ npm run build
 # Test with Claude Desktop or your AI platform
 ```
 
-### 6. Commit Your Changes
+### 7. Commit Your Changes
 ```bash
 # Stage your changes
 git add .
@@ -137,7 +179,7 @@ Fixes #123"
 - `style:` - Code style changes
 - `chore:` - Build process or auxiliary tool changes
 
-### 7. Push and Create PR
+### 8. Push and Create PR
 ```bash
 # Push to your fork
 git push origin feature/your-feature-name
@@ -145,7 +187,7 @@ git push origin feature/your-feature-name
 # Create PR on GitHub
 ```
 
-### 8. PR Guidelines
+### 9. PR Guidelines
 - Reference the issue number (e.g., "Fixes #123")
 - Provide a clear description of changes
 - Include screenshots for UI changes

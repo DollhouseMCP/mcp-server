@@ -10,20 +10,32 @@
  * 4. Accessing specific repository content
  */
 
-import { MCPTestRunner } from './qa-test-runner.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import chalk from 'chalk';
 import open from 'open';
 import readline from 'readline';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import fs from 'fs/promises';
+import { isTestMode } from './utils/github-auth.js';
 
 const execAsync = promisify(exec);
 
-class OAuthGitHubTest extends MCPTestRunner {
+/**
+ * WARNING: OAuth Testing Mode Support
+ * This script supports both PAT (testing) and OAuth device flow (production)
+ * - PAT Mode: Set GITHUB_TEST_TOKEN environment variable
+ * - OAuth Mode: Leave GITHUB_TEST_TOKEN unset
+ * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
+ */
+
+class OAuthGitHubTest {
   constructor() {
-    super('OAuth GitHub Access Test', 'qa-oauth-github');
+    this.client = null;
+    this.transport = null;
     this.githubToken = null;
+    this.availableTools = [];
   }
 
   /**
@@ -254,6 +266,66 @@ class OAuthGitHubTest extends MCPTestRunner {
     }
   }
 
+  async connectToMCP() {
+    console.log(chalk.blue('🔗 Connecting to MCP server...'));
+    
+    try {
+      // Create transport and client
+      this.transport = new StdioClientTransport({
+        command: 'node',
+        args: ['dist/index.js'],
+        cwd: process.cwd()
+      });
+
+      this.client = new Client({
+        name: 'oauth-test-client',
+        version: '1.0.0'
+      }, {
+        capabilities: {}
+      });
+
+      await this.client.connect(this.transport);
+      console.log(chalk.green('✅ Connected to MCP server'));
+      
+      // Discover tools
+      const tools = await this.client.listTools();
+      this.availableTools = tools.tools.map(t => t.name);
+      console.log(chalk.blue(`📋 Discovered ${this.availableTools.length} available tools`));
+      
+      return true;
+    } catch (error) {
+      console.error(chalk.red('Failed to connect:'), error.message);
+      throw error;
+    }
+  }
+  
+  async cleanup() {
+    if (this.client) {
+      await this.client.close();
+    }
+    if (this.transport) {
+      await this.transport.close();
+    }
+  }
+  
+  async callTool(toolName, args = {}) {
+    try {
+      const result = await this.client.callTool({
+        name: toolName,
+        arguments: args
+      });
+      return {
+        success: true,
+        result: result.content
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
   async runTests() {
     console.log(chalk.bold.cyan('\n' + '='.repeat(60)));
     console.log(chalk.bold.white('  OAuth GitHub Repository Access Test'));
@@ -278,7 +350,12 @@ class OAuthGitHubTest extends MCPTestRunner {
     console.log(chalk.bold.green('='.repeat(60)));
     
     console.log(chalk.cyan('\nResults:'));
-    console.log(chalk.green('  ✅ OAuth authentication working'));
+    if (isTestMode()) {
+      console.log(chalk.green('  ✅ PAT authentication working (TEST MODE)'));
+      console.log(chalk.yellow('  ⚠️  OAuth device flow NOT tested (requires manual testing)'));
+    } else {
+      console.log(chalk.green('  ✅ OAuth authentication working'));
+    }
     console.log(chalk.green('  ✅ Direct GitHub API access confirmed'));
     console.log(chalk.green('  ✅ Token storage and retrieval working'));
     
@@ -296,6 +373,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     try {
       await test.connectToMCP();
       await test.runTests();
+      process.exit(0);
     } catch (error) {
       console.error(chalk.red('Fatal error:'), error);
       process.exit(1);
