@@ -16,6 +16,7 @@ import open from 'open';
 import readline from 'readline';
 import { promisify } from 'util';
 import { exec } from 'child_process';
+import fs from 'fs/promises';
 
 const execAsync = promisify(exec);
 
@@ -53,14 +54,18 @@ class OAuthGitHubTest extends MCPTestRunner {
    */
   async getStoredToken() {
     try {
-      // Check if token file exists
-      const { stdout } = await execAsync('cat ~/.dollhouse/.github_token 2>/dev/null || echo ""');
-      const token = stdout.trim();
-      if (token && token.startsWith('ghu_')) {
-        return token;
+      // Check if token file exists using fs instead of shell
+      const tokenPath = `${process.env.HOME}/.dollhouse/.github_token`;
+      const token = await fs.readFile(tokenPath, 'utf-8');
+      const trimmedToken = token.trim();
+      if (trimmedToken && trimmedToken.startsWith('ghu_')) {
+        return trimmedToken;
       }
     } catch (error) {
-      // Token file doesn't exist
+      // Token file doesn't exist or can't be read
+      if (error.code !== 'ENOENT') {
+        console.error(chalk.yellow('Warning: Error reading token file:', error.message));
+      }
     }
     return null;
   }
@@ -128,6 +133,27 @@ class OAuthGitHubTest extends MCPTestRunner {
   }
 
   /**
+   * Make authenticated GitHub API request using fetch
+   */
+  async githubFetch(url, options = {}) {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Authorization': `token ${this.githubToken}`,
+        'Accept': 'application/vnd.github.v3+json',
+        ...options.headers
+      }
+    });
+    
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(`GitHub API error: ${error.message || response.statusText}`);
+    }
+    
+    return response.json();
+  }
+  
+  /**
    * Test GitHub API access with token
    */
   async testGitHubAPI() {
@@ -144,56 +170,48 @@ class OAuthGitHubTest extends MCPTestRunner {
     try {
       // Test 1: Get authenticated user
       console.log(chalk.cyan('Getting authenticated user...'));
-      const userResult = await execAsync(`curl -s -H "Authorization: token ${this.githubToken}" https://api.github.com/user`);
-      const userData = JSON.parse(userResult.stdout);
+      const userData = await this.githubFetch('https://api.github.com/user');
       console.log(chalk.green(`✅ Authenticated as: ${userData.login}`));
       
       // Test 2: Access dollhouse-portfolio repository
       console.log(chalk.cyan('\nAccessing dollhouse-portfolio repository...'));
-      const repoResult = await execAsync(`curl -s -H "Authorization: token ${this.githubToken}" https://api.github.com/repos/mickdarling/dollhouse-portfolio`);
-      const repoData = JSON.parse(repoResult.stdout);
+      const repoData = await this.githubFetch('https://api.github.com/repos/mickdarling/dollhouse-portfolio');
       console.log(chalk.green(`✅ Repository: ${repoData.full_name}`));
       console.log(`   Description: ${repoData.description}`);
       console.log(`   Private: ${repoData.private}`);
       
       // Test 3: List contents of templates folder
       console.log(chalk.cyan('\nListing templates folder contents...'));
-      const contentsResult = await execAsync(`curl -s -H "Authorization: token ${this.githubToken}" https://api.github.com/repos/mickdarling/dollhouse-portfolio/contents/templates`);
-      const contents = JSON.parse(contentsResult.stdout);
-      
-      if (Array.isArray(contents)) {
-        console.log(chalk.green(`✅ Found ${contents.length} items in templates folder:`));
-        contents.forEach(item => {
-          console.log(`   - ${item.name} (${item.type})`);
-        });
-      } else if (contents.message) {
-        console.log(chalk.yellow(`   No templates folder found: ${contents.message}`));
-      }
-      
-      // Test 4: Get a specific file content (if templates exist)
-      if (Array.isArray(contents) && contents.length > 0) {
-        const firstFile = contents.find(c => c.type === 'file');
-        if (firstFile) {
-          console.log(chalk.cyan(`\nReading ${firstFile.name}...`));
-          const fileResult = await execAsync(`curl -s -H "Authorization: token ${this.githubToken}" "${firstFile.url}"`);
-          const fileData = JSON.parse(fileResult.stdout);
-          const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-          console.log(chalk.green(`✅ Successfully read ${firstFile.name}`));
-          console.log(chalk.gray('   First 200 chars:'));
-          console.log(chalk.gray(`   ${content.substring(0, 200)}...`));
+      try {
+        const contents = await this.githubFetch('https://api.github.com/repos/mickdarling/dollhouse-portfolio/contents/templates');
+        
+        if (Array.isArray(contents)) {
+          console.log(chalk.green(`✅ Found ${contents.length} items in templates folder:`));
+          contents.forEach(item => {
+            console.log(`   - ${item.name} (${item.type})`);
+          });
+          
+          // Test 4: Get a specific file content (if templates exist)
+          const firstFile = contents.find(c => c.type === 'file');
+          if (firstFile) {
+            console.log(chalk.cyan(`\nReading ${firstFile.name}...`));
+            const fileData = await this.githubFetch(firstFile.url);
+            const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+            console.log(chalk.green(`✅ Successfully read ${firstFile.name}`));
+            console.log(chalk.gray('   First 200 chars:'));
+            console.log(chalk.gray(`   ${content.substring(0, 200)}...`));
+          }
+        }
+      } catch (error) {
+        if (error.message.includes('404')) {
+          console.log(chalk.yellow('   No templates folder found'));
+        } else {
+          throw error;
         }
       }
       
     } catch (error) {
       console.error(chalk.red('Error accessing GitHub API:'), error.message);
-      if (error.stdout) {
-        try {
-          const errorData = JSON.parse(error.stdout);
-          console.error(chalk.red('API Error:'), errorData.message);
-        } catch {
-          console.error(chalk.red('Response:'), error.stdout);
-        }
-      }
     }
   }
 

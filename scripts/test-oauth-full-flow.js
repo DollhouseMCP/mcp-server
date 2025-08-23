@@ -26,7 +26,6 @@ class MCPOAuthTester {
   constructor() {
     this.client = null;
     this.transport = null;
-    this.serverProcess = null;
   }
 
   /**
@@ -72,13 +71,7 @@ class MCPOAuthTester {
     console.log(chalk.blue('🔄 Connecting to MCP server...'));
     
     try {
-      // Spawn the MCP server process
-      this.serverProcess = spawn('node', ['dist/index.js'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        cwd: process.cwd()
-      });
-
-      // Create transport and client
+      // Create transport and client (transport will spawn the process)
       this.transport = new StdioClientTransport({
         command: 'node',
         args: ['dist/index.js'],
@@ -111,7 +104,8 @@ class MCPOAuthTester {
       
       console.log(chalk.green('✅ OAuth tools available:'));
       oauthTools.forEach(tool => {
-        console.log(`   - ${tool.name}: ${tool.description}`);
+        // Only log tool names to avoid leaking sensitive information
+        console.log(`   - ${tool.name}`);
       });
       
       return true;
@@ -203,8 +197,9 @@ class MCPOAuthTester {
    * Wait for user to complete authentication
    */
   async waitForAuthentication() {
-    const maxAttempts = 60; // 5 minutes total
+    const maxAttempts = 30; // 5 minutes total with exponential backoff
     let attempts = 0;
+    let delay = 2000; // Start with 2 seconds
     
     console.log(chalk.blue('🔄 Waiting for authentication...'));
     
@@ -231,12 +226,14 @@ class MCPOAuthTester {
         return false;
       }
       
-      // Show remaining time
-      const remaining = Math.floor((maxAttempts - attempts) * 5 / 60);
-      process.stdout.write(`\r🔄 Waiting for authentication... (${remaining}m remaining)`);
+      // Calculate exponential backoff with cap at 10 seconds
+      delay = Math.min(delay * 1.2, 10000);
+      const totalElapsed = attempts * (delay / 1000);
+      const remaining = Math.max(0, Math.floor((300 - totalElapsed) / 60));
+      process.stdout.write(`\r🔄 Waiting for authentication... (${remaining}m remaining, checking every ${Math.round(delay/1000)}s)`);
       
-      // Wait 5 seconds before next check
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Wait with exponential backoff
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
     
     console.log(chalk.red('\n❌ Authentication timeout'));
@@ -349,9 +346,8 @@ class MCPOAuthTester {
       await this.transport.close();
     }
     
-    if (this.serverProcess) {
-      this.serverProcess.kill();
-    }
+    // Note: transport.close() handles process cleanup
+    // No need to kill serverProcess separately since we removed the redundant spawn
     
     console.log(chalk.green('✅ Cleanup complete'));
   }
