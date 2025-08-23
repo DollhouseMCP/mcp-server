@@ -46,6 +46,9 @@ import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 
 
@@ -2677,44 +2680,112 @@ export class DollhouseMCPServer implements IToolHandler {
       // Initiate device flow
       const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
       
-      // CRITICAL FIX: Use direct main-process polling instead of unreliable background helper
-      // This fixes Issue #704 where background helper process dies without saving token
+      // CRITICAL FIX: Use helper process approach from PR #518
+      // MCP servers are stateless and terminate after returning response
+      // The helper process survives MCP termination and can complete OAuth polling
       
-      // Start polling in the background using the existing GitHubAuthManager
-      // This approach stores token immediately in main process after successful polling
-      setTimeout(async () => {
-        try {
-          logger.info('Starting OAuth token polling in main process', {
-            deviceCode: deviceResponse.device_code.substring(0, 8) + '...',
-            interval: deviceResponse.interval || 5,
-            expiresIn: deviceResponse.expires_in
-          });
-          
-          // Use the existing pollForToken method from GitHubAuthManager
-          const tokenResponse = await this.githubAuthManager.pollForToken(
-            deviceResponse.device_code,
-            (deviceResponse.interval || 5) * 1000 // Convert to milliseconds
-          );
-          
-          // Complete authentication - this stores token immediately in main process
-          const authStatus = await this.githubAuthManager.completeAuthentication(tokenResponse);
-          
-          logger.info('OAuth token polling completed successfully', {
-            username: authStatus.username,
-            hasToken: authStatus.hasToken,
-            isAuthenticated: authStatus.isAuthenticated
-          });
-          
-        } catch (pollingError) {
-          logger.error('OAuth token polling failed', { 
-            error: pollingError instanceof Error ? pollingError.message : 'Unknown error'
-          });
-          
-          // Communicate error to user via stderr
-          console.error(`❌ GitHub authentication polling failed: ${pollingError instanceof Error ? pollingError.message : 'Unknown error'}`);
-          console.error('Please try running the "setup_github_auth" command again.');
+      // Get the OAuth client ID
+      const configManager = ConfigManager.getInstance();
+      const clientId = await configManager.getGitHubClientId();
+      
+      if (!clientId) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Not Configured**\n\n` +
+                  `The server administrator needs to configure GitHub OAuth.\n\n` +
+                  `**Administrator Setup:**\n` +
+                  `1. Create OAuth app at: https://github.com/settings/applications/new\n` +
+                  `2. Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
+                  `3. Restart the MCP server\n\n` +
+                  `For details, see: /docs/setup/OAUTH_SETUP.md`
+          }]
+        };
+      }
+      
+      // Spawn the OAuth helper process
+      // The helper runs independently and survives MCP server termination
+      try {
+        // Get the directory where the compiled JS file is
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        
+        // Find the oauth-helper.mjs file
+        // It should be in the root directory (one level up from dist/)
+        const possiblePaths = [
+          path.join(__dirname, '..', 'oauth-helper.mjs'),  // From dist/index.js
+          path.join(process.cwd(), 'oauth-helper.mjs'),    // From CWD
+          path.join(__dirname, 'oauth-helper.mjs')         // Same directory
+        ];
+        
+        let helperPath: string | null = null;
+        for (const testPath of possiblePaths) {
+          try {
+            await fs.access(testPath);
+            helperPath = testPath;
+            break;
+          } catch {
+            // Try next path
+          }
         }
-      }, 1000); // Start polling after 1 second delay
+        
+        if (!helperPath) {
+          throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
+        }
+        
+        // Spawn the helper as a detached process
+        const helper = spawn('node', [
+          helperPath,
+          deviceResponse.device_code,
+          (deviceResponse.interval || 5).toString(),
+          deviceResponse.expires_in.toString(),
+          clientId
+        ], {
+          detached: true,
+          stdio: 'ignore', // Completely detach I/O
+          windowsHide: true // Hide console on Windows
+        });
+        
+        // Allow the parent process to exit without waiting for the helper
+        helper.unref();
+        
+        logger.info('OAuth helper process spawned', {
+          pid: helper.pid,
+          expiresIn: deviceResponse.expires_in,
+          userCode: deviceResponse.user_code
+        });
+        
+        // Write state file for monitoring
+        const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+        const stateDir = path.dirname(stateFile);
+        await fs.mkdir(stateDir, { recursive: true });
+        
+        const state = {
+          pid: helper.pid,
+          deviceCode: deviceResponse.device_code,
+          userCode: deviceResponse.user_code,
+          startTime: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
+        };
+        
+        await fs.writeFile(stateFile, JSON.stringify(state, null, 2));
+        
+      } catch (spawnError) {
+        logger.error('Failed to spawn OAuth helper', { error: spawnError });
+        // Fall back to informing user about the issue
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ **OAuth Helper Launch Failed**\n\n` +
+                  `Could not start background authentication process.\n\n` +
+                  `**Alternative Options:**\n` +
+                  `1. Try again: Run setup_github_auth again\n` +
+                  `2. Use GitHub CLI: gh auth login --web\n` +
+                  `3. Set token manually: export GITHUB_TOKEN=your_token\n\n` +
+                  `Error: ${spawnError instanceof Error ? spawnError.message : 'Unknown error'}`
+          }]
+        };
+      }
       
       // Return instructions to user
       return {
