@@ -16,8 +16,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
 import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
@@ -2711,6 +2709,10 @@ export class DollhouseMCPServer implements IToolHandler {
           logger.error('OAuth token polling failed', { 
             error: pollingError instanceof Error ? pollingError.message : 'Unknown error'
           });
+          
+          // Communicate error to user via stderr
+          console.error(`❌ GitHub authentication polling failed: ${pollingError instanceof Error ? pollingError.message : 'Unknown error'}`);
+          console.error('Please try running the "setup_github_auth" command again.');
         }
       }, 1000); // Start polling after 1 second delay
       
