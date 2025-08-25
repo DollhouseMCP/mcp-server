@@ -2725,7 +2725,8 @@ export class DollhouseMCPServer implements IToolHandler {
         const possiblePaths = [
           path.join(__dirname, '..', 'oauth-helper.mjs'),  // From dist/index.js
           path.join(process.cwd(), 'oauth-helper.mjs'),    // From CWD
-          path.join(__dirname, 'oauth-helper.mjs')         // Same directory
+          path.join(__dirname, 'oauth-helper.mjs'),        // Same directory
+          path.join(__dirname, '..', '..', 'oauth-helper.mjs') // NPM package root
         ];
         
         helperPath = null;

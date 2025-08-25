@@ -94,6 +94,7 @@
     "data/ensembles/**/*.md",
     "!dist/__tests__/**",
     "!dist/**/*.test.*",
+    "oauth-helper.mjs",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

@@ -177,12 +177,12 @@ jobs:
 
           if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            npm test > test-perf.log 2>&1
+            npm test -- test/__tests__/performance/ --no-coverage > test-perf.log 2>&1
             END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             TEST_TIME=$((END_TIME - START_TIME))
           else
             START_TIME=$(date +%s)
-            npm test > test-perf.log 2>&1
+            npm test -- test/__tests__/performance/ --no-coverage > test-perf.log 2>&1
             END_TIME=$(date +%s)
             TEST_TIME=$(((END_TIME - START_TIME) * 1000))
           fi
