@@ -181,16 +181,7 @@ export class GitHubAuthManager {
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
     const clientId = await GitHubAuthManager.getClientId();
-    
-    // This should never happen now with the default fallback, but kept for safety
-    if (!clientId) {
-      throw new Error(
-        'Unable to obtain GitHub OAuth client ID. ' +
-        'This is a known issue that is being fixed. ' +
-        'Our apologies for the inconvenience. ' +
-        'As a workaround, please update to the latest version or check the documentation.'
-      );
-    }
+    // getClientId() always returns a value (env, config, or default)
     
     try {
       const response = await this.fetchWithRetry(GitHubAuthManager.DEVICE_CODE_URL, {
