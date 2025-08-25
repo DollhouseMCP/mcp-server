@@ -9,7 +9,7 @@
 ## Build & Quality
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
-[![Test Coverage](https://img.shields.io/badge/Coverage-600%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
 [![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](docs/SECURITY.md)
 
 ## Platform Support
@@ -85,9 +85,9 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements 
 
 ## 🎨 Portfolio Customization Elements
 
-DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior. Your portfolio is your personal collection of AI customization elements that enhance and tailor your AI experience.
+DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior through **customization element types**. Your portfolio is your personal collection of these element types that enhance and tailor your AI experience. Each element type serves a specific purpose in shaping how AI assistants interact with you.
 
-### Portfolio Element Types
+### Current Portfolio Element Types
 
 | Element | Purpose | Status |
 |---------|---------|--------|
@@ -95,8 +95,16 @@ DollhouseMCP introduces a comprehensive portfolio system for customizing AI beha
 | 🛠️ **Skills** | Add specific capabilities like code review, data analysis, or creative writing | ✅ Available |
 | 📝 **Templates** | Create reusable response formats for emails, reports, documentation | ✅ Available |
 | 🤖 **Agents** | Build autonomous assistants that can pursue goals and make decisions | ✅ Available |
-| 🧠 **Memory** | Persistent context storage with retention policies and search capabilities | ✅ Available |
-| 🎯 **Ensemble** | Orchestrate multiple elements together as one unified entity | ✅ Available |
+
+### Coming Soon
+
+| Element | Purpose | Status |
+|---------|---------|--------|
+| 💬 **Prompts** | Pre-configured conversation starters and structured interactions | 🔄 Coming Soon |
+| 🧠 **Memory** | Persistent context storage with retention policies and search capabilities | 🔄 Coming Soon |
+| 🎯 **Ensemble** | Orchestrate multiple elements together as one unified entity | 🔄 Coming Soon |
+
+> **📢 Note**: Prompt, memory, and ensemble element types are actively being developed and will be available in upcoming releases.
 
 ### Managing Your Portfolio
 
