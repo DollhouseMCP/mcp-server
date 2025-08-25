@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2025-08-25
+
+### Fixed
+- **OAuth Authentication** - Fixed invalid OAuth client ID and added comprehensive error handling
+  - Updated default client ID from incorrect `Ov23liXGGP9jNrBhBNfO` to correct `Ov23li9gyNZP6m9aJ2EP`
+  - Added unique error codes throughout OAuth flow for precise debugging
+  - Added debug logging at each step of the authentication process
+  - Improved error messages to be specific and actionable
+  - Fixed TypeScript compilation issue with missing DeviceCodeResponse import
+
 ## [1.6.2] - 2025-08-25
 
 ### Fixed
