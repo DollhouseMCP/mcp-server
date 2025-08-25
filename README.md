@@ -42,7 +42,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.5.2 enables anonymous usage - no GitHub auth required!
+# ✅ v1.6.0 enables anonymous usage - no GitHub auth required!
 # Browse and submit to collection without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
@@ -735,7 +735,7 @@ get_collection_cache_health
 
 ### GitHub Authentication (v1.5.0+)
 
-DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.5.2**: Authentication is now optional - browse and submit anonymously!
+DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.6.0**: Authentication is now optional - browse and submit anonymously!
 
 #### OAuth Setup (For Self-Hosting)
 
