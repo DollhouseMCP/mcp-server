@@ -54,9 +54,6 @@ describe('SecureErrorHandler', () => {
       expect(result.code).toBe('ENOENT');
       expect(result.message).not.toContain('/Users/john');
       expect(result.message).not.toContain('secret');
-      
-      // Restore test environment to suppress console output
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize paths in development mode', () => {
@@ -71,9 +68,6 @@ describe('SecureErrorHandler', () => {
       expect(result.message).toBe('Cannot read file [PATH]');
       expect(result.message).not.toContain('/home/user');
       expect(result.message).not.toContain('secret.json');
-      
-      // Restore test environment to suppress console output
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize Windows paths', () => {
@@ -88,9 +82,6 @@ describe('SecureErrorHandler', () => {
       expect(result.message).toBe('Access denied: [PATH]');
       expect(result.message).not.toContain('C:\\Users');
       expect(result.message).not.toContain('Admin');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize IP addresses', () => {
@@ -103,9 +94,6 @@ describe('SecureErrorHandler', () => {
       const result = SecureErrorHandler.sanitizeError(error);
       
       expect(result.message).toBe('Connection failed to [IP]:[PORT]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize file URLs', () => {
@@ -118,9 +106,6 @@ describe('SecureErrorHandler', () => {
       const result = SecureErrorHandler.sanitizeError(error);
       
       expect(result.message).toBe('Cannot load [FILE]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize environment variables', () => {
@@ -133,9 +118,6 @@ describe('SecureErrorHandler', () => {
       const result = SecureErrorHandler.sanitizeError(error);
       
       expect(result.message).toBe('Missing [ENV] or [ENV] environment variable');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should handle errors without messages', () => {
@@ -148,9 +130,6 @@ describe('SecureErrorHandler', () => {
       const result = SecureErrorHandler.sanitizeError(error);
       
       expect(result.message).toBe('Access denied');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should truncate very long error messages', () => {
@@ -165,9 +144,6 @@ describe('SecureErrorHandler', () => {
       
       expect(result.message.length).toBe(500);
       expect(result.message.endsWith('...')).toBe(true);
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     // Note: Testing logger calls directly is not needed for security validation
@@ -182,9 +158,6 @@ describe('SecureErrorHandler', () => {
         .toBe('An error occurred processing your request.');
       expect(SecureErrorHandler.sanitizeError(undefined).message)
         .toBe('An error occurred processing your request.');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize temp directory paths', () => {
@@ -199,9 +172,6 @@ describe('SecureErrorHandler', () => {
       const error2 = new Error('Cannot access /var/folders/y6/nj790rtn62l/T/test');
       const result2 = SecureErrorHandler.sanitizeError(error2);
       expect(result2.message).toBe('Cannot access [TEMP]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize UNC paths', () => {
@@ -212,9 +182,6 @@ describe('SecureErrorHandler', () => {
       const error = new Error('Cannot access \\\\server\\share\\secret.txt');
       const result = SecureErrorHandler.sanitizeError(error);
       expect(result.message).toBe('Cannot access [PATH]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize zero-padded IP addresses', () => {
@@ -225,9 +192,6 @@ describe('SecureErrorHandler', () => {
       const error = new Error('Connection failed to 192.168.001.100');
       const result = SecureErrorHandler.sanitizeError(error);
       expect(result.message).toBe('Connection failed to [IP]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should sanitize Windows file URLs', () => {
@@ -238,9 +202,6 @@ describe('SecureErrorHandler', () => {
       const error = new Error('Cannot load file:///c:/Users/admin/secret.txt');
       const result = SecureErrorHandler.sanitizeError(error);
       expect(result.message).toBe('Cannot load [FILE]');
-      
-      // Restore test environment
-      process.env.NODE_ENV = originalEnv;
     });
 
     it('should handle validation errors specially', () => {
