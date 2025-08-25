@@ -30,9 +30,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.6.0
+**📦 Version**: v1.6.1
 
-> **🎉 New in v1.6.0**: Portfolio management system with GitHub integration, enhanced collection search with pagination, and 42 total MCP tools! See [Migration Guide](docs/MIGRATION_GUIDE_v1.6.0.md) for upgrade instructions.
+> **🎉 New in v1.6.1**: Default OAuth client ID for seamless GitHub authentication! Users can now authenticate without any configuration. The portfolio management system, GitHub integration, and 42 MCP tools from v1.6.0 are also included.
 
 > **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
@@ -42,8 +42,8 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.6.0 enables anonymous usage - no GitHub auth required!
-# Browse and submit to collection without authentication:
+# ✅ v1.6.1 includes default OAuth - authentication just works!
+# Browse and submit to collection with or without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
 # Add to Claude Desktop config (see path below for your OS)
@@ -735,7 +735,7 @@ get_collection_cache_health
 
 ### GitHub Authentication (v1.5.0+)
 
-DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.6.0**: Authentication is now optional - browse and submit anonymously!
+DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.6.1**: Default OAuth client ID built-in - no configuration needed!
 
 #### OAuth Setup (For Self-Hosting)
 
@@ -1547,7 +1547,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.6.0 - August 18, 2025 (Current - Develop Branch)
+### v1.6.1 - August 25, 2025 (Current - Develop Branch)
 
 **⚠️ Breaking Changes**:
 - 🔄 **Serialization Format Change** - `BaseElement.serialize()` now returns markdown with YAML frontmatter instead of JSON
