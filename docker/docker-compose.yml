@@ -28,14 +28,16 @@ services:
     
     # Temporary filesystems for writable areas
     tmpfs:
-      - /tmp:noexec,nosuid,size=100M
-      - /app/tmp:noexec,nosuid,size=50M
-      - /app/logs:noexec,nosuid,size=50M
+      - /tmp:noexec,nosuid,size=100M,mode=1777
+      - /app/tmp:noexec,nosuid,size=50M,mode=1777
+      - /app/logs:noexec,nosuid,size=50M,mode=1777
     
     environment:
       - NODE_ENV=production
       - PERSONAS_DIR=/app/data/personas
       - DOLLHOUSE_SECURITY_MODE=strict
+      - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio
+      - DOLLHOUSE_CACHE_DIR=/app/tmp/cache
     
     volumes:
       # Mount custom personas directory (optional - extends default personas)
@@ -74,6 +76,8 @@ services:
     environment:
       - NODE_ENV=development
       - PERSONAS_DIR=/app/data/personas
+      - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio
+      - DOLLHOUSE_CACHE_DIR=/app/tmp/cache
     
     volumes:
       - ..:/app

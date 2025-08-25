@@ -29,7 +29,7 @@ describe('MCP Tools Security Tests', () => {
     process.chdir(testDir);
     
     // Set environment to use test directory
-    process.env.DOLLHOUSE_PERSONAS_DIR = path.join(testDir, 'personas');
+    process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
     
     // Initialize server
     server = new DollhouseMCPServer();
@@ -329,29 +329,9 @@ describe('MCP Tools Security Tests', () => {
     });
   });
   
-  describe('Rate Limiting', () => {
-    test('should enforce rate limits on API operations', async () => {
-      SecurityTestPerformance.start();
-      
-      // Make rapid requests
-      const requests: Promise<any>[] = [];
-      for (let i = 0; i < 10; i++) {
-        requests.push(server.checkForUpdates());
-      }
-      
-      const results = await Promise.allSettled(requests);
-      
-      // Some should be rate limited
-      const rateLimited = results.filter(r => 
-        r.status === 'rejected' || 
-        (r.status === 'fulfilled' && r.value.content[0].text.includes('rate limit'))
-      );
-      
-      expect(rateLimited.length).toBeGreaterThan(0);
-      
-      SecurityTestPerformance.checkpoint('rate limiting');
-    });
-  });
+  // Note: Rate limiting tests were removed as they tested the auto-update system
+  // which was removed in PR #634. Rate limiting is still implemented for specific
+  // operations like GitHub API calls and persona submissions where appropriate.
   
   describe('SSRF Prevention', () => {
     const ssrfPayloads = [

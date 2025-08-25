@@ -46,8 +46,15 @@ risk_thresholds:
   max_file_size: 500
   max_function_length: 50
   security_score_minimum: 8.0
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "Edge case validation testing"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.340Z"
+  originalPath: "data/agents/code-reviewer.md"
 ---
-
 # Code Reviewer Agent
 
 An intelligent agent that performs automated code reviews focusing on security, performance, quality, and best practices.

@@ -47,14 +47,14 @@ describe('PersonaManager', () => {
   describe('loadPersonas', () => {
     it('should load personas successfully', async () => {
       const mockPersonas = new Map<string, Persona>([
-        ['test.md', {
+        ['sample.md', {
           metadata: {
             name: 'Test Persona',
             description: 'A test persona',
             unique_id: 'test-persona_20250101-120000_tester'
           },
           content: 'Test content',
-          filename: 'test.md',
+          filename: 'sample.md',
           unique_id: 'test-persona_20250101-120000_tester'
         }]
       ]);
@@ -85,7 +85,7 @@ describe('PersonaManager', () => {
         unique_id: 'test-persona_20250101-120000_tester'
       },
       content: 'You are a test assistant',
-      filename: 'test.md',
+      filename: 'sample.md',
       unique_id: 'test-persona_20250101-120000_tester'
     };
 
@@ -99,7 +99,7 @@ describe('PersonaManager', () => {
 
       expect(result).toBeDefined();
       expect(result.message).toContain('Test Persona');
-      expect((personaManager as any).activePersona).toBe('test.md');
+      expect((personaManager as any).activePersona).toBe('sample.md');
     });
 
     it('should activate a persona by unique_id', () => {
@@ -107,7 +107,7 @@ describe('PersonaManager', () => {
 
       expect(result).toBeDefined();
       expect(result.message).toContain('Activated');
-      expect((personaManager as any).activePersona).toBe('test.md');
+      expect((personaManager as any).activePersona).toBe('sample.md');
     });
 
     it('should throw error for non-existent persona', () => {
@@ -126,7 +126,7 @@ describe('PersonaManager', () => {
           unique_id: 'test-persona_20250101-120000_tester'
         },
         content: 'Test content',
-        filename: 'test.md',
+        filename: 'sample.md',
         unique_id: 'test-persona_20250101-120000_tester'
       };
 
@@ -212,7 +212,7 @@ describe('PersonaManager', () => {
         unique_id: 'test-persona_20250101-120000_tester'
       },
       content: '---\nname: Test Persona\ndescription: Original description\n---\nOriginal content',
-      filename: 'test.md',
+      filename: 'sample.md',
       unique_id: 'test-persona_20250101-120000_tester'
     };
 

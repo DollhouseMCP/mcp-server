@@ -18,6 +18,7 @@ export interface SecureParseOptions {
   maxContentSize?: number;
   allowedKeys?: string[];
   validateContent?: boolean;
+  validateFields?: boolean; // Whether to apply field-specific validators (for persona metadata)
 }
 
 export interface ParsedContent {
@@ -30,11 +31,12 @@ export class SecureYamlParser {
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
     maxYamlSize: 64 * 1024,      // 64KB for YAML
     maxContentSize: 1024 * 1024,  // 1MB for content
-    validateContent: true
+    validateContent: true,
+    validateFields: true         // By default, apply field validators
   };
 
-  // Allowed YAML types - using FAILSAFE_SCHEMA as base
-  private static readonly SAFE_SCHEMA = yaml.FAILSAFE_SCHEMA;
+  // Allowed YAML types - using CORE_SCHEMA (safe subset with basic types like booleans and integers)
+  private static readonly SAFE_SCHEMA = yaml.CORE_SCHEMA;
 
   // Additional validation for specific persona fields
   private static readonly FIELD_VALIDATORS: Record<string, (value: any) => boolean> = {
@@ -47,7 +49,30 @@ export class SecureYamlParser {
     price: (v) => typeof v === 'string' && (v === 'free' || /^\$\d+\.\d{2}$/.test(v)),
     ai_generated: (v) => typeof v === 'boolean' || v === 'true' || v === 'false',
     generation_method: (v) => ['human', 'ChatGPT', 'Claude', 'hybrid'].includes(v),
-    created_date: (v) => typeof v === 'string' && !isNaN(Date.parse(v)),
+    created_date: (v) => {
+      if (typeof v !== 'string') return false;
+      
+      // More flexible date validation - accept common formats
+      // ISO8601, US format, European format, simple dates
+      const datePatterns = [
+        /^\d{4}-\d{2}-\d{2}$/, // YYYY-MM-DD
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, // ISO8601 with time
+        /^\d{1,2}\/\d{1,2}\/\d{4}$/, // MM/DD/YYYY or M/D/YYYY
+        /^\d{1,2}-\d{1,2}-\d{4}$/, // MM-DD-YYYY or M-D-YYYY
+        /^\d{1,2}\.\d{1,2}\.\d{4}$/, // DD.MM.YYYY (European)
+        /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}$/i // Month DD, YYYY
+      ];
+      
+      // Check if it matches common patterns first
+      const matchesPattern = datePatterns.some(pattern => pattern.test(v.trim()));
+      if (!matchesPattern) {
+        // Fall back to Date.parse for other formats, but be more lenient
+        const parsed = Date.parse(v);
+        return !isNaN(parsed) && parsed > 0; // Ensure it's a valid positive timestamp
+      }
+      
+      return true;
+    },
     triggers: (v) => Array.isArray(v) && v.every(t => typeof t === 'string' && t.length <= 50),
     content_flags: (v) => Array.isArray(v) && v.every(f => typeof f === 'string' && f.length <= 50)
   };
@@ -126,8 +151,8 @@ export class SecureYamlParser {
 
     // 8. Validate field types and content
     for (const [key, value] of Object.entries(data)) {
-      // Check field-specific validators
-      if (this.FIELD_VALIDATORS[key] && !this.FIELD_VALIDATORS[key](value)) {
+      // Check field-specific validators only if field validation is enabled
+      if (opts.validateFields && this.FIELD_VALIDATORS[key] && !this.FIELD_VALIDATORS[key](value)) {
         throw new SecurityError(`Invalid value for field '${key}'`, 'medium');
       }
 

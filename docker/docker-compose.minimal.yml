@@ -1,0 +1,8 @@
+# Minimal Docker Compose test - just runs alpine and echoes hello
+services:
+  minimal-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.minimal
+    image: minimal-test:latest
+    container_name: minimal-docker-test

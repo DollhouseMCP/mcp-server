@@ -13,6 +13,28 @@
 @docs/development/BRANCH_PROTECTION_CONFIG.md
 @docs/development/PR_BEST_PRACTICES.md
 @docs/development/SESSION_NOTES_JULY_23_AFTERNOON_ENSEMBLE.md
+@docs/development/GITFLOW_GUARDIAN.md
+@docs/development/SESSION_NOTES_2025_08_11_EVENING_GITFLOW_FIXES.md
+
+## GitFlow Guardian Hooks 🚨
+
+**IMPORTANT: Git hooks are in `.githooks/` directory, NOT `.git/hooks/`**
+- Configured via: `git config core.hookspath .githooks`
+- Pre-commit hook: Prevents commits to protected branches (main/develop)
+- Post-checkout hook: Shows branch-specific warnings and detects violations
+- Pre-push hook: Blocks pushing feature branches created from main
+- See `docs/development/GITFLOW_GUARDIAN.md` for full details
+
+**Quick Override** (emergencies only):
+- Skip commit check: `git commit --no-verify -m "Emergency: reason"`
+- Skip push check: `SKIP_GITFLOW_CHECK=1 git push`
+
+## GitFlow Guardian Hooks Location 🚨
+
+**IMPORTANT: Git hooks are in `.githooks/` directory, NOT `.git/hooks/`**
+- Configured via: `git config core.hookspath .githooks`
+- Post-checkout hook (`.githooks/post-checkout`) shows colored branch messages
+- See `docs/development/GITFLOW_GUARDIAN_HOOKS_REFERENCE.md` for full details
 
 ## Project Overview
 
@@ -444,13 +466,6 @@ edit_persona "Study Buddy" "instructions" "You are a supportive tutor who..."
 validate_persona "Study Buddy"      # Check quality and format
 ```
 
-**Auto-Update System:**
-```
-check_for_updates                   # Check for new versions on GitHub
-get_server_status                   # View current version and system info
-update_server true                  # Perform automated update with backup
-rollback_update true                # Revert to previous version if needed
-```
 
 ## Business Model & Legal Framework
 

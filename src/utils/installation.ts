@@ -7,7 +7,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
-import { UpdateConfigManager } from '../config/updateConfig.js';
 
 export type InstallationType = 'npm' | 'git' | 'unknown';
 
@@ -15,9 +14,7 @@ export class InstallationDetector {
   private static cachedType: InstallationType | null = null;
   
   // Maximum directory levels to search upward for .git directory
-  private static get MAX_SEARCH_DEPTH(): number {
-    return UpdateConfigManager.getInstance().getMaxSearchDepth();
-  }
+  private static readonly MAX_SEARCH_DEPTH = 10;
   
   /**
    * Detect the installation type (npm global, git clone, or unknown)
@@ -44,8 +41,10 @@ export class InstallationDetector {
       
       // Check if we're in a node_modules directory (npm installation)
       // Use path separator to ensure we match the exact package name
-      const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
-      if (currentDir.includes(npmPattern)) {
+      // Normalize the path to handle both Windows and Unix separators
+      const normalizedCurrentDir = path.normalize(currentDir);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      if (normalizedCurrentDir.includes(npmPattern)) {
         logger.debug('[InstallationDetector] Detected npm installation');
         this.cachedType = 'npm';
         return 'npm';
@@ -98,7 +97,9 @@ export class InstallationDetector {
       let currentDir = path.dirname(currentFilePath);
       
       // Find the root of the npm package
-      while (currentDir.includes('node_modules/@dollhousemcp/mcp-server')) {
+      // Normalize paths to handle Windows and Unix separators
+      const npmPackagePattern = path.normalize('node_modules/@dollhousemcp/mcp-server');
+      while (path.normalize(currentDir).includes(npmPackagePattern)) {
         const packageJsonPath = path.join(currentDir, 'package.json');
         if (fs.existsSync(packageJsonPath)) {
           return currentDir;

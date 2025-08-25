@@ -7,13 +7,16 @@
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
+import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -27,6 +30,18 @@ export const FILE_CONSTANTS = {
   CHUNK_SIZE: 64 * 1024 // 64KB chunks for reading large files
 } as const;
 
+// Development mode detection
+// When running from a git clone, we don't want to auto-load test data
+const IS_DEVELOPMENT_MODE = (() => {
+  try {
+    // Check if we're in a git repository (development mode)
+    const gitDir = path.join(process.cwd(), '.git');
+    return fsSync.existsSync(gitDir);
+  } catch {
+    return false;
+  }
+})();
+
 // Internal constants
 const DATA_DIR_CACHE_KEY = 'dollhouse_data_dir';
 const COPY_RETRY_ATTEMPTS = 3;
@@ -37,6 +52,15 @@ export interface DefaultElementProviderConfig {
   customDataPaths?: string[];
   /** Whether to use default search paths after custom paths */
   useDefaultPaths?: boolean;
+  /** Whether to load test/example data from repository (default: false in dev mode) */
+  loadTestData?: boolean;
+}
+
+// PERFORMANCE: Metadata cache with mtime-based invalidation
+interface MetadataCacheEntry {
+  metadata: any;
+  mtime: number;
+  size: number;
 }
 
 export class DefaultElementProvider {
@@ -45,13 +69,72 @@ export class DefaultElementProvider {
   private static populateInProgress: Map<string, Promise<void>> = new Map();
   private readonly config: DefaultElementProviderConfig;
   
+  // PERFORMANCE OPTIMIZATION: Cache metadata with file mtime for invalidation
+  private static metadataCache: Map<string, MetadataCacheEntry> = new Map();
+  private static readonly MAX_CACHE_SIZE = 20; // MEMORY LEAK FIX: Further reduced cache size to prevent accumulation during performance tests
+  
   constructor(config?: DefaultElementProviderConfig) {
     const __filename = fileURLToPath(import.meta.url);
     this.__dirname = path.dirname(__filename);
+    
+    // Check environment variable for test data loading
+    const envLoadTestData = process.env.DOLLHOUSE_LOAD_TEST_DATA;
+    const loadTestDataFromEnv = envLoadTestData === 'true' || envLoadTestData === '1';
+    const disableTestDataFromEnv = envLoadTestData === 'false' || envLoadTestData === '0';
+    
+    // Check if we're in development mode (with respect to FORCE_PRODUCTION_MODE override)
+    const isDevMode = (() => {
+      // Respect FORCE_PRODUCTION_MODE override first
+      if (process.env.FORCE_PRODUCTION_MODE === 'true') {
+        return false; // Force production mode
+      }
+      if (process.env.FORCE_PRODUCTION_MODE === 'false') {
+        return true; // Force development mode
+      }
+      // Fall back to git detection
+      return IS_DEVELOPMENT_MODE;
+    })();
+    
+    // Determine loadTestData value
+    let computedLoadTestData: boolean;
+    if (loadTestDataFromEnv) {
+      // Environment explicitly enables test data
+      computedLoadTestData = true;
+    } else if (disableTestDataFromEnv) {
+      // Environment explicitly disables test data
+      computedLoadTestData = false;
+    } else {
+      // Default logic: enable in production, disable in development unless config overrides
+      computedLoadTestData = !isDevMode && (config?.loadTestData ?? true);
+    }
+    
     this.config = {
       useDefaultPaths: true,
-      ...config
+      ...config,
+      // Apply final loadTestData logic - environment variables and development mode take precedence
+      loadTestData: loadTestDataFromEnv ? true : disableTestDataFromEnv ? false : computedLoadTestData
     };
+    
+    if (isDevMode && !this.config.loadTestData) {
+      logger.info('[DefaultElementProvider] Development mode detected - test data loading disabled');
+      logger.info('[DefaultElementProvider] To enable test data, set DOLLHOUSE_LOAD_TEST_DATA=true');
+    }
+  }
+  
+  /**
+   * Get the current loadTestData configuration value
+   * @returns Whether test data loading is enabled
+   */
+  public get isTestDataLoadingEnabled(): boolean {
+    return this.config.loadTestData ?? false;
+  }
+  
+  /**
+   * Get whether the system is in development mode
+   * @returns Whether running in development mode
+   */
+  public get isDevelopmentMode(): boolean {
+    return IS_DEVELOPMENT_MODE;
   }
   
   /**
@@ -68,11 +151,19 @@ export class DefaultElementProvider {
     
     // Add default paths if enabled
     if (this.config.useDefaultPaths !== false) {
-      paths.push(
+      // Skip development/repository data paths unless test data loading is enabled
+      if (this.config.loadTestData) {
         // Development/Git installation (relative to this file)
-        path.join(this.__dirname, '../../data'),
-        path.join(this.__dirname, '../../../data'),
-        
+        paths.push(
+          path.join(this.__dirname, '../../data'),
+          path.join(this.__dirname, '../../../data'),
+          // Current working directory (last resort)
+          path.join(process.cwd(), 'data')
+        );
+      }
+      
+      // Always include NPM installation paths (these would have production data)
+      paths.push(
         // NPM installations - macOS Homebrew
         '/opt/homebrew/lib/node_modules/@dollhousemcp/mcp-server/data',
         
@@ -85,10 +176,7 @@ export class DefaultElementProvider {
         'C:\\Program Files (x86)\\nodejs\\node_modules\\@dollhousemcp\\mcp-server\\data',
         
         // NPM installations - Windows with nvm
-        path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server', 'data'),
-        
-        // Current working directory (last resort)
-        path.join(process.cwd(), 'data')
+        path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server', 'data')
       );
     }
     
@@ -151,6 +239,421 @@ export class DefaultElementProvider {
       return false;
     }
   }
+
+  /**
+   * Validate file path to prevent path traversal attacks
+   * SECURITY FIX: Added file path validation to prevent directory traversal
+   * Previously: File paths were used without validation, allowing potential ../../../ attacks
+   * Now: Strict validation ensures paths stay within allowed directories
+   * @param filePath The file path to validate
+   * @param allowedBasePaths Array of allowed base paths (optional)
+   * @returns true if path is safe, false otherwise
+   */
+  private validateFilePath(filePath: string, allowedBasePaths?: string[]): boolean {
+    try {
+      // SECURITY: Normalize path to prevent traversal attempts
+      const normalizedPath = path.normalize(filePath);
+      
+      // SECURITY: Reject paths containing traversal patterns
+      if (normalizedPath.includes('..')) {
+        logger.warn(`[DefaultElementProvider] Path traversal attempt blocked: ${filePath}`);
+        return false;
+      }
+      
+      // SECURITY: Check for home directory expansion attempts, but allow Windows 8.3 short path names
+      // Windows short path names use ~ followed by a digit (e.g., RUNNER~1), which should be allowed
+      // Only block ~ followed by / or \ (home directory expansion patterns)
+      if (normalizedPath.includes('~/') || normalizedPath.includes('~\\')) {
+        logger.warn(`[DefaultElementProvider] Home directory expansion attempt blocked: ${filePath}`);
+        return false;
+      }
+      
+      // SECURITY: Reject absolute paths outside allowed directories
+      if (path.isAbsolute(normalizedPath) && allowedBasePaths) {
+        const isAllowed = allowedBasePaths.some(basePath => {
+          const normalizedBase = path.normalize(basePath);
+          return normalizedPath.startsWith(normalizedBase);
+        });
+        
+        if (!isAllowed) {
+          logger.warn(`[DefaultElementProvider] Absolute path outside allowed directories: ${filePath}`);
+          return false;
+        }
+      }
+      
+      // SECURITY: Reject null bytes and other dangerous characters
+      if (normalizedPath.includes('\0') || normalizedPath.includes('\x00')) {
+        logger.warn(`[DefaultElementProvider] Null byte in path blocked: ${filePath}`);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      logger.warn(`[DefaultElementProvider] Path validation error: ${error}`);
+      return false;
+    }
+  }
+
+  // DEPRECATED: Commented out filename pattern detection - replaced with metadata-based detection
+  /**
+   * Cached compiled regex patterns for performance optimization
+   * @deprecated Use metadata-based detection instead
+   */
+  // private static compiledTestPatterns: RegExp[] | null = null;
+
+  /**
+   * Get compiled test patterns with caching for better performance
+   * @deprecated Use metadata-based detection instead
+   * @returns Array of compiled regex patterns
+   */
+  // private getCompiledTestPatterns(): RegExp[] {
+  //   // Use cached patterns if available
+  //   if (DefaultElementProvider.compiledTestPatterns) {
+  //     return DefaultElementProvider.compiledTestPatterns;
+  //   }
+  //   
+  //   // Compile and cache patterns on first use
+  //   // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
+  //   // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
+  //   // We only block specific test patterns that are clearly from our test suite
+  //   DefaultElementProvider.compiledTestPatterns = [
+  //     /^testpersona/i,              // Our test suite pattern
+  //     /^yamltest/i,                 // Security test pattern
+  //     /^yamlbomb/i,                 // Security test pattern
+  //     /^memory-test-/i,             // Performance test pattern
+  //     /^perf-test-/i,               // Performance test pattern
+  //     /^test-fixture-/i,            // Test fixture pattern (more specific)
+  //     /^test-data-/i,               // Test data pattern (more specific)
+  //     /bin-sh|rm-rf|pwned/i,        // Malicious patterns
+  //     /concurrent-\d+/i,            // Concurrent test pattern
+  //     /legacy\.md$/i,               // Legacy test pattern
+  //     /performance-test/i,          // Performance test pattern
+  //     /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
+  //     /^unittest-/i,                // Unit test pattern
+  //     /^integrationtest-/i,         // Integration test pattern
+  //   ];
+  //   
+  //   return DefaultElementProvider.compiledTestPatterns;
+  // }
+
+  /**
+   * Check if a filename matches test data patterns that should never be copied to production
+   * @deprecated Use isDollhouseMCPTestElement() for metadata-based detection instead
+   * @param filename The filename to check
+   * @returns true if the filename matches test patterns that should be blocked
+   */
+  // private isTestDataPattern(filename: string): boolean {
+  //   const patterns = this.getCompiledTestPatterns();
+  //   return patterns.some(pattern => pattern.test(filename));
+  // }
+
+  /**
+   * Read metadata from YAML frontmatter only (never reads content body)
+   * Uses a small buffer to safely extract only the frontmatter between --- markers
+   * @param filePath Path to the file to read metadata from
+   * @returns Parsed metadata object or null if no frontmatter found
+   */
+  // PERFORMANCE OPTIMIZATION: Reusable buffer pool to reduce allocations
+  private static readonly bufferPool: Buffer[] = [];
+  private static readonly MAX_POOL_SIZE = 20; // MEMORY LEAK FIX: Reduced buffer pool size to match cache size for consistent memory management
+  private static bufferPoolStats = { hits: 0, misses: 0, created: 0 };
+  
+  private getBuffer(): Buffer {
+    // PERFORMANCE: Track buffer pool usage for optimization monitoring
+    let buffer = DefaultElementProvider.bufferPool.pop();
+    if (buffer) {
+      DefaultElementProvider.bufferPoolStats.hits++;
+      return buffer;
+    } else {
+      DefaultElementProvider.bufferPoolStats.misses++;
+      DefaultElementProvider.bufferPoolStats.created++;
+      buffer = Buffer.alloc(4096);
+      logger.debug(`[DefaultElementProvider] Created new buffer (pool empty), total created: ${DefaultElementProvider.bufferPoolStats.created}`);
+      return buffer;
+    }
+  }
+  
+  private releaseBuffer(buffer: Buffer): void {
+    // CRITICAL FIX: Always attempt to return buffer to pool for reuse
+    if (DefaultElementProvider.bufferPool.length < DefaultElementProvider.MAX_POOL_SIZE) {
+      buffer.fill(0); // SECURITY: Clear buffer before reuse to prevent data leakage
+      DefaultElementProvider.bufferPool.push(buffer);
+    } else {
+      // PERFORMANCE: If pool is full, clear the buffer to help GC
+      buffer.fill(0);
+      logger.debug('[DefaultElementProvider] Buffer pool full, discarding buffer');
+    }
+  }
+
+  /**
+   * Clean up buffer pool and cache to free memory
+   * PERFORMANCE FIX: Added cleanup method to prevent memory leaks
+   * This should be called during application shutdown or periodic cleanup
+   */
+  public static cleanup(): void {
+    // Clear buffer pool
+    DefaultElementProvider.bufferPool.length = 0;
+    
+    // Clear metadata cache
+    DefaultElementProvider.metadataCache.clear();
+    
+    // Clear cached data directory
+    DefaultElementProvider.cachedDataDir = null;
+    
+    // Clear population promises
+    DefaultElementProvider.populateInProgress.clear();
+    
+    logger.info('[DefaultElementProvider] Memory cleanup completed', {
+      bufferStats: DefaultElementProvider.bufferPoolStats,
+      cacheCleared: true
+    });
+    
+    // Reset stats
+    DefaultElementProvider.bufferPoolStats = { hits: 0, misses: 0, created: 0 };
+  }
+
+  /**
+   * Get performance statistics for monitoring
+   * PERFORMANCE MONITORING: Added statistics method for performance tracking
+   * This provides insights into buffer pool efficiency and cache performance
+   * @returns Object containing performance metrics
+   */
+  public static getPerformanceStats(): {
+    bufferPool: {
+      hits: number;
+      misses: number; 
+      created: number;
+      hitRate: number;
+      poolSize: number;
+      maxPoolSize: number;
+    };
+    metadataCache: {
+      size: number;
+      maxSize: number;
+    };
+  } {
+    const bufferHits = DefaultElementProvider.bufferPoolStats.hits;
+    const bufferMisses = DefaultElementProvider.bufferPoolStats.misses;
+    const totalRequests = bufferHits + bufferMisses;
+    
+    return {
+      bufferPool: {
+        hits: bufferHits,
+        misses: bufferMisses,
+        created: DefaultElementProvider.bufferPoolStats.created,
+        hitRate: totalRequests > 0 ? bufferHits / totalRequests : 0,
+        poolSize: DefaultElementProvider.bufferPool.length,
+        maxPoolSize: DefaultElementProvider.MAX_POOL_SIZE
+      },
+      metadataCache: {
+        size: DefaultElementProvider.metadataCache.size,
+        maxSize: DefaultElementProvider.MAX_CACHE_SIZE
+      }
+    };
+  }
+
+  private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
+    // PERFORMANCE: Check cache first before reading file
+    try {
+      const stats = await fs.stat(filePath);
+      const cacheKey = filePath;
+      const cached = DefaultElementProvider.metadataCache.get(cacheKey);
+      
+      // Return cached metadata if file hasn't changed 
+      // CRITICAL FIX: Use integer mtime comparison to avoid floating-point precision issues
+      if (cached && Math.floor(cached.mtime) === Math.floor(stats.mtimeMs) && cached.size === stats.size) {
+        logger.debug(`[DefaultElementProvider] Cache hit for ${filePath}`);
+        return cached.metadata;
+      }
+    } catch {
+      // File doesn't exist, proceed with normal flow
+    }
+    
+    try {
+      // Open file and read only first 4KB to avoid reading dangerous content
+      const fd = await fs.open(filePath, 'r');
+      // PERFORMANCE: Use buffer pool instead of allocating new buffer each time
+      const buffer = this.getBuffer();
+      
+      try {
+        const result = await fd.read(buffer, 0, 4096, 0);
+        const header = buffer.subarray(0, result.bytesRead).toString('utf-8');
+        
+        // Look for YAML frontmatter between --- markers
+        // Support both Unix (\n) and Windows (\r\n) line endings
+        const match = header.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        if (!match) {
+          return null; // No frontmatter found
+        }
+        
+        // Parse the YAML frontmatter safely
+        try {
+          // SECURITY FIX: Replace direct YAML parsing function with SecureYamlParser for enhanced security
+          // SecureYamlParser provides additional validation, injection prevention, and content sanitization
+          // It expects full YAML with --- markers, so we reconstruct the frontmatter block
+          // We disable specific field validation as this is general metadata parsing, not persona-specific
+          const fullYaml = `---\n${match[1]}\n---`;
+          const parseResult = SecureYamlParser.parse(fullYaml, { 
+            validateContent: false, 
+            validateFields: false 
+          });
+          const metadata = parseResult.data;
+          
+          // PERFORMANCE: Cache the metadata with file stats for future reads
+          if (typeof metadata === 'object' && metadata !== null) {
+            try {
+              const stats = await fs.stat(filePath);
+              const cacheEntry: MetadataCacheEntry = {
+                metadata,
+                mtime: stats.mtimeMs,
+                size: stats.size
+              };
+              
+              // CRITICAL MEMORY LEAK FIX: More aggressive cache management to prevent unbounded growth
+              // Check if this entry already exists and just update it instead of adding new
+              if (DefaultElementProvider.metadataCache.has(filePath)) {
+                // Update existing entry - no eviction needed
+                DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
+                logger.debug(`[DefaultElementProvider] Updated existing cache entry for ${filePath}`);
+              } else {
+                // New entry - check if we need to evict first
+                // Use > instead of >= to ensure we never exceed MAX_CACHE_SIZE
+                if (DefaultElementProvider.metadataCache.size >= DefaultElementProvider.MAX_CACHE_SIZE) {
+                  // More aggressive eviction: remove enough entries to stay well under limit
+                  const entriesToEvict = Math.max(1, Math.floor(DefaultElementProvider.MAX_CACHE_SIZE * 0.4));
+                  const keysToEvict = Array.from(DefaultElementProvider.metadataCache.keys()).slice(0, entriesToEvict);
+                  for (const key of keysToEvict) {
+                    DefaultElementProvider.metadataCache.delete(key);
+                  }
+                  logger.debug(`[DefaultElementProvider] Evicted ${keysToEvict.length} cache entries to manage memory (cache size was ${DefaultElementProvider.metadataCache.size + keysToEvict.length})`);
+                }
+                
+                DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
+                logger.debug(`[DefaultElementProvider] Added new cache entry for ${filePath} (cache size now: ${DefaultElementProvider.metadataCache.size})`);
+              }
+            } catch {
+              // Ignore cache errors, return metadata anyway
+            }
+            return metadata;
+          }
+          return null;
+        } catch (yamlError) {
+          // Invalid YAML, return null
+          // ENHANCEMENT: Include error type for better debugging
+          const yamlErrorType = (yamlError as any)?.constructor?.name || 'YAMLError';
+          logger.debug(`[DefaultElementProvider] Invalid YAML in ${filePath}: ${yamlErrorType} - ${yamlError}`);
+          return null;
+        }
+      } finally {
+        // CRITICAL FIX: Ensure file descriptor is closed and buffer is released in ALL paths
+        try {
+          await fd.close();
+        } catch (closeError) {
+          logger.debug(`[DefaultElementProvider] Error closing file descriptor for ${filePath}: ${closeError}`);
+        }
+        // PERFORMANCE: Return buffer to pool for reuse
+        this.releaseBuffer(buffer);
+      }
+    } catch (error: any) {
+      // ENHANCEMENT: Include error type in debug logs for better debugging
+      const errorType = error?.constructor?.name || 'UnknownError';
+      const errorCode = error?.code || 'NO_CODE';
+      
+      // RELIABILITY: Add retry logic for transient failures
+      if (retries > 0 && (errorCode === 'EBUSY' || errorCode === 'EAGAIN')) {
+        logger.debug(`[DefaultElementProvider] Retrying read for ${filePath} after ${errorType}:${errorCode}`);
+        await new Promise(resolve => setTimeout(resolve, 50)); // Brief delay before retry
+        return this.readMetadataOnly(filePath, retries - 1);
+      }
+      
+      logger.debug(`[DefaultElementProvider] Could not read metadata from ${filePath}: ${errorType}:${errorCode} - ${error?.message || error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a file is a DollhouseMCP test element based on metadata
+   * This replaces filename pattern detection with accurate metadata-based detection
+   * @param filePath Path to the file to check
+   * @returns true if the file contains _dollhouseMCPTest: true metadata
+   */
+  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean> {
+    try {
+      const metadata = await this.readMetadataOnly(filePath);
+      const isTest = !!(metadata && metadata._dollhouseMCPTest === true);
+      
+      
+      return isTest;
+    } catch (error) {
+      // If we can't read the metadata, assume it's not a test file
+      logger.debug(`[DefaultElementProvider] Error checking test metadata for ${filePath}: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Detect if we're in a production environment by checking for production indicators
+   * Uses a confidence-based approach requiring multiple indicators for better accuracy
+   * @returns true if this appears to be a production environment
+   */
+  private isProductionEnvironment(): boolean {
+    // Allow tests to explicitly override production mode detection
+    if (process.env.FORCE_PRODUCTION_MODE === 'true') {
+      return true;
+    }
+    if (process.env.FORCE_PRODUCTION_MODE === 'false') {
+      return false;
+    }
+    
+    // Weighted indicators for production detection
+    const indicators = {
+      // Strong indicators (weight: 2)
+      hasUserHomeDir: (process.env.HOME && (process.env.HOME.includes('/Users/') || process.env.HOME.includes('/home/'))) || 
+                      !!process.env.USERPROFILE,
+      isProductionNode: process.env.NODE_ENV === 'production',
+      notInTestDir: (() => {
+        const cwd = process.cwd().toLowerCase();
+        // Normalize path separators for cross-platform checking (Windows uses \ but checks use /)
+        const normalizedCwd = cwd.replace(/\\/g, '/');
+        return !normalizedCwd.includes('/test') && 
+               !normalizedCwd.includes('/__tests__') && 
+               !normalizedCwd.includes('/temp') &&
+               !normalizedCwd.includes('/dist/test');
+      })(),
+      
+      // Moderate indicators (weight: 1)
+      notInCI: !process.env.CI,
+      noTestEnv: process.env.NODE_ENV !== 'test',
+      noDevEnv: process.env.NODE_ENV !== 'development',
+    };
+    
+    // Calculate weighted score
+    let score = 0;
+    if (indicators.hasUserHomeDir) score += 2;
+    if (indicators.isProductionNode) score += 2;
+    if (indicators.notInTestDir) score += 2;
+    if (indicators.notInCI) score += 1;
+    if (indicators.noTestEnv) score += 1;
+    if (indicators.noDevEnv) score += 1;
+    
+    // Log detection details for debugging
+    const activeIndicators = Object.entries(indicators)
+      .filter(([_, value]) => value)
+      .map(([key]) => key);
+    
+    // TYPESCRIPT FIX: Removed logger.isDebugEnabled() check as this method doesn't exist on MCPLogger
+    // The logger already handles debug level internally, so we can call debug() directly
+    if (score >= 3) {
+      logger.debug(
+        '[DefaultElementProvider] Production environment detected',
+        { score, activeIndicators, forceMode: 'not set' }
+      );
+    }
+    
+    // Require a score of at least 3 for production detection (more confident)
+    // This prevents false positives in edge cases while maintaining security
+    return score >= 3;
+  }
   
   /**
    * Copy all files from source directory to destination directory
@@ -159,6 +662,7 @@ export class DefaultElementProvider {
   private async copyElementFiles(sourceDir: string, destDir: string, elementType: string): Promise<number> {
     let copiedCount = 0;
     
+    
     try {
       // Ensure destination directory exists
       await fs.mkdir(destDir, { recursive: true });
@@ -166,7 +670,9 @@ export class DefaultElementProvider {
       // Read source directory
       const files = await fs.readdir(sourceDir);
       
+      
       for (const file of files) {
+        
         // Only copy markdown files
         if (!file.endsWith(FILE_CONSTANTS.ELEMENT_EXTENSION)) {
           continue;
@@ -178,9 +684,56 @@ export class DefaultElementProvider {
           logger.warn(`[DefaultElementProvider] Skipping file with invalid Unicode: ${file}`);
           continue;
         }
-        
+
         const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
         const destPath = path.join(destDir, normalizedFile.normalizedContent);
+        
+        
+        // SECURITY FIX: Validate file paths to prevent path traversal attacks
+        // This prevents malicious files from escaping the intended directory structure
+        const sourceValid = this.validateFilePath(sourcePath, [sourceDir]);
+        const destValid = this.validateFilePath(destPath, [destDir]);
+        
+        if (!sourceValid || !destValid) {
+          logger.warn(
+            `[DefaultElementProvider] Skipping file with invalid path: ${normalizedFile.normalizedContent}`,
+            { sourcePath, destPath, elementType }
+          );
+          continue;
+        }
+        
+        // Production safety check: Block DollhouseMCP test elements in production environments
+        // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
+        if (!this.config.loadTestData && this.isProductionEnvironment()) {
+          const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
+          
+          if (isDollhouseTest) {
+            logger.warn(
+              `[DefaultElementProvider] SECURITY: Blocking DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
+              { 
+                file: normalizedFile.normalizedContent,
+                reason: 'DollhouseMCP test element detected in production environment',
+                elementType
+              }
+            );
+            
+            // Log security event for blocked test data
+            SecurityMonitor.logSecurityEvent({
+              type: 'TEST_DATA_BLOCKED',
+              severity: 'MEDIUM',
+              source: 'DefaultElementProvider.copyElementFiles',
+              details: `Blocked DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
+              metadata: {
+                filename: normalizedFile.normalizedContent,
+                elementType,
+                reason: 'DollhouseMCP test element detected in production environment',
+                detectionMethod: 'metadata-based'
+              }
+            });
+            
+            continue;
+          }
+        }
         
         try {
           // Check if destination file already exists
@@ -211,8 +764,10 @@ export class DefaultElementProvider {
           }
           
           // Copy the file with verification
+          
           await this.copyFileWithVerification(sourcePath, destPath);
           copiedCount++;
+          
           logger.debug(`[DefaultElementProvider] Copied ${elementType}: ${normalizedFile.normalizedContent}`);
           
           // Log security event for each file copied
@@ -403,6 +958,25 @@ export class DefaultElementProvider {
    * @param portfolioBaseDir Base directory of the portfolio
    */
   private async performPopulation(portfolioBaseDir: string): Promise<void> {
+    // Check if test data loading is disabled
+    // Note: This check is needed even though constructor sets config, because
+    // config can be overridden after construction
+    
+    // Use production environment detection that respects FORCE_PRODUCTION_MODE
+    const isDevelopmentMode = !this.isProductionEnvironment();
+    
+    if (isDevelopmentMode && !this.config.loadTestData) {
+      logger.info(
+        '[DefaultElementProvider] Skipping default element population in development mode',
+        { 
+          portfolioBaseDir,
+          reason: 'Test data loading disabled',
+          enableWith: 'Set DOLLHOUSE_LOAD_TEST_DATA=true to enable'
+        }
+      );
+      return;
+    }
+    
     logger.info(
       '[DefaultElementProvider] Starting default element population',
       { portfolioBaseDir }

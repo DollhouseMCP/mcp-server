@@ -1,21 +1,28 @@
 # DollhouseMCP
 
+## Project Status
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
+[![npm version](https://img.shields.io/npm/v/@dollhousemcp/mcp-server.svg)](https://www.npmjs.com/package/@dollhousemcp/mcp-server)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![GitHub Views](https://komarev.com/ghpvc/?username=DollhouseMCP&repo=mcp-server&label=Repository+Views&style=flat)](https://github.com/DollhouseMCP/mcp-server)
+
+## Build & Quality
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
-[![Extended Node Compatibility](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml)
-[![Docker Testing](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
+[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](docs/SECURITY.md)
 
 ## Platform Support
-
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
 [![Linux Build Status](https://img.shields.io/badge/Linux-✓_Tested-FCC624?logo=linux&logoColor=black)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Linux CI Build Status")
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/blob/main/Dockerfile)
-[![Test Coverage](https://img.shields.io/badge/Coverage-600%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
-[![Auto-Update](https://img.shields.io/badge/Auto--Update-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server)
+
+## Technology
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Extended Node Compatibility](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml)
+[![Docker Testing](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml)
 
 A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered collection. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
 
@@ -23,9 +30,11 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.5.2
+**📦 Version**: v1.6.0
 
-> **🎉 New in v1.5.2**: Anonymous collection browsing and submission! No GitHub authentication required for basic usage. See [Anonymous Submission Guide](docs/ANONYMOUS_SUBMISSION_GUIDE.md) for details.
+> **🎉 New in v1.6.0**: Portfolio management system with GitHub integration, enhanced collection search with pagination, and 42 total MCP tools! See [Migration Guide](docs/MIGRATION_GUIDE_v1.6.0.md) for upgrade instructions.
+
+> **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
 ## 🚀 Quick Start
 
@@ -54,28 +63,31 @@ npm install -g @dollhousemcp/mcp-server
 }
 ```
 
-Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_personas` to get started.
+Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements type="personas"` to get started.
+
+> **🎯 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
 
 ## ✨ Key Features
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **49 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **42 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
+| 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
+| 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
 | 👤 **User Identity System** | Environment-based attribution for persona creators |
 | 🆔 **Unique ID System** | Advanced ID generation: `{type}_{name}_{author}_{YYYYMMDD}-{HHMMSS}` |
 | 💬 **Chat-Based Management** | Create, edit, and validate personas through conversational interface |
 | 🔄 **Real-time Operations** | Live editing with automatic version bumping and validation |
-| 🚀 **Auto-Update System** | Enterprise-grade auto-update with backup/rollback and dependency validation |
 | 📦 **NPM Installation** | Install MCP servers from npm with cross-platform support and atomic operations |
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
 
 ## 🎨 Portfolio Customization Elements
 
-DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior. Your portfolio is your personal collection of AI customization elements that enhance and tailor your AI experience.
+DollhouseMCP introduces a comprehensive portfolio system for customizing AI behavior through **customization element types**. Your portfolio is your personal collection of these element types that enhance and tailor your AI experience. Each element type serves a specific purpose in shaping how AI assistants interact with you.
 
-### Portfolio Element Types
+### Current Portfolio Element Types
 
 | Element | Purpose | Status |
 |---------|---------|--------|
@@ -83,8 +95,16 @@ DollhouseMCP introduces a comprehensive portfolio system for customizing AI beha
 | 🛠️ **Skills** | Add specific capabilities like code review, data analysis, or creative writing | ✅ Available |
 | 📝 **Templates** | Create reusable response formats for emails, reports, documentation | ✅ Available |
 | 🤖 **Agents** | Build autonomous assistants that can pursue goals and make decisions | ✅ Available |
-| 🧠 **Memory** | Persistent context storage with retention policies and search capabilities | ✅ Available |
-| 🎯 **Ensemble** | Orchestrate multiple elements together as one unified entity | ✅ Available |
+
+### Coming Soon
+
+| Element | Purpose | Status |
+|---------|---------|--------|
+| 💬 **Prompts** | Pre-configured conversation starters and structured interactions | 🔄 Coming Soon |
+| 🧠 **Memory** | Persistent context storage with retention policies and search capabilities | 🔄 Coming Soon |
+| 🎯 **Ensemble** | Orchestrate multiple elements together as one unified entity | 🔄 Coming Soon |
+
+> **📢 Note**: Prompt, memory, and ensemble element types are actively being developed and will be available in upcoming releases.
 
 ### Managing Your Portfolio
 
@@ -96,6 +116,57 @@ Use these new generic tools to manage any element type in your portfolio:
 - **`deactivate_element`** - Deactivate specific customizations
 - **`get_element_details`** - Examine element configuration and metadata
 - **`reload_elements`** - Refresh portfolio from filesystem
+
+### GitHub Portfolio Integration (NEW!)
+
+Manage your portfolio on GitHub for sharing and collaboration:
+
+- **`portfolio_status`** - Check your GitHub portfolio repository status
+- **`init_portfolio`** - Create a new GitHub portfolio repository
+- **`portfolio_config`** - Configure sync and submission settings
+- **`sync_portfolio`** - Synchronize local and GitHub repositories
+- **`search_portfolio`** - Search your local portfolio with advanced indexing
+- **`search_all`** - Unified search across local, GitHub, and collection sources
+- **`submit_content`** - Upload elements to your GitHub portfolio
+
+> **📘 Getting Started**: New to portfolios? Follow our [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md) for step-by-step instructions.
+
+### Smart Element Detection
+
+DollhouseMCP automatically detects element types when submitting content, eliminating the need to manually specify types:
+
+```bash
+# System automatically detects whether this is a persona, skill, template, etc.
+submit_content name="code-review"
+```
+
+**Key Features:**
+- **Automatic Type Detection**: Searches all element directories simultaneously
+- **Fuzzy Matching**: Finds content with partial names or different extensions  
+- **Clear Error Messages**: Provides actionable guidance when content isn't found
+- **No More Mistakes**: Prevents accidentally submitting content as wrong element type
+
+**Example Output:**
+```
+✅ Smart detection: Found "code-review" as SKILL
+✅ Successfully uploaded code-review to your GitHub portfolio!
+```
+
+> **📖 Learn More**: See our [Element Detection Guide](docs/guides/ELEMENT_DETECTION_GUIDE.md) for detailed usage examples and troubleshooting tips.
+
+### Complete Naming Freedom
+
+DollhouseMCP gives you **complete freedom** to name your elements whatever you want. There are no naming restrictions or forbidden words.
+
+**✅ You can create elements named**:
+- "Test Assistant" - Previously blocked, now fully supported
+- "Sample Code Reviewer" - No restrictions
+- "テスト" (Japanese for "test") - Unicode supported
+- "My Debugging Helper" - Any descriptive name
+
+**How it works**: DollhouseMCP uses metadata-based test detection instead of filename patterns, so only internal DollhouseMCP test files are filtered (those with `_dollhouseMCPTest: true` metadata). Your personal elements are never affected.
+
+> **📘 Technical Details**: See our [Test Metadata Convention](docs/TEST_METADATA_CONVENTION.md) for information about how DollhouseMCP identifies its own test files without affecting user content.
 
 ### Specialized Element Tools
 
@@ -135,13 +206,17 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 └── agents/         # Autonomous assistants
 ```
 
-### Legacy Persona Tools
+### Persona Management via ElementTools
 
-For backward compatibility, the original persona-specific tools still work:
-- `list_personas` → calls `list_elements type="personas"`
-- `activate_persona` → calls `activate_element type="personas"`
-- `get_active_persona` → calls `get_active_elements type="personas"`
-- etc.
+Personas are now managed through the generic ElementTools system:
+- **`list_elements type="personas"`** - Display all local personas with enhanced metadata
+- **`activate_element name="name" type="personas"`** - Activate by name, filename, or unique ID
+- **`get_active_elements type="personas"`** - Get current active persona information
+- **`deactivate_element type="personas"`** - Return to default mode
+- **`get_element_details name="name" type="personas"`** - View complete persona details
+- **`reload_elements type="personas"`** - Refresh personas from filesystem
+
+> **📖 Migration**: Legacy PersonaTools were removed in v1.6.0. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for complete migration instructions.
 
 ## 🔒 Enterprise-Grade Security
 
@@ -178,7 +253,7 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 #### NPM Installation (NEW! - Recommended)
 
 ```bash
-npm install -g @mickdarling/dollhousemcp
+npm install -g @dollhousemcp/mcp-server
 ```
 
 After installation, add DollhouseMCP to your Claude Desktop configuration:
@@ -272,9 +347,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 49 DollhouseMCP tools will be available
+3. All 42 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (49 Total)
+## 🛠️ Available Tools (42 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -288,36 +363,42 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`render_template`** - Render a template element with provided variables
 - **`execute_agent`** - Execute an agent element with a specific goal
 
-### Core Persona Management (Legacy - Still Supported)
-- **`list_personas`** - Display all local personas with enhanced metadata
-- **`activate_persona`** - Activate by name, filename, or unique ID
-- **`get_active_persona`** - Get current persona information
-- **`deactivate_persona`** - Return to default mode
-- **`get_persona_details`** - View complete persona details
-- **`reload_personas`** - Refresh from filesystem
+### Persona Export/Import (Specialized Tools)
+- **`export_persona`** - Export single persona to JSON format
+- **`export_all_personas`** - Export all personas to JSON bundle  
+- **`import_persona`** - Import persona from file path or JSON string
+- **`share_persona`** - Generate shareable URL for persona
+- **`import_from_url`** - Import persona from shared URL
 
 ### GitHub Collection Integration
 - **`browse_collection`** - Browse content by section and type (flat structure, no categories)
 - **`search_collection`** - Search across all collection content
+- **`search_collection_enhanced`** - Enhanced search with pagination, filtering, and sorting
 - **`get_collection_content`** - View detailed content info
+- **`get_collection_cache_health`** - Monitor collection cache status and performance
 - **`install_element`** - One-click download and installation of any element type
 - **`submit_persona`** - Submit to collection via GitHub issue
+
+### GitHub Portfolio Management (NEW!)
+- **`portfolio_status`** - Check your GitHub portfolio repository status
+- **`init_portfolio`** - Create a new GitHub portfolio repository
+- **`sync_portfolio`** - Synchronize local and GitHub repositories
+- **`search_portfolio`** - Search your local portfolio with advanced indexing
+- **`search_all`** - Unified search across local, GitHub, and collection sources
+- **`submit_content`** - Upload elements to your GitHub portfolio
+
+### Collection Configuration (NEW!)
+- **`configure_collection_submission`** - Configure auto-submit and default settings
+- **`get_collection_submission_config`** - View current submission configuration
 
 ### User Identity Management
 - **`set_user_identity`** - Set username for persona attribution
 - **`get_user_identity`** - View current identity status
 - **`clear_user_identity`** - Return to anonymous mode
 
-### Chat-Based Persona Management
-- **`create_persona`** - Guided persona creation through chat
-- **`edit_persona`** - Modify existing persona fields
-- **`validate_persona`** - Comprehensive quality validation
 
-### Auto-Update System
-- **`check_for_updates`** - Check GitHub releases for available DollhouseMCP updates
-- **`update_server`** - Automated git pull + npm install + build with backup creation
-- **`rollback_update`** - Restore previous version from automatic backups
-- **`get_server_status`** - Comprehensive server status with version, git info, and system details
+### System Tools
+- **`get_build_info`** - Comprehensive build and runtime information
 
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
@@ -332,17 +413,125 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 ### Collection Operations
 ```
-browse_collection(section="library", type="personas")  # Browse all personas
-browse_collection(section="library", type="skills")    # Browse skills
-search_collection "writing"                # Search for writing personas
-install_element "library/personas/storyteller.md"  # Install from collection
+# Browse collection content by type
+browse_collection section="library" type="personas"    # Browse all personas
+browse_collection section="library" type="skills"      # Browse skills
+browse_collection section="library" type="templates"   # Browse templates
+
+# Search collection content
+search_collection query="writing"                      # Search for writing personas
+search_collection query="code review"                  # Find code review skills
+
+# Enhanced collection search with pagination
+search_collection_enhanced query="data analysis" maxResults=10 elementType="skills"
+search_collection_enhanced query="creative" page=2 resultsPerPage=5
+
+# Install elements from collection
+install_element path="library/personas/storyteller.md"        # Install persona
+install_element path="library/skills/code-reviewer.md"       # Install skill
+install_element path="library/templates/email-template.md"   # Install template
+
+# Check collection cache health
+get_collection_cache_health
 ```
 
-### Persona Creation & Management
+### Portfolio Workflow (NEW!)
 ```
-create_persona "Study Buddy" "A helpful tutor" "educational" "You are a patient tutor..."
-edit_persona "Study Buddy" "description" "An encouraging academic mentor"
-validate_persona "Study Buddy"             # Check quality and format
+# Check GitHub portfolio status
+portfolio_status                                       # Check repository status
+
+# Initialize a new GitHub portfolio (first time setup)
+init_portfolio                                         # Create GitHub repository
+init_portfolio repoName="my-ai-portfolio"             # Custom repository name
+
+# Synchronize local and GitHub portfolios
+sync_portfolio                                         # Sync both directions
+sync_portfolio direction="push"                        # Push local to GitHub
+sync_portfolio direction="pull"                        # Pull GitHub to local
+
+# Search your local portfolio with advanced indexing
+search_portfolio query="writing"                       # Search all element types
+search_portfolio query="code" elementType="skills"     # Search specific type
+search_portfolio query="email" fuzzyMatch=true         # Enable fuzzy matching
+
+# Unified search across all sources (local, GitHub, collection)
+search_all query="data analysis"                       # Search everywhere
+search_all query="creative writing" maxResults=20      # Limit results
+search_all query="templates" source="local"            # Search specific source
+
+# Submit content with smart auto-detection
+submit_content name="code-review"                      # Auto-detects element type
+submit_content name="my-persona" elementType="personas" # Explicit type
+submit_content name="email-template" description="Professional email template"
+
+# Configure collection submission settings
+configure_collection_submission autoSubmit=true        # Enable auto-submit
+configure_collection_submission defaultLicense="MIT"   # Set default license
+get_collection_submission_config                       # View current config
+```
+
+### Portfolio Element Management
+```
+# List elements by type (works with all element types)
+list_elements type="personas"                          # List personas
+list_elements type="skills"                            # List skills  
+list_elements type="templates"                         # List templates
+list_elements type="agents"                            # List agents
+
+# Activate elements to customize AI behavior
+activate_element name="code-reviewer" type="skills"    # Activate skill
+activate_element name="professional" type="personas"   # Activate persona
+activate_element name="email-format" type="templates"  # Activate template
+
+# View active elements
+get_active_elements                                     # All active elements
+get_active_elements type="skills"                      # Active skills only
+
+# Get detailed element information
+get_element_details name="code-reviewer" type="skills" # View skill details
+get_element_details name="my-persona" type="personas"  # View persona details
+
+# Deactivate elements
+deactivate_element name="code-reviewer" type="skills"  # Deactivate specific
+deactivate_element type="personas"                     # Deactivate all personas
+
+# Refresh elements from filesystem
+reload_elements                                         # Reload all elements
+reload_elements type="skills"                          # Reload specific type
+```
+
+### Specialized Element Operations
+```
+# Render templates with variables
+render_template name="project-update" variables='{"project": "DollhouseMCP", "status": "Released"}'
+render_template name="email-professional" variables='{"recipient": "John", "subject": "Meeting"}'
+
+# Execute agents with specific goals
+execute_agent name="project-manager" goal="Create a sprint plan for next week"
+execute_agent name="data-analyst" goal="Analyze sales trends for Q3"
+```
+
+### System Information
+```
+# Get comprehensive build and runtime information
+get_build_info                                         # Full system info
+get_build_info section="version"                       # Version info only
+get_build_info section="environment"                   # Environment details
+get_build_info section="dependencies"                  # Dependency versions
+```
+
+### Persona Management with ElementTools
+```
+# List all personas
+list_elements type="personas"
+
+# Activate a persona
+activate_element name="Study Buddy" type="personas"
+
+# Get persona details
+get_element_details name="Study Buddy" type="personas"
+
+# Submit to community collection
 submit_persona "Study Buddy"               # Share with community
 ```
 
@@ -353,34 +542,8 @@ get_user_identity                          # Check current status
 clear_user_identity                        # Return to anonymous
 ```
 
-### Auto-Update Operations
 
-The auto-update system provides enterprise-grade update management with safety features:
 
-```
-check_for_updates                          # Check for new DollhouseMCP versions
-get_server_status                          # View current version and system info
-update_server true                         # Perform automated update with backup
-rollback_update true                       # Revert to previous version if needed
-```
-
-**How Auto-Update Works:**
-
-1. **Version Check**: Queries GitHub releases API for latest version
-2. **Backup Creation**: Automatically backs up current installation (including user personas)
-3. **Update Process**: 
-   - Performs `git pull` to fetch latest code
-   - Runs `npm install` for dependency updates
-   - Rebuilds TypeScript with `npm run build`
-4. **Verification**: Validates the update succeeded
-5. **Rollback Option**: Keep last 5 backups for easy recovery
-
-**Safety Features:**
-- Rate limiting prevents API abuse
-- GPG signature verification (when available)
-- Dependency version validation
-- Automatic backup retention (5 most recent)
-- User personas preserved during updates
 
 ### Persona Indicators
 DollhouseMCP adds visual indicators to AI responses when a persona is active:
@@ -407,9 +570,202 @@ export DOLLHOUSE_INDICATOR_STYLE=minimal
 export DOLLHOUSE_INDICATOR_EMOJI=🎨
 ```
 
+## 🔄 Complete Workflows
+
+### Setting Up Portfolio from Scratch
+
+**Step 1: Initial Setup**
+```
+# Set your user identity for attribution
+set_user_identity "your-username"
+
+# Check current portfolio status
+portfolio_status
+
+# Initialize a new GitHub portfolio repository
+init_portfolio repoName="my-ai-portfolio"
+```
+
+**Step 2: Browse and Install Elements**
+```
+# Browse the community collection
+browse_collection section="library" type="personas"
+browse_collection section="library" type="skills"
+
+# Search for specific elements
+search_collection query="code review"
+search_collection_enhanced query="data analysis" elementType="skills" maxResults=5
+
+# Install elements you like
+install_element path="library/skills/code-reviewer.md"
+install_element path="library/personas/technical-writer.md"
+install_element path="library/templates/project-update.md"
+```
+
+**Step 3: Customize and Activate**
+```
+# Activate installed elements
+activate_element name="code-reviewer" type="skills"
+activate_element name="technical-writer" type="personas"
+
+# View your active elements
+get_active_elements
+
+# Get details about any element
+get_element_details name="technical-writer" type="personas"
+```
+
+**Step 4: Sync and Share**
+```
+# Submit your custom content to GitHub portfolio
+submit_content name="My Assistant"
+
+# Sync everything to GitHub
+sync_portfolio direction="push"
+
+# Optionally submit personas to community collection
+submit_persona name="My Assistant"
+```
+
+### Searching Across All Sources
+
+**Unified Search Example**
+```
+# Search everything (local portfolio, GitHub portfolio, community collection)
+search_all query="writing assistant"
+
+# Search with filters
+search_all query="code" elementType="skills" maxResults=10
+
+# Search specific sources
+search_all query="templates" source="collection"    # Collection only
+search_all query="my content" source="local"        # Local portfolio only
+search_all query="my content" source="github"       # GitHub portfolio only
+```
+
+**Advanced Portfolio Search**
+```
+# Search your local portfolio with fuzzy matching
+search_portfolio query="analysi" fuzzyMatch=true    # Finds "analysis" elements
+
+# Search by element type
+search_portfolio query="email" elementType="templates"
+search_portfolio query="review" elementType="skills"
+
+# Get all elements of a type
+list_elements type="personas"
+list_elements type="agents"
+```
+
+### Content Submission with Auto-Detection
+
+**Smart Element Detection**
+```
+# System automatically detects element type
+submit_content name="code-review"                   # Finds in skills/
+submit_content name="email-template"                # Finds in templates/
+submit_content name="my-persona"                    # Finds in personas/
+
+# Add description for better documentation
+submit_content name="data-analyzer" description="Advanced data analysis skill"
+
+# Override auto-detection if needed
+submit_content name="ambiguous-name" elementType="skills"
+```
+
+**Batch Content Management**
+```
+# Configure submission settings
+configure_collection_submission autoSubmit=true
+configure_collection_submission defaultLicense="CC-BY-SA-4.0"
+
+# Check configuration
+get_collection_submission_config
+
+# Submit multiple elements
+submit_content name="skill-1"
+submit_content name="skill-2"
+submit_content name="template-1"
+
+# Sync all changes to GitHub
+sync_portfolio
+```
+
+### Daily Workflow Example
+
+**Morning Setup**
+```
+# Check for updates
+get_build_info section="version"
+portfolio_status
+
+# Activate your daily toolkit
+activate_element name="code-reviewer" type="skills"
+activate_element name="professional" type="personas"
+activate_element name="email-template" type="templates"
+
+# Check what's active
+get_active_elements
+```
+
+**During Work**
+```
+# Use templates for communication
+render_template name="email-template" variables='{"recipient": "team", "subject": "Sprint Update"}'
+
+# Deploy agents for tasks
+execute_agent name="project-manager" goal="Review pending tasks and prioritize"
+
+# Search for tools as needed
+search_all query="debugging" elementType="skills"
+```
+
+**End of Day**
+```
+# Save any new content
+submit_content name="new-skill"
+submit_content name="daily-template"
+
+# Sync to GitHub
+sync_portfolio
+
+# Check system health
+get_collection_cache_health
+```
+
 ### GitHub Authentication (v1.5.0+)
 
 DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.5.2**: Authentication is now optional - browse and submit anonymously!
+
+#### OAuth Setup (For Self-Hosting)
+
+If you're self-hosting or developing, you need to configure a GitHub OAuth app:
+
+1. **Create GitHub OAuth App**:
+   - Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+   - **Application name**: `DollhouseMCP Server`
+   - **Homepage URL**: `https://github.com/DollhouseMCP/mcp-server`
+   - **Authorization callback URL**: `http://localhost:12345/callback` (required but not used)
+   - Click "Register application"
+
+2. **Enable Device Flow**:
+   - In your OAuth app settings, check ✅ **Enable Device Flow**
+   - Copy your Client ID (format: `Ov23liXXXXXXXXXXXXXX`)
+
+3. **Configure Environment**:
+   ```bash
+   # Add to your shell profile (.bashrc, .zshrc, etc)
+   export DOLLHOUSE_GITHUB_CLIENT_ID="your_client_id_here"
+   
+   # Or in Claude Desktop config:
+   "env": {
+     "DOLLHOUSE_GITHUB_CLIENT_ID": "your_client_id_here"
+   }
+   ```
+
+See [OAuth Setup Guide](docs/setup/OAUTH_SETUP.md) for detailed instructions.
+
+#### Using Authentication
 
 ```
 setup_github_auth                         # Start OAuth device flow
@@ -677,7 +1033,6 @@ npm run test:coverage
 npm run test:watch
 
 # Run specific test suites
-npm run test:auto-update
 npm run test:personas
 npm run test:collection
 ```
@@ -705,10 +1060,6 @@ node dist/index.js --help 2>/dev/null || echo "Server compiled successfully"
 
 # Verify personas directory
 ls -la personas/
-
-# Test auto-update system
-check_for_updates    # Use in Claude Desktop
-get_server_status    # Check current system status
 ```
 
 ## ☁️ Cloud Deployment
@@ -776,7 +1127,7 @@ DollhouseMCP/
 │   ├── index.ts                  # Main MCP server (DollhouseMCPServer)
 │   ├── cache/                    # API caching layer
 │   ├── config/                   # Configuration management
-│   ├── marketplace/              # GitHub collection integration
+│   ├── collection/               # GitHub collection integration
 │   ├── persona/                  # Persona management core
 │   ├── security/                 # Input validation and security
 │   ├── server/                   # MCP server setup and tools
@@ -792,7 +1143,6 @@ DollhouseMCP/
 │   └── debug-detective.md
 ├── custom-personas/              # User-created personas (git-ignored)
 ├── docs/                         # Documentation
-│   ├── auto-update/             # Auto-update system docs
 │   └── development/             # Development notes and guides
 ├── scripts/                      # Management and utility scripts
 ├── Dockerfile                    # Multi-stage Docker build
@@ -934,6 +1284,9 @@ Customize server behavior with these environment variables:
 export DOLLHOUSE_USER="your-username"          # User attribution for persona creation
 export DOLLHOUSE_EMAIL="your-email"            # Contact email (optional)
 
+# GitHub OAuth Configuration
+export DOLLHOUSE_GITHUB_CLIENT_ID="Ov23li..."  # OAuth app client ID (for self-hosting)
+
 # Directory Configuration
 export PERSONAS_DIR="/custom/path/to/personas"  # Custom personas directory
 
@@ -1013,11 +1366,10 @@ If you upgraded from v1.4.2, the server will automatically migrate your director
    npm --version
    ```
 
-5. **Test auto-update system:**
+5. **Check system status:**
    ```bash
    # Use within Claude Desktop
-   check_for_updates    # Check for available updates
-   get_server_status    # View system information
+   get_build_info    # Get build and runtime information
    ```
 
 6. **Validate personas:**
@@ -1025,12 +1377,21 @@ If you upgraded from v1.4.2, the server will automatically migrate your director
 
 ## 📚 Documentation
 
+### User Guides (START HERE!)
+- **[🎯 Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md)** - Complete workflow: discover → customize → share
+- **[📁 Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md)** - Set up your GitHub portfolio step-by-step  
+- **[🔧 Troubleshooting Guide](docs/guides/TROUBLESHOOTING_ROUNDTRIP.md)** - Solutions for common workflow issues
+
 ### Element System Documentation
 - **[Element Architecture](docs/ELEMENT_ARCHITECTURE.md)** - System design and core concepts
 - **[Element Types Reference](docs/ELEMENT_TYPES.md)** - Detailed guide for all element types
 - **[Developer Guide](docs/ELEMENT_DEVELOPER_GUIDE.md)** - How to create new element types
 - **[API Reference](docs/API_REFERENCE.md)** - Complete MCP tool documentation
 - **[Migration Guide](docs/MIGRATION_TO_PORTFOLIO.md)** - Upgrading from personas-only
+
+### Setup & Configuration
+- **[OAuth Setup Guide](docs/setup/OAUTH_SETUP.md)** - GitHub authentication configuration
+- **[Anonymous Submission Guide](docs/ANONYMOUS_SUBMISSION_GUIDE.md)** - Use without GitHub authentication
 
 ### Additional Resources
 - **[Security Guidelines](docs/SECURITY.md)** - Security best practices
@@ -1130,14 +1491,13 @@ interface DollhouseTool {
 
 ### Tool Categories
 
-#### Core Persona Management
+#### Persona Export/Import
 ```typescript
-// list_personas - No parameters
-// activate_persona - { persona: string }
-// get_active_persona - No parameters  
-// deactivate_persona - No parameters
-// get_persona_details - { persona: string }
-// reload_personas - No parameters
+// export_persona - { persona: string }
+// export_all_personas - { includeDefaults?: boolean }
+// import_persona - { source: string, overwrite?: boolean }
+// share_persona - { persona: string, expiryDays?: number }
+// import_from_url - { url: string, overwrite?: boolean }
 ```
 
 #### Collection Integration
@@ -1156,20 +1516,7 @@ interface DollhouseTool {
 // clear_user_identity - No parameters
 ```
 
-#### Chat-Based Management
-```typescript
-// create_persona - { name: string, description: string, category?: string, instructions: string }
-// edit_persona - { persona: string, field: string, value: string }
-// validate_persona - { persona: string }
-```
 
-#### Auto-Update System
-```typescript
-// check_for_updates - No parameters
-// update_server - { confirm: boolean }
-// rollback_update - { confirm: boolean }
-// get_server_status - No parameters
-```
 
 ### Error Handling
 
@@ -1200,10 +1547,47 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-<<<<<<< HEAD
-### v1.5.0 - August 5, 2025 (Current)
-=======
-### v1.5.1 - August 5, 2025 (Current)
+### v1.6.0 - August 18, 2025 (Current - Develop Branch)
+
+**⚠️ Breaking Changes**:
+- 🔄 **Serialization Format Change** - `BaseElement.serialize()` now returns markdown with YAML frontmatter instead of JSON
+  - Migration: Use new `serializeToJSON()` method for backward compatibility
+- 🏗️ **Server Initialization** - Portfolio initialization moved from constructor to `run()` method
+  - New `ensureInitialized()` method provides lazy initialization for tests
+
+**Major New Features**:
+- 🔍 **Enhanced Portfolio System** (6 new tools):
+  - `portfolio_status` - Check GitHub portfolio status
+  - `init_portfolio` - Create GitHub portfolio repository
+  - `sync_portfolio` - Synchronize local/GitHub repositories  
+  - `search_portfolio` - Search with advanced indexing
+  - `search_all` - Unified search across all sources
+  - Complete GitHub integration with indexing
+- 📊 **Enhanced Collection Search**:
+  - `search_collection_enhanced` - Pagination, filtering, sorting
+  - `get_collection_cache_health` - Cache monitoring
+  - Smart caching with ETags and conditional requests
+- 🛠️ **System Tools**:
+  - `get_build_info` - Comprehensive build and runtime information
+- ⚙️ **Collection Configuration**:
+  - `configure_collection_submission` - Auto-submit settings
+  - `get_collection_submission_config` - Check submission config
+
+**Infrastructure Improvements**:
+- 🚀 **High-Performance Caching** - Memory-aware LRU cache system
+- 🔒 **Enhanced Security** - YAML bomb protection, content validation
+- 📦 **Build Information Service** - Runtime and build info API
+- 🎯 **Error Handler** - Centralized error management system
+- 🔄 **Roundtrip Workflow** - Complete content submission cycle
+
+**Statistics**:
+- 42 total MCP tools (down from 51 - 9 PersonaTools removed, 5 preserved)
+- 89 commits ahead of main
+- 257 files changed
+- 50,857 lines added
+- 76 test files modified/added
+
+### v1.5.1 - August 5, 2025
 **Critical Bug Fixes**:
 - 🔧 **Fixed OAuth Token Retrieval** - `setup_github_auth` tokens now properly used for API calls
 - 🔧 **Fixed Collection Browsing** - Removed legacy category validation blocking browsing
@@ -1211,7 +1595,6 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - ✅ **Element System Alignment** - Full consistency with new architecture
 
 ### v1.5.0 - August 5, 2025
->>>>>>> origin/main
 **GitHub OAuth Authentication**:
 - 🔐 **OAuth Device Flow** - Secure authentication without manual token management
 - 🔒 **AES-256-GCM Encryption** - Tokens encrypted at rest with machine-specific keys

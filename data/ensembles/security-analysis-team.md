@@ -90,8 +90,15 @@ elements:
     activation: "conditional"
     condition: "automated_review_requested || large_codebase"
     purpose: "Automated security code analysis"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.342Z"
+  originalPath: "data/ensembles/security-analysis-team.md"
 ---
-
 # Security Analysis Team Ensemble
 
 An elite security analysis ensemble that combines the expertise of seasoned security professionals with advanced testing methodologies and comprehensive reporting capabilities. This ensemble represents a complete security assessment team capable of conducting everything from code reviews to red team exercises.

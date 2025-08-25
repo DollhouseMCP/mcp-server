@@ -1,0 +1,73 @@
+# Production-only Dockerfile that uses pre-built TypeScript
+# Skips TypeScript compilation to avoid timeout issues with large index.ts
+# Requires dist/ directory to be built locally before Docker build
+
+FROM node:24-slim AS production
+
+# Install only essential runtime dependencies and remove unnecessary packages
+# This reduces attack surface by removing tools commonly used in exploits
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && apt-get remove -y --purge \
+    curl \
+    wget \
+    git \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create non-root user for security
+# Using specific UID/GID for consistency across containers
+RUN groupadd -g 1001 nodejs && \
+    useradd -u 1001 -g nodejs -s /bin/false -m dollhouse && \
+    mkdir -p /app && \
+    chown -R dollhouse:nodejs /app
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install only production dependencies
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Copy pre-built application (dist/ must exist locally)
+COPY dist ./dist
+COPY data/personas ./data/personas
+
+# Remove test files that shouldn't be in production image
+# These files can cause Docker build to hang due to large pathological test datasets
+RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js || true
+
+# Security hardening - Set proper permissions
+RUN chmod -R 750 /app && \
+    chown -R dollhouse:nodejs /app
+
+# Create writable directories with restricted permissions
+RUN mkdir -p /app/tmp /app/logs && \
+    chown -R dollhouse:nodejs /app/tmp /app/logs && \
+    chmod -R 700 /app/tmp /app/logs
+
+# Switch to non-root user
+USER dollhouse
+
+# No ports exposed - stdio-based MCP servers don't need network access
+
+# Add security labels for container metadata
+LABEL security.non-root="true" \
+      security.no-new-privileges="true" \
+      security.read-only-root="true" \
+      build.strategy="prebuilt" \
+      build.note="TypeScript compiled locally to avoid Docker timeout"
+
+# Set environment variables with security considerations
+ENV NODE_ENV=production \
+    PERSONAS_DIR=/app/data/personas \
+    NODE_OPTIONS="--max-old-space-size=256" \
+    DOLLHOUSE_DISABLE_UPDATES=true \
+    DOLLHOUSE_SECURITY_MODE=strict \
+    PATH="/app/node_modules/.bin:$PATH"
+
+# Default command with explicit platform handling
+CMD ["node", "--trace-warnings", "dist/index.js"]

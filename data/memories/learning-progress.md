@@ -44,8 +44,15 @@ schema:
       in_progress: "array"
       planned: "array"
       prerequisites: "object"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.343Z"
+  originalPath: "data/memories/learning-progress.md"
 ---
-
 # Learning Progress Memory
 
 This memory element creates a personalized learning experience by tracking progress, adapting to learning patterns, and maintaining a comprehensive knowledge map.

@@ -5,27 +5,66 @@
 import { GitHubClient } from './GitHubClient.js';
 import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
+import { CollectionIndexManager } from './CollectionIndexManager.js';
+import { CollectionIndex, IndexEntry } from '../types/collection.js';
 import { logger } from '../utils/logger.js';
+import { ElementType } from '../portfolio/types.js';
+
+// Content types supported by MCP server (Issue #144)
+// Hide: memories, ensembles from MCP queries
+// ⚠️ CRITICAL: When adding new element types, you MUST update this array!
+// Also update validTypes array in src/index.ts
+// See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
+const MCP_SUPPORTED_TYPES = [
+  ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
+  ElementType.SKILL,      // skills - supported by ElementTools
+  ElementType.AGENT,      // agents - supported by ElementTools  
+  ElementType.TEMPLATE    // templates - supported by ElementTools
+];
+
+/**
+ * Type guard to safely check if a string is a valid ElementType
+ */
+function isElementType(value: string): value is ElementType {
+  return Object.values(ElementType).includes(value as ElementType);
+}
+
+/**
+ * Type guard to safely check if an ElementType is supported by MCP
+ */
+function isMCPSupportedType(elementType: ElementType): boolean {
+  return MCP_SUPPORTED_TYPES.includes(elementType);
+}
 
 export class CollectionBrowser {
   private githubClient: GitHubClient;
   private collectionCache: CollectionCache;
+  private indexManager: CollectionIndexManager;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
-  constructor(githubClient: GitHubClient, collectionCache?: CollectionCache) {
+  constructor(githubClient: GitHubClient, collectionCache?: CollectionCache, indexManager?: CollectionIndexManager) {
     this.githubClient = githubClient;
     this.collectionCache = collectionCache || new CollectionCache();
+    this.indexManager = indexManager || new CollectionIndexManager();
   }
   
   /**
    * Browse collection content by section and type
+   * Uses CollectionIndexManager for fast browsing with background refresh
    * Falls back to cached data when GitHub API is not available or not authenticated
    * @param section - Top level section: library, showcase, or catalog
    * @param type - Optional content type within the library section (personas, skills, etc.)
    */
   async browseCollection(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
     try {
-      // Try GitHub API first
+      // Try using collection index first for faster browsing
+      const indexResult = await this.browseFromIndex(section, type);
+      if (indexResult) {
+        logger.debug('Used collection index for browsing');
+        return indexResult;
+      }
+      
+      // Fallback to GitHub API
       let url = this.baseUrl;
       
       // If no section provided, show top-level sections
@@ -56,9 +95,12 @@ export class CollectionBrowser {
       
       // In the library section, we have content type directories
       if (section === 'library' && !type) {
-        const contentTypes = data.filter((item: any) => 
-          item.type === 'dir' && ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'].includes(item.name)
-        );
+        // Filter to only show MCP-supported content types
+        const contentTypes = data.filter((item: any) => {
+          if (item.type !== 'dir') return false;
+          const elementType = isElementType(item.name) ? item.name as ElementType : null;
+          return elementType && isMCPSupportedType(elementType);
+        });
         return { items: [], categories: contentTypes };
       }
       
@@ -74,6 +116,97 @@ export class CollectionBrowser {
       // Fallback to cached data
       return this.browseFromCache(section, type);
     }
+  }
+  
+  /**
+   * Browse collection using the fast collection index
+   * Returns null if index is not available or browsing fails
+   */
+  private async browseFromIndex(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] } | null> {
+    try {
+      const index = await this.indexManager.getIndex();
+      
+      // If no section provided, show top-level sections
+      if (!section) {
+        const sections = [
+          { name: 'library', type: 'dir' },
+          { name: 'showcase', type: 'dir' },
+          { name: 'catalog', type: 'dir' }
+        ];
+        return { items: [], categories: [], sections };
+      }
+      
+      // In the library section, we have content type directories
+      if (section === 'library' && !type) {
+        // Get unique content types from index
+        const contentTypes = this.getContentTypesFromIndex(index);
+        return { items: [], categories: contentTypes };
+      }
+      
+      // Get items for specific type or all items in section
+      const items = this.getItemsFromIndex(index, section, type);
+      const formattedItems = this.convertIndexItemsToGitHubFormat(items);
+      
+      return { items: formattedItems, categories: [] };
+      
+    } catch (error) {
+      logger.debug('Failed to browse from collection index', { error: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
+  
+  /**
+   * Get unique content types from collection index
+   */
+  private getContentTypesFromIndex(index: CollectionIndex): any[] {
+    const types = new Set<string>();
+    
+    // Extract types from index keys and filter for MCP-supported types
+    Object.keys(index.index).forEach(typeName => {
+      const elementType = isElementType(typeName) ? typeName as ElementType : null;
+      if (elementType && isMCPSupportedType(elementType)) {
+        types.add(typeName);
+      }
+    });
+    
+    return Array.from(types).map(type => ({
+      name: type,
+      type: 'dir'
+    }));
+  }
+  
+  /**
+   * Get items from collection index by section and type
+   */
+  private getItemsFromIndex(index: CollectionIndex, section: string, type?: string): IndexEntry[] {
+    // For library section with type, get items from that type
+    if (section === 'library' && type) {
+      return index.index[type] || [];
+    }
+    
+    // For library section without type, return empty (should show categories)
+    if (section === 'library' && !type) {
+      return [];
+    }
+    
+    // For other sections (showcase, catalog), return all items that match
+    // Note: The current index structure is primarily for library content
+    // Future enhancement: extend index to include showcase/catalog sections
+    return [];
+  }
+  
+  /**
+   * Convert index entries to GitHub API format for compatibility
+   */
+  private convertIndexItemsToGitHubFormat(items: IndexEntry[]): any[] {
+    return items.map(item => ({
+      name: item.name.endsWith('.md') ? item.name : `${item.name}.md`,
+      path: item.path,
+      sha: item.sha,
+      type: 'file',
+      url: `https://api.github.com/repos/DollhouseMCP/collection/contents/${item.path}`,
+      html_url: `https://github.com/DollhouseMCP/collection/blob/main/${item.path}`
+    }));
   }
   
   /**
@@ -150,7 +283,12 @@ export class CollectionBrowser {
     items.forEach(item => {
       const pathParts = item.path.split('/');
       if (pathParts.length >= 2 && pathParts[0] === 'library') {
-        types.add(pathParts[1]);
+        // Only include MCP-supported types in cache browsing
+        const typeName = pathParts[1];
+        const elementType = isElementType(typeName) ? typeName as ElementType : null;
+        if (elementType && isMCPSupportedType(elementType)) {
+          types.add(typeName);
+        }
       }
     });
     
@@ -211,7 +349,7 @@ export class CollectionBrowser {
         const icon = sectionIcons[sec.name] || '📁';
         const descriptions: { [key: string]: string } = {
           'library': 'Free community content',
-          'showcase': 'Featured high-quality content',
+          'showcase': 'Featured high-quality content (coming soon)',
           'catalog': 'Premium content (coming soon)'
         };
         textParts.push(
@@ -230,9 +368,7 @@ export class CollectionBrowser {
           'personas': '🎭',
           'skills': '🛠️',
           'agents': '🤖',
-          'prompts': '💬',
           'templates': '📄',
-          'tools': '🔧',
           'ensembles': '🎼',
           'memories': '🧠'
         };
@@ -256,9 +392,7 @@ export class CollectionBrowser {
         'personas': '🎭',
         'skills': '🛠️',
         'agents': '🤖',
-        'prompts': '💬',
         'templates': '📄',
-        'tools': '🔧',
         'ensembles': '🎼',
         'memories': '🧠'
       };

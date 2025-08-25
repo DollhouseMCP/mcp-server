@@ -144,7 +144,7 @@ describe('CollectionCache', () => {
   describe.skip('loadCache (requires ESM mocking)', () => {
     it('should load valid cache from file', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const result = await cache.loadCache();
 
@@ -158,7 +158,7 @@ describe('CollectionCache', () => {
         etag: 'expired-etag'
       };
       const cacheData = JSON.stringify(expiredCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const result = await cache.loadCache();
 
@@ -168,7 +168,7 @@ describe('CollectionCache', () => {
     it('should return null for non-existent cache file', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const result = await cache.loadCache();
 
@@ -178,7 +178,7 @@ describe('CollectionCache', () => {
     it('should return null and log error for other file system errors', async () => {
       const error = new Error('Permission denied') as any;
       error.code = 'EACCES';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const result = await cache.loadCache();
 
@@ -186,7 +186,7 @@ describe('CollectionCache', () => {
     });
 
     it('should return null for invalid JSON', async () => {
-      (fs.readFile as jest.Mock).mockResolvedValue('invalid json');
+      (fs.readFile as any).mockResolvedValue('invalid json');
 
       const result = await cache.loadCache();
 
@@ -213,7 +213,7 @@ describe('CollectionCache', () => {
         etag: 'boundary-etag'
       };
       const cacheData = JSON.stringify(boundaryCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const result = await cache.loadCache();
       expect(result).toBeNull(); // Should be expired at exactly TTL boundary
@@ -227,7 +227,7 @@ describe('CollectionCache', () => {
         etag: 'within-ttl-etag'
       };
       const cacheData = JSON.stringify(withinTtlCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const result = await cache.loadCache();
       expect(result).toEqual(withinTtlCacheEntry);
@@ -236,8 +236,8 @@ describe('CollectionCache', () => {
 
   describe.skip('saveCache (requires ESM mocking)', () => {
     it('should save cache successfully', async () => {
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.mkdir as any).mockResolvedValue(undefined);
+      (fs.writeFile as any).mockResolvedValue(undefined);
 
       await cache.saveCache(mockItems, 'test-etag');
 
@@ -250,52 +250,52 @@ describe('CollectionCache', () => {
     });
 
     it('should save cache without etag', async () => {
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.mkdir as any).mockResolvedValue(undefined);
+      (fs.writeFile as any).mockResolvedValue(undefined);
 
       await cache.saveCache(mockItems);
       
-      const savedData = JSON.parse((fs.writeFile as jest.Mock).mock.calls[0][1] as string);
+      const savedData = JSON.parse((fs.writeFile as any).mock.calls[0][1] as string);
       expect(savedData.etag).toBeUndefined();
     });
 
     it('should include timestamp in saved cache', async () => {
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.mkdir as any).mockResolvedValue(undefined);
+      (fs.writeFile as any).mockResolvedValue(undefined);
 
       const beforeTime = Date.now();
       await cache.saveCache(mockItems, 'test-etag');
       const afterTime = Date.now();
 
-      const savedData = JSON.parse((fs.writeFile as jest.Mock).mock.calls[0][1] as string);
+      const savedData = JSON.parse((fs.writeFile as any).mock.calls[0][1] as string);
       expect(savedData.timestamp).toBeGreaterThanOrEqual(beforeTime);
       expect(savedData.timestamp).toBeLessThanOrEqual(afterTime);
     });
 
     it('should handle directory creation errors gracefully', async () => {
       const mkdirError = new Error('Permission denied');
-      (fs.mkdir as jest.Mock).mockRejectedValue(mkdirError);
+      (fs.mkdir as any).mockRejectedValue(mkdirError);
 
       await cache.saveCache(mockItems, 'test-etag');
       // Should not throw - errors are handled gracefully
     });
 
     it('should handle write errors gracefully', async () => {
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
+      (fs.mkdir as any).mockResolvedValue(undefined);
       const writeError = new Error('Disk full');
-      (fs.writeFile as jest.Mock).mockRejectedValue(writeError);
+      (fs.writeFile as any).mockRejectedValue(writeError);
 
       await cache.saveCache(mockItems, 'test-etag');
       // Should not throw - errors are handled gracefully  
     });
 
     it('should format JSON with proper indentation', async () => {
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
-      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.mkdir as any).mockResolvedValue(undefined);
+      (fs.writeFile as any).mockResolvedValue(undefined);
 
       await cache.saveCache(mockItems, 'test-etag');
 
-      const savedData = (fs.writeFile as jest.Mock).mock.calls[0][1] as string;
+      const savedData = (fs.writeFile as any).mock.calls[0][1] as string;
       expect(savedData).toContain('  '); // Check for indentation
       expect(savedData).toContain('\n'); // Check for newlines
     });
@@ -304,7 +304,7 @@ describe('CollectionCache', () => {
   describe.skip('searchCache (requires ESM mocking)', () => {
     it('should search by filename', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('test-persona');
       expect(results).toHaveLength(1);
@@ -313,7 +313,7 @@ describe('CollectionCache', () => {
 
     it('should search by path', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('personas');
       expect(results).toHaveLength(2);
@@ -322,7 +322,7 @@ describe('CollectionCache', () => {
 
     it('should search by content', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('Another test');
       expect(results).toHaveLength(1);
@@ -331,7 +331,7 @@ describe('CollectionCache', () => {
 
     it('should perform case-insensitive search', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('TEST-PERSONA');
       expect(results).toHaveLength(1);
@@ -340,7 +340,7 @@ describe('CollectionCache', () => {
 
     it('should handle search with normalization', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('test persona');
       expect(results).toHaveLength(1);
@@ -350,7 +350,7 @@ describe('CollectionCache', () => {
     it('should return empty array when cache is not available', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const results = await cache.searchCache('test');
       expect(results).toEqual([]);
@@ -358,7 +358,7 @@ describe('CollectionCache', () => {
 
     it('should return empty array for no matches', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('nonexistent');
       expect(results).toEqual([]);
@@ -366,7 +366,7 @@ describe('CollectionCache', () => {
 
     it('should handle empty search query', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('');
       expect(results).toEqual([]);
@@ -376,7 +376,7 @@ describe('CollectionCache', () => {
       const itemsWithoutContent = mockItems.map(item => ({ ...item, content: undefined }));
       const cacheEntryWithoutContent = { ...validCacheEntry, items: itemsWithoutContent };
       const cacheData = JSON.stringify(cacheEntryWithoutContent);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('test-persona');
       expect(results).toHaveLength(1);
@@ -399,7 +399,7 @@ describe('CollectionCache', () => {
       };
 
       const cacheData = JSON.stringify(unicodeCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('émojis');
       expect(results).toHaveLength(1);
@@ -410,7 +410,7 @@ describe('CollectionCache', () => {
   describe.skip('getItemsByPath (requires ESM mocking)', () => {
     it('should filter items by path prefix', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.getItemsByPath('personas/');
       expect(results).toHaveLength(2);
@@ -419,7 +419,7 @@ describe('CollectionCache', () => {
 
     it('should filter items by exact path prefix', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.getItemsByPath('skills/');
       expect(results).toHaveLength(1);
@@ -428,7 +428,7 @@ describe('CollectionCache', () => {
 
     it('should return empty array for non-matching prefix', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.getItemsByPath('nonexistent/');
       expect(results).toEqual([]);
@@ -437,7 +437,7 @@ describe('CollectionCache', () => {
     it('should return empty array when cache is not available', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const results = await cache.getItemsByPath('personas/');
       expect(results).toEqual([]);
@@ -445,7 +445,7 @@ describe('CollectionCache', () => {
 
     it('should handle empty path prefix', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.getItemsByPath('');
       expect(results).toHaveLength(mockItems.length);
@@ -455,7 +455,7 @@ describe('CollectionCache', () => {
   describe.skip('isCacheValid (requires ESM mocking)', () => {
     it('should return true for valid cache', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const isValid = await cache.isCacheValid();
       expect(isValid).toBe(true);
@@ -468,7 +468,7 @@ describe('CollectionCache', () => {
         etag: 'expired-etag'
       };
       const cacheData = JSON.stringify(expiredCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const isValid = await cache.isCacheValid();
       expect(isValid).toBe(false);
@@ -477,14 +477,14 @@ describe('CollectionCache', () => {
     it('should return false when cache file does not exist', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const isValid = await cache.isCacheValid();
       expect(isValid).toBe(false);
     });
 
     it('should return false for corrupted cache file', async () => {
-      (fs.readFile as jest.Mock).mockResolvedValue('invalid json');
+      (fs.readFile as any).mockResolvedValue('invalid json');
 
       const isValid = await cache.isCacheValid();
       expect(isValid).toBe(false);
@@ -493,7 +493,7 @@ describe('CollectionCache', () => {
 
   describe.skip('clearCache (requires ESM mocking)', () => {
     it('should clear cache successfully', async () => {
-      (fs.unlink as jest.Mock).mockResolvedValue(undefined);
+      (fs.unlink as any).mockResolvedValue(undefined);
 
       await cache.clearCache();
       expect(fs.unlink).toHaveBeenCalledWith(testCacheFile);
@@ -502,7 +502,7 @@ describe('CollectionCache', () => {
     it('should handle non-existent file gracefully', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.unlink as jest.Mock).mockRejectedValue(error);
+      (fs.unlink as any).mockRejectedValue(error);
 
       await cache.clearCache(); // Should not throw
     });
@@ -510,7 +510,7 @@ describe('CollectionCache', () => {
     it('should handle other file system errors', async () => {
       const error = new Error('Permission denied') as any;
       error.code = 'EACCES';
-      (fs.unlink as jest.Mock).mockRejectedValue(error);
+      (fs.unlink as any).mockRejectedValue(error);
 
       await cache.clearCache(); // Should not throw
     });
@@ -519,7 +519,7 @@ describe('CollectionCache', () => {
   describe.skip('getCacheStats (requires ESM mocking)', () => {
     it('should return stats for valid cache', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const stats = await cache.getCacheStats();
       expect(stats.itemCount).toBe(mockItems.length);
@@ -534,7 +534,7 @@ describe('CollectionCache', () => {
         etag: 'expired-etag'
       };
       const cacheData = JSON.stringify(expiredCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const stats = await cache.getCacheStats();
       expect(stats.itemCount).toBe(0);
@@ -545,7 +545,7 @@ describe('CollectionCache', () => {
     it('should return default stats when cache does not exist', async () => {
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as any).mockRejectedValue(error);
 
       const stats = await cache.getCacheStats();
       expect(stats.itemCount).toBe(0);
@@ -561,7 +561,7 @@ describe('CollectionCache', () => {
         etag: 'test-etag'
       };
       const cacheData = JSON.stringify(testCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const stats = await cache.getCacheStats();
       expect(stats.cacheAge).toBeGreaterThanOrEqual(5000);
@@ -586,7 +586,7 @@ describe('CollectionCache', () => {
       };
 
       const cacheData = JSON.stringify(largeCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const results = await cache.searchCache('item-123');
       expect(results).toHaveLength(1);
@@ -606,7 +606,7 @@ describe('CollectionCache', () => {
       };
 
       const cacheData = JSON.stringify(malformedCache);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const result = await cache.loadCache();
       expect(result).not.toBeNull();
@@ -617,7 +617,7 @@ describe('CollectionCache', () => {
 
     it('should handle concurrent operations', async () => {
       const cacheData = JSON.stringify(validCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const promises = [
         cache.loadCache(),
@@ -653,7 +653,7 @@ describe('CollectionCache', () => {
       };
 
       const cacheData = JSON.stringify(largeCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const startTime = Date.now();
       const results = await cache.searchCache('item');
@@ -679,7 +679,7 @@ describe('CollectionCache', () => {
       };
 
       const cacheData = JSON.stringify(largeCacheEntry);
-      (fs.readFile as jest.Mock).mockResolvedValue(cacheData);
+      (fs.readFile as any).mockResolvedValue(cacheData);
 
       const startTime = Date.now();
       const results = await cache.getItemsByPath('category0/');

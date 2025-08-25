@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -13,14 +13,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "inspector:dev": "npx @modelcontextprotocol/inspector tsx src/index.ts",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "setup": "npm install && npm run build",
     "prepublishOnly": "BUILD_TYPE=npm npm run build",
-    "update:check": "echo 'Use check_for_updates MCP tool for interactive update checking'",
-    "update:pull": "git pull origin main && npm install && npm run build",
-    "update:backup": "cp -r . .backup-$(date +%s)",
-    "update:restore": "echo 'Use rollback_update MCP tool for interactive rollback'",
     "test": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs",
     "test:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs --watch",
     "test:coverage": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs --coverage",
@@ -42,7 +40,17 @@
     "security:audit": "tsx scripts/run-security-audit.ts",
     "security:audit:json": "tsx scripts/run-security-audit.ts --json",
     "security:audit:verbose": "tsx scripts/run-security-audit.ts --verbose",
-    "pre-commit": "npm run security:rapid && npm audit --audit-level=high"
+    "pre-commit": "npm run security:rapid && npm audit --audit-level=high",
+    "test:e2e": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs",
+    "test:e2e:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs --watch",
+    "test:e2e:verbose": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.e2e.config.cjs --verbose",
+    "test:roundtrip": "npm run test:e2e",
+    "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
+    "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup",
+    "qa:direct": "node scripts/qa-direct-test.js",
+    "qa:inspector": "node scripts/qa-inspector-cli-test.js",
+    "qa:all": "npm run qa:direct && npm run qa:inspector",
+    "qa:simple": "node scripts/qa-simple-test.js"
   },
   "keywords": [
     "mcp",
@@ -99,7 +107,7 @@
     "url": "https://github.com/sponsors/mickdarling"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.16.0",
+    "@modelcontextprotocol/sdk": "^1.17.3",
     "@types/dompurify": "^3.0.5",
     "@types/uuid": "^10.0.0",
     "dompurify": "^3.2.6",
@@ -107,11 +115,13 @@
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
     "jsdom": "^26.1.0",
+    "node-fetch": "^3.3.2",
     "uuid": "^11.1.0",
     "zod": "^4.0.5"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
+    "@modelcontextprotocol/inspector": "^0.16.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",

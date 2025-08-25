@@ -164,12 +164,12 @@ export class TemplateManager implements IElementManager<Template> {
 
   /**
    * List all templates
-   * SECURITY FIX: Uses validated directory path
+   * SECURITY FIX: Uses PortfolioManager.listElements() which filters test elements
    */
   async list(): Promise<Template[]> {
     try {
-      const files = await fs.readdir(this.templatesDir);
-      const templateFiles = files.filter(file => file.endsWith('.md') || file.endsWith('.yaml'));
+      // Use PortfolioManager to get filtered list (excludes test elements)
+      const templateFiles = await this.portfolioManager.listElements(ElementType.TEMPLATE);
       
       // Load templates in parallel with error handling
       const templates = await Promise.all(
@@ -351,7 +351,8 @@ export class TemplateManager implements IElementManager<Template> {
     try {
       switch (format) {
         case 'json':
-          return template.serialize();
+          // Use serializeToJSON for JSON format, or serialize if not available
+          return (template as any).serializeToJSON ? (template as any).serializeToJSON() : template.serialize();
           
         case 'yaml':
           // SECURITY FIX: Use yaml.dump with FAILSAFE_SCHEMA to prevent code execution

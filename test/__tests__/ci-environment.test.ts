@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * CI Environment Tests - Issue #92
@@ -229,59 +230,15 @@ describe('CI Environment Tests', () => {
     });
   });
 
-  describe('BackupManager CI Safety', () => {
-    it('should use safe directories in CI environment', async () => {
-      if (isCI) {
-        // In CI, BackupManager should use temporary directories
-        const { BackupManager } = await import('../../src/update/BackupManager.js');
-        
-        // Create a test directory in tmp
-        const testDir = path.join(os.tmpdir(), 'backup-ci-test-' + Date.now());
-        await fs.mkdir(testDir, { recursive: true });
-        
-        try {
-          // This should not throw in CI
-          const backup = new BackupManager(testDir);
-          expect(backup).toBeDefined();
-        } finally {
-          await fs.rm(testDir, { recursive: true, force: true });
-        }
-      }
-    });
-  });
-
-  describe('UpdateManager CI Compatibility', () => {
-    it('should handle rootDir configuration in CI', async () => {
-      if (isCI) {
-        const { UpdateManager } = await import('../../src/update/UpdateManager.js');
-        
-        // Create a test directory
-        const testDir = path.join(os.tmpdir(), 'update-ci-test-' + Date.now());
-        await fs.mkdir(testDir, { recursive: true });
-        
-        // Create a minimal package.json
-        await fs.writeFile(
-          path.join(testDir, 'package.json'),
-          JSON.stringify({ name: 'test-project', version: '1.0.0' })
-        );
-        
-        try {
-          // This should work with custom rootDir
-          const updater = new UpdateManager(testDir);
-          expect(updater).toBeDefined();
-        } finally {
-          await fs.rm(testDir, { recursive: true, force: true });
-        }
-      }
-    });
-  });
 
   describe('Integration Test Environment', () => {
     it('should provide necessary environment for integration tests', () => {
       if (isCI) {
         // Check that integration tests have what they need
+        // Windows uses USERPROFILE instead of HOME
+        const homeVar = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
         const requiredEnvVars = [
-          'HOME',
+          homeVar,
           'PATH'
         ];
         

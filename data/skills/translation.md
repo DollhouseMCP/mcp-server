@@ -34,8 +34,15 @@ parameters:
     type: "boolean"
     description: "Adapt content for target culture"
     default: false
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.348Z"
+  originalPath: "data/skills/translation.md"
 ---
-
 # Translation Skill
 
 This skill provides advanced translation capabilities that go beyond literal word conversion to preserve meaning, tone, and cultural context.

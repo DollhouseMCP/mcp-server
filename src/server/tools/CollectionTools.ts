@@ -46,6 +46,55 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     },
     {
       tool: {
+        name: "search_collection_enhanced",
+        description: "Enhanced search for collection content with pagination, filtering, and sorting. Use this for advanced searches when users need specific content types or want to browse results in pages.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Search query for finding content. Examples: 'creative writer', 'explain like I'm five', 'coding assistant'.",
+            },
+            elementType: {
+              type: "string",
+              description: "Filter by content type: personas, skills, agents, templates, tools, ensembles, memories, prompts",
+              enum: ["personas", "skills", "agents", "templates", "tools", "ensembles", "memories", "prompts"]
+            },
+            category: {
+              type: "string",
+              description: "Filter by category: creative, professional, educational, personal, gaming",
+              enum: ["creative", "professional", "educational", "personal", "gaming"]
+            },
+            page: {
+              type: "number",
+              description: "Page number for paginated results (default: 1)",
+              minimum: 1
+            },
+            pageSize: {
+              type: "number", 
+              description: "Number of results per page (default: 25, max: 100)",
+              minimum: 1,
+              maximum: 100
+            },
+            sortBy: {
+              type: "string",
+              description: "Sort results by relevance, name, or date",
+              enum: ["relevance", "name", "date"]
+            }
+          },
+          required: ["query"],
+        },
+      },
+      handler: (args: any) => server.searchCollectionEnhanced(args.query, {
+        elementType: args.elementType,
+        category: args.category,
+        page: args.page,
+        pageSize: args.pageSize,
+        sortBy: args.sortBy
+      })
+    },
+    {
+      tool: {
         name: "get_collection_content",
         description: "Get detailed information about content from the collection. Use this when users ask to 'see details about a persona' or 'show me the creative writer persona'. Personas are a type of content that defines AI behavioral profiles.",
         inputSchema: {
@@ -108,50 +157,10 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     }
   ];
 
-  // Backward compatibility aliases (deprecated)
-  // Will be removed in version 2.0.0 (estimated Q1 2026)
-  const deprecatedAliases: Array<{ tool: ToolDefinition; handler: any }> = [
-    {
-      tool: {
-        name: "browse_marketplace",
-        description: "[DEPRECATED - Use browse_collection] " + tools[0].tool.description + " | Will be removed in v2.0.0",
-        inputSchema: { ...tools[0].tool.inputSchema }
-      },
-      handler: tools[0].handler
-    },
-    {
-      tool: {
-        name: "search_marketplace",
-        description: "[DEPRECATED - Use search_collection] " + tools[1].tool.description + " | Will be removed in v2.0.0",
-        inputSchema: { ...tools[1].tool.inputSchema }
-      },
-      handler: tools[1].handler
-    },
-    {
-      tool: {
-        name: "get_marketplace_persona",
-        description: "[DEPRECATED - Use get_collection_content] " + tools[2].tool.description + " | Will be removed in v2.0.0",
-        inputSchema: { ...tools[2].tool.inputSchema }
-      },
-      handler: tools[2].handler
-    },
-    {
-      tool: {
-        name: "install_persona",
-        description: "[DEPRECATED - Use install_content] " + tools[3].tool.description + " | Will be removed in v2.0.0",
-        inputSchema: { ...tools[3].tool.inputSchema }
-      },
-      handler: tools[3].handler
-    },
-    {
-      tool: {
-        name: "submit_persona",
-        description: "[DEPRECATED - Use submit_content] " + tools[4].tool.description + " | Will be removed in v2.0.0",
-        inputSchema: { ...tools[4].tool.inputSchema }
-      },
-      handler: tools[4].handler
-    }
-  ];
-
-  return [...tools, ...deprecatedAliases];
+  // PERFORMANCE FIX #548: Removed deprecated marketplace aliases
+  // These duplicated existing collection tools and increased MCP overhead
+  // Users should migrate to: browse_collection, search_collection, 
+  // get_collection_content, install_content, submit_content
+  
+  return tools;
 }

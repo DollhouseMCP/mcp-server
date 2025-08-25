@@ -65,8 +65,15 @@ elements:
     activation: "conditional"
     condition: "project_planning || implementation_phase"
     purpose: "Project execution and resource management"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.341Z"
+  originalPath: "data/ensembles/business-advisor.md"
 ---
-
 # Business Advisor Ensemble
 
 A comprehensive business advisory ensemble that combines strategic thinking, data analysis, market research, and project management to provide executive-level business guidance and implementation support.

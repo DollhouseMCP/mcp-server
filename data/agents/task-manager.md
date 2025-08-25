@@ -40,8 +40,15 @@ risk_thresholds:
   max_task_age_days: 90
   min_progress_rate: 0.1
   resource_utilization_cap: 0.9
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "Workflow integration testing"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.341Z"
+  originalPath: "data/agents/task-manager.md"
 ---
-
 # Task Manager Agent
 
 An intelligent agent designed to manage tasks, optimize workflows, and ensure project success through systematic planning and execution.

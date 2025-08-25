@@ -33,6 +33,7 @@ export interface IToolHandler {
   // Collection tools
   browseCollection(section?: string, type?: string): Promise<any>;
   searchCollection(query: string): Promise<any>;
+  searchCollectionEnhanced(query: string, options?: any): Promise<any>;
   getCollectionContent(path: string): Promise<any>;
   installContent(path: string): Promise<any>;
   submitContent(content: string): Promise<any>;
@@ -47,17 +48,15 @@ export interface IToolHandler {
   setupGitHubAuth(): Promise<any>;
   checkGitHubAuth(): Promise<any>;
   clearGitHubAuth(): Promise<any>;
+  configureOAuth(client_id?: string): Promise<any>;
+  getOAuthHelperStatus(verbose?: boolean): Promise<any>;
   
-  // Update tools
-  checkForUpdates(): Promise<any>;
-  updateServer(confirm: boolean): Promise<any>;
-  rollbackUpdate(confirm: boolean): Promise<any>;
-  getServerStatus(): Promise<any>;
-  convertToGitInstallation(targetDir?: string, confirm?: boolean): Promise<any>;
   
   // Config tools
   configureIndicator(config: any): Promise<any>;
   getIndicatorConfig(): Promise<any>;
+  configureCollectionSubmission(autoSubmit: boolean): Promise<any>;
+  getCollectionSubmissionConfig(): Promise<any>;
   
   // Export/Import/Share tools
   exportPersona(persona: string): Promise<any>;
@@ -65,4 +64,12 @@ export interface IToolHandler {
   importPersona(source: string, overwrite?: boolean): Promise<any>;
   sharePersona(persona: string, expiryDays?: number): Promise<any>;
   importFromUrl(url: string, overwrite?: boolean): Promise<any>;
+  
+  // Portfolio tools
+  portfolioStatus(username?: string): Promise<any>;
+  initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}): Promise<any>;
+  portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): Promise<any>;
+  syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}): Promise<any>;
+  searchPortfolio(options: {query: string; elementType?: string; fuzzyMatch?: boolean; maxResults?: number; includeKeywords?: boolean; includeTags?: boolean; includeTriggers?: boolean; includeDescriptions?: boolean}): Promise<any>;
+  searchAll(options: {query: string; sources?: string[]; elementType?: string; page?: number; pageSize?: number; sortBy?: string}): Promise<any>;
 }

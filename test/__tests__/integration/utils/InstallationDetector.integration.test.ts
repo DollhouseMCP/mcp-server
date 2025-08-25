@@ -36,8 +36,10 @@ describe('InstallationDetector Integration Tests', () => {
       );
       
       // Since we can't change import.meta.url in tests, we'll verify the detection logic
-      // by checking path patterns
-      const isNpmPath = npmPath.includes(path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep);
+      // by checking path patterns - normalize paths for cross-platform compatibility
+      const normalizedNpmPath = path.normalize(npmPath);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      const isNpmPath = normalizedNpmPath.includes(npmPattern);
       expect(isNpmPath).toBe(true);
     });
     
@@ -46,8 +48,10 @@ describe('InstallationDetector Integration Tests', () => {
       const winPath = path.join(testDir, 'AppData', 'Roaming', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server');
       await fs.mkdir(winPath, { recursive: true });
       
-      const pathPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
-      const isNpmPath = winPath.includes(pathPattern);
+      // Use the same normalization logic as the actual implementation
+      const normalizedWinPath = path.normalize(winPath);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      const isNpmPath = normalizedWinPath.includes(npmPattern);
       expect(isNpmPath).toBe(true);
     });
   });
@@ -72,8 +76,9 @@ describe('InstallationDetector Integration Tests', () => {
       expect(stats.isDirectory()).toBe(true);
       
       // Check that path doesn't contain node_modules pattern
-      const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
-      expect(srcPath.includes(npmPattern)).toBe(false);
+      const normalizedSrcPath = path.normalize(srcPath);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      expect(normalizedSrcPath.includes(npmPattern)).toBe(false);
     });
     
     it('should find .git directory in parent directories', async () => {
@@ -128,8 +133,9 @@ describe('InstallationDetector Integration Tests', () => {
       expect(gitExists).toBe(false);
       
       // No npm pattern
-      const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server') + path.sep;
-      expect(unknownPath.includes(npmPattern)).toBe(false);
+      const normalizedUnknownPath = path.normalize(unknownPath);
+      const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+      expect(normalizedUnknownPath.includes(npmPattern)).toBe(false);
     });
   });
   
@@ -155,7 +161,9 @@ describe('InstallationDetector Integration Tests', () => {
       let currentDir = distPath;
       let packageJsonPath = null;
       
-      while (currentDir.includes('node_modules/@dollhousemcp/mcp-server')) {
+      // Use normalized paths for cross-platform compatibility
+      const npmPackagePattern = path.normalize('node_modules/@dollhousemcp/mcp-server');
+      while (path.normalize(currentDir).includes(npmPackagePattern)) {
         const possiblePath = path.join(currentDir, 'package.json');
         try {
           await fs.access(possiblePath);
@@ -251,8 +259,9 @@ describe('InstallationDetector Integration Tests', () => {
         
         // If successful, verify symlink points to npm-like path
         const realPath = await fs.realpath(linkSource);
-        const npmPattern = path.sep + path.join('node_modules', '@dollhousemcp', 'mcp-server');
-        expect(realPath.includes(npmPattern)).toBe(true);
+        const normalizedRealPath = path.normalize(realPath);
+        const npmPattern = path.normalize(path.join('node_modules', '@dollhousemcp', 'mcp-server'));
+        expect(normalizedRealPath.includes(npmPattern)).toBe(true);
       } catch (error) {
         // Symlinks not supported on this system, skip test
         console.log('Symlink test skipped - not supported on this system');
@@ -265,7 +274,13 @@ describe('InstallationDetector Integration Tests', () => {
       await fs.mkdir(protectedPath);
       
       try {
-        // Try to make it unreadable (may not work on all systems)
+        // Try to make it unreadable (may not work on all systems, especially Windows)
+        if (process.platform === 'win32') {
+          // Windows doesn't support chmod the same way - skip this test
+          console.log('Permission test skipped - Windows doesn\'t support Unix-style chmod');
+          return;
+        }
+        
         await fs.chmod(protectedPath, 0o000);
         
         // Try to access it
@@ -274,9 +289,9 @@ describe('InstallationDetector Integration Tests', () => {
         
         // Restore permissions for cleanup
         await fs.chmod(protectedPath, 0o755);
-      } catch (error) {
+      } catch (error: any) {
         // Permission change not supported, skip this part
-        console.log('Permission test skipped - chmod not supported');
+        console.log('Permission test skipped - chmod not supported:', error.message);
       }
     });
   });

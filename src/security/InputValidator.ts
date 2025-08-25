@@ -6,6 +6,8 @@ import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 import { VALID_CATEGORIES } from '../config/constants.js';
 import { RegexValidator } from './regexValidator.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ValidationErrorCodes } from '../utils/errorCodes.js';
 
 // Pre-compiled regex patterns for better performance
 // These patterns are used repeatedly and benefit from pre-compilation
@@ -34,17 +36,17 @@ export class MCPInputValidator {
    */
   static validatePersonaIdentifier(identifier: string): string {
     if (!identifier || typeof identifier !== 'string') {
-      throw new Error('Persona identifier must be a non-empty string');
+      throw ErrorHandler.createError('Persona identifier must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PERSONA_ID);
     }
 
     if (identifier.length > 100) {
-      throw new Error('Persona identifier too long (max 100 characters)');
+      throw ErrorHandler.createError('Persona identifier too long (max 100 characters)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
     }
 
     // Allow persona names and filenames
     const sanitized = sanitizeInput(identifier, 100);
     if (!sanitized) {
-      throw new Error('Persona identifier contains only invalid characters');
+      throw ErrorHandler.createError('Persona identifier contains only invalid characters', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PERSONA_ID);
     }
 
     return sanitized;
@@ -55,15 +57,15 @@ export class MCPInputValidator {
    */
   static validateSearchQuery(query: string): string {
     if (!query || typeof query !== 'string') {
-      throw new Error('Search query must be a non-empty string');
+      throw ErrorHandler.createError('Search query must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_SEARCH_QUERY);
     }
 
     if (query.length < 2) {
-      throw new Error('Search query too short (minimum 2 characters)');
+      throw ErrorHandler.createError('Search query too short (minimum 2 characters)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
     }
 
     if (query.length > 200) {
-      throw new Error('Search query too long (max 200 characters)');
+      throw ErrorHandler.createError('Search query too long (max 200 characters)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
     }
 
     // Sanitize but preserve spaces for search
@@ -75,7 +77,7 @@ export class MCPInputValidator {
       .trim();
 
     if (!sanitized) {
-      throw new Error('Search query contains only invalid characters');
+      throw ErrorHandler.createError('Search query contains only invalid characters', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_SEARCH_QUERY);
     }
 
     return sanitized;
@@ -86,11 +88,11 @@ export class MCPInputValidator {
    */
   static validateCollectionPath(path: string): string {
     if (!path || typeof path !== 'string') {
-      throw new Error('Collection path must be a non-empty string');
+      throw ErrorHandler.createError('Collection path must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_COLLECTION_PATH);
     }
 
     if (path.length > 500) {
-      throw new Error('Collection path too long (max 500 characters)');
+      throw ErrorHandler.createError('Collection path too long (max 500 characters)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
     }
 
     // GitHub API paths should be safe filename patterns
@@ -100,11 +102,11 @@ export class MCPInputValidator {
       for (let i = 0; i < path.length; i++) {
         const char = path[i];
         if (!COLLECTION_PATH_CHAR_REGEX.test(char)) {
-          throw new Error(`Invalid character '${char}' in collection path at position ${i + 1}`);
+          throw ErrorHandler.createError(`Invalid character '${char}' in collection path at position ${i + 1}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CHARACTER);
         }
       }
       // Fallback error if we somehow don't find the invalid character
-      throw new Error('Invalid characters in collection path');
+      throw ErrorHandler.createError('Invalid characters in collection path', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_COLLECTION_PATH);
     }
 
     // Prevent path traversal in GitHub paths (comprehensive check)
@@ -129,7 +131,7 @@ export class MCPInputValidator {
     
     for (const pattern of traversalPatterns) {
       if (pathLower.includes(pattern) || encodedPath.toLowerCase().includes(pattern)) {
-        throw new Error('Path traversal not allowed in collection path');
+        throw ErrorHandler.createError('Path traversal not allowed in collection path', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATH_TRAVERSAL);
       }
     }
 
@@ -141,16 +143,16 @@ export class MCPInputValidator {
    */
   static validateImportUrl(url: string): string {
     if (!url || typeof url !== 'string') {
-      throw new Error('URL must be a non-empty string');
+      throw ErrorHandler.createError('URL must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
     }
 
     if (url.length > 2000) {
-      throw new Error('URL too long (max 2000 characters)');
+      throw ErrorHandler.createError('URL too long (max 2000 characters)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
     }
 
     // Reject protocol-relative URLs that could bypass validation
     if (url.startsWith('//')) {
-      throw new Error('Protocol-relative URLs are not allowed');
+      throw ErrorHandler.createError('Protocol-relative URLs are not allowed', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
     }
 
     try {
@@ -166,7 +168,7 @@ export class MCPInputValidator {
       
       // Protocol validation
       if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error('Only HTTP(S) URLs are allowed');
+        throw ErrorHandler.createError('Only HTTP(S) URLs are allowed', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
       
       // Enhanced SSRF protection with IDN normalization
@@ -178,17 +180,17 @@ export class MCPInputValidator {
         hostname = idnNormalized;
       } catch (idnError) {
         // If IDN conversion fails, reject the URL for security
-        throw new Error('Invalid hostname: IDN conversion failed - potentially malicious domain name');
+        throw ErrorHandler.createError('Invalid hostname: IDN conversion failed - potentially malicious domain name', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
       
       // Check for private IPs (now with IDN-normalized hostname)
       if (this.isPrivateIP(hostname)) {
-        throw new Error('Private network URLs are not allowed');
+        throw ErrorHandler.createError('Private network URLs are not allowed', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
       
       // Additional SSRF checks for encoded IPs
       if (this.isEncodedPrivateIP(hostname)) {
-        throw new Error('Encoded private network URLs are not allowed');
+        throw ErrorHandler.createError('Encoded private network URLs are not allowed', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
 
       return url;
@@ -197,7 +199,7 @@ export class MCPInputValidator {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Invalid URL format: ${errorMessage}`);
+      throw ErrorHandler.createError(`Invalid URL format: ${errorMessage}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
     }
   }
 
@@ -206,15 +208,15 @@ export class MCPInputValidator {
    */
   static validateExpiryDays(days: number): number {
     if (typeof days !== 'number') {
-      throw new Error('Expiry days must be a valid number');
+      throw ErrorHandler.createError('Expiry days must be a valid number', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
     }
     
     if (isNaN(days) || !isFinite(days)) {
-      throw new Error('Expiry days must be a valid number');
+      throw ErrorHandler.createError('Expiry days must be a valid number', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
     }
 
     if (days < 1 || days > 365) {
-      throw new Error('Expiry days must be between 1 and 365');
+      throw ErrorHandler.createError('Expiry days must be between 1 and 365', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_RANGE);
     }
 
     return Math.floor(days);
@@ -225,11 +227,11 @@ export class MCPInputValidator {
    */
   static validateConfirmation(confirm: boolean, operationName: string): boolean {
     if (typeof confirm !== 'boolean') {
-      throw new Error(`${operationName} confirmation must be a boolean value`);
+      throw ErrorHandler.createError(`${operationName} confirmation must be a boolean value`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_TYPE);
     }
 
     if (!confirm) {
-      throw new Error(`${operationName} operation requires explicit confirmation (true)`);
+      throw ErrorHandler.createError(`${operationName} operation requires explicit confirmation (true)`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.CONFIRMATION_REQUIRED);
     }
 
     return confirm;
@@ -240,7 +242,7 @@ export class MCPInputValidator {
    */
   static validateEditField(field: string): string {
     if (!field || typeof field !== 'string') {
-      throw new Error('Field name must be a non-empty string');
+      throw ErrorHandler.createError('Field name must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.REQUIRED_FIELD);
     }
 
     const validFields = [
@@ -250,7 +252,7 @@ export class MCPInputValidator {
 
     const normalizedField = field.toLowerCase().trim();
     if (!validFields.includes(normalizedField)) {
-      throw new Error(`Invalid field name. Must be one of: ${validFields.join(', ')}`);
+      throw ErrorHandler.createError(`Invalid field name. Must be one of: ${validFields.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_INPUT);
     }
 
     return normalizedField;
@@ -348,18 +350,18 @@ export class MCPInputValidator {
  */
 export function validateFilename(filename: string): string {
   if (!filename || typeof filename !== 'string') {
-    throw new Error('Filename must be a non-empty string');
+    throw ErrorHandler.createError('Filename must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FILENAME);
   }
   
   if (filename.length > SECURITY_LIMITS.MAX_FILENAME_LENGTH) {
-    throw new Error(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`);
+    throw ErrorHandler.createError(`Filename too long (max ${SECURITY_LIMITS.MAX_FILENAME_LENGTH} characters)`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_LENGTH);
   }
   
   // Remove any path separators and dangerous characters
   const sanitized = filename.replace(FILENAME_DANGEROUS_REGEX, '').replace(FILENAME_LEADING_DOTS_REGEX, '');
   
   if (!RegexValidator.validate(sanitized, VALIDATION_PATTERNS.SAFE_FILENAME, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
-    throw new Error('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
+    throw ErrorHandler.createError('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FILENAME);
   }
   
   return sanitized;
@@ -370,7 +372,7 @@ export function validateFilename(filename: string): string {
  */
 export function validatePath(inputPath: string, baseDir?: string): string {
   if (!inputPath || typeof inputPath !== 'string') {
-    throw new Error('Path must be a non-empty string');
+    throw ErrorHandler.createError('Path must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
   }
   
   // If baseDir is provided and inputPath is absolute, reject it
@@ -379,7 +381,7 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   const isWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(inputPath);
   
   if (baseDir && (isUnixAbsolute || isWindowsAbsolute)) {
-    throw new Error('Absolute paths not allowed when base directory is specified');
+    throw ErrorHandler.createError('Absolute paths not allowed when base directory is specified', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
   }
   
   // Remove leading/trailing slashes and normalize
@@ -399,18 +401,18 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   }
   
   if (!VALIDATION_PATTERNS.SAFE_PATH.test(normalized)) {
-    throw new Error('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.');
+    throw ErrorHandler.createError('Invalid path format. Use alphanumeric characters, hyphens, underscores, dots, and forward slashes only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
   }
   
   // Check for path traversal attempts
   if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
-    throw new Error('Path traversal not allowed');
+    throw ErrorHandler.createError('Path traversal not allowed', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATH_TRAVERSAL);
   }
   
   // Validate path depth
   const depth = normalized.split('/').length;
   if (depth > SECURITY_LIMITS.MAX_PATH_DEPTH) {
-    throw new Error(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`);
+    throw ErrorHandler.createError(`Path too deep (max ${SECURITY_LIMITS.MAX_PATH_DEPTH} levels)`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH);
   }
   
   // If baseDir provided, ensure path is within it
@@ -419,7 +421,7 @@ export function validatePath(inputPath: string, baseDir?: string): string {
     const resolvedBase = path.resolve(baseDir);
     
     if (!resolvedPath.startsWith(resolvedBase)) {
-      throw new Error('Path traversal attempt detected');
+      throw ErrorHandler.createError('Path traversal attempt detected', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.PATH_TRAVERSAL);
     }
   }
   
@@ -431,11 +433,11 @@ export function validatePath(inputPath: string, baseDir?: string): string {
  */
 export function validateUsername(username: string): string {
   if (!username || typeof username !== 'string') {
-    throw new Error('Username must be a non-empty string');
+    throw ErrorHandler.createError('Username must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.REQUIRED_FIELD);
   }
   
   if (!VALIDATION_PATTERNS.SAFE_USERNAME.test(username)) {
-    throw new Error('Invalid username format. Use alphanumeric characters, hyphens, underscores, and dots only.');
+    throw ErrorHandler.createError('Invalid username format. Use alphanumeric characters, hyphens, underscores, and dots only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FORMAT);
   }
   
   return username.toLowerCase();
@@ -446,17 +448,17 @@ export function validateUsername(username: string): string {
  */
 export function validateCategory(category: string): string {
   if (!category || typeof category !== 'string') {
-    throw new Error('Category must be a non-empty string');
+    throw ErrorHandler.createError('Category must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
   if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, { maxLength: 50 })) {
-    throw new Error('Invalid category format. Use alphabetic characters, hyphens, and underscores only.');
+    throw ErrorHandler.createError('Invalid category format. Use alphabetic characters, hyphens, and underscores only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
   const normalized = category.toLowerCase();
   
   if (!VALID_CATEGORIES.includes(normalized)) {
-    throw new Error(`Invalid category. Must be one of: ${VALID_CATEGORIES.join(', ')}`);
+    throw ErrorHandler.createError(`Invalid category. Must be one of: ${VALID_CATEGORIES.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
   return normalized;
@@ -467,12 +469,12 @@ export function validateCategory(category: string): string {
  */
 export function validateContentSize(content: string, maxSize: number = SECURITY_LIMITS.MAX_CONTENT_LENGTH): void {
   if (!content || typeof content !== 'string') {
-    throw new Error('Content must be a non-empty string');
+    throw ErrorHandler.createError('Content must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.REQUIRED_FIELD);
   }
   
   const sizeBytes = Buffer.byteLength(content, 'utf8');
   if (sizeBytes > maxSize) {
-    throw new Error(`Content too large (${sizeBytes} bytes, max ${maxSize} bytes)`);
+    throw ErrorHandler.createError(`Content too large (${sizeBytes} bytes, max ${maxSize} bytes)`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.CONTENT_TOO_LARGE);
   }
 }
 
@@ -503,16 +505,20 @@ export function validateInputLengths(
   switch (contentType) {
     case 'full':
       if (content.length > limits.maxContentLength) {
-        throw new Error(
-          `Content exceeds maximum length of ${limits.maxContentLength} characters (${content.length} provided)`
+        throw ErrorHandler.createError(
+          `Content exceeds maximum length of ${limits.maxContentLength} characters (${content.length} provided)`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.CONTENT_TOO_LARGE
         );
       }
       break;
     
     case 'yaml':
       if (content.length > limits.maxYamlLength) {
-        throw new Error(
-          `YAML content exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`
+        throw ErrorHandler.createError(
+          `YAML content exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.CONTENT_TOO_LARGE
         );
       }
       break;
@@ -520,16 +526,20 @@ export function validateInputLengths(
     case 'metadata':
       // For metadata, check overall size
       if (content.length > limits.maxYamlLength) {
-        throw new Error(
-          `Metadata exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`
+        throw ErrorHandler.createError(
+          `Metadata exceeds maximum length of ${limits.maxYamlLength} characters (${content.length} provided)`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.CONTENT_TOO_LARGE
         );
       }
       break;
     
     case 'field':
       if (content.length > limits.maxMetadataFieldLength) {
-        throw new Error(
-          `Field exceeds maximum length of ${limits.maxMetadataFieldLength} characters (${content.length} provided)`
+        throw ErrorHandler.createError(
+          `Field exceeds maximum length of ${limits.maxMetadataFieldLength} characters (${content.length} provided)`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.CONTENT_TOO_LARGE
         );
       }
       break;

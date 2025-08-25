@@ -57,8 +57,15 @@ elements:
     priority: 80
     activation: "always"
     purpose: "Coordinate tasks and track progress"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "Workflow integration testing"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.342Z"
+  originalPath: "data/ensembles/development-team.md"
 ---
-
 # Development Team Ensemble
 
 A comprehensive ensemble that combines multiple specialized elements to function as a complete software development team. This ensemble provides architecture design, implementation, debugging, documentation, and project management capabilities.

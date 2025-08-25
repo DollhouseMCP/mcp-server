@@ -20,6 +20,7 @@ import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type Indica
 import { SecureYamlParser } from './security/secureYamlParser.js';
 import { SecurityError } from './errors/SecurityError.js';
 import { SecureErrorHandler } from './security/errorHandler.js';
+import { ErrorHandler, ErrorCategory } from './utils/ErrorHandler.js';
 
 // Import modularized components
 import { Persona, PersonaMetadata } from './types/persona.js';
@@ -30,8 +31,7 @@ import { ContentValidator } from './security/contentValidator.js';
 import { PathValidator } from './security/pathValidator.js';
 import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { GitHubClient, CollectionBrowser, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
-import { UpdateManager } from './update/index.js';
+import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
@@ -40,8 +40,15 @@ import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
+import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
+import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
+import { Agent } from './elements/agents/Agent.js';
+import { ConfigManager } from './config/ConfigManager.js';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 
 
@@ -61,22 +68,24 @@ if (process.env.DOLLHOUSE_DEBUG) {
 
 export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
-  private personasDir: string;
+  public personasDir: string | null;
   private personas: Map<string, Persona> = new Map();
   private activePersona: string | null = null;
   private currentUser: string | null = null;
+  private isInitialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
   private apiCache: APICache = new APICache();
   private collectionCache: CollectionCache = new CollectionCache();
   private rateLimitTracker = new Map<string, number[]>();
   private indicatorConfig: IndicatorConfig;
   private githubClient: GitHubClient;
   private githubAuthManager: GitHubAuthManager;
+  private collectionIndexManager: CollectionIndexManager;
   private collectionBrowser: CollectionBrowser;
   private collectionSearch: CollectionSearch;
   private personaDetails: PersonaDetails;
   private elementInstaller: ElementInstaller;
   private personaSubmitter: PersonaSubmitter;
-  private updateManager?: UpdateManager;
   private serverSetup: ServerSetup;
   private personaExporter: PersonaExporter;
   private personaImporter?: PersonaImporter;
@@ -91,7 +100,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.server = new Server(
       {
         name: "dollhousemcp",
-        version: "1.0.0",
+        version: "1.0.0-build-20250817-1630-pr606",
       },
       {
         capabilities: {
@@ -107,7 +116,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // CRITICAL FIX: Don't access directories until after migration runs
     // Previously: this.personasDir was set here, creating directories before migration could fix them
     // Now: We delay directory access until initializePortfolio() completes
-    this.personasDir = ''; // Temporary - will be set after migration
+    // Using null to make the uninitialized state explicit (per PR review feedback)
+    this.personasDir = null; // Will be properly initialized in completeInitialization()
     
     // Initialize element managers
     this.skillManager = new SkillManager();
@@ -130,7 +140,8 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize collection modules
     this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.githubAuthManager = new GitHubAuthManager(this.apiCache);
-    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache);
+    this.collectionIndexManager = new CollectionIndexManager();
+    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache, this.collectionIndexManager);
     this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
     this.personaDetails = new PersonaDetails(this.githubClient);
     this.elementInstaller = new ElementInstaller(this.githubClient);
@@ -147,37 +158,9 @@ export class DollhouseMCPServer implements IToolHandler {
     this.serverSetup = new ServerSetup();
     this.serverSetup.setupServer(this.server, this);
     
-    // Initialize portfolio and perform migration if needed
-    this.initializePortfolio().then(() => {
-      // NOW safe to access directories after migration
-      this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-      
-      // Log resolved path for debugging
-      logger.info(`Personas directory resolved to: ${this.personasDir}`);
-      
-      // Initialize PathValidator with the personas directory
-      PathValidator.initialize(this.personasDir);
-      
-      // Initialize update manager with safe directory
-      // Use the parent of personas directory to avoid production check
-      const safeDir = path.dirname(this.personasDir);
-      try {
-        this.updateManager = new UpdateManager(safeDir);
-      } catch (error) {
-        console.error('[DollhouseMCP] Failed to initialize UpdateManager:', error);
-        logger.error(`Failed to initialize UpdateManager: ${error}`);
-        // Continue without update functionality
-      }
-      
-      // Initialize import module that depends on personasDir
-      this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
-      
-      this.loadPersonas();
-    }).catch(error => {
-      // Don't use CRITICAL in the error message as it triggers Docker test failures
-      console.error('[DollhouseMCP] Failed to initialize portfolio:', error);
-      logger.error(`Failed to initialize portfolio: ${error}`);
-    });
+    // FIX #610: Portfolio initialization moved to run() method to prevent race condition
+    // Previously: this.initializePortfolio().then() ran async in constructor
+    // Now: Initialization happens synchronously in run() before MCP connection
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -212,6 +195,62 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   /**
+   * Complete initialization after portfolio is ready
+   * FIX #610: This was previously in a .then() callback in the constructor
+   * Now called synchronously from run() to prevent race condition
+   */
+  private async completeInitialization(): Promise<void> {
+    // NOW safe to access directories after migration
+    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
+    
+    // Log resolved path for debugging
+    logger.info(`Personas directory resolved to: ${this.personasDir}`);
+    
+    // Initialize PathValidator with the personas directory
+    PathValidator.initialize(this.personasDir);
+    
+    // Initialize update manager with safe directory
+    
+    // Initialize import module that depends on personasDir
+    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
+    
+    this.loadPersonas();
+    
+    // Mark initialization as complete
+    this.isInitialized = true;
+  }
+  
+  /**
+   * Ensure server is initialized before any operation
+   * FIX #610: Added for test compatibility - tests don't call run()
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.isInitialized) {
+      return;
+    }
+    
+    // If initialization is already in progress, wait for it
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+    
+    // Start initialization
+    this.initializationPromise = (async () => {
+      try {
+        await this.initializePortfolio();
+        await this.completeInitialization();
+        logger.info("Portfolio and personas initialized successfully (lazy)");
+      } catch (error) {
+        ErrorHandler.logError('DollhouseMCPServer.ensureInitialized', error);
+        throw error;
+      }
+    })();
+    
+    await this.initializationPromise;
+  }
+  
+  /**
    * Initialize collection cache with seed data for anonymous browsing
    */
   private async initializeCollectionCache(): Promise<void> {
@@ -228,7 +267,7 @@ export class DollhouseMCPServer implements IToolHandler {
         logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
       }
     } catch (error) {
-      logger.error(`Failed to initialize collection cache: ${error}`);
+      ErrorHandler.logError('DollhouseMCPServer.initializeCollectionCache', error);
       // Don't throw - cache failures shouldn't prevent server startup
     }
   }
@@ -310,22 +349,24 @@ export class DollhouseMCPServer implements IToolHandler {
     return sanitized;
   }
 
+
   private async loadPersonas() {
     // Validate the personas directory path
-    if (!path.isAbsolute(this.personasDir)) {
+    // personasDir is guaranteed to be set by completeInitialization before this is called
+    if (!path.isAbsolute(this.personasDir!)) {
       logger.warn(`Personas directory path is not absolute: ${this.personasDir}`);
     }
     
     try {
-      await fs.access(this.personasDir);
+      await fs.access(this.personasDir!);
     } catch (error) {
       // Create personas directory if it doesn't exist
       try {
-        await fs.mkdir(this.personasDir, { recursive: true });
+        await fs.mkdir(this.personasDir!, { recursive: true });
         logger.info(`Created personas directory at: ${this.personasDir}`);
         // Continue to try loading (directory will be empty)
-      } catch (mkdirError: any) {
-        logger.error(`Failed to create personas directory at ${this.personasDir}: ${mkdirError.message}`);
+      } catch (mkdirError) {
+        ErrorHandler.logError('DollhouseMCPServer.loadPersonas.mkdir', mkdirError, { personasDir: this.personasDir });
         // Don't throw - empty portfolio is valid
         this.personas.clear();
         return;
@@ -333,8 +374,11 @@ export class DollhouseMCPServer implements IToolHandler {
     }
 
     try {
-      const files = await fs.readdir(this.personasDir);
-      const markdownFiles = files.filter(file => file.endsWith('.md'));
+      // personasDir is guaranteed to be set by completeInitialization before this is called
+      const files = await fs.readdir(this.personasDir!);
+      const markdownFiles = files
+        .filter(file => file.endsWith('.md'))
+        .filter(file => !this.portfolioManager.isTestElement(file));
 
       this.personas.clear();
       
@@ -344,7 +388,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
       for (const file of markdownFiles) {
         try {
-          const filePath = path.join(this.personasDir, file);
+          const filePath = path.join(this.personasDir!, file);
           const fileContent = await PathValidator.safeReadFile(filePath);
           
           // Use secure YAML parser
@@ -393,7 +437,7 @@ export class DollhouseMCPServer implements IToolHandler {
           this.personas.set(file, persona);
           logger.debug(`Loaded persona: ${metadata.name} (${uniqueId}`);
         } catch (error) {
-          logger.error(`Error loading persona ${file}: ${error}`);
+          ErrorHandler.logError('DollhouseMCPServer.loadPersonas.loadFile', error, { file });
         }
       }
     } catch (error) {
@@ -403,7 +447,7 @@ export class DollhouseMCPServer implements IToolHandler {
         this.personas.clear();
         return;
       }
-      logger.error(`Error reading personas directory: ${error}`);
+      ErrorHandler.logError('DollhouseMCPServer.loadPersonas', error);
       this.personas.clear();
     }
   }
@@ -614,7 +658,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const skillList = skills.map(skill => {
             const complexity = skill.metadata.complexity || 'beginner';
             const domains = skill.metadata.domains?.join(', ') || 'general';
-            return `🛠️ ${skill.metadata.name} - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
+            const version = skill.version || skill.metadata.version || '1.0.0';
+            return `🛠️ ${skill.metadata.name} (v${version}) - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
           }).join('\n\n');
           
           return {
@@ -638,7 +683,8 @@ export class DollhouseMCPServer implements IToolHandler {
           
           const templateList = templates.map(template => {
             const variables = template.metadata.variables?.map(v => v.name).join(', ') || 'none';
-            return `📄 ${template.metadata.name} - ${template.metadata.description}\n   Variables: ${variables}`;
+            const version = template.version || template.metadata.version || '1.0.0';
+            return `📄 ${template.metadata.name} (v${version}) - ${template.metadata.description}\n   Variables: ${variables}`;
           }).join('\n\n');
           
           return {
@@ -663,7 +709,8 @@ export class DollhouseMCPServer implements IToolHandler {
           const agentList = agents.map(agent => {
             const specializations = (agent.metadata as any).specializations?.join(', ') || 'general';
             const status = agent.getStatus();
-            return `🤖 ${agent.metadata.name} - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
+            const version = agent.version || agent.metadata.version || '1.0.0';
+            return `🤖 ${agent.metadata.name} (v${version}) - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
           }).join('\n\n');
           
           return {
@@ -683,11 +730,11 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
     } catch (error) {
-      logger.error(`Failed to list ${type} elements:`, error);
+      ErrorHandler.logError('DollhouseMCPServer.handleListElements', error, { type });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to list ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to list ${type}: ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
@@ -775,11 +822,11 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
     } catch (error) {
-      logger.error(`Failed to activate ${type} '${name}':`, error);
+      ErrorHandler.logError('DollhouseMCPServer.handleActivateElement', error, { type, name });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to activate ${type} '${name}': ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to activate ${type} '${name}': ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
@@ -1225,6 +1272,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, description, content, metadata } = args;
       
@@ -1241,6 +1291,21 @@ export class DollhouseMCPServer implements IToolHandler {
       // Validate inputs
       const validatedName = validateFilename(name);
       const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
+      
+      // CRITICAL FIX: Validate content size BEFORE processing to prevent memory exhaustion
+      // This prevents Claude from trying to output massive content in responses
+      if (content) {
+        try {
+          validateContentSize(content, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
+        } catch (error: any) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Content too large: ${error.message}. Maximum allowed size is ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 1024)}KB).`
+            }]
+          };
+        }
+      }
       
       // SECURITY FIX: Sanitize metadata to prevent prototype pollution
       const sanitizedMetadata = this.sanitizeMetadata(metadata || {});
@@ -1344,17 +1409,28 @@ export class DollhouseMCPServer implements IToolHandler {
         return this.editPersona(name, field, String(value));
       }
       
-      // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      // TYPE SAFETY: Define a common interface for element managers
+      interface ElementManagerBase<T> {
+        find(predicate: (element: T) => boolean): Promise<T | undefined>;
+        save(element: T, filePath: string): Promise<void>;
+      }
+      
+      // Get the appropriate manager based on type with proper typing
+      let manager: ElementManagerBase<Skill | Template | Agent> | null = null;
+      let element: Skill | Template | Agent | undefined;
+      
       switch (type as ElementType) {
         case ElementType.SKILL:
-          manager = this.skillManager;
+          manager = this.skillManager as ElementManagerBase<Skill>;
+          element = await this.skillManager.find((e: Skill) => e.metadata.name === name);
           break;
         case ElementType.TEMPLATE:
-          manager = this.templateManager;
+          manager = this.templateManager as ElementManagerBase<Template>;
+          element = await this.templateManager.find((e: Template) => e.metadata.name === name);
           break;
         case ElementType.AGENT:
-          manager = this.agentManager;
+          manager = this.agentManager as ElementManagerBase<Agent>;
+          element = await this.agentManager.find((e: Agent) => e.metadata.name === name);
           break;
         default:
           return {
@@ -1365,8 +1441,7 @@ export class DollhouseMCPServer implements IToolHandler {
           };
       }
       
-      // Find the element
-      const element = await manager!.find((e: any) => e.metadata.name === name);
+      // Check if element was found
       if (!element) {
         return {
           content: [{
@@ -1426,32 +1501,113 @@ export class DollhouseMCPServer implements IToolHandler {
         configurable: true
       });
       
-      // Update version - handle various version formats
-      if (element.version) {
-        const versionParts = element.version.split('.');
-        if (versionParts.length >= 3) {
-          // Standard semver format (e.g., 1.0.0)
-          const patch = parseInt(versionParts[2]) || 0;
-          versionParts[2] = String(patch + 1);
-          element.version = versionParts.join('.');
-        } else if (versionParts.length === 2) {
-          // Two-part version (e.g., 1.0) - add patch version
-          element.version = `${element.version}.1`;
-        } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-          // Single number version (e.g., 1) - convert to semver
-          element.version = `${element.version}.0.1`;
-        } else {
-          // Non-standard version - append or replace with standard format
-          element.version = '1.0.1';
+      // VERSION FIX: Handle version field updates differently
+      // If user is directly editing version field, don't auto-increment
+      if (field === 'version' || field === 'metadata.version') {
+        const versionString = String(value);
+        
+        // VERSION VALIDATION: Validate version format
+        // Accept semver (1.0.0), two-part (1.0), or single digit (1)
+        // Also accepts pre-release versions (1.0.0-beta, 1.0.0-alpha.1)
+        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(versionString);
+        if (!isValidVersion) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Invalid version format: '${versionString}'. Please use format like 1.0.0, 1.0, or 1`
+            }]
+          };
+        }
+        
+        // ERROR HANDLING: Wrap version update in try-catch
+        try {
+          // Update both locations to ensure consistency
+          element.version = versionString;
+          if (element.metadata) {
+            element.metadata.version = versionString;
+          }
+        } catch (error) {
+          logger.error(`Failed to update version for ${name}:`, error);
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Failed to update version: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }]
+          };
         }
       } else {
-        // No version - set initial version
-        element.version = '1.0.0';
+        // For other field edits, auto-increment version
+        // VERSION FIX: Update both element.version AND element.metadata.version
+        // Previously: Only element.version was updated, but some managers read from metadata.version
+        // Now: Keep both in sync to ensure version persists correctly
+        
+        // ERROR HANDLING: Wrap auto-increment in try-catch
+        try {
+          if (element.version) {
+            // PRE-RELEASE HANDLING: Check for pre-release versions
+            const preReleaseMatch = element.version.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
+            
+            if (preReleaseMatch) {
+              // Handle pre-release versions (e.g., 1.0.0-beta.1)
+              const baseVersion = preReleaseMatch[1];
+              const preReleaseTag = preReleaseMatch[3];
+              
+              if (preReleaseTag) {
+                // If it has a pre-release tag, increment the pre-release number
+                const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
+                if (preReleaseNumberMatch) {
+                  const preReleaseType = preReleaseNumberMatch[1];
+                  const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+                  element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
+                } else {
+                  // Complex pre-release, just increment patch
+                  const [major, minor, patch] = baseVersion.split('.').map(Number);
+                  element.version = `${major}.${minor}.${patch + 1}`;
+                }
+              } else {
+                // Regular semver, increment patch
+                const [major, minor, patch] = baseVersion.split('.').map(Number);
+                element.version = `${major}.${minor}.${patch + 1}`;
+              }
+            } else {
+              // Handle non-semver versions
+              const versionParts = element.version.split('.');
+              if (versionParts.length >= 3) {
+                // Standard semver format (e.g., 1.0.0)
+                const patch = parseInt(versionParts[2]) || 0;
+                versionParts[2] = String(patch + 1);
+                element.version = versionParts.join('.');
+              } else if (versionParts.length === 2) {
+                // Two-part version (e.g., 1.0) - add patch version
+                element.version = `${element.version}.1`;
+              } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
+                // Single number version (e.g., 1) - convert to semver
+                element.version = `${element.version}.0.1`;
+              } else {
+                // Non-standard version - append or replace with standard format
+                element.version = '1.0.1';
+              }
+            }
+          } else {
+            // No version - set initial version
+            element.version = '1.0.0';
+          }
+          
+          // Ensure metadata.version is also updated for managers that use it
+          if (element.metadata) {
+            element.metadata.version = element.version;
+          }
+        } catch (error) {
+          logger.error(`Failed to auto-increment version for ${name}:`, error);
+          // Don't fail the entire operation, just log the error
+          // Version will remain unchanged
+        }
       }
       
       // Save the element - need to determine filename
       const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
-      await manager!.save(element as any, filename);
+      // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
+      await manager!.save(element, filename);
       
       return {
         content: [{
@@ -1580,6 +1736,9 @@ export class DollhouseMCPServer implements IToolHandler {
   }
   
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       const { name, type, deleteData } = args;
       
@@ -1607,7 +1766,8 @@ export class DollhouseMCPServer implements IToolHandler {
           break;
         case ElementType.PERSONA:
           // For personas, use a different approach
-          const personaPath = path.join(this.personasDir, `${name}.md`);
+          // personasDir is guaranteed to be set after ensureInitialized()
+          const personaPath = path.join(this.personasDir!, `${name}.md`);
           try {
             await fs.access(personaPath);
             await fs.unlink(personaPath);
@@ -1626,7 +1786,7 @@ export class DollhouseMCPServer implements IToolHandler {
               return {
                 content: [{
                   type: "text",
-                  text: `❌ Persona '${name}' not found`
+                  text: `❌ ${type.charAt(0).toUpperCase() + type.slice(1)} '${name}' not found`
                 }]
               };
             }
@@ -1802,9 +1962,14 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX #471: Replace legacy category validation with proper section/type validation
       // Valid sections: library, showcase, catalog
-      // Valid types: personas, skills, agents, prompts, templates, tools, ensembles, memories
+      // Valid types for MCP: personas, skills, agents, templates (others filtered per Issue #144)
+      // Note: tools, prompts, ensembles, memories exist in collection but are filtered from MCP
       const validSections = ['library', 'showcase', 'catalog'];
-      const validTypes = ['personas', 'skills', 'agents', 'prompts', 'templates', 'tools', 'ensembles', 'memories'];
+      
+      // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
+      // See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete checklist
+      // This array is often forgotten and causes validation failures for new types
+      const validTypes = ['personas', 'skills', 'agents', 'templates'];  // Only MCP-supported types
       
       // Validate section if provided
       const validatedSection = section ? sanitizeInput(section.toLowerCase()) : undefined;
@@ -1863,6 +2028,44 @@ export class DollhouseMCPServer implements IToolHandler {
       
       const items = await this.collectionSearch.searchCollection(validatedQuery);
       const text = this.collectionSearch.formatSearchResults(items, validatedQuery, this.getPersonaIndicator());
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: text,
+          },
+        ],
+      };
+    } catch (error) {
+      const sanitized = SecureErrorHandler.sanitizeError(error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${sanitized.message}`,
+          },
+        ],
+      };
+    }
+  }
+
+  async searchCollectionEnhanced(query: string, options: any = {}) {
+    try {
+      // Enhanced input validation for search query
+      const validatedQuery = MCPInputValidator.validateSearchQuery(query);
+      
+      // Validate and sanitize options
+      const validatedOptions = {
+        elementType: options.elementType ? String(options.elementType) : undefined,
+        category: options.category ? String(options.category) : undefined,
+        page: options.page ? Math.max(1, parseInt(options.page) || 1) : 1,
+        pageSize: options.pageSize ? Math.min(100, Math.max(1, parseInt(options.pageSize) || 25)) : 25,
+        sortBy: options.sortBy && ['relevance', 'name', 'date'].includes(options.sortBy) ? options.sortBy : 'relevance'
+      };
+      
+      const results = await this.collectionSearch.searchCollectionWithOptions(validatedQuery, validatedOptions);
+      const text = this.collectionSearch.formatSearchResultsWithPagination(results, this.getPersonaIndicator());
       
       return {
         content: [
@@ -1959,129 +2162,278 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async submitContent(contentIdentifier: string) {
-    // Check GitHub authentication first
-    const authStatus = await this.githubAuthManager.getAuthStatus();
-    const isAuthenticated = authStatus.isAuthenticated;
+    try {
+      // Use the new portfolio-based submission tool
+      const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
+      const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
+      const submitTool = new SubmitToPortfolioTool(this.apiCache);
     
-    // Find the content in local collection
-    let persona = this.personas.get(contentIdentifier);
+    // Try to find the content across all element types
+    const portfolioManager = PortfolioManager.getInstance();
+    let elementType: ElementType | undefined;
+    let foundPath: string | null = null;
     
-    if (!persona) {
-      // Search by name
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === contentIdentifier.toLowerCase()
-      );
+    // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+    // NOTE: This dynamically handles ALL element types from the ElementType enum
+    // No hardcoded count - if you add 10 more element types tomorrow, this code
+    // will automatically search all 16 types without any changes needed here
+    const searchPromises = Object.values(ElementType).map(async (type) => {
+      const dir = portfolioManager.getElementDir(type);
+      try {
+        const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+          extensions: ['.md', '.json', '.yaml', '.yml'],
+          partialMatch: true,
+          cacheResults: true
+        });
+        
+        return file ? { type: type as ElementType, file } : null;
+      } catch (error: any) {
+        // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+          // Not just a missing directory - this could be a permission issue or other problem
+          logger.warn(`Unexpected error searching ${type} directory`, { 
+            contentIdentifier,
+            type,
+            error: error?.message || String(error),
+            code: error?.code 
+          });
+        } else {
+          // Directory doesn't exist - this is expected for unused element types
+          logger.debug(`${type} directory does not exist, skipping`, { type });
+        }
+        return null;
+      }
+    });
+    
+    // Wait for all searches to complete and find the first match
+    const searchResults = await Promise.allSettled(searchPromises);
+    
+    // NOTE: File validation - we rely on the portfolio directory structure to ensure
+    // files are in the correct element type directory. Additional schema validation
+    // could be added here if needed, but the current approach is sufficient as:
+    // 1. FileDiscoveryUtil already validates file extensions
+    // 2. Portfolio structure enforces proper organization
+    // 3. submitToPortfolioTool performs additional validation downstream
+    for (const result of searchResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        foundPath = result.value.file;
+        elementType = result.value.type;
+        logger.debug(`Found content in ${elementType} directory`, { 
+          contentIdentifier, 
+          type: elementType, 
+          file: foundPath 
+        });
+        break;
+      }
     }
-
-    if (!persona) {
+    
+    // CRITICAL FIX: Never default to any element type when content is not found
+    // This prevents incorrect submissions and forces proper type detection or user specification
+    if (!elementType) {
+      // Content not found in any element directory - provide helpful error with suggestions
+      const availableTypes = Object.values(ElementType).join(', ');
+      logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, { 
+        contentIdentifier,
+        searchedTypes: Object.values(ElementType) 
+      });
+      
+      // UX IMPROVEMENT: Enhanced error message with smart suggestions
+      let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
+      errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
+      
+      // Try to provide smart suggestions based on partial matches
+      try {
+        const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
+        const suggestions: string[] = [];
+        
+        // Search for similar names across all element types
+        for (const elementType of Object.values(ElementType)) {
+          const dir = portfolioManager.getElementDir(elementType);
+          try {
+            const partialMatches = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
+              extensions: ['.md', '.json', '.yaml', '.yml'],
+              partialMatch: true,
+              cacheResults: false
+            });
+            
+            if (Array.isArray(partialMatches) && partialMatches.length > 0) {
+              for (const match of partialMatches.slice(0, 2)) {
+                const basename = path.basename(match, path.extname(match));
+                suggestions.push(`"${basename}" (${elementType})`);
+              }
+            } else if (partialMatches) {
+              const basename = path.basename(partialMatches, path.extname(partialMatches));
+              suggestions.push(`"${basename}" (${elementType})`);
+            }
+          } catch (error) {
+            // Skip this type if there's an error
+            continue;
+          }
+        }
+        
+        if (suggestions.length > 0) {
+          errorMessage += `💡 **Did you mean one of these?**\n`;
+          for (const suggestion of suggestions.slice(0, 5)) {
+            errorMessage += `  • ${suggestion}\n`;
+          }
+          errorMessage += `\n`;
+        }
+      } catch (suggestionError) {
+        // If suggestions fail, continue without them
+        logger.debug('Failed to generate suggestions', { suggestionError });
+      }
+      
+      errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
+      errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
+      errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations\n`;
+      errorMessage += `3. 🎯 **Specify type**: Try \`submit_content "${contentIdentifier}" --type=personas\`\n`;
+      errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually\n\n`;
+      errorMessage += `📝 **Tip**: The system searches both filenames and display names with fuzzy matching.`;
+      
       return {
         content: [
           {
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Content not found: ${contentIdentifier}`,
+            text: errorMessage,
           },
         ],
       };
     }
-
-    // Validate persona content before submission
+    
+    // Check for duplicates across all sources before submission
     try {
-      // Read the full persona file content
-      const fullPath = path.join(this.personasDir, persona.filename);
-      const fileContent = await PathValidator.safeReadFile(fullPath);
+      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
+      const unifiedManager = UnifiedIndexManager.getInstance();
       
-      // Validate content for security threats
-      const contentValidation = ContentValidator.validateAndSanitize(fileContent);
-      if (!contentValidation.isValid && contentValidation.severity === 'critical') {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
-              `This persona contains content that could be used for prompt injection attacks:\n` +
-              `• ${contentValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please remove these patterns before submitting to the collection.`,
-            },
-          ],
-        };
-      }
+      // Extract the actual element name from the content path
+      const basename = path.basename(foundPath!, path.extname(foundPath!));
+      const duplicates = await unifiedManager.checkDuplicates(basename);
       
-      // Validate metadata
-      const metadataValidation = ContentValidator.validateMetadata(persona.metadata);
-      if (!metadataValidation.isValid) {
+      if (duplicates.length > 0) {
+        const duplicate = duplicates[0];
+        let warningText = `⚠️ **Duplicate Detection Alert**\n\n`;
+        warningText += `Found "${duplicate.name}" in multiple sources:\n\n`;
+        
+        for (const source of duplicate.sources) {
+          const sourceIcon = this.getSourceIcon(source.source);
+          warningText += `${sourceIcon} **${source.source}**: ${source.version || 'unknown version'} (${source.lastModified.toLocaleDateString()})\n`;
+        }
+        
+        warningText += `\n`;
+        
+        if (duplicate.hasVersionConflict && duplicate.versionConflict) {
+          warningText += `🔄 **Version Conflict Detected**\n`;
+          warningText += `Recommended source: **${duplicate.versionConflict.recommended}**\n`;
+          warningText += `Reason: ${duplicate.versionConflict.reason}\n\n`;
+        }
+        
+        warningText += `**Recommendations:**\n`;
+        warningText += `• Review existing versions before submitting\n`;
+        warningText += `• Consider updating local version instead of creating duplicate\n`;
+        warningText += `• Ensure your version adds meaningful improvements\n`;
+        warningText += `• Update version number in metadata if submitting enhancement\n\n`;
+        warningText += `**Proceeding with submission anyway...**\n\n`;
+        
+        // Log the duplicate detection for monitoring
+        logger.warn('Duplicate content detected during submission', {
+          contentIdentifier,
+          elementType,
+          duplicateInfo: duplicate
+        });
+        
+        // Continue with submission but show warning
+        const result = await submitTool.execute({
+          name: contentIdentifier,
+          type: elementType
+        });
+        
+        // Combine warning with submission result
+        const responseText = `${this.getPersonaIndicator()}${result.success ? '⚠️' : '❌'} ${warningText}${result.message}`;
+        
         return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ **Metadata Security Warning**\n\n` +
-              `The persona metadata contains potentially problematic content:\n` +
-              `• ${metadataValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please fix these issues before submitting.`,
-            },
-          ],
-        };
-      }
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
+          content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error validating persona: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
-
-    // Generate submission issue with rate limiting
-    let githubIssueUrl: string;
-    let rateLimitStatus: any;
-    
-    try {
-      const submissionResult = this.personaSubmitter.generateSubmissionIssue(persona);
-      githubIssueUrl = submissionResult.githubIssueUrl;
-      rateLimitStatus = submissionResult.rateLimitStatus;
-    } catch (error: any) {
-      // Handle rate limiting error specifically
-      if (error.message.includes('rate limit')) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}⏳ **Rate Limit Reached**\n\n` +
-                `${error.message}\n\n` +
-                `This protection ensures the quality and integrity of our collection.`,
-            },
-          ],
+            text: responseText,
+          }],
         };
       }
-      throw error; // Re-throw other errors
+    } catch (duplicateError) {
+      // If duplicate checking fails, log but continue with submission
+      logger.warn('Duplicate checking failed during submission', {
+        contentIdentifier,
+        error: duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
+      });
     }
     
-    // Choose response format based on authentication status
-    const text = isAuthenticated 
-      ? this.personaSubmitter.formatSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator())
-      : this.personaSubmitter.formatAnonymousSubmissionResponse(persona, githubIssueUrl, this.getPersonaIndicator());
+    // Execute the submission with the detected element type
+    const result = await submitTool.execute({
+      name: contentIdentifier,
+      type: elementType
+    });
     
-    // Add rate limit info if available
-    const rateLimitInfo = rateLimitStatus 
-      ? `\n\n📊 **Rate Limit Status:** ${rateLimitStatus.remainingTokens} submissions remaining this hour`
-      : '';
-
+    // Format the response - the message already contains all details
+    let responseText = result.message;
+    
+    // Add persona indicator for consistency
+    responseText = `${this.getPersonaIndicator()}${result.success ? '✅' : '❌'} ${responseText}`;
+    
     return {
       content: [
         {
           type: "text",
-          text: text + rateLimitInfo,
+          text: responseText,
         },
       ],
     };
+    
+    } catch (error: any) {
+      // UX IMPROVEMENT: Comprehensive error handling with fallback suggestions
+      logger.error('Unexpected error in submitContent', {
+        contentIdentifier,
+        error: error.message,
+        stack: error.stack
+      });
+      
+      let errorMessage = `${this.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
+      errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
+      
+      // Provide contextual troubleshooting based on error type
+      if (error.message?.includes('auth') || error.message?.includes('token')) {
+        errorMessage += `🔐 **Authentication Issue**:\n`;
+        errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
+        errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
+      }
+      
+      if (error.message?.includes('network') || error.message?.includes('connection')) {
+        errorMessage += `🌐 **Network Issue**:\n`;
+        errorMessage += `• Check your internet connection\n`;
+        errorMessage += `• Try again in a few minutes\n`;
+        errorMessage += `• Check GitHub status: https://status.github.com\n\n`;
+      }
+      
+      errorMessage += `🚑 **Emergency Alternatives**:\n`;
+      errorMessage += `1. 🔄 **Retry**: Try the same command again\n`;
+      errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
+      errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
+      errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface\n\n`;
+      errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: errorMessage,
+          },
+        ],
+      };
+    }
   }
 
   async getCollectionCacheHealth() {
     try {
-      // Get cache statistics
-      const stats = await this.collectionCache.getCacheStats();
+      // Get cache statistics from both caches
+      const collectionStats = await this.collectionCache.getCacheStats();
+      const searchStats = await this.collectionSearch.getCacheStats();
       
       // Check if cache directory exists
       const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
@@ -2108,22 +2460,32 @@ export class DollhouseMCPServer implements IToolHandler {
         return `${minutes}m old`;
       };
       
-      // Build health report
+      // Build health report with both cache systems
       const healthReport = {
-        status: stats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
-        cacheExists: cacheFileExists,
-        itemCount: stats.itemCount,
-        cacheAge: formatAge(stats.cacheAge),
-        cacheAgeMs: stats.cacheAge,
-        isValid: stats.isValid,
-        cacheFileSize: cacheFileSize,
-        cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
-        ttlRemaining: stats.isValid ? formatAge(24 * 60 * 60 * 1000 - stats.cacheAge) : 'Expired',
-        recommendation: stats.isValid 
-          ? 'Cache is healthy and serving content' 
-          : cacheFileExists 
-            ? 'Cache has expired. Will refresh on next collection access.'
-            : 'No cache present. Will be created on first collection access.'
+        collection: {
+          status: collectionStats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+          cacheExists: cacheFileExists,
+          itemCount: collectionStats.itemCount,
+          cacheAge: formatAge(collectionStats.cacheAge),
+          cacheAgeMs: collectionStats.cacheAge,
+          isValid: collectionStats.isValid,
+          cacheFileSize: cacheFileSize,
+          cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
+          ttlRemaining: collectionStats.isValid ? formatAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
+        },
+        index: {
+          status: searchStats.index.isValid ? 'healthy' : (searchStats.index.hasCache ? 'expired' : 'empty'),
+          hasCache: searchStats.index.hasCache,
+          elements: searchStats.index.elements,
+          cacheAge: formatAge(searchStats.index.age),
+          isValid: searchStats.index.isValid,
+          ttlRemaining: searchStats.index.isValid ? formatAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
+        },
+        overall: {
+          recommendation: (collectionStats.isValid || searchStats.index.isValid)
+            ? 'Cache system is operational and serving content efficiently'
+            : 'Cache system will refresh on next access for optimal performance'
+        }
       };
       
       return {
@@ -2131,14 +2493,20 @@ export class DollhouseMCPServer implements IToolHandler {
           {
             type: "text",
             text: `${this.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
-              `**Status**: ${healthReport.status === 'healthy' ? '✅' : healthReport.status === 'expired' ? '⚠️' : '📦'} ${healthReport.status.toUpperCase()}\n` +
-              `**Items Cached**: ${healthReport.itemCount}\n` +
-              `**Cache Age**: ${healthReport.cacheAge}\n` +
-              `**Cache Size**: ${healthReport.cacheFileSizeFormatted}\n` +
-              `**Valid**: ${healthReport.isValid ? 'Yes ✓' : 'No ✗'}\n` +
-              `**TTL Remaining**: ${healthReport.ttlRemaining}\n\n` +
-              `**Recommendation**: ${healthReport.recommendation}\n\n` +
-              `Cache enables offline browsing and faster collection access.`,
+              `## 🗄️ Collection Cache (Legacy)\n` +
+              `**Status**: ${healthReport.collection.status === 'healthy' ? '✅' : healthReport.collection.status === 'expired' ? '⚠️' : '📦'} ${healthReport.collection.status.toUpperCase()}\n` +
+              `**Items Cached**: ${healthReport.collection.itemCount}\n` +
+              `**Cache Age**: ${healthReport.collection.cacheAge}\n` +
+              `**Cache Size**: ${healthReport.collection.cacheFileSizeFormatted}\n` +
+              `**TTL Remaining**: ${healthReport.collection.ttlRemaining}\n\n` +
+              `## 🚀 Index Cache (Enhanced Search)\n` +
+              `**Status**: ${healthReport.index.status === 'healthy' ? '✅' : healthReport.index.status === 'expired' ? '⚠️' : '📦'} ${healthReport.index.status.toUpperCase()}\n` +
+              `**Elements Indexed**: ${healthReport.index.elements}\n` +
+              `**Cache Age**: ${healthReport.index.cacheAge}\n` +
+              `**TTL Remaining**: ${healthReport.index.ttlRemaining}\n\n` +
+              `**Overall Status**: ${healthReport.overall.recommendation}\n\n` +
+              `The enhanced index cache provides fast search with pagination, filtering, and sorting. ` +
+              `The collection cache serves as a fallback for offline browsing.`,
           },
         ],
       };
@@ -2312,14 +2680,120 @@ export class DollhouseMCPServer implements IToolHandler {
       // Initiate device flow
       const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
       
-      // Start polling in background
-      this.pollForAuthCompletion(deviceResponse.device_code, deviceResponse.interval);
+      // CRITICAL FIX: Use helper process approach from PR #518
+      // MCP servers are stateless and terminate after returning response
+      // The helper process survives MCP termination and can complete OAuth polling
+      
+      // Get the OAuth client ID
+      const configManager = ConfigManager.getInstance();
+      const clientId = await configManager.getGitHubClientId();
+      
+      if (!clientId) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Not Configured**\n\n` +
+                  `The server administrator needs to configure GitHub OAuth.\n\n` +
+                  `**Administrator Setup:**\n` +
+                  `1. Create OAuth app at: https://github.com/settings/applications/new\n` +
+                  `2. Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
+                  `3. Restart the MCP server\n\n` +
+                  `For details, see: /docs/setup/OAUTH_SETUP.md`
+          }]
+        };
+      }
+      
+      // Spawn the OAuth helper process
+      // The helper runs independently and survives MCP server termination
+      try {
+        // Get the directory where the compiled JS file is
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        
+        // Find the oauth-helper.mjs file
+        // It should be in the root directory (one level up from dist/)
+        const possiblePaths = [
+          path.join(__dirname, '..', 'oauth-helper.mjs'),  // From dist/index.js
+          path.join(process.cwd(), 'oauth-helper.mjs'),    // From CWD
+          path.join(__dirname, 'oauth-helper.mjs')         // Same directory
+        ];
+        
+        let helperPath: string | null = null;
+        for (const testPath of possiblePaths) {
+          try {
+            await fs.access(testPath);
+            helperPath = testPath;
+            break;
+          } catch {
+            // Try next path
+          }
+        }
+        
+        if (!helperPath) {
+          throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
+        }
+        
+        // Spawn the helper as a detached process
+        const helper = spawn('node', [
+          helperPath,
+          deviceResponse.device_code,
+          (deviceResponse.interval || 5).toString(),
+          deviceResponse.expires_in.toString(),
+          clientId
+        ], {
+          detached: true,
+          stdio: 'ignore', // Completely detach I/O
+          windowsHide: true // Hide console on Windows
+        });
+        
+        // Allow the parent process to exit without waiting for the helper
+        helper.unref();
+        
+        logger.info('OAuth helper process spawned', {
+          pid: helper.pid,
+          expiresIn: deviceResponse.expires_in,
+          userCode: deviceResponse.user_code
+        });
+        
+        // Write state file for monitoring
+        const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+        const stateDir = path.dirname(stateFile);
+        await fs.mkdir(stateDir, { recursive: true });
+        
+        const state = {
+          pid: helper.pid,
+          deviceCode: deviceResponse.device_code,
+          userCode: deviceResponse.user_code,
+          startTime: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
+        };
+        
+        await fs.writeFile(stateFile, JSON.stringify(state, null, 2));
+        
+      } catch (spawnError) {
+        logger.error('Failed to spawn OAuth helper', { error: spawnError });
+        // Fall back to informing user about the issue
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ **OAuth Helper Launch Failed**\n\n` +
+                  `Could not start background authentication process.\n\n` +
+                  `**Alternative Options:**\n` +
+                  `1. Try again: Run setup_github_auth again\n` +
+                  `2. Use GitHub CLI: gh auth login --web\n` +
+                  `3. Set token manually: export GITHUB_TOKEN=your_token\n\n` +
+                  `Error: ${spawnError instanceof Error ? spawnError.message : 'Unknown error'}`
+          }]
+        };
+      }
       
       // Return instructions to user
       return {
         content: [{
           type: "text",
-          text: this.githubAuthManager.formatAuthInstructions(deviceResponse)
+          text: this.githubAuthManager.formatAuthInstructions(deviceResponse) +
+                '\n\n📝 **Note**: Authentication will complete automatically once you authorize. ' +
+                'Your token will be stored securely for future use!'
         }]
       };
     } catch (error) {
@@ -2337,9 +2811,17 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async checkGitHubAuth() {
     try {
+      // First check for OAuth helper process health
+      const helperHealth = await this.checkOAuthHelperHealth();
       const status = await this.githubAuthManager.getAuthStatus();
       
       if (status.isAuthenticated) {
+        // Clean up helper state file if auth is successful
+        if (helperHealth.exists) {
+          const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+          await fs.unlink(stateFile).catch(() => {});
+        }
+        
         return {
           content: [{
             type: "text",
@@ -2351,6 +2833,37 @@ export class DollhouseMCPServer implements IToolHandler {
                   `✅ Install content\n` +
                   `✅ Submit content\n\n` +
                   `Everything is working properly!`
+          }]
+        };
+      } else if (helperHealth.isActive) {
+        // OAuth helper is actively polling
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⏳ **GitHub Authentication In Progress**\n\n` +
+                  `🔑 **User Code:** ${helperHealth.userCode}\n` +
+                  `⏱️ **Time Remaining:** ${Math.floor(helperHealth.timeRemaining / 60)}m ${helperHealth.timeRemaining % 60}s\n` +
+                  `🔄 **Process Status:** ${helperHealth.processAlive ? '✅ Running' : '⚠️ May have stopped'}\n` +
+                  `📁 **Log Available:** ${helperHealth.hasLog ? 'Yes' : 'No'}\n\n` +
+                  `**Waiting for you to:**\n` +
+                  `1. Go to: https://github.com/login/device\n` +
+                  `2. Enter code: **${helperHealth.userCode}**\n` +
+                  `3. Authorize the application\n\n` +
+                  `The authentication will complete automatically once you authorize.\n` +
+                  `Run this command again to check status.`
+          }]
+        };
+      } else if (helperHealth.exists && helperHealth.expired) {
+        // Helper state exists but expired
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⏱️ **Authentication Expired**\n\n` +
+                  `The GitHub authentication request has expired.\n` +
+                  `User code: ${helperHealth.userCode} (expired)\n\n` +
+                  `**To try again:**\n` +
+                  `Run: \`setup_github_auth\` to get a new code\n\n` +
+                  `${helperHealth.errorLog ? `**Error Log:**\n\`\`\`\n${helperHealth.errorLog}\n\`\`\`\n` : ''}`
           }]
         };
       } else if (status.hasToken) {
@@ -2391,6 +2904,199 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
   
+  // Public method for oauth_helper_status tool
+  async getOAuthHelperStatus(verbose: boolean = false) {
+    try {
+      const health = await this.checkOAuthHelperHealth();
+      const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+      const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
+      const pidFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+      
+      let statusText = `${this.getPersonaIndicator()}📊 **OAuth Helper Process Diagnostics**\n\n`;
+      
+      // Basic status
+      if (!health.exists) {
+        statusText += `**Status:** No OAuth process detected\n`;
+        statusText += `**State File:** Not found\n\n`;
+        statusText += `No active authentication process. Run \`setup_github_auth\` to start one.\n`;
+      } else if (health.isActive) {
+        statusText += `**Status:** 🟢 ACTIVE - Authentication in progress\n`;
+        statusText += `**User Code:** ${health.userCode}\n`;
+        statusText += `**Process ID:** ${health.pid}\n`;
+        statusText += `**Process Alive:** ${health.processAlive ? '✅ Yes' : '❌ No (may have crashed)'}\n`;
+        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
+        statusText += `**Expires:** ${health.expiresAt?.toLocaleString()}\n`;
+        statusText += `**Time Remaining:** ${Math.floor(health.timeRemaining / 60)}m ${health.timeRemaining % 60}s\n\n`;
+        
+        if (!health.processAlive) {
+          statusText += `⚠️ **WARNING:** Process appears to have stopped!\n`;
+          statusText += `The helper process (PID ${health.pid}) is not responding.\n`;
+          statusText += `You may need to run \`setup_github_auth\` again.\n\n`;
+        }
+      } else if (health.expired) {
+        statusText += `**Status:** 🔴 EXPIRED\n`;
+        statusText += `**User Code:** ${health.userCode} (expired)\n`;
+        statusText += `**Process ID:** ${health.pid}\n`;
+        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
+        statusText += `**Expired:** ${health.expiresAt?.toLocaleString()}\n\n`;
+        statusText += `The authentication request has expired. Run \`setup_github_auth\` to try again.\n\n`;
+      }
+      
+      // File locations
+      statusText += `**📁 File Locations:**\n`;
+      statusText += `• State: ${stateFile}\n`;
+      statusText += `• Log: ${logFile} ${health.hasLog ? '(exists)' : '(not found)'}\n`;
+      statusText += `• PID: ${pidFile}\n\n`;
+      
+      // Error log if available
+      if (health.errorLog) {
+        statusText += `**⚠️ Recent Errors:**\n\`\`\`\n${health.errorLog}\n\`\`\`\n\n`;
+      }
+      
+      // Verbose log output
+      if (verbose && health.hasLog) {
+        try {
+          const fullLog = await fs.readFile(logFile, 'utf-8');
+          const lines = fullLog.split('\n').filter(line => line.trim());
+          const recentLines = lines.slice(-20); // Last 20 lines
+          
+          statusText += `**📜 Recent Log Output (last 20 lines):**\n\`\`\`\n`;
+          statusText += recentLines.join('\n');
+          statusText += `\n\`\`\`\n\n`;
+        } catch (error) {
+          statusText += `**📜 Log:** Unable to read log file\n\n`;
+        }
+      }
+      
+      // Troubleshooting tips
+      if (health.exists && !health.processAlive && !health.expired) {
+        statusText += `**🔧 Troubleshooting Tips:**\n`;
+        statusText += `1. The helper process may have crashed\n`;
+        statusText += `2. Check the log file for errors: ${logFile}\n`;
+        statusText += `3. Try running \`setup_github_auth\` again\n`;
+        statusText += `4. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n`;
+        statusText += `5. Check your internet connection\n`;
+      }
+      
+      // Manual cleanup instructions
+      if (health.exists && (health.expired || !health.processAlive)) {
+        statusText += `\n**🧹 Manual Cleanup (if needed):**\n`;
+        statusText += `\`\`\`bash\n`;
+        statusText += `rm "${stateFile}"\n`;
+        statusText += `rm "${logFile}"\n`;
+        statusText += `rm "${pidFile}"\n`;
+        statusText += `\`\`\`\n`;
+      }
+      
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+      
+    } catch (error) {
+      logger.error('Failed to get OAuth helper status', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **Failed to Get OAuth Helper Status**\n\n` +
+                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]
+      };
+    }
+  }
+  
+  // Helper method to check OAuth helper process health
+  private async checkOAuthHelperHealth() {
+    const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+    const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
+    
+    const health = {
+      exists: false,
+      isActive: false,
+      expired: false,
+      processAlive: false,
+      hasLog: false,
+      userCode: '',
+      timeRemaining: 0,
+      pid: 0,
+      startTime: null as Date | null,
+      expiresAt: null as Date | null,
+      errorLog: ''
+    };
+    
+    try {
+      // Check if state file exists
+      const stateData = await fs.readFile(stateFile, 'utf-8');
+      const state = JSON.parse(stateData);
+      health.exists = true;
+      health.pid = state.pid;
+      health.userCode = state.userCode;
+      health.startTime = new Date(state.startTime);
+      health.expiresAt = new Date(state.expiresAt);
+      
+      const now = new Date();
+      if (health.expiresAt > now) {
+        health.isActive = true;
+        health.timeRemaining = Math.ceil((health.expiresAt.getTime() - now.getTime()) / 1000);
+        
+        // Check if process is still alive (Unix/Linux/Mac)
+        if (process.platform !== 'win32') {
+          try {
+            // Send signal 0 to check if process exists
+            process.kill(health.pid, 0);
+            health.processAlive = true;
+          } catch {
+            health.processAlive = false;
+          }
+        } else {
+          // On Windows, we can't easily check, so assume it's alive if not expired
+          health.processAlive = true;
+        }
+      } else {
+        health.expired = true;
+      }
+      
+      // Check for log file
+      try {
+        await fs.access(logFile);
+        health.hasLog = true;
+        
+        // Read last few lines of log if there's an error
+        if (!health.processAlive || health.expired) {
+          const logContent = await fs.readFile(logFile, 'utf-8');
+          const lines = logContent.split('\n');
+          // Get last 10 lines that contain errors or important info
+          const importantLines = lines.filter(line => 
+            line.includes('error') || 
+            line.includes('Error') || 
+            line.includes('failed') ||
+            line.includes('Failed') ||
+            line.includes('❌') ||
+            line.includes('⏱️')
+          ).slice(-10);
+          
+          if (importantLines.length > 0) {
+            health.errorLog = importantLines.join('\n');
+          }
+        }
+      } catch {
+        // Log file doesn't exist
+      }
+      
+    } catch (error) {
+      // State file doesn't exist or is invalid
+      if (error instanceof Error && error.message.includes('ENOENT')) {
+        // File doesn't exist, that's ok
+      } else {
+        logger.debug('Error reading OAuth helper state', { error });
+      }
+    }
+    
+    return health;
+  }
+  
   async clearGitHubAuth() {
     try {
       await this.githubAuthManager.clearAuthentication();
@@ -2419,28 +3125,107 @@ export class DollhouseMCPServer implements IToolHandler {
       };
     }
   }
-  
-  /**
-   * Poll for auth completion in the background
-   */
-  private async pollForAuthCompletion(deviceCode: string, interval: number): Promise<void> {
+
+  // OAuth configuration management
+  async configureOAuth(client_id?: string) {
     try {
-      const tokenResponse = await this.githubAuthManager.pollForToken(deviceCode, interval);
-      const authStatus = await this.githubAuthManager.completeAuthentication(tokenResponse);
+      const configManager = ConfigManager.getInstance();
+      await configManager.loadConfig();
       
-      // Log success (user will see this in their next interaction)
-      logger.info('GitHub authentication completed successfully', { 
-        username: authStatus.username,
-        scopes: authStatus.scopes 
-      });
+      // If no client_id provided, show current configuration status
+      if (!client_id) {
+        const currentClientId = configManager.getGitHubClientId();
+        
+        if (currentClientId) {
+          // Show first 10 characters for security
+          const maskedClientId = currentClientId.substring(0, 10) + '...';
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}✅ **GitHub OAuth Configuration**\n\n` +
+                    `**Current Status:** Configured\n` +
+                    `**Client ID:** ${maskedClientId}\n\n` +
+                    `Your GitHub OAuth is ready to use! You can now:\n` +
+                    `• Run setup_github_auth to connect\n` +
+                    `• Submit content to the collection\n` +
+                    `• Access authenticated features\n\n` +
+                    `To update the configuration, provide a new client_id parameter.`
+            }]
+          };
+        } else {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}⚠️ **GitHub OAuth Not Configured**\n\n` +
+                    `No GitHub OAuth client ID is currently configured.\n\n` +
+                    `**To set up OAuth:**\n` +
+                    `1. Create a GitHub OAuth app at: https://github.com/settings/applications/new\n` +
+                    `2. Use these settings:\n` +
+                    `   • Homepage URL: https://github.com/DollhouseMCP\n` +
+                    `   • Authorization callback URL: http://localhost:3000/callback\n` +
+                    `3. Copy your Client ID (starts with "Ov23li")\n` +
+                    `4. Run: configure_oauth with your client_id parameter\n\n` +
+                    `**Need help?** Check the documentation for detailed setup instructions.`
+            }]
+          };
+        }
+      }
+      
+      // Validate client ID format
+      if (!ConfigManager.validateClientId(client_id)) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **Invalid Client ID Format**\n\n` +
+                  `GitHub OAuth Client IDs must:\n` +
+                  `• Start with "Ov23li"\n` +
+                  `• Be followed by at least 14 alphanumeric characters\n\n` +
+                  `**Example:** Ov23liABCDEFGHIJKLMN\n\n` +
+                  `Please check your client ID and try again.`
+          }]
+        };
+      }
+      
+      // Save the client ID
+      await configManager.setGitHubClientId(client_id);
+      
+      // Show success message with masked ID
+      const maskedClientId = client_id.substring(0, 10) + '...';
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}✅ **GitHub OAuth Configured Successfully**\n\n` +
+                `**Client ID:** ${maskedClientId}\n` +
+                `**Saved to:** ~/.dollhouse/config.json\n\n` +
+                `Your GitHub OAuth is now ready! Next steps:\n` +
+                `• Run setup_github_auth to connect your account\n` +
+                `• Start submitting content to the collection\n` +
+                `• Access all authenticated features\n\n` +
+                `**Note:** Your client ID is securely stored in your local config file.`
+        }]
+      };
+      
     } catch (error) {
-      // Log error but don't throw - this runs in background
-      logger.error('GitHub authentication polling failed', { error });
+      logger.error('Failed to configure OAuth', { error });
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ **OAuth Configuration Failed**\n\n` +
+                `Error: ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
+                `Please check:\n` +
+                `• File permissions for ~/.dollhouse/config.json\n` +
+                `• Valid client ID format (starts with "Ov23li")\n` +
+                `• Available disk space`
+        }]
+      };
     }
   }
 
   // Chat-based persona management tools
   async createPersona(name: string, description: string, instructions: string, triggers?: string) {
+    // Ensure initialization for test compatibility
+    await this.ensureInitialized();
+    
     try {
       // Validate required fields
       if (!name || !description || !instructions) {
@@ -2497,7 +3282,8 @@ export class DollhouseMCPServer implements IToolHandler {
       const author = this.getCurrentUserForAttribution();
       const uniqueId = generateUniqueId(sanitizedName, this.currentUser || undefined);
       const filename = validateFilename(`${slugify(sanitizedName)}.md`);
-      const filePath = path.join(this.personasDir, filename);
+      // personasDir is guaranteed to be set after ensureInitialized()
+      const filePath = path.join(this.personasDir!, filename);
 
     // Check if file already exists
     try {
@@ -2687,7 +3473,8 @@ ${sanitizedInstructions}
       };
     }
 
-    let filePath = path.join(this.personasDir, persona.filename);
+    // personasDir is guaranteed to be set after initialization
+    let filePath = path.join(this.personasDir!, persona.filename);
     let isDefault = isDefaultPersona(persona.filename);
 
     try {
@@ -2719,7 +3506,7 @@ ${sanitizedInstructions}
         const author = this.currentUser || generateAnonymousId();
         const uniqueId = generateUniqueId(persona.metadata.name, author);
         const newFilename = `${uniqueId}.md`;
-        const newFilePath = path.join(this.personasDir, newFilename);
+        const newFilePath = path.join(this.personasDir!, newFilename);
         
         // Create copy of the default persona
         const content = await PathValidator.safeReadFile(filePath);
@@ -2968,112 +3755,14 @@ ${sanitizedInstructions}
     };
   }
 
-  // retryNetworkOperation is now handled by UpdateChecker
+  // retryNetworkOperation has been removed with UpdateTools
 
-  // Auto-update management tools
-  async checkForUpdates() {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.checkForUpdates();
-    return {
-      content: [{ type: "text", text: this.getPersonaIndicator() + text }]
-    };
-  }
 
-  // Update helper methods are now handled by UpdateManager
 
-  async updateServer(confirm: boolean) {
-    if (!confirm) {
-      return {
-        content: [{
-          type: "text",
-          text: this.getPersonaIndicator() + 
-            '⚠️ **Update Confirmation Required**\n\n' +
-            'To proceed with the update, you must confirm:\n' +
-            '`update_server true`\n\n' +
-            '**What will happen:**\n' +
-            '• Backup current version\n' +
-            '• Pull latest changes from GitHub\n' +
-            '• Update dependencies\n' +
-            '• Rebuild TypeScript\n' +
-            '• Restart server (will disconnect temporarily)\n\n' +
-            '**Prerequisites:**\n' +
-            '• Git repository must be clean (no uncommitted changes)\n' +
-            '• Network connection required\n' +
-            '• Sufficient disk space for backup'
-        }]
-      };
-    }
 
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.updateServer(confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text }]
-    };
-  }
 
-  // Rollback helper methods are now handled by UpdateManager
 
-  async rollbackUpdate(confirm: boolean) {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const { text } = await this.updateManager.rollbackUpdate(confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text }]
-    };
-  }
 
-  // Version and git info methods are now handled by UpdateManager
-
-  // Status helper methods are now handled by UpdateManager
-
-  async getServerStatus() {
-    // Add persona information to the status
-    const personaInfo = `
-**🎭 Persona Information:**
-• **Total Personas:** ${this.personas.size}
-• **Active Persona:** ${this.activePersona || 'None'}
-• **User Identity:** ${this.currentUser || 'Anonymous'}
-• **Personas Directory:** ${this.personasDir}`;
-    
-    if (!this.updateManager) {
-      const errorMessage = `${this.getPersonaIndicator()}❌ Update functionality not available (initialization failed)\n\n${personaInfo}`;
-      return {
-        content: [{ type: "text", text: errorMessage }]
-      };
-    }
-    const { text } = await this.updateManager.getServerStatus(this.getPersonaIndicator());
-    // Insert persona info into the status text
-    const updatedText = text.replace('**Available Commands:**', personaInfo + '\n\n**Available Commands:**');
-    
-    return {
-      content: [{ type: "text", text: updatedText }]
-    };
-  }
-
-  async convertToGitInstallation(targetDir?: string, confirm: boolean = false) {
-    if (!this.updateManager) {
-      return {
-        content: [{ type: "text", text: this.getPersonaIndicator() + "❌ Update functionality not available (initialization failed)" }]
-      };
-    }
-    const result = await this.updateManager.convertToGitInstallation(targetDir, confirm, this.getPersonaIndicator());
-    return {
-      content: [{ type: "text", text: result.text }]
-    };
-  }
-
-  // Version and dependency methods are now handled by UpdateManager
 
 
   /**
@@ -3186,6 +3875,61 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
   /**
    * Get current indicator configuration
    */
+  async configureCollectionSubmission(autoSubmit: boolean) {
+    try {
+      // Store the configuration in environment variable
+      if (autoSubmit) {
+        process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
+      } else {
+        delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
+      }
+
+      const message = autoSubmit 
+        ? "✅ Collection submission enabled! Content will automatically be submitted to the DollhouseMCP collection after portfolio upload."
+        : "✅ Collection submission disabled. Content will only be uploaded to your personal portfolio.";
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}${message}`
+          }
+        ]
+      };
+    } catch (error) {
+      logger.error('Error configuring collection submission', { error });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Failed to configure collection submission: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }
+        ]
+      };
+    }
+  }
+
+  async getCollectionSubmissionConfig() {
+    const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+    
+    const message = `**Collection Submission Configuration**\n\n` +
+      `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
+      `When auto-submit is enabled, the \`submit_content\` tool will:\n` +
+      `1. Upload content to your GitHub portfolio\n` +
+      `2. Automatically create a submission issue in DollhouseMCP/collection\n\n` +
+      `To change this setting, use:\n` +
+      `\`\`\`\nconfigure_collection_submission autoSubmit: true/false\n\`\`\``;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${this.getPersonaIndicator()}${message}`
+        }
+      ]
+    };
+  }
+
   async getIndicatorConfig() {
     // Show current configuration and example
     let exampleIndicator = "";
@@ -3459,9 +4203,1026 @@ Placeholders for custom format:
     }
   }
 
+  /**
+   * Portfolio management methods
+   */
+
+  /**
+   * Check portfolio status including repository existence and sync information
+   */
+  async portfolioStatus(username?: string) {
+    try {
+      // Validate username parameter if provided
+      if (username && typeof username === 'string') {
+        try {
+          validateUsername(username);
+        } catch (error) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid username: ${error instanceof Error ? error.message : 'Validation failed'}`
+            }]
+          };
+        }
+      }
+
+      // Get current user if username not provided
+      let targetUsername = username;
+      if (!targetUsername) {
+        const authStatus = await this.githubAuthManager.getAuthStatus();
+        if (!authStatus.isAuthenticated || !authStatus.username) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
+            }]
+          };
+        }
+        targetUsername = authStatus.username;
+      }
+
+      // Check if portfolio exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      const portfolioExists = await portfolioManager.checkPortfolioExists(targetUsername);
+
+      let statusText = `${this.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
+
+      if (portfolioExists) {
+        statusText += `✅ **Repository**: dollhouse-portfolio exists\n`;
+        statusText += `🔗 **URL**: https://github.com/${targetUsername}/dollhouse-portfolio\n\n`;
+        
+        // Get local elements count
+        const localPortfolioManager = PortfolioManager.getInstance();
+        const personasPath = localPortfolioManager.getElementDir(ElementType.PERSONA);
+        const skillsPath = localPortfolioManager.getElementDir(ElementType.SKILL);
+        const templatesPath = localPortfolioManager.getElementDir(ElementType.TEMPLATE);
+        const agentsPath = localPortfolioManager.getElementDir(ElementType.AGENT);
+        const memoriesPath = localPortfolioManager.getElementDir(ElementType.MEMORY);
+        const ensemblesPath = localPortfolioManager.getElementDir(ElementType.ENSEMBLE);
+
+        const [personas, skills, templates, agents, memories, ensembles] = await Promise.all([
+          this.countElementsInDir(personasPath),
+          this.countElementsInDir(skillsPath),
+          this.countElementsInDir(templatesPath),
+          this.countElementsInDir(agentsPath),
+          this.countElementsInDir(memoriesPath),
+          this.countElementsInDir(ensemblesPath)
+        ]);
+
+        const totalElements = personas + skills + templates + agents + memories + ensembles;
+        statusText += `📈 **Local Elements**:\n`;
+        statusText += `  • Personas: ${personas}\n`;
+        statusText += `  • Skills: ${skills}\n`;
+        statusText += `  • Templates: ${templates}\n`;
+        statusText += `  • Agents: ${agents}\n`;
+        statusText += `  • Memories: ${memories}\n`;
+        statusText += `  • Ensembles: ${ensembles}\n`;
+        statusText += `  • **Total**: ${totalElements}\n\n`;
+
+        statusText += `🔄 **Sync Status**: Use sync_portfolio to update GitHub\n`;
+      } else {
+        statusText += `❌ **Repository**: No portfolio found\n`;
+        statusText += `💡 **Next Step**: Use init_portfolio to create one\n\n`;
+        
+        statusText += `📝 **What you'll get**:\n`;
+        statusText += `  • GitHub repository for your elements\n`;
+        statusText += `  • Organized folder structure\n`;
+        statusText += `  • README with usage instructions\n`;
+        statusText += `  • Easy sharing and backup\n`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to check portfolio status: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Initialize a new GitHub portfolio repository
+   */
+  async initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}) {
+    try {
+      // Check authentication
+      const authStatus = await this.githubAuthManager.getAuthStatus();
+      if (!authStatus.isAuthenticated || !authStatus.username) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
+          }]
+        };
+      }
+
+      const username = authStatus.username;
+
+      // Check if portfolio already exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
+
+      if (portfolioExists) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/dollhouse-portfolio\n\nUse portfolio_status to see details or sync_portfolio to update it.`
+          }]
+        };
+      }
+
+      // Create portfolio with explicit consent
+      const portfolioUrl = await portfolioManager.createPortfolio(username, true);
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
+                `✅ **Repository**: https://github.com/${username}/dollhouse-portfolio\n` +
+                `📁 **Structure**: Organized folders for all element types\n` +
+                `📝 **README**: Usage instructions included\n` +
+                `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
+                `Your portfolio is ready for sharing your DollhouseMCP creations!`
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to initialize portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Configure portfolio settings
+   */
+  async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+    try {
+      const configManager = ConfigManager.getInstance();
+      await configManager.loadConfig();
+
+      let statusText = `${this.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
+
+      // Update settings if provided
+      if (options.autoSync !== undefined) {
+        // This would be implemented when auto-sync feature is added
+        statusText += `🔄 Auto-sync: ${options.autoSync ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
+      }
+
+      if (options.defaultVisibility) {
+        statusText += `🔒 Default visibility: ${options.defaultVisibility}\n`;
+      }
+
+      if (options.autoSubmit !== undefined) {
+        // Note: Auto-submit configuration would be implemented here
+        // For now, we'll just show the status
+        statusText += `📤 Auto-submit to collection: ${options.autoSubmit ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
+      }
+
+      if (options.repositoryName) {
+        statusText += `📁 Repository name: ${options.repositoryName} (Custom names coming soon)\n`;
+      }
+
+      // Show current configuration
+      statusText += `\n📋 **Current Settings**:\n`;
+      statusText += `  • Auto-submit: Disabled (Coming soon)\n`;
+      statusText += `  • Repository name: dollhouse-portfolio (default)\n`;
+      statusText += `  • Default visibility: public\n`;
+
+      return {
+        content: [{
+          type: "text",
+          text: statusText
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to configure portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Sync portfolio with GitHub
+   */
+  async syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}) {
+    try {
+      // Check authentication
+      const authStatus = await this.githubAuthManager.getAuthStatus();
+      if (!authStatus.isAuthenticated || !authStatus.username) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+            `🔐 **Quick Setup**:\n` +
+            `1. Run: \`setup_github_auth\` to authenticate\n` +
+            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+            `📝 **What this enables**:\n` +
+            `• Upload elements to your GitHub portfolio\n` +
+            `• Sync your local portfolio with GitHub\n` +
+            `• Share elements with the community\n\n` +
+            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
+          }]
+        };
+      }
+
+      const username = authStatus.username;
+
+      // Check if portfolio exists
+      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
+      const portfolioManager = new PortfolioRepoManager();
+      
+      // CRITICAL FIX: Set GitHub token like submit_content does
+      // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
+      const { TokenManager } = await import('./security/tokenManager.js');
+      const token = await TokenManager.getGitHubTokenAsync();
+      if (!token) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please authenticate first using setup_github_auth.`
+          }]
+        };
+      }
+      portfolioManager.setToken(token);
+      
+      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
+
+      if (!portfolioExists) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
+                  `🏠 **Quick Setup**:\n` +
+                  `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
+                  `2. This creates: https://github.com/[username]/dollhouse-portfolio\n\n` +
+                  `📝 **What you'll get**:\n` +
+                  `• Public repository to showcase your AI elements\n` +
+                  `• Organized structure for personas, skills, templates, and agents\n` +
+                  `• Automatic syncing of your local portfolio\n` +
+                  `• Community sharing capabilities\n\n` +
+                  `🚀 **After setup**: Use \`sync_portfolio\` to upload your content!`
+          }]
+        };
+      }
+
+      if (options.dryRun) {
+        // Show what would be synced
+        const localPortfolioManager = PortfolioManager.getInstance();
+        
+        const elementTypeCounts: Record<string, number | string> = {};
+        const elementTypeErrors: string[] = [];
+        
+        // Get element counts with better error handling
+        for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
+          try {
+            const elements = await this.getElementsList(elementType);
+            elementTypeCounts[elementType] = elements.length;
+          } catch (error: any) {
+            elementTypeCounts[elementType] = 'ERROR';
+            elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
+          }
+        }
+
+        let dryRunText = `${this.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
+        dryRunText += `📤 **Elements to sync** (${options.direction}):\n`;
+        dryRunText += `  • Personas: ${elementTypeCounts.personas}\n`;
+        dryRunText += `  • Skills: ${elementTypeCounts.skills}\n`;
+        dryRunText += `  • Templates: ${elementTypeCounts.templates}\n`;
+        dryRunText += `  • Agents: ${elementTypeCounts.agents}\n\n`;
+        
+        // Include any errors encountered during dry run
+        if (elementTypeErrors.length > 0) {
+          dryRunText += `⚠️ **Errors found during preview:**\n`;
+          for (const error of elementTypeErrors) {
+            dryRunText += `  • ${error}\n`;
+          }
+          dryRunText += `\n`;
+        }
+        
+        dryRunText += `🎯 **Target**: https://github.com/${username}/dollhouse-portfolio\n`;
+        dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
+
+        return {
+          content: [{
+            type: "text",
+            text: dryRunText
+          }]
+        };
+      }
+
+      // For now, implement basic push functionality
+      if (options.direction === 'push' || options.direction === 'both') {
+        let syncCount = 0;
+        let totalElements = 0;
+        let syncText = `${this.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`;
+
+        // UX IMPROVEMENT: Calculate total elements for progress tracking
+        const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
+        const elementCounts: Record<string, number> = {};
+        const failedElements: Array<{type: string, name: string, error: string}> = [];
+        
+        // Pre-calculate totals for better progress indicators
+        try {
+          syncText += `📊 **Calculating sync scope...**\n`;
+          for (const elementType of elementTypes) {
+            try {
+              const elements = await this.getElementsList(elementType);
+              elementCounts[elementType] = elements.length;
+              totalElements += elements.length;
+            } catch (error: any) {
+              elementCounts[elementType] = 0;
+              logger.warn(`Failed to count ${elementType}`, { error: error.message });
+            }
+          }
+          
+          syncText += `\n🎯 **Ready to sync ${totalElements} elements:**\n`;
+          for (const [type, count] of Object.entries(elementCounts)) {
+            const icon = count > 0 ? '✅' : '⚪';
+            syncText += `  ${icon} ${type}: ${count} elements\n`;
+          }
+          syncText += `\n🚀 **Starting sync process...**\n\n`;
+          
+        } catch (error: any) {
+          syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
+        }
+        
+        // UX IMPROVEMENT: Process each element type with progress tracking
+        for (const elementType of elementTypes) {
+          const typeCount = elementCounts[elementType] || 0;
+          if (typeCount === 0) {
+            syncText += `⏩ **Skipping ${elementType}** (no elements found)\n`;
+            continue;
+          }
+          
+          syncText += `📁 **Processing ${elementType}** (${typeCount} elements):\n`;
+          let typeSuccessCount = 0;
+          
+          try {
+            const elements = await this.getElementsList(elementType);
+            
+            for (let i = 0; i < elements.length; i++) {
+              const elementName = elements[i];
+              const progress = `[${i + 1}/${elements.length}]`;
+              
+              try {
+                // UX IMPROVEMENT: Show individual element progress
+                syncText += `  ${progress} 🔄 Syncing "${elementName}"...`;
+                
+                // Load element and save to portfolio
+                const element = await this.loadElementByType(elementName, elementType);
+                if (element) {
+                  await portfolioManager.saveElement(element, true); // Explicit consent
+                  syncCount++;
+                  typeSuccessCount++;
+                  syncText += ` ✅\n`;
+                  logger.debug(`Successfully synced ${elementType}/${elementName}`);
+                } else {
+                  syncText += ` ❌ (null element)\n`;
+                  failedElements.push({
+                    type: elementType,
+                    name: elementName,
+                    error: 'Element loaded as null/undefined'
+                  });
+                }
+              } catch (elementError: any) {
+                const errorMessage = elementError.message || 'Unknown error during element sync';
+                syncText += ` ❌ (${errorMessage})\n`;
+                failedElements.push({
+                  type: elementType,
+                  name: elementName,
+                  error: errorMessage
+                });
+                logger.warn(`Failed to sync ${elementType}/${elementName}`, { error: errorMessage });
+              }
+            }
+            
+            // UX IMPROVEMENT: Show completion summary for each type
+            const successRate = elements.length > 0 ? Math.round((typeSuccessCount / elements.length) * 100) : 0;
+            const statusIcon = successRate === 100 ? '🎉' : successRate > 50 ? '⚠️' : '❌';
+            syncText += `  ${statusIcon} **${elementType} complete**: ${typeSuccessCount}/${elements.length} synced (${successRate}%)\n\n`;
+          } catch (listError: any) {
+            // UX IMPROVEMENT: Better error reporting for list failures
+            const errorMessage = listError.message || 'Failed to get elements list';
+            syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
+            failedElements.push({
+              type: elementType,
+              name: 'ALL',
+              error: `Failed to list ${elementType}: ${errorMessage}`
+            });
+            logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
+          }
+        }
+
+        // UX IMPROVEMENT: Enhanced final summary with actionable insights
+        const successRate = totalElements > 0 ? Math.round((syncCount / totalElements) * 100) : 0;
+        const summaryIcon = successRate === 100 ? '🎉' : successRate >= 80 ? '✅' : successRate >= 50 ? '⚠️' : '❌';
+        
+        syncText += `${summaryIcon} **Sync Complete!**\n`;
+        syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
+        syncText += `🏠 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        
+        // Include failed elements information with actionable suggestions
+        if (failedElements.length > 0) {
+          syncText += `⚠️ **Issues Encountered** (${failedElements.length} problems):\n\n`;
+          
+          // Group failures by type for better organization
+          const failuresByType: Record<string, Array<{name: string, error: string}>> = {};
+          for (const failed of failedElements) {
+            if (!failuresByType[failed.type]) {
+              failuresByType[failed.type] = [];
+            }
+            failuresByType[failed.type].push({ name: failed.name, error: failed.error });
+          }
+          
+          for (const [type, failures] of Object.entries(failuresByType)) {
+            syncText += `📁 **${type}** (${failures.length} issues):\n`;
+            for (const failure of failures) {
+              if (failure.name === 'ALL') {
+                syncText += `  ❌ ${failure.error}\n`;
+              } else {
+                syncText += `  ❌ "${failure.name}": ${failure.error}\n`;
+              }
+            }
+            syncText += `\n`;
+          }
+          
+          // UX IMPROVEMENT: Add helpful suggestions for common issues
+          syncText += `💡 **Troubleshooting Tips**:\n`;
+          syncText += `  • Check element file formats and metadata\n`;
+          syncText += `  • Verify GitHub authentication is still valid\n`;
+          syncText += `  • Try syncing individual elements with \`submit_content\`\n`;
+          syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
+        } else {
+          syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
+        }
+        
+        // UX IMPROVEMENT: Add next steps and helpful links
+        if (syncCount > 0) {
+          syncText += `🚀 **Next Steps**:\n`;
+          syncText += `  • View your portfolio: https://github.com/${username}/dollhouse-portfolio\n`;
+          syncText += `  • Share individual elements using \`submit_content <name>\`\n`;
+          syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
+        }
+        
+        syncText += `Your elements are now available on GitHub!`;
+
+        return {
+          content: [{
+            type: "text",
+            text: syncText
+          }]
+        };
+      }
+
+      if (options.direction === 'pull') {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}⚠️ Pull sync is coming soon. Currently only push sync is supported.`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Invalid sync direction. Use 'push', 'pull', or 'both'.`
+        }]
+      };
+
+    } catch (error) {
+      // IMPROVED ERROR HANDLING: Ensure we always have a meaningful error message
+      const sanitizedError = SecureErrorHandler.sanitizeError(error);
+      const errorMessage = sanitizedError?.message || (error as any)?.message || String(error) || 'Unknown error occurred';
+      
+      return {
+        content: [{
+          type: "text",
+          text: `${this.getPersonaIndicator()}❌ Failed to sync portfolio: ${errorMessage}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Search local portfolio using the metadata index system
+   * This provides fast, comprehensive search across all element types
+   */
+  async searchPortfolio(options: {
+    query: string; 
+    elementType?: string; 
+    fuzzyMatch?: boolean; 
+    maxResults?: number; 
+    includeKeywords?: boolean; 
+    includeTags?: boolean; 
+    includeTriggers?: boolean; 
+    includeDescriptions?: boolean;
+  }) {
+    try {
+      // Validate the query parameter
+      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
+          }]
+        };
+      }
+
+      // Import portfolio index manager
+      const { PortfolioIndexManager } = await import('./portfolio/PortfolioIndexManager.js');
+      const indexManager = PortfolioIndexManager.getInstance();
+
+      // Parse element type if provided
+      let elementType: ElementType | undefined;
+      if (options.elementType) {
+        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
+        if (!validTypes.includes(options.elementType)) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
+            }]
+          };
+        }
+        elementType = options.elementType as ElementType;
+      }
+
+      // Build search options
+      const searchOptions = {
+        elementType,
+        fuzzyMatch: options.fuzzyMatch !== false, // Default to true
+        maxResults: options.maxResults || 20,
+        includeKeywords: options.includeKeywords !== false,
+        includeTags: options.includeTags !== false,
+        includeTriggers: options.includeTriggers !== false,
+        includeDescriptions: options.includeDescriptions !== false
+      };
+
+      // Perform the search
+      const results = await indexManager.search(options.query, searchOptions);
+
+      // Format the results
+      let text = `${this.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
+      text += `**Query**: "${options.query}"\n`;
+      
+      if (elementType) {
+        text += `**Type Filter**: ${elementType}\n`;
+      }
+      
+      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
+
+      if (results.length === 0) {
+        text += `No elements found matching your search criteria.\n\n`;
+        text += `**Tips for better results:**\n`;
+        text += `• Try different keywords or partial names\n`;
+        text += `• Remove the type filter to search all element types\n`;
+        text += `• Check spelling and try synonyms\n`;
+        text += `• Use the list_elements tool to see all available content`;
+      } else {
+        text += `**Results:**\n\n`;
+        
+        for (const result of results) {
+          const { entry, matchType } = result;
+          const icon = this.getElementIcon(entry.elementType);
+          
+          text += `${icon} **${entry.metadata.name}**\n`;
+          text += `   📁 Type: ${entry.elementType}\n`;
+          text += `   🎯 Match: ${matchType}\n`;
+          
+          if (entry.metadata.description) {
+            const desc = entry.metadata.description.length > 100 
+              ? entry.metadata.description.substring(0, 100) + '...'
+              : entry.metadata.description;
+            text += `   📝 ${desc}\n`;
+          }
+          
+          if (entry.metadata.tags && entry.metadata.tags.length > 0) {
+            text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
+          }
+          
+          text += `   📄 File: ${entry.filename}.md\n\n`;
+        }
+        
+        if (results.length >= searchOptions.maxResults) {
+          text += `⚠️ Results limited to ${searchOptions.maxResults}. Refine your search for more specific results.\n\n`;
+        }
+        
+        text += `💡 **Next steps:**\n`;
+        text += `• Use get_element_details to see full content\n`;
+        text += `• Use activate_element to activate elements\n`;
+        text += `• Use submit_content to share with the community`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text
+        }]
+      };
+
+    } catch (error: any) {
+      ErrorHandler.logError('DollhouseMCPServer.searchPortfolio', error, { 
+        query: options.query,
+        elementType: options.elementType 
+      });
+      
+      return {
+        content: [{
+          type: "text", 
+          text: `${this.getPersonaIndicator()}❌ Search failed: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Search across all sources (local, GitHub, collection) using UnifiedIndexManager
+   * This provides comprehensive search with duplicate detection and version comparison
+   */
+  async searchAll(options: {
+    query: string;
+    sources?: string[];
+    elementType?: string;
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+  }) {
+    try {
+      // Validate the query parameter
+      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
+          }]
+        };
+      }
+
+      // Import unified index manager
+      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
+      const { ElementType } = await import('./portfolio/types.js');
+      const unifiedManager = UnifiedIndexManager.getInstance();
+
+      // Parse element type if provided
+      let elementType: ElementType | undefined;
+      if (options.elementType) {
+        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
+        if (!validTypes.includes(options.elementType)) {
+          return {
+            content: [{
+              type: "text",
+              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
+            }]
+          };
+        }
+        elementType = options.elementType as ElementType;
+      }
+
+      // Parse sources (default to local and github)
+      const sources = options.sources || ['local', 'github'];
+      const includeLocal = sources.includes('local');
+      const includeGitHub = sources.includes('github');
+      const includeCollection = sources.includes('collection');
+
+      // Build search options
+      const searchOptions = {
+        query: options.query,
+        includeLocal,
+        includeGitHub,
+        includeCollection,
+        elementType,
+        page: options.page || 1,
+        pageSize: options.pageSize || 20,
+        sortBy: (options.sortBy as any) || 'relevance'
+      };
+
+      // Perform the unified search
+      const results = await unifiedManager.search(searchOptions);
+
+      // Format the results
+      let text = `${this.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
+      text += `**Query**: "${options.query}"\n`;
+      text += `**Sources**: ${sources.join(', ')}\n`;
+      
+      if (elementType) {
+        text += `**Type Filter**: ${elementType}\n`;
+      }
+      
+      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
+
+      if (results.length === 0) {
+        text += `No elements found matching your search criteria.\n\n`;
+        text += `**Tips for better results:**\n`;
+        text += `• Try different keywords or partial names\n`;
+        text += `• Remove the type filter to search all element types\n`;
+        text += `• Include more sources: local, github, collection\n`;
+        text += `• Check spelling and try synonyms\n`;
+        text += `• Use browse_collection to explore available content`;
+      } else {
+        text += `**Results:**\n\n`;
+        
+        for (const result of results) {
+          const { entry, source, matchType, score, isDuplicate, versionConflict } = result;
+          const icon = this.getElementIcon(entry.elementType);
+          const sourceIcon = this.getSourceIcon(source);
+          
+          text += `${icon} **${entry.name}** ${sourceIcon}\n`;
+          text += `   📁 Type: ${entry.elementType} | Source: ${source}\n`;
+          text += `   🎯 Match: ${matchType} | Score: ${score.toFixed(2)}\n`;
+          
+          if (entry.description) {
+            const desc = entry.description.length > 100 
+              ? entry.description.substring(0, 100) + '...'
+              : entry.description;
+            text += `   📝 ${desc}\n`;
+          }
+
+          if (entry.version) {
+            text += `   🏷️ Version: ${entry.version}\n`;
+          }
+
+          // Show duplicate information
+          if (isDuplicate) {
+            text += `   ⚠️ **Duplicate detected across sources**\n`;
+            if (versionConflict) {
+              text += `   🔄 Version conflict - Recommended: ${versionConflict.recommended} (${versionConflict.reason})\n`;
+            }
+          }
+          
+          text += `\n`;
+        }
+        
+        const hasMore = results.length >= searchOptions.pageSize;
+        if (hasMore) {
+          const nextPage = searchOptions.page + 1;
+          text += `⚠️ Results limited to ${searchOptions.pageSize}. Use page=${nextPage} for more results.\n\n`;
+        }
+        
+        text += `💡 **Next steps:**\n`;
+        text += `• Use get_element_details to see full content\n`;
+        text += `• Use install_content for collection items\n`;
+        text += `• Use activate_element for local elements\n`;
+        text += `• Check for duplicates before submitting new content`;
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text
+        }]
+      };
+
+    } catch (error: any) {
+      const { ErrorHandler } = await import('./utils/ErrorHandler.js');
+      const { SecureErrorHandler } = await import('./security/errorHandler.js');
+      
+      ErrorHandler.logError('DollhouseMCPServer.searchAll', error, { 
+        query: options.query,
+        sources: options.sources,
+        elementType: options.elementType 
+      });
+      
+      return {
+        content: [{
+          type: "text", 
+          text: `${this.getPersonaIndicator()}❌ Unified search failed: ${SecureErrorHandler.sanitizeError(error).message}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Get icon for source type
+   */
+  private getSourceIcon(source: string): string {
+    const icons: { [key: string]: string } = {
+      local: '💻',
+      github: '🐙',
+      collection: '🌐'
+    };
+    return icons[source] || '📁';
+  }
+
+  /**
+   * Get icon for element type
+   */
+  private getElementIcon(elementType: ElementType): string {
+    const icons = {
+      personas: '🎭',
+      skills: '🎯',
+      templates: '📄',
+      agents: '🤖',
+      memories: '🧠',
+      ensembles: '🎼'
+    };
+    return icons[elementType] || '📁';
+  }
+
+  /**
+   * Helper method to count elements in a directory
+   */
+  private async countElementsInDir(dirPath: string): Promise<number> {
+    try {
+      // Check if directory exists and is accessible
+      await fs.access(dirPath);
+      const files = await fs.readdir(dirPath);
+      
+      // Count all element files (.md, .json, .yaml) to support all element types
+      // - Personas: .md files
+      // - Skills: .md files  
+      // - Templates: .md or .yaml files
+      // - Agents: .md files
+      return files.filter(file => 
+        file.endsWith('.md') || 
+        file.endsWith('.json') || 
+        file.endsWith('.yaml')
+      ).length;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * Helper method to get list of elements by type
+   */
+  private async getElementsList(elementType: string): Promise<string[]> {
+    try {
+      const localPortfolioManager = PortfolioManager.getInstance();
+      let elementTypeEnum: ElementType;
+      
+      switch (elementType) {
+        case 'personas':
+          elementTypeEnum = ElementType.PERSONA;
+          break;
+        case 'skills':
+          elementTypeEnum = ElementType.SKILL;
+          break;
+        case 'templates':
+          elementTypeEnum = ElementType.TEMPLATE;
+          break;
+        case 'agents':
+          elementTypeEnum = ElementType.AGENT;
+          break;
+        default:
+          // Instead of silently returning empty array, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
+      }
+
+      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
+      
+      // Check if directory exists and is accessible
+      await fs.access(dirPath);
+      const files = await fs.readdir(dirPath);
+      
+      // Filter and extract names for all element file types
+      // - Personas: .md files
+      // - Skills: .md files  
+      // - Templates: .md or .yaml files
+      // - Agents: .md files
+      return files
+        .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
+        .map(file => {
+          // Remove file extension to get element name
+          if (file.endsWith('.md')) return file.replace('.md', '');
+          if (file.endsWith('.json')) return file.replace('.json', '');
+          if (file.endsWith('.yaml')) return file.replace('.yaml', '');
+          return file;
+        });
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // For file system errors, provide context about the operation
+      const errorMessage = error.code === 'ENOENT' 
+        ? `Element directory not found for type '${elementType}'. Directory may not exist yet.`
+        : `Failed to read elements directory for type '${elementType}': ${error.message || 'Unknown file system error'}`;
+      
+      logger.warn('Error in getElementsList', { 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
+    }
+  }
+
+  /**
+   * Helper method to load element by type
+   */
+  private async loadElementByType(elementName: string, elementType: string): Promise<any> {
+    try {
+      const localPortfolioManager = PortfolioManager.getInstance();
+      let elementTypeEnum: ElementType;
+      
+      switch (elementType) {
+        case 'personas':
+          elementTypeEnum = ElementType.PERSONA;
+          break;
+        case 'skills':
+          elementTypeEnum = ElementType.SKILL;
+          break;
+        case 'templates':
+          elementTypeEnum = ElementType.TEMPLATE;
+          break;
+        case 'agents':
+          elementTypeEnum = ElementType.AGENT;
+          break;
+        default:
+          // Instead of silently returning null, throw descriptive error
+          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
+      }
+
+      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
+      const filePath = path.join(dirPath, `${elementName}.json`);
+      const content = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(content);
+    } catch (error: any) {
+      // Check if this is our validation error for invalid element types
+      if (error.message && error.message.includes('Invalid element type:')) {
+        throw error; // Re-throw validation errors for debugging
+      }
+      
+      // Provide specific error messages for common file system errors
+      let errorMessage: string;
+      
+      if (error.code === 'ENOENT') {
+        errorMessage = `Element '${elementName}' not found in ${elementType}. File does not exist.`;
+      } else if (error instanceof SyntaxError) {
+        errorMessage = `Element '${elementName}' in ${elementType} contains invalid JSON: ${error.message}`;
+      } else {
+        errorMessage = `Failed to load element '${elementName}' from ${elementType}: ${error.message || 'Unknown error'}`;
+      }
+      
+      logger.warn('Error in loadElementByType', { 
+        elementName, 
+        elementType, 
+        error: error.message, 
+        code: error.code 
+      });
+      
+      throw new Error(errorMessage);
+    }
+  }
+
   async run() {
-    const transport = new StdioServerTransport();
     logger.info("Starting DollhouseMCP server...");
+    // Docker build verification - proves we're running fresh code
+    logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
+    
+    // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
+    // This ensures personas and portfolio are ready when MCP commands arrive
+    try {
+      await this.initializePortfolio();
+      await this.completeInitialization();
+      logger.info("Portfolio and personas initialized successfully");
+      // Output message that Docker tests can detect
+      logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
+      throw error; // Re-throw to prevent server from starting with incomplete initialization
+    }
+    
+    const transport = new StdioServerTransport();
     
     // Set up graceful shutdown handlers
     const cleanup = async () => {
@@ -3474,10 +5235,6 @@ Placeholders for custom format:
         }
         
         // Clean up any other resources
-        if (this.updateManager) {
-          // UpdateManager might have active operations too
-          logger.debug("Cleaning up update manager...");
-        }
         
         logger.info("Cleanup completed");
       } catch (error) {
@@ -3524,6 +5281,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
       return startServerWithRetry(retriesLeft - 1);
     }
     // Final failure - minimal error message for security
+    // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed");
     process.exit(1);
   }
@@ -3531,6 +5289,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
 
 if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
   startServerWithRetry().catch(() => {
+    // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed");
     process.exit(1);
   });

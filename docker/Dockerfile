@@ -60,9 +60,13 @@ COPY package*.json ./
 # Install only production dependencies
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built application from builder stage
+# Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/data/personas ./data/personas
+
+# Remove test files that shouldn't be in production image
+# These files can cause Docker build to hang due to large pathological test datasets
+RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js || true
 
 # Security hardening - Set proper permissions
 RUN chmod -R 750 /app && \
@@ -89,6 +93,8 @@ ENV NODE_ENV=production \
     NODE_OPTIONS="--max-old-space-size=256" \
     DOLLHOUSE_DISABLE_UPDATES=true \
     DOLLHOUSE_SECURITY_MODE=strict \
+    DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
+    DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
     PATH="/app/node_modules/.bin:$PATH"
 
 # Default command with explicit platform handling

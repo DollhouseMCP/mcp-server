@@ -5,6 +5,62 @@ All notable changes to DollhouseMCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.6.0] - 2025-08-25
+
+### Added
+- **Collection Submission Workflow** (#549) - Complete community contribution pipeline
+  - Enhanced `submit_content` tool to optionally submit to DollhouseMCP collection after portfolio upload
+  - Automatic GitHub issue creation in collection repository with proper labels
+  - New configuration tools: `configure_collection_submission` and `get_collection_submission_config`
+  - Opt-in behavior via environment variable or configuration setting
+  - Comprehensive error handling with fallback to manual submission
+- **OAuth Personal Access Token (PAT) Support** (#724) - Dual-mode authentication for testing
+  - Added PAT support alongside OAuth device flow for automated testing
+  - Created unified authentication utility for both OAuth and PAT modes
+  - Comprehensive test suite for OAuth/PAT functionality
+  - Complete documentation for testing vs production authentication
+- **Performance Optimizations** (#700) - Significant startup and runtime improvements
+  - Tool caching to reduce redundant initialization
+  - Lazy loading for collection operations
+  - Reduced memory footprint and faster response times
+- **QA Test Framework** (#689, #677, #683) - Comprehensive testing infrastructure
+  - Added QA metrics and dashboard for test monitoring
+  - Implemented test data cleanup mechanism for CI reliability
+  - Added comprehensive CI/CD pipeline integration
+  - Automated test execution with metrics collection
+
+### Breaking Changes
+- **Removed Deprecated Marketplace Aliases** (#548) - Performance improvement
+  - Removed 5 deprecated tool aliases that duplicated collection tools
+  - Tools removed: `browse_marketplace`, `search_marketplace`, `get_marketplace_persona`, `install_persona`, `submit_persona`
+  - **Migration required**: Use `browse_collection`, `search_collection`, `get_collection_content`, `install_content`, `submit_content` instead
+  - Reduces tool count by 5, improving MCP initialization performance
+
+### Fixed
+- **OAuth Token Persistence** (#719) - Fixed critical authentication issue
+  - Replaced unreliable background helper process with main process polling
+  - OAuth tokens now persist correctly after device flow authorization
+  - Improved reliability and user experience for authentication
+- **Build Info Tool Format** (#726) - Fixed MCP protocol compliance
+  - Corrected `get_build_info` tool return format to match MCP requirements
+  - Tool now returns proper MCP response format instead of plain string
+  - Resolves Claude Desktop hanging issue
+- **GitHub Token Validation** (#701) - Made token validation more flexible
+  - Fixed overly strict token validation that blocked valid tokens
+  - Improved compatibility with different GitHub token formats
+- **Environment Variable Naming** (#725) - Fixed GitHub Actions compatibility
+  - Changed from `GITHUB_TEST_TOKEN` to `TEST_GITHUB_TOKEN`
+  - GitHub Actions secrets cannot start with "GITHUB_"
+
+### Security
+- **YAML Bomb Detection** (#364) - Comprehensive protection against denial of service
+  - Added detection for recursive YAML structures
+  - Added circular reference chain detection  
+  - Added excessive alias amplification detection
+  - Prevents memory exhaustion from malicious YAML patterns
+
 ## [1.5.2] - 2025-08-06
 
 ### Added

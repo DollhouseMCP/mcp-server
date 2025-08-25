@@ -39,6 +39,38 @@ export function getAuthTools(server: IToolHandler): Array<{ tool: ToolDefinition
         }
       },
       handler: () => server.clearGitHubAuth()
+    },
+    {
+      tool: {
+        name: "configure_oauth",
+        description: "Configure GitHub OAuth client ID for authentication. If no client_id provided, shows current configuration status. If client_id provided, validates format and saves it to config. Use when users need to set up OAuth or check their configuration.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            client_id: {
+              type: "string",
+              description: "GitHub OAuth client ID (starts with 'Ov23li' followed by at least 14 alphanumeric characters)"
+            }
+          }
+        }
+      },
+      handler: (args: { client_id?: string }) => server.configureOAuth(args.client_id)
+    },
+    {
+      tool: {
+        name: "oauth_helper_status",
+        description: "Get detailed diagnostic information about the OAuth helper process. Shows if authentication is in progress, process health, timing, and any errors. Use when troubleshooting authentication issues or checking if OAuth flow is working.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            verbose: {
+              type: "boolean",
+              description: "Include detailed log output if available (default: false)"
+            }
+          }
+        }
+      },
+      handler: (args: { verbose?: boolean }) => server.getOAuthHelperStatus(args.verbose)
     }
   ];
 }

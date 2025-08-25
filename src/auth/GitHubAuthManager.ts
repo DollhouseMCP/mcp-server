@@ -8,6 +8,8 @@ import { logger } from '../utils/logger.js';
 import { APICache } from '../cache/APICache.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -36,9 +38,28 @@ export interface AuthStatus {
  * This is the recommended approach for CLI/desktop applications
  */
 export class GitHubAuthManager {
-  // GitHub OAuth App Client ID for DollhouseMCP
-  // Must be configured via environment variable
-  private static readonly CLIENT_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+  /**
+   * Get the CLIENT_ID from environment variable or ConfigManager
+   * Environment variable takes precedence, then ConfigManager
+   * No hardcoded fallback for security reasons
+   */
+  private static async getClientId(): Promise<string | null> {
+    // Check environment variable first (for backward compatibility)
+    const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+    if (envClientId) {
+      return envClientId;
+    }
+
+    // Fallback to ConfigManager
+    try {
+      const configManager = ConfigManager.getInstance();
+      await configManager.loadConfig();
+      return configManager.getGitHubClientId();
+    } catch (error) {
+      logger.debug('Failed to load config for client ID', { error });
+      return null;
+    }
+  }
   
   // GitHub OAuth endpoints
   private static readonly DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -73,6 +94,7 @@ export class GitHubAuthManager {
         return response;
       } catch (error) {
         lastError = error as Error;
+        ErrorHandler.logError('GitHubAuthManager.fetchWithRetry', error, { url, attempt });
         
         // Check if it's a network error that should be retried
         const isNetworkError = error instanceof Error && (
@@ -126,7 +148,7 @@ export class GitHubAuthManager {
       };
     } catch (error) {
       // Token might be invalid or expired
-      logger.debug('Token validation failed', { error });
+      ErrorHandler.logError('GitHubAuthManager.checkAuthStatus', error);
       return {
         isAuthenticated: false,
         hasToken: true // Has token but it's invalid
@@ -138,10 +160,12 @@ export class GitHubAuthManager {
    * Initiate the device flow authentication process
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
-    if (!GitHubAuthManager.CLIENT_ID) {
+    const clientId = await GitHubAuthManager.getClientId();
+    
+    if (!clientId) {
       throw new Error(
-        'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
-        'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'
+        'GitHub OAuth client ID is not configured. ' +
+        'Please set the DOLLHOUSE_GITHUB_CLIENT_ID environment variable.'
       );
     }
     
@@ -153,7 +177,7 @@ export class GitHubAuthManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          client_id: GitHubAuthManager.CLIENT_ID,
+          client_id: clientId,
           scope: 'public_repo read:user'
         })
       });
@@ -180,7 +204,7 @@ export class GitHubAuthManager {
         type: 'TOKEN_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'GitHubAuthManager.initiateDeviceFlow',
-        details: 'GitHub OAuth device flow initiated',
+        details: 'GitHub OAuth device flow initiated successfully',
         metadata: {
           userCode: data.user_code,
           expiresIn: data.expires_in,
@@ -190,7 +214,13 @@ export class GitHubAuthManager {
       
       return data as DeviceCodeResponse;
     } catch (error) {
-      logger.error('Failed to initiate device flow', { error });
+      ErrorHandler.logError('GitHubAuthManager.initiateDeviceFlow', error);
+      
+      // Re-throw if it's already a properly formatted error
+      if (error instanceof Error && error.message.includes('GitHub OAuth')) {
+        throw error;
+      }
+      
       throw new Error('Failed to start GitHub authentication. Please check your internet connection.');
     }
   }
@@ -222,7 +252,7 @@ export class GitHubAuthManager {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            client_id: GitHubAuthManager.CLIENT_ID,
+            client_id: await GitHubAuthManager.getClientId() || '',
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })
@@ -268,7 +298,7 @@ export class GitHubAuthManager {
         
       } catch (error) {
         // Network errors shouldn't stop polling
-        logger.debug('Poll attempt failed', { attempt: attempts, error });
+        ErrorHandler.logError('GitHubAuthManager.pollForToken', error, { attempt: attempts });
         await this.waitWithAbort(interval, signal);
       }
     }
@@ -345,8 +375,8 @@ export class GitHubAuthManager {
       
       logger.info('GitHub authentication cleared successfully');
     } catch (error) {
-      logger.error('Error clearing authentication', { error });
-      throw new Error('Failed to clear authentication');
+      ErrorHandler.logError('GitHubAuthManager.clearAuthentication', error);
+      throw ErrorHandler.createError('Failed to clear authentication', ErrorCategory.AUTH_ERROR, undefined, error);
     }
   }
   
@@ -358,10 +388,10 @@ export class GitHubAuthManager {
       await TokenManager.storeGitHubToken(token);
       logger.info('GitHub token stored securely. You are now authenticated!');
     } catch (error) {
-      logger.error('Failed to store token securely', { error });
+      ErrorHandler.logError('GitHubAuthManager.storeToken', error);
       // Fallback to environment variable instructions
       logger.info('For manual setup, you can set GITHUB_TOKEN environment variable.');
-      throw error;
+      throw ErrorHandler.wrapError(error, 'Failed to store GitHub token', ErrorCategory.AUTH_ERROR);
     }
   }
   
@@ -532,7 +562,7 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
       case 400:
         return `Invalid request to GitHub. Please ensure the OAuth app is properly configured.`;
       case 401:
-        return `Authentication failed. The OAuth app credentials may be invalid.`;
+        return `GitHub OAuth is not configured. Please report this issue at: https://github.com/DollhouseMCP/mcp-server/issues`;
       case 403:
         return `Access denied by GitHub. The OAuth app may lack required permissions.`;
       case 404:

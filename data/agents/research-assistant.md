@@ -40,8 +40,15 @@ risk_thresholds:
   max_research_depth: 10
   fact_check_requirement: 0.7
   bias_detection_sensitivity: 0.8
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.340Z"
+  originalPath: "data/agents/research-assistant.md"
 ---
-
 # Research Assistant Agent
 
 An autonomous agent designed to conduct comprehensive research, validate information, and synthesize findings into actionable insights.

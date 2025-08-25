@@ -61,6 +61,34 @@ export function getConfigTools(server: IToolHandler): Array<{ tool: ToolDefiniti
         },
       },
       handler: () => server.getIndicatorConfig()
+    },
+    {
+      tool: {
+        name: "configure_collection_submission",
+        description: "Configure automatic collection submission settings. When enabled, the submit_content tool will automatically create a submission issue in the DollhouseMCP collection repository after uploading to your portfolio.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            autoSubmit: {
+              type: "boolean",
+              description: "Enable automatic submission to DollhouseMCP collection after portfolio upload. When false, content is only uploaded to your personal portfolio."
+            }
+          },
+          required: ["autoSubmit"]
+        }
+      },
+      handler: (args: any) => server.configureCollectionSubmission(args.autoSubmit)
+    },
+    {
+      tool: {
+        name: "get_collection_submission_config",
+        description: "Get current collection submission configuration settings",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      handler: () => server.getCollectionSubmissionConfig()
     }
   ];
 }

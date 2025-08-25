@@ -131,16 +131,16 @@ describe('Generic Element Tools Integration', () => {
     beforeEach(async () => {
       // Create a test skill
       await server.createElement({
-        name: 'test-skill',
+        name: 'sample-skill',
         type: ElementType.SKILL,
         description: 'Original description',
-        metadata: { domain: 'testing', proficiency: 3 }
+        metadata: { domain: 'demo', proficiency: 3 }
       });
     });
     
     it('should edit a skill element field successfully', async () => {
       const args = {
-        name: 'test-skill',
+        name: 'sample-skill',
         type: ElementType.SKILL,
         field: 'description',
         value: 'Updated description'
@@ -155,7 +155,7 @@ describe('Generic Element Tools Integration', () => {
     
     it('should edit nested metadata fields using dot notation', async () => {
       const args = {
-        name: 'test-skill',
+        name: 'sample-skill',
         type: ElementType.SKILL,
         field: 'metadata.proficiency',
         value: 5

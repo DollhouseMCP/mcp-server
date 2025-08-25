@@ -6,6 +6,7 @@
  */
 
 import * as path from 'path';
+import { logger } from '../../../utils/logger.js';
 
 export interface Suppression {
   rule: string;
@@ -231,6 +232,21 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: 'scripts/**/*',
     reason: 'Build and utility scripts do not process user input'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/tools/portfolio/types.ts',
+    reason: 'Type definition file containing only TypeScript interfaces - no runtime code or user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/tools/**/types.ts',
+    reason: 'Type definition files do not process user input - compile-time only'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/BuildInfoService.ts',
+    reason: 'BuildInfoService only processes system information (package.json, git commands, Docker runtime) - the MCP tool takes no parameters and no user input flows through this service'
   },
   
   // ========================================
@@ -599,7 +615,7 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
           return true;
         }
       } catch (error) {
-        console.error(`Invalid suppression pattern "${suppression.file}":`, error);
+        logger.error(`Invalid suppression pattern "${suppression.file}":`, error);
       }
     }
   }
@@ -645,5 +661,5 @@ export function getSuppressionStats(): {
 // Validate suppressions on module load
 const validationErrors = validateSuppressions();
 if (validationErrors.length > 0) {
-  console.warn('Suppression configuration warnings:', validationErrors);
+  logger.warn('Suppression configuration warnings:', validationErrors);
 }

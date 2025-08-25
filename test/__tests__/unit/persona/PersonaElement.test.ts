@@ -14,13 +14,13 @@ describe('PersonaElement', () => {
         description: 'A test persona'
       };
 
-      const persona = new PersonaElement(metadata, 'Test content', 'test.md');
+      const persona = new PersonaElement(metadata, 'Test content', 'sample.md');
 
       expect(persona.type).toBe(ElementType.PERSONA);
       expect(persona.metadata.name).toBe('Test Persona');
       expect(persona.metadata.description).toBe('A test persona');
       expect(persona.content).toBe('Test content');
-      expect(persona.filename).toBe('test.md');
+      expect(persona.filename).toBe('sample.md');
       expect(persona.metadata.category).toBe('personal');
       expect(persona.metadata.age_rating).toBe('all');
       expect(persona.metadata.ai_generated).toBe(false);
@@ -203,12 +203,14 @@ describe('PersonaElement', () => {
       const serialized = persona.serialize();
 
       expect(serialized).toContain('---');
-      expect(serialized).toContain('name: "Serializable Persona"');
-      expect(serialized).toContain('description: "A persona for serialization testing"');
-      expect(serialized).toContain('author: "test-author"');
-      expect(serialized).toContain('triggers:\n  - test\n  - serialize');
-      expect(serialized).toContain('category: "testing"');
-      expect(serialized).toContain('version: "1.5.0"');
+      // js-yaml doesn't quote strings unless necessary
+      expect(serialized).toContain('name: Serializable Persona');
+      expect(serialized).toContain('description: A persona for serialization testing');
+      expect(serialized).toContain('author: test-author');
+      // Check triggers are formatted as YAML list
+      expect(serialized).toMatch(/triggers:\s*\n\s*- test\s*\n\s*- serialize/);
+      expect(serialized).toContain('category: testing');
+      expect(serialized).toContain('version: 1.5.0');
       expect(serialized).toContain('Serializable content');
     });
 

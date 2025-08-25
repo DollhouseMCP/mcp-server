@@ -69,8 +69,8 @@ describe('TokenManager - Secure Storage', () => {
     it('should store valid token securely', async () => {
       const validToken = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockMkdir.mockResolvedValue(undefined);
-      mockWriteFile.mockResolvedValue(undefined);
+      mockMkdir.mockImplementation(() => Promise.resolve(undefined));
+      mockWriteFile.mockImplementation(() => Promise.resolve(undefined));
 
       await TokenManager.storeGitHubToken(validToken);
 
@@ -111,8 +111,8 @@ describe('TokenManager - Secure Storage', () => {
       // Token with Unicode that needs normalization
       const tokenWithUnicode = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockMkdir.mockResolvedValue(undefined);
-      mockWriteFile.mockResolvedValue(undefined);
+      mockMkdir.mockImplementation(() => Promise.resolve(undefined));
+      mockWriteFile.mockImplementation(() => Promise.resolve(undefined));
 
       await TokenManager.storeGitHubToken(tokenWithUnicode);
 
@@ -122,7 +122,7 @@ describe('TokenManager - Secure Storage', () => {
     it('should handle storage errors', async () => {
       const validToken = 'ghp_1234567890abcdef1234567890abcdef12345678';
       
-      mockMkdir.mockRejectedValue(new Error('Permission denied'));
+      mockMkdir.mockImplementation(() => Promise.reject(new Error('Permission denied')));
 
       await expect(TokenManager.storeGitHubToken(validToken)).rejects.toThrow(
         'Failed to store token'
@@ -150,8 +150,8 @@ describe('TokenManager - Secure Storage', () => {
       const encrypted = Buffer.from(originalToken); // Simplified for test
       const stored = Buffer.concat([salt, iv, tag, encrypted]);
 
-      mockAccess.mockResolvedValue(undefined);
-      mockReadFile.mockResolvedValue(stored);
+      mockAccess.mockImplementation(() => Promise.resolve(undefined));
+      mockReadFile.mockImplementation(() => Promise.resolve(stored));
 
       // Mock the decryption to return the original token
       // In real implementation, this would use proper AES-GCM decryption
@@ -173,7 +173,7 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should return null when no token file exists', async () => {
-      mockAccess.mockRejectedValue({ code: 'ENOENT' });
+      mockAccess.mockImplementation(() => Promise.reject({ code: 'ENOENT' }));
 
       const result = await TokenManager.retrieveGitHubToken();
 
@@ -182,8 +182,8 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should handle corrupted token data', async () => {
-      mockAccess.mockResolvedValue(undefined);
-      mockReadFile.mockResolvedValue(Buffer.from('corrupted data'));
+      mockAccess.mockImplementation(() => Promise.resolve(undefined));
+      mockReadFile.mockImplementation(() => Promise.resolve(Buffer.from('corrupted data')));
 
       const result = await TokenManager.retrieveGitHubToken();
 
@@ -200,8 +200,8 @@ describe('TokenManager - Secure Storage', () => {
 
   describe('removeStoredToken', () => {
     it('should remove token file', async () => {
-      mockAccess.mockResolvedValue(undefined);
-      mockUnlink.mockResolvedValue(undefined);
+      mockAccess.mockImplementation(() => Promise.resolve(undefined));
+      mockUnlink.mockImplementation(() => Promise.resolve(undefined));
 
       await TokenManager.removeStoredToken();
 
@@ -219,7 +219,7 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should handle missing token file gracefully', async () => {
-      mockAccess.mockRejectedValue({ code: 'ENOENT' });
+      mockAccess.mockImplementation(() => Promise.reject({ code: 'ENOENT' }));
 
       await TokenManager.removeStoredToken();
 
@@ -228,8 +228,8 @@ describe('TokenManager - Secure Storage', () => {
     });
 
     it('should handle deletion errors', async () => {
-      mockAccess.mockResolvedValue(undefined);
-      mockUnlink.mockRejectedValue(new Error('Permission denied'));
+      mockAccess.mockImplementation(() => Promise.resolve(undefined));
+      mockUnlink.mockImplementation(() => Promise.reject(new Error('Permission denied')));
 
       await TokenManager.removeStoredToken();
 

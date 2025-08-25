@@ -37,6 +37,9 @@ test/coverage-integration/
 # Integration test temporary files
 .test-tmp/
 
+# Performance test temp directories 
+test/temp/*/
+
 # Logs
 logs/
 *.log
@@ -50,6 +53,12 @@ pids/
 # Temporary files
 tmp/
 temp/
+
+# QA test results and metrics (generated during testing)
+docs/QA/qa-*-test-results-*.json
+docs/QA/qa-*-results-*.json
+docs/QA/metrics/qa-metrics-*.json
+docs/QA/agent-reports/*.json
 
 # Development and testing
 test-personas/
@@ -66,3 +75,11 @@ install.ps1
 
 # Security audit reports (keep private)
 .security-audit/
+
+# QA test output files (generated, not source code)
+docs/QA/*-test-results-*.json
+docs/QA/simple-test-results-*.json
+docs/QA/qa-test-results-*.json
+docs/QA/qa-direct-test-results-*.json
+docs/QA/qa-github-integration-*.json
+docs/QA/agent-reports/*-Results.json

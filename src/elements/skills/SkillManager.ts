@@ -136,6 +136,13 @@ export class SkillManager implements IElementManager<Skill> {
       return acc;
     }, {} as any);
     
+    // VERSION FIX: Include version in the saved metadata
+    // Previously: version was stored in element.version but not saved to YAML
+    // Now: Ensure version is included in the frontmatter
+    if (element.version) {
+      cleanMetadata.version = element.version;
+    }
+    
     const content = matter.stringify(instructions, cleanMetadata);
 
     // CRITICAL FIX: Use atomic file write to prevent corruption
@@ -152,15 +159,15 @@ export class SkillManager implements IElementManager<Skill> {
 
   /**
    * List all available skills
+   * SECURITY: Uses PortfolioManager.listElements() which filters test elements
    */
   async list(): Promise<Skill[]> {
     try {
       // Ensure directory exists
       await fs.mkdir(this.skillsDir, { recursive: true });
       
-      // Read all markdown files
-      const files = await fs.readdir(this.skillsDir);
-      const markdownFiles = files.filter(f => f.endsWith('.md'));
+      // Use PortfolioManager to get filtered list (excludes test elements)
+      const markdownFiles = await this.portfolioManager.listElements(ElementType.SKILL);
       
       // Load all skills in parallel
       const skills = await Promise.all(

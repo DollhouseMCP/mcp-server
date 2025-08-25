@@ -45,8 +45,15 @@ schema:
       dependencies: "array"
       api_contracts: "object"
       known_issues: "array"
+_dollhouseMCPTest: true
+_testMetadata:
+  suite: "bundled-test-data"
+  purpose: "General test data for DollhouseMCP system validation"
+  created: "2025-08-20"
+  version: "1.0.0"
+  migrated: "2025-08-20T23:47:24.343Z"
+  originalPath: "data/memories/project-context.md"
 ---
-
 # Project Context Memory
 
 This memory element maintains comprehensive project knowledge including technical decisions, team information, architecture details, and historical context.

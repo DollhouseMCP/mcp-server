@@ -48,10 +48,7 @@ describe('Unicode Normalization in Tool Calls', () => {
       createPersona: jest.fn(),
       editPersona: jest.fn(),
       validatePersona: jest.fn(),
-      checkForUpdates: jest.fn(),
-      updateServer: jest.fn(),
-      rollbackUpdate: jest.fn(),
-      getServerStatus: jest.fn(),
+      getBuildInfo: jest.fn(),
       configureIndicator: jest.fn(),
       getIndicatorConfig: jest.fn(),
       exportPersona: jest.fn(),
@@ -320,16 +317,7 @@ describe('Unicode Normalization in Tool Calls', () => {
   });
 });
 
-describe('UpdateChecker Unicode Normalization', () => {
-  it('should have Unicode normalization integrated', async () => {
-    // Verify that UpdateChecker imports and would use UnicodeValidator
-    const updateCheckerModule = await import('../../../../src/update/UpdateChecker.js');
-    expect(updateCheckerModule.UpdateChecker).toBeDefined();
-    
-    // The actual Unicode normalization in UpdateChecker is tested through
-    // its existing test suite. This test just verifies the integration exists.
-  });
-});
+// UpdateChecker tests removed - UpdateTools and UpdateChecker have been removed from the codebase
 
 describe('ReDoS Protection', () => {
   it('should handle malformed surrogates without ReDoS', async () => {

@@ -159,8 +159,8 @@ name: !!java/object:java.lang.Runtime
       });
     });
 
-    it('should use FAILSAFE_SCHEMA for parsing', () => {
-      // FAILSAFE_SCHEMA only allows strings, nulls, and plain values
+    it('should use CORE_SCHEMA for parsing', () => {
+      // CORE_SCHEMA allows strings, booleans, integers, floats - safe basic types
       const content = `---
 name: Test
 date: 2025-07-10
@@ -170,10 +170,11 @@ count: 42
 
       const result = SecureYamlParser.parse(content);
       
-      // All values should be strings with FAILSAFE_SCHEMA
-      expect(typeof result.data.date).toBe('string');
-      expect(typeof result.data.enabled).toBe('string');
-      expect(typeof result.data.count).toBe('string');
+      // With CORE_SCHEMA, we get proper types for basic values
+      expect(typeof result.data.name).toBe('string');
+      expect(typeof result.data.date).toBe('string'); // Dates remain strings
+      expect(typeof result.data.enabled).toBe('boolean'); // Booleans are parsed correctly
+      expect(typeof result.data.count).toBe('number'); // Numbers are parsed correctly
     });
 
     it('should validate field types', () => {
@@ -342,8 +343,9 @@ ai_generated: false
 ---`;
 
       const result = SecureYamlParser.parse(yaml);
-      // With FAILSAFE_SCHEMA, booleans are strings
-      expect(result.data.ai_generated).toBe('false');
+      // With CORE_SCHEMA, booleans are parsed as actual booleans
+      expect(result.data.ai_generated).toBe(false);
+      expect(typeof result.data.ai_generated).toBe('boolean');
     });
 
     it('should validate generation_method enum', () => {

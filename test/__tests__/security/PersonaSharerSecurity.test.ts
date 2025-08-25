@@ -151,7 +151,7 @@ describe('PersonaSharer Security Tests', () => {
       const result = await sharer.importFromUrl('https://example.com/persona.json');
       
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Invalid response type: expected JSON');
+      expect(result.message).toContain('Invalid response type: Dangerous Content-Type not allowed: text/html');
     });
 
     it('should accept valid JSON responses', async () => {
