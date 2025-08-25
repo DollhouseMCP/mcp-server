@@ -33,7 +33,7 @@ import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
-import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
+import { GitHubAuthManager, type DeviceCodeResponse } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
 import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
