@@ -383,14 +383,20 @@ These elements can be imported into your DollhouseMCP installation.
   /**
    * Generate safe filename from element name
    * SECURITY: Additional Unicode normalization for filenames
+   * SECURITY FIX: Fixed ReDoS vulnerability in regex pattern
    */
   private generateFileName(name: string): string {
     // Normalize to prevent Unicode attacks in filenames
     const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
+    
+    // SECURITY FIX: Prevent ReDoS by using separate, non-ambiguous regex replacements
+    // Previously: .replace(/^-+|-+$/g, '') could cause polynomial time complexity
+    // Now: Use two separate replacements to avoid ambiguity
     return normalizedName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
+      .replace(/^-+/, '')  // Remove leading dashes
+      .replace(/-+$/, ''); // Remove trailing dashes
   }
 
   /**
