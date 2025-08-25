@@ -54,7 +54,7 @@ export class GitHubAuthManager {
    * 
    * @returns The OAuth Client ID to use for authentication
    */
-  private static async getClientId(): Promise<string | null> {
+  public static async getClientId(): Promise<string | null> {
     // Check environment variable first (for backward compatibility)
     const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
