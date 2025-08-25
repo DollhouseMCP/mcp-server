@@ -102,75 +102,93 @@ describe('BuildInfoTools', () => {
       buildInfoTool = tools.find(t => t.tool.name === 'get_build_info')!;
     });
 
-    it('should return formatted build info string', async () => {
+    it('should return formatted build info in MCP format', async () => {
       const result = await buildInfoTool.handler();
 
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
-      expect(result).toContain('# 🔧 Build Information');
+      // Check MCP response structure
+      expect(typeof result).toBe('object');
+      expect(result).toHaveProperty('content');
+      expect(Array.isArray(result.content)).toBe(true);
+      expect(result.content).toHaveLength(1);
+      expect(result.content[0]).toHaveProperty('type', 'text');
+      expect(result.content[0]).toHaveProperty('text');
+      
+      // Check content
+      const text = result.content[0].text;
+      expect(typeof text).toBe('string');
+      expect(text.length).toBeGreaterThan(0);
+      expect(text).toContain('# 🔧 Build Information');
     });
 
     it('should work with empty arguments object', async () => {
       const result = await buildInfoTool.handler({});
 
-      expect(typeof result).toBe('string');
-      expect(result).toContain('Build Information');
+      expect(typeof result).toBe('object');
+      expect(result).toHaveProperty('content');
+      expect(result.content[0].text).toContain('Build Information');
     });
 
     it('should work with no arguments', async () => {
       const result = await buildInfoTool.handler();
 
-      expect(typeof result).toBe('string');
-      expect(result).toContain('Build Information');
+      expect(typeof result).toBe('object');
+      expect(result).toHaveProperty('content');
+      expect(result.content[0].text).toContain('Build Information');
     });
 
     it('should include package information', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('## 📦 Package');
-      expect(result).toContain('**Name**:');
-      expect(result).toContain('**Version**:');
+      expect(text).toContain('## 📦 Package');
+      expect(text).toContain('**Name**:');
+      expect(text).toContain('**Version**:');
     });
 
     it('should include build information', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('## 🏗️ Build');
-      expect(result).toContain('**Type**:');
+      expect(text).toContain('## 🏗️ Build');
+      expect(text).toContain('**Type**:');
     });
 
     it('should include runtime information', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('## 💻 Runtime');
-      expect(result).toContain('**Node.js**:');
-      expect(result).toContain('**Platform**:');
-      expect(result).toContain('**Architecture**:');
+      expect(text).toContain('## 💻 Runtime');
+      expect(text).toContain('**Node.js**:');
+      expect(text).toContain('**Platform**:');
+      expect(text).toContain('**Architecture**:');
     });
 
     it('should include environment information', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('## ⚙️ Environment');
-      expect(result).toContain('**NODE_ENV**:');
-      expect(result).toContain('**Mode**:');
-      expect(result).toContain('**Debug**:');
-      expect(result).toContain('**Docker**:');
+      expect(text).toContain('## ⚙️ Environment');
+      expect(text).toContain('**NODE_ENV**:');
+      expect(text).toContain('**Mode**:');
+      expect(text).toContain('**Debug**:');
+      expect(text).toContain('**Docker**:');
     });
 
     it('should include server information', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('## 🚀 Server');
-      expect(result).toContain('**Started**:');
-      expect(result).toContain('**Uptime**:');
-      expect(result).toContain('**MCP Connection**:');
+      expect(text).toContain('## 🚀 Server');
+      expect(text).toContain('**Started**:');
+      expect(text).toContain('**Uptime**:');
+      expect(text).toContain('**MCP Connection**:');
     });
 
     it('should indicate MCP connection is active', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
 
-      expect(result).toContain('**MCP Connection**: ✅ Connected');
+      expect(text).toContain('**MCP Connection**: ✅ Connected');
     });
   });
 
@@ -219,7 +237,8 @@ describe('BuildInfoTools', () => {
       const result = await buildInfoTool.handler();
       const endTime = Date.now();
 
-      expect(typeof result).toBe('string');
+      expect(typeof result).toBe('object');
+      expect(result).toHaveProperty('content');
       expect(endTime - startTime).toBeGreaterThanOrEqual(0);
     });
 
@@ -235,22 +254,26 @@ describe('BuildInfoTools', () => {
 
       expect(results).toHaveLength(3);
       results.forEach(result => {
-        expect(typeof result).toBe('string');
-        expect(result).toContain('Build Information');
+        expect(typeof result).toBe('object');
+        expect(result).toHaveProperty('content');
+        expect(result.content[0].text).toContain('Build Information');
       });
     });
 
     it('should produce consistent results', async () => {
       const result1 = await buildInfoTool.handler();
       const result2 = await buildInfoTool.handler();
+      
+      const text1 = result1.content[0].text;
+      const text2 = result2.content[0].text;
 
       // Results should be similar (package name/version should be the same)
-      expect(result1).toContain('@dollhousemcp/mcp-server');
-      expect(result2).toContain('@dollhousemcp/mcp-server');
+      expect(text1).toContain('@dollhousemcp/mcp-server');
+      expect(text2).toContain('@dollhousemcp/mcp-server');
       
       // Both should have the same structure
-      expect(result1).toContain('## 📦 Package');
-      expect(result2).toContain('## 📦 Package');
+      expect(text1).toContain('## 📦 Package');
+      expect(text2).toContain('## 📦 Package');
     });
   });
 
@@ -281,15 +304,24 @@ describe('BuildInfoTools', () => {
       expect(buildInfoTool.tool.name.length).toBeGreaterThan(3);
     });
 
-    it('should return string content suitable for MCP', async () => {
+    it('should return content suitable for MCP', async () => {
       const result = await tools[0].handler();
 
-      expect(typeof result).toBe('string');
-      expect(result.length).toBeGreaterThan(0);
+      // Check MCP format
+      expect(typeof result).toBe('object');
+      expect(result).toHaveProperty('content');
+      expect(Array.isArray(result.content)).toBe(true);
+      expect(result.content[0]).toHaveProperty('type', 'text');
+      expect(result.content[0]).toHaveProperty('text');
+      
+      // Check text content
+      const text = result.content[0].text;
+      expect(typeof text).toBe('string');
+      expect(text.length).toBeGreaterThan(0);
       
       // Should be formatted markdown
-      expect(result).toContain('#');
-      expect(result).toContain('**');
+      expect(text).toContain('#');
+      expect(text).toContain('**');
     });
   });
 
@@ -313,7 +345,8 @@ describe('BuildInfoTools', () => {
       try {
         const result = await buildInfoTool.handler();
         // Even if something fails internally, we should get some result
-        expect(typeof result).toBe('string');
+        expect(typeof result).toBe('object');
+        expect(result).toHaveProperty('content');
       } finally {
         console.error = originalConsoleError;
       }
@@ -321,11 +354,12 @@ describe('BuildInfoTools', () => {
 
     it('should include fallback values when external dependencies fail', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
       
       // Even if git/docker detection fails, we should get basic info
-      expect(result).toContain('**Node.js**:');
-      expect(result).toContain('**Platform**:');
-      expect(result).toContain('**Architecture**:');
+      expect(text).toContain('**Node.js**:');
+      expect(text).toContain('**Platform**:');
+      expect(text).toContain('**Architecture**:');
     });
   });
 
@@ -338,29 +372,33 @@ describe('BuildInfoTools', () => {
 
     it('should format memory usage correctly', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
       
-      expect(result).toMatch(/\*\*Memory Usage\*\*: \d+\.\d+ MB \/ \d+\.\d+ MB/);
+      expect(text).toMatch(/\*\*Memory Usage\*\*: \d+\.\d+ MB \/ \d+\.\d+ MB/);
     });
 
     it('should format uptime correctly', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
       
-      expect(result).toMatch(/\*\*Process Uptime\*\*: \d+[dhms]/);
-      expect(result).toMatch(/\*\*Uptime\*\*: \d+[dhms]/);
+      expect(text).toMatch(/\*\*Process Uptime\*\*: \d+[dhms]/);
+      expect(text).toMatch(/\*\*Uptime\*\*: \d+[dhms]/);
     });
 
     it('should include valid timestamps', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
       
-      expect(result).toMatch(/\*\*Started\*\*: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      expect(text).toMatch(/\*\*Started\*\*: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
 
     it('should show correct environment detection', async () => {
       const result = await buildInfoTool.handler();
+      const text = result.content[0].text;
       
-      expect(result).toMatch(/\*\*Mode\*\*: (Production|Development|Unknown)/);
-      expect(result).toMatch(/\*\*Debug\*\*: (Enabled|Disabled)/);
-      expect(result).toMatch(/\*\*Docker\*\*: (Yes|No)/);
+      expect(text).toMatch(/\*\*Mode\*\*: (Production|Development|Unknown)/);
+      expect(text).toMatch(/\*\*Debug\*\*: (Enabled|Disabled)/);
+      expect(text).toMatch(/\*\*Docker\*\*: (Yes|No)/);
     });
   });
 });
