@@ -2684,21 +2684,22 @@ export class DollhouseMCPServer implements IToolHandler {
       // MCP servers are stateless and terminate after returning response
       // The helper process survives MCP termination and can complete OAuth polling
       
-      // Get the OAuth client ID
-      const configManager = ConfigManager.getInstance();
-      const clientId = await configManager.getGitHubClientId();
+      // Get the OAuth client ID - use the same method that has the default fallback
+      // This ensures we get the default client ID if no env/config is set
+      const clientId = await GitHubAuthManager.getClientId();
       
+      // This should never happen now since getClientId() always returns a value
+      // (env, config, or default), but keeping for safety
       if (!clientId) {
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Not Configured**\n\n` +
-                  `The server administrator needs to configure GitHub OAuth.\n\n` +
-                  `**Administrator Setup:**\n` +
-                  `1. Create OAuth app at: https://github.com/settings/applications/new\n` +
-                  `2. Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
-                  `3. Restart the MCP server\n\n` +
-                  `For details, see: /docs/setup/OAUTH_SETUP.md`
+            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Configuration Error**\n\n` +
+                  `Unable to obtain GitHub OAuth client ID.\n\n` +
+                  `This is unexpected - please report this issue.\n\n` +
+                  `**Workaround:**\n` +
+                  `• Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
+                  `• Or use GitHub CLI: gh auth login --web`
           }]
         };
       }
