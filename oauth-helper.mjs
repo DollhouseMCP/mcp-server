@@ -41,10 +41,12 @@ const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
+  console.error('OAUTH_HELPER_43: Missing or undefined client ID');
   console.error('⚠️  GitHub OAuth Configuration Missing\n');
   console.error('The server administrator needs to configure GitHub OAuth.');
   console.error('Please contact your administrator to set up the DOLLHOUSE_GITHUB_CLIENT_ID.');
   console.error('\nFor administrators: Set the environment variable before starting the server.');
+  await log('OAUTH_HELPER_43: Process exiting - missing client ID');
   process.exit(1);
 }
 
@@ -262,20 +264,23 @@ async function main() {
             continue;
             
           case 'expired_token':
-            await log('[ERROR] Device code expired - authentication window closed');
+            await log('OAUTH_HELPER_264: Device code expired - authentication window closed');
+            console.error('OAUTH_EXPIRED: Device code expired at line 264 - authentication window closed');
             clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           case 'access_denied':
-            await log('[ERROR] User denied authorization request');
+            await log('OAUTH_HELPER_270: User denied authorization request');
+            console.error('OAUTH_ACCESS_DENIED: User denied authorization at line 270');
             clearInterval(heartbeatInterval);
             await cleanupPidFile();
             process.exit(1);
             
           default:
-            await log(`[ERROR] Unknown error from GitHub: ${response.error}`);
+            await log(`OAUTH_HELPER_276: Unknown error from GitHub: ${response.error}`);
             await log(`[ERROR] Error description: ${response.error_description}`);
+            console.error(`OAUTH_UNKNOWN_RESPONSE: Unknown error '${response.error}' at line 276`);
         }
       } else if (response.access_token) {
         // Success! We got the token
@@ -317,17 +322,19 @@ async function main() {
       
       if (isNetworkError) {
         consecutiveErrors++;
-        await log(`[NETWORK] Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
+        await log(`OAUTH_HELPER_319: Network error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
         
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          await log('[FATAL] Too many consecutive network errors, exiting');
+          await log('OAUTH_HELPER_323: Too many consecutive network errors, exiting');
+          console.error(`OAUTH_NETWORK_FAILURE: Too many network errors (${MAX_CONSECUTIVE_ERRORS}) at line 323 - check internet connection`);
           clearInterval(heartbeatInterval);
           await cleanupPidFile();
           process.exit(1);
         }
       } else {
         // Non-network error, likely fatal
-        await log(`[FATAL] Non-recoverable error: ${error.message}`);
+        await log(`OAUTH_HELPER_330: Non-recoverable error: ${error.message}`);
+        console.error(`OAUTH_FATAL_ERROR: Non-recoverable error at line 330 - ${error.message}`);
         clearInterval(heartbeatInterval);
         await cleanupPidFile();
         process.exit(1);
@@ -339,9 +346,9 @@ async function main() {
   }
   
   // Timeout reached
-  await log('[TIMEOUT] ⏱️ OAuth authorization timed out');
+  await log('OAUTH_HELPER_342: OAuth authorization timed out');
   await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
-  console.error('⏱️ GitHub authorization timed out. Please try again.');
+  console.error(`OAUTH_TIMEOUT: Authorization timed out at line 342 after ${Math.round((Date.now() - startTime) / 1000)}s - user did not authorize in time`);
   clearInterval(heartbeatInterval);
   await cleanupPidFile();
   process.exit(1);
