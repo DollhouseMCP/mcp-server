@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2025-08-25
+
+### Fixed
+- **Critical OAuth Bug** - Fixed default client ID not being used in `setup_github_auth`
+  - The v1.6.1 release had a bug where `setupGitHubAuth()` bypassed the default fallback
+  - Made `GitHubAuthManager.getClientId()` public instead of private
+  - Updated `setupGitHubAuth()` to use proper fallback chain
+  - Now correctly uses default OAuth client ID when no configuration exists
+  - Restores the "just works" authentication experience promised in v1.6.1
+
 ## [1.6.1] - 2025-08-25
 
 ### Fixed
