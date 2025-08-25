@@ -24,7 +24,15 @@ export function getBuildInfoTools(_server: IToolHandler) {
       },
       handler: async () => {
         const info = await buildInfoService.getBuildInfo();
-        return buildInfoService.formatBuildInfo(info);
+        const formattedInfo = buildInfoService.formatBuildInfo(info);
+        return {
+          content: [
+            {
+              type: "text",
+              text: formattedInfo
+            }
+          ]
+        };
       }
     }
   ];
