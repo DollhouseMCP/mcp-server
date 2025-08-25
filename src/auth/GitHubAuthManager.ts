@@ -39,26 +39,46 @@ export interface AuthStatus {
  */
 export class GitHubAuthManager {
   /**
-   * Get the CLIENT_ID from environment variable or ConfigManager
-   * Environment variable takes precedence, then ConfigManager
-   * No hardcoded fallback for security reasons
+   * DollhouseMCP's official OAuth App Client ID
+   * This is PUBLIC information - OAuth Client IDs are meant to be visible.
+   * Only Client Secrets are private (device flow doesn't use secrets).
+   * 
+   * This Client ID enables the GitHub device flow authentication
+   * allowing users to authenticate with an 8-character code.
+   */
+  private static readonly DEFAULT_CLIENT_ID = 'Ov23liXGGP9jNrBhBNfO';
+  
+  /**
+   * Get the CLIENT_ID from environment variable, ConfigManager, or default
+   * Priority: Environment variable > ConfigManager > Default Client ID
+   * 
+   * @returns The OAuth Client ID to use for authentication
    */
   private static async getClientId(): Promise<string | null> {
     // Check environment variable first (for backward compatibility)
     const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
+      logger.debug('Using OAuth Client ID from environment variable');
       return envClientId;
     }
 
-    // Fallback to ConfigManager
+    // Check ConfigManager for stored configuration
     try {
       const configManager = ConfigManager.getInstance();
       await configManager.loadConfig();
-      return configManager.getGitHubClientId();
+      const configClientId = configManager.getGitHubClientId();
+      if (configClientId) {
+        logger.debug('Using OAuth Client ID from config');
+        return configClientId;
+      }
     } catch (error) {
-      logger.debug('Failed to load config for client ID', { error });
-      return null;
+      logger.debug('No OAuth Client ID in config', { error });
     }
+    
+    // Use default DollhouseMCP OAuth App Client ID
+    // This enables "just works" experience for NPM installs
+    logger.debug('Using default DollhouseMCP OAuth Client ID');
+    return GitHubAuthManager.DEFAULT_CLIENT_ID;
   }
   
   // GitHub OAuth endpoints
@@ -162,10 +182,13 @@ export class GitHubAuthManager {
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
     const clientId = await GitHubAuthManager.getClientId();
     
+    // This should never happen now with the default fallback, but kept for safety
     if (!clientId) {
       throw new Error(
-        'GitHub OAuth client ID is not configured. ' +
-        'Please set the DOLLHOUSE_GITHUB_CLIENT_ID environment variable.'
+        'Unable to obtain GitHub OAuth client ID. ' +
+        'This is a known issue that is being fixed. ' +
+        'Our apologies for the inconvenience. ' +
+        'As a workaround, please update to the latest version or check the documentation.'
       );
     }
     
