@@ -33,7 +33,7 @@ import { FileLockManager } from './security/fileLockManager.js';
 import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
 import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
 import { ServerSetup, IToolHandler } from './server/index.js';
-import { GitHubAuthManager } from './auth/GitHubAuthManager.js';
+import { GitHubAuthManager, type DeviceCodeResponse } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
 import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
@@ -2678,7 +2678,13 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Initiate device flow
-      const deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
+      let deviceResponse: DeviceCodeResponse;
+      try {
+        deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
+      } catch (deviceFlowError) {
+        logger.error('OAUTH_INDEX_2681: Failed to initiate device flow', { error: deviceFlowError });
+        throw new Error(`OAUTH_INDEX_2681: Device flow initiation failed - ${deviceFlowError instanceof Error ? deviceFlowError.message : 'Unknown error'}`);
+      }
       
       // CRITICAL FIX: Use helper process approach from PR #518
       // MCP servers are stateless and terminate after returning response
@@ -2686,7 +2692,9 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Get the OAuth client ID - use the same method that has the default fallback
       // This ensures we get the default client ID if no env/config is set
+      logger.debug('OAUTH_STEP_4: Getting client ID for helper process');
       const clientId = await GitHubAuthManager.getClientId();
+      logger.debug('OAUTH_STEP_5: Client ID obtained', { clientId: clientId?.substring(0, 8) + '...' });
       
       // This should never happen now since getClientId() always returns a value
       // (env, config, or default), but keeping for safety
@@ -2706,6 +2714,7 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Spawn the OAuth helper process
       // The helper runs independently and survives MCP server termination
+      let helperPath: string | null = null;
       try {
         // Get the directory where the compiled JS file is
         const __filename = fileURLToPath(import.meta.url);
@@ -2719,7 +2728,7 @@ export class DollhouseMCPServer implements IToolHandler {
           path.join(__dirname, 'oauth-helper.mjs')         // Same directory
         ];
         
-        let helperPath: string | null = null;
+        helperPath = null;
         for (const testPath of possiblePaths) {
           try {
             await fs.access(testPath);
@@ -2731,8 +2740,19 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         if (!helperPath) {
-          throw new Error('OAuth helper script not found. Please ensure oauth-helper.mjs is in the project root.');
+          logger.error('OAUTH_INDEX_2734: oauth-helper.mjs not found', { 
+            searchedPaths: possiblePaths,
+            cwd: process.cwd(),
+            dirname: __dirname
+          });
+          throw new Error(`OAUTH_HELPER_NOT_FOUND: oauth-helper.mjs not found at line 2734. Searched: ${possiblePaths.join(', ')}`);
         }
+        
+        logger.debug('OAUTH_STEP_6: Spawning helper process', { 
+          helperPath,
+          clientId: clientId?.substring(0, 8) + '...',
+          deviceCode: deviceResponse.device_code.substring(0, 8) + '...'
+        });
         
         // Spawn the helper as a detached process
         const helper = spawn('node', [
@@ -2749,6 +2769,8 @@ export class DollhouseMCPServer implements IToolHandler {
         
         // Allow the parent process to exit without waiting for the helper
         helper.unref();
+        
+        logger.debug('OAUTH_STEP_7: Helper process spawned successfully', { pid: helper.pid });
         
         logger.info('OAuth helper process spawned', {
           pid: helper.pid,
@@ -2772,18 +2794,40 @@ export class DollhouseMCPServer implements IToolHandler {
         await fs.writeFile(stateFile, JSON.stringify(state, null, 2));
         
       } catch (spawnError) {
-        logger.error('Failed to spawn OAuth helper', { error: spawnError });
+        logger.error('OAUTH_INDEX_2774: Failed to spawn OAuth helper process', { 
+          error: spawnError,
+          helperPath,
+          clientId: clientId?.substring(0, 8) + '...',
+          errorCode: (spawnError as any)?.code,
+          syscall: (spawnError as any)?.syscall
+        });
+        
+        // Provide specific error message based on error type
+        let errorDetail = '';
+        if (spawnError instanceof Error) {
+          if (spawnError.message.includes('ENOENT')) {
+            errorDetail = `OAUTH_HELPER_SPAWN_ENOENT: Node.js executable not found or helper script missing at ${helperPath}`;
+          } else if (spawnError.message.includes('EACCES')) {
+            errorDetail = `OAUTH_HELPER_SPAWN_EACCES: Permission denied when trying to execute ${helperPath}`;
+          } else if (spawnError.message.includes('E2BIG')) {
+            errorDetail = `OAUTH_HELPER_SPAWN_E2BIG: Argument list too long for helper process`;
+          } else {
+            errorDetail = `OAUTH_HELPER_SPAWN_FAILED: Could not start background authentication process at line 2774 - ${spawnError.message}`;
+          }
+        } else {
+          errorDetail = `OAUTH_HELPER_SPAWN_UNKNOWN: Unknown spawn error at line 2774`;
+        }
+        
         // Fall back to informing user about the issue
         return {
           content: [{
             type: "text",
             text: `${this.getPersonaIndicator()}⚠️ **OAuth Helper Launch Failed**\n\n` +
-                  `Could not start background authentication process.\n\n` +
+                  `${errorDetail}\n\n` +
                   `**Alternative Options:**\n` +
                   `1. Try again: Run setup_github_auth again\n` +
                   `2. Use GitHub CLI: gh auth login --web\n` +
-                  `3. Set token manually: export GITHUB_TOKEN=your_token\n\n` +
-                  `Error: ${spawnError instanceof Error ? spawnError.message : 'Unknown error'}`
+                  `3. Set token manually: export GITHUB_TOKEN=your_token`
           }]
         };
       }
@@ -2798,13 +2842,22 @@ export class DollhouseMCPServer implements IToolHandler {
         }]
       };
     } catch (error) {
-      logger.error('Failed to setup GitHub auth', { error });
+      logger.error('OAUTH_INDEX_2806: Main catch block - authentication setup failed', { 
+        error,
+        errorType: error?.constructor?.name,
+        errorMessage: error instanceof Error ? error.message : 'Unknown'
+      });
+      
+      // If error already has our error code, pass it through
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const hasErrorCode = errorMessage.includes('OAUTH_');
+      
       return {
         content: [{
           type: "text",
           text: `${this.getPersonaIndicator()}❌ **Authentication Setup Failed**\n\n` +
-                `Unable to start GitHub authentication: ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
-                `Please check your internet connection and try again.`
+                `${hasErrorCode ? errorMessage : `OAUTH_INDEX_2806: Unable to start GitHub authentication - ${errorMessage}`}\n\n` +
+                `${!errorMessage.includes('OAUTH_NETWORK') ? 'Please check your internet connection and try again.' : ''}`
         }]
       };
     }
