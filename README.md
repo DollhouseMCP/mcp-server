@@ -30,9 +30,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.6.1
+**📦 Version**: v1.6.2
 
-> **🎉 New in v1.6.1**: Default OAuth client ID for seamless GitHub authentication! Users can now authenticate without any configuration. The portfolio management system, GitHub integration, and 42 MCP tools from v1.6.0 are also included.
+> **🎉 New in v1.6.2**: Critical OAuth fix - the default client ID now actually works! The v1.6.1 release had a bug where the default OAuth wasn't being used. This hotfix restores the "just works" authentication experience. Includes all features from v1.6.0.
 
 > **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
@@ -42,7 +42,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.6.1 includes default OAuth - authentication just works!
+# ✅ v1.6.2 fixes OAuth - authentication truly just works now!
 # Browse and submit to collection with or without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
@@ -735,7 +735,7 @@ get_collection_cache_health
 
 ### GitHub Authentication (v1.5.0+)
 
-DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **NEW in v1.6.1**: Default OAuth client ID built-in - no configuration needed!
+DollhouseMCP supports GitHub OAuth device flow authentication for enhanced features. **FIXED in v1.6.2**: Default OAuth client ID now works correctly - no configuration needed!
 
 #### OAuth Setup (For Self-Hosting)
 
@@ -1547,7 +1547,22 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.6.1 - August 25, 2025 (Current - Develop Branch)
+### v1.6.2 - August 25, 2025 (Current - Develop Branch)
+
+**Critical Hotfix**: Fixed OAuth default client ID not being used in `setup_github_auth` tool
+
+#### 🔧 Bug Fixes
+- **OAuth Authentication**: Fixed critical bug where default OAuth client ID wasn't used in `setupGitHubAuth()` method
+- **Configuration Fallback**: Now correctly uses `GitHubAuthManager.getClientId()` with proper fallback hierarchy
+
+#### 📚 Technical Details
+- Made `GitHubAuthManager.getClientId()` public (was private)
+- Updated `setupGitHubAuth()` to use proper fallback chain
+- Restored "just works" authentication experience promised in v1.6.1
+
+---
+
+### v1.6.1 - August 25, 2025
 
 **⚠️ Breaking Changes**:
 - 🔄 **Serialization Format Change** - `BaseElement.serialize()` now returns markdown with YAML frontmatter instead of JSON

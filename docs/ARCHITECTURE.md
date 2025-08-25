@@ -1,6 +1,6 @@
-# DollhouseMCP Architecture v1.6.1
+# DollhouseMCP Architecture v1.6.2
 
-This document describes the comprehensive architecture of DollhouseMCP v1.6.1, including core systems, design patterns, and architectural components that create a complete AI persona management ecosystem.
+This document describes the comprehensive architecture of DollhouseMCP v1.6.2, including core systems, design patterns, and architectural components that create a complete AI persona management ecosystem.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ This document describes the comprehensive architecture of DollhouseMCP v1.6.1, i
                       │ MCP Protocol
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    MCP Server (Core v1.6.1)                 │
+│                    MCP Server (Core v1.6.2)                 │
 │  • Portfolio System (PortfolioManager)                       │
 │  • Unified Indexing (UnifiedIndexManager)                    │
 │  • Tool Registry (23+ tools)                                 │
@@ -549,8 +549,8 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidelines on:
 
 ---
 
-**Architecture Version**: v1.6.1  
-**Last Updated**: August 19, 2025  
+**Architecture Version**: v1.6.2  
+**Last Updated**: August 25, 2025  
 **Next Review**: September 2025
 
 *This architecture is designed for scalability, security, and community growth while maintaining simplicity for end users and comprehensive functionality for AI platforms.*
