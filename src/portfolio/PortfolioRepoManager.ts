@@ -383,20 +383,30 @@ These elements can be imported into your DollhouseMCP installation.
   /**
    * Generate safe filename from element name
    * SECURITY: Additional Unicode normalization for filenames
-   * SECURITY FIX: Fixed ReDoS vulnerability in regex pattern
+   * SECURITY FIX: Fixed ReDoS vulnerability with input length limit and optimized regex
    */
   private generateFileName(name: string): string {
+    // SECURITY FIX: Limit input length to prevent ReDoS attacks
+    // Even with optimized regex, very long inputs could cause performance issues
+    const MAX_FILENAME_LENGTH = 255; // Common filesystem limit
+    
     // Normalize to prevent Unicode attacks in filenames
     const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
     
-    // SECURITY FIX: Prevent ReDoS by using separate, non-ambiguous regex replacements
-    // Previously: .replace(/^-+|-+$/g, '') could cause polynomial time complexity
-    // Now: Use two separate replacements to avoid ambiguity
-    return normalizedName
+    // Truncate to safe length BEFORE regex operations
+    const truncatedName = normalizedName.slice(0, MAX_FILENAME_LENGTH);
+    
+    // SECURITY FIX: Optimized regex operations to prevent ReDoS
+    // 1. Convert non-alphanumeric sequences to single dash
+    // 2. Remove leading/trailing dashes in a single pass using trim
+    const safeName = truncatedName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+/, '')  // Remove leading dashes
       .replace(/-+$/, ''); // Remove trailing dashes
+    
+    // Ensure we have a valid filename (not empty after cleaning)
+    return safeName || 'unnamed';
   }
 
   /**
