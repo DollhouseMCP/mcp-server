@@ -30,6 +30,12 @@ const isDryRun = args.includes('--dry-run');
 const notesIndex = args.indexOf('--notes');
 const releaseNotes = notesIndex !== -1 && args[notesIndex + 1] ? args[notesIndex + 1] : '';
 
+// Security: Validate release notes length to prevent injection attacks
+if (releaseNotes.length > 1000) {
+  console.error('❌ Release notes too long (max 1000 characters)');
+  process.exit(1);
+}
+
 if (!newVersion || !newVersion.match(/^\d+\.\d+\.\d+(-[\w\.]+)?$/)) {
   console.error('❌ Please provide a valid semantic version (e.g., 1.6.5 or 1.6.5-beta.1)');
   console.error('Usage: npm run update:version -- <version> [--notes "Release notes"] [--dry-run]');
@@ -142,10 +148,32 @@ export const BUILD_DATE = "${new Date().toISOString()}";
   }
 ];
 
+// Security: Helper function to validate file paths and prevent directory traversal
+function validateFilePath(filePath, basePath) {
+  const normalizedPath = path.normalize(filePath);
+  
+  // Check for path traversal attempts
+  if (normalizedPath.includes('..') || path.isAbsolute(normalizedPath)) {
+    throw new Error(`Path traversal detected: ${filePath}`);
+  }
+  
+  const resolved = path.resolve(basePath, normalizedPath);
+  const resolvedBase = path.resolve(basePath);
+  
+  // Ensure the resolved path is within the base path
+  if (!resolved.startsWith(resolvedBase)) {
+    throw new Error(`Path traversal detected: ${filePath}`);
+  }
+  
+  return resolved;
+}
+
 // Helper function to update a single file
 function updateFile(filePath, config) {
   try {
-    const fullPath = path.join(path.dirname(__dirname), filePath);
+    // Security: Validate path to prevent directory traversal
+    const basePath = path.dirname(__dirname);
+    const fullPath = validateFilePath(filePath, basePath);
     
     if (!fs.existsSync(fullPath)) {
       if (config.createIfMissing && config.defaultContent) {
@@ -165,6 +193,14 @@ function updateFile(filePath, config) {
         console.error(`  ❌ Required file not found: ${filePath}`);
         return false;
       }
+      return false;
+    }
+    
+    // Security: Check file size to prevent DoS attacks
+    const stats = fs.statSync(fullPath);
+    const maxFileSize = 10 * 1024 * 1024; // 10MB limit
+    if (stats.size > maxFileSize) {
+      console.error(`  ❌ File too large: ${filePath} (${Math.round(stats.size / 1024 / 1024)}MB, max 10MB)`);
       return false;
     }
 
@@ -240,8 +276,23 @@ function updateFile(filePath, config) {
 // Helper function to handle glob patterns
 async function handleGlobPattern(pattern, config) {
   const basePath = path.dirname(__dirname);
-  const fullPattern = path.join(basePath, pattern);
+  
+  // Security: Validate pattern to prevent directory traversal
+  const normalizedPattern = path.normalize(pattern);
+  if (normalizedPattern.includes('..') || path.isAbsolute(normalizedPattern)) {
+    throw new Error(`Path traversal detected in pattern: ${pattern}`);
+  }
+  
+  const fullPattern = path.join(basePath, normalizedPattern);
+  
+  // Get files matching the pattern
   const files = await glob(fullPattern);
+  
+  // Security: Limit number of files to prevent DoS
+  if (files.length > 1000) {
+    console.error(`❌ Too many files matched (${files.length}). Maximum is 1000.`);
+    process.exit(1);
+  }
   let updated = 0;
   
   for (const file of files) {
@@ -288,9 +339,13 @@ async function main() {
     // Update package-lock.json properly using npm
     console.log('\n📦 Updating package-lock.json with npm...');
     try {
-      execSync('npm install --package-lock-only', { stdio: 'inherit', cwd: path.dirname(__dirname) });
+      // Security: Use resolved path for cwd to ensure we're in the right directory
+      const projectRoot = path.resolve(path.dirname(__dirname));
+      execSync('npm install --package-lock-only', { stdio: 'inherit', cwd: projectRoot });
     } catch (error) {
-      console.error('⚠️  Failed to update package-lock.json with npm');
+      console.error('⚠️  Failed to update package-lock.json with npm:', error.message);
+      // Don't continue silently - this is important for version consistency
+      process.exit(1);
     }
     
     // Generate version file if script exists
@@ -298,9 +353,12 @@ async function main() {
     if (fs.existsSync(versionScriptPath)) {
       console.log('\n🏗️  Generating version info...');
       try {
-        execSync('node scripts/generate-version.js', { stdio: 'inherit', cwd: path.dirname(__dirname) });
+        // Security: Use resolved path for cwd
+        const projectRoot = path.resolve(path.dirname(__dirname));
+        execSync('node scripts/generate-version.js', { stdio: 'inherit', cwd: projectRoot });
       } catch (error) {
-        console.error('⚠️  Failed to generate version info');
+        console.error('⚠️  Failed to generate version info:', error.message);
+        // Non-critical, so we can continue
       }
     }
     
