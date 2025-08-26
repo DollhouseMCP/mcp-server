@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.7] - 2025-08-26
+
+QA Test Infrastructure - Comprehensive QA test infrastructure with real GitHub integration testing capabilities, security vulnerability fixes, and improved CI reliability. Includes E2E test suite and test utilities.
+
 ## [1.6.5] - 2025-08-26
 
 - Portfolio sync fix for markdown elements (#759)
