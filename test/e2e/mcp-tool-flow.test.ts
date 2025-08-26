@@ -276,6 +276,12 @@ describe('MCP Tool Integration Flow', () => {
   
   describe('Error Handling Through MCP Tools', () => {
     it('should handle authentication errors correctly', async () => {
+      // Skip test if no token available
+      if (testEnv.skipTests) {
+        console.log('⏭️  Test skipped - no GitHub token');
+        return;
+      }
+      
       console.log('\n▶️ Test: MCP tool auth error handling');
       
       const { DollhouseMCPServer } = await import('../../src/index.js');
@@ -298,6 +304,12 @@ describe('MCP Tool Integration Flow', () => {
     }, 30000);
     
     it('should provide helpful error messages on failures', async () => {
+      // Skip test if no token available
+      if (testEnv.skipTests) {
+        console.log('⏭️  Test skipped - no GitHub token');
+        return;
+      }
+      
       console.log('\n▶️ Test: MCP tool error messages');
       
       const { DollhouseMCPServer } = await import('../../src/index.js');

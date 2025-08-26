@@ -40,7 +40,27 @@ async function testMCPSubmit() {
     
     const text = result?.content?.[0]?.text || JSON.stringify(result);
     
-    if (text.includes('github.com') || text.includes('uploaded')) {
+    // Check for success indicators
+    const hasUploadedText = text.includes('uploaded');
+    
+    // Properly validate GitHub URLs using URL parsing
+    let hasValidGitHubUrl = false;
+    const urlMatches = text.match(/https?:\/\/[^\s]+/g);
+    if (urlMatches) {
+      for (const urlStr of urlMatches) {
+        try {
+          const parsedUrl = new URL(urlStr);
+          if (parsedUrl.hostname === 'github.com' || parsedUrl.hostname === 'www.github.com') {
+            hasValidGitHubUrl = true;
+            break;
+          }
+        } catch (e) {
+          // Invalid URL, ignore
+        }
+      }
+    }
+    
+    if (hasValidGitHubUrl || hasUploadedText) {
       console.log('\n✅ SUCCESS! The REAL MCP tool uploaded to GitHub!');
       console.log('This proves the actual submit_content MCP tool works.\n');
     } else if (text.includes('not found')) {

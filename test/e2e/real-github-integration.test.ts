@@ -113,6 +113,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
     }, 60000);
 
     it('should handle GitHub response with null commit field correctly', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: Handle null commit in GitHub response');
       
       // This tests the specific bug from the QA report
@@ -146,6 +152,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
 
   describe('Error Code Validation', () => {
     it('should return PORTFOLIO_SYNC_001 for invalid token', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: Invalid token error (SYNC_001)');
       
       const badManager = new PortfolioRepoManager();
@@ -161,6 +173,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
     }, 30000);
 
     it('should handle rate limit errors gracefully', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: Rate limit handling');
       
       // Check current rate limit
@@ -186,6 +204,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
 
   describe('Bulk Sync Prevention', () => {
     it('should upload ONLY the specified element, not all personas', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: Single upload does not trigger bulk sync');
       
       // Create multiple personas
@@ -230,6 +254,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
 
   describe('URL Extraction Fallbacks', () => {
     it('should generate correct URLs with various response formats', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: URL extraction with fallbacks');
       
       const testPersona = createTestPersona({
@@ -260,6 +290,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
 
   describe('Real User Flow Simulation', () => {
     it('should complete the exact flow a user would follow', async () => {
+      // Skip if no GitHub token
+      if (testEnv.skipTests) {
+        console.log('⏭️  Skipping test - no GitHub token available');
+        return;
+      }
+      
       console.log('\n▶️ Test: Complete user flow simulation');
       console.log('  Simulating: User wants to upload Ziggy persona to GitHub portfolio');
       

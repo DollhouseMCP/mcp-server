@@ -68,15 +68,30 @@ async function testRealMCPSubmit() {
       console.log('\n   📊 MCP Tool Result:');
       console.log('   ' + submitText.substring(0, 200));
       
-      if (submitText.includes('Successfully uploaded') || submitText.includes('github.com')) {
+      // Check for success indicators
+      const hasSuccess = submitText.includes('Successfully uploaded');
+      
+      // Properly validate GitHub URLs using URL parsing
+      let hasValidGitHubUrl = false;
+      const urlMatch = submitText.match(/https?:\/\/[^\s]+/g);
+      if (urlMatch) {
+        for (const urlStr of urlMatch) {
+          try {
+            const parsedUrl = new URL(urlStr);
+            if (parsedUrl.hostname === 'github.com' || parsedUrl.hostname === 'www.github.com') {
+              hasValidGitHubUrl = true;
+              console.log(`   📍 Uploaded to: ${urlStr}`);
+              break;
+            }
+          } catch (e) {
+            // Invalid URL, ignore
+          }
+        }
+      }
+      
+      if (hasSuccess || hasValidGitHubUrl) {
         console.log('\n   ✅ MCP submit_content tool WORKED!');
         console.log('   This was the ACTUAL MCP server tool, not GitHub API directly.');
-        
-        // Extract URL if present
-        const urlMatch = submitResult.match(/https:\/\/github\.com[^\s]*/);
-        if (urlMatch) {
-          console.log(`   📍 Uploaded to: ${urlMatch[0]}`);
-        }
       } else {
         console.log('\n   ⚠️ Unexpected result from MCP tool');
       }

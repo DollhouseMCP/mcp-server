@@ -233,8 +233,11 @@ export class GitHubTestClient {
    */
   async verifyUrl(url: string): Promise<boolean> {
     try {
+      // Properly parse and validate the URL
+      const parsedUrl = new URL(url);
+      
       // For GitHub URLs, we can check via API
-      if (url.includes('github.com')) {
+      if (parsedUrl.hostname === 'github.com' || parsedUrl.hostname === 'www.github.com') {
         // Extract path from URL
         const match = url.match(/github\.com\/[^/]+\/[^/]+\/blob\/[^/]+\/(.+)/);
         if (match) {
