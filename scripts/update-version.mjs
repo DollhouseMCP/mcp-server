@@ -73,9 +73,20 @@ const updateConfigs = [
   },
   {
     name: 'package-lock.json',
-    pattern: /"version":\s*"[^"]+"/,
-    replacement: `"version": "${newVersion}"`,
-    multiple: true, // Update all occurrences
+    updates: [
+      {
+        // Only update root package version in first occurrence after package name
+        pattern: /("name":\s*"@dollhousemcp\/mcp-server",[\s\S]*?"version":\s*")[^"]+"/,
+        replacement: `$1${newVersion}"`,
+        once: true
+      },
+      {
+        // Update packages section if it exists
+        pattern: /("packages":\s*{[\s\S]*?"node_modules\/@dollhousemcp\/mcp-server":\s*{[\s\S]*?"version":\s*")[^"]+"/,
+        replacement: `$1${newVersion}"`,
+        once: true
+      }
+    ],
     required: true
   },
   {
@@ -106,21 +117,17 @@ const updateConfigs = [
       {
         // Add new version entry at the top (after the header)
         pattern: /(# Changelog\n+)/,
-        replacement: `$1## [${newVersion}] - ${new Date().toISOString().split('T')[0]}${releaseNotes ? `\n\n${releaseNotes}` : '\n\n- Version bump'}\n\n`,
+        replacement: (match, p1, offset, string) => {
+          // Check if version already exists
+          if (string.includes(`## [${newVersion}]`)) {
+            console.log('  ⏭️  Version already exists in CHANGELOG.md');
+            return match; // Don't add duplicate
+          }
+          return `${p1}## [${newVersion}] - ${new Date().toISOString().split('T')[0]}${releaseNotes ? `\n\n${releaseNotes}` : '\n\n- Version bump'}\n\n`;
+        },
         once: true // Only replace first occurrence
       }
     ]
-  },
-  {
-    name: 'src/constants/version.ts',
-    pattern: /export const VERSION = "[^"]+"/,
-    replacement: `export const VERSION = "${newVersion}"`,
-    createIfMissing: true,
-    defaultContent: `// Auto-generated version constant
-export const VERSION = "${newVersion}";
-export const BUILD_DATE = "${new Date().toISOString()}";
-`,
-    optional: true
   },
   {
     name: 'docs/**/*.md',

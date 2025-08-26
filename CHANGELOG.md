@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.7] - 2025-08-26
+
+Fixed version update script and improved QA test reliability
+
 ## [1.6.5] - 2025-08-26
 
 - Portfolio sync fix for markdown elements (#759)
