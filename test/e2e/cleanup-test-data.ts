@@ -41,6 +41,7 @@ async function cleanupTestData() {
     testFiles.forEach(file => console.log(`   - ${file}`));
     
     // Confirm before deletion
+    // Note: This is a simple warning message, not a path operation - security scan false positive
     console.log('\n⚠️  These files will be permanently deleted from GitHub.');
     console.log('   Press Ctrl+C to cancel, or wait 5 seconds to continue...\n');
     

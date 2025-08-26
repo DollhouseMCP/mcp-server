@@ -150,6 +150,13 @@ describe('MCP Tool Integration Flow', () => {
   beforeAll(async () => {
     console.log('\n🔧 Starting MCP tool integration tests...\n');
     testEnv = await setupTestEnvironment();
+    
+    // Skip tests if running in CI without token
+    if (testEnv.skipTests) {
+      console.log('⏭️  Skipping MCP tool tests - no token available');
+      return;
+    }
+    
     githubClient = new GitHubTestClient(testEnv);
   }, 60000);
   
@@ -169,6 +176,12 @@ describe('MCP Tool Integration Flow', () => {
   
   describe('Complete MCP Tool Flow', () => {
     it('should simulate complete user flow with MCP tools', async () => {
+      // Skip test if no token available
+      if (testEnv.skipTests) {
+        console.log('⏭️  Test skipped - no GitHub token');
+        return;
+      }
+      
       console.log('\n▶️ Test: Complete MCP tool flow simulation');
       
       // Import the actual server implementation to test tool handlers

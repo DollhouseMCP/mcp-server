@@ -24,6 +24,13 @@ describe('Real GitHub Portfolio Integration Tests', () => {
     
     // Setup and validate environment
     testEnv = await setupTestEnvironment();
+    
+    // Skip tests if running in CI without token
+    if (testEnv.skipTests) {
+      console.log('⏭️  Skipping GitHub integration tests - no token available');
+      return;
+    }
+    
     githubClient = new GitHubTestClient(testEnv);
     
     // Initialize portfolio manager with real token
@@ -54,6 +61,12 @@ describe('Real GitHub Portfolio Integration Tests', () => {
 
   describe('Single Element Upload - Success Path', () => {
     it('should successfully upload a single persona to GitHub and verify it exists', async () => {
+      // Skip test if no token available
+      if (testEnv.skipTests) {
+        console.log('⏭️  Test skipped - no GitHub token');
+        return;
+      }
+      
       console.log('\n▶️ Test: Upload single persona to GitHub');
       
       // Step 1: Create test persona

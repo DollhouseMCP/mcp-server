@@ -13,16 +13,17 @@ const __dirname = path.dirname(__filename);
 
 export interface TestEnvironment {
   githubToken: string;
-  testRepo: string;
-  githubUser: string;
-  cleanupAfter: boolean;
-  verboseLogging: boolean;
-  retryAttempts: number;
-  timeoutMs: number;
-  rateLimitDelayMs: number;
-  maxConcurrentRequests: number;
-  personaPrefix: string;
-  testBranch: string;
+  testRepo?: string;
+  githubUser?: string;
+  cleanupAfter?: boolean;
+  verboseLogging?: boolean;
+  retryAttempts?: number;
+  timeoutMs?: number;
+  rateLimitDelayMs?: number;
+  maxConcurrentRequests?: number;
+  personaPrefix?: string;
+  testBranch?: string;
+  skipTests?: boolean;
 }
 
 /**
@@ -43,6 +44,14 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   // Validate required variables
   const githubToken = process.env.GITHUB_TEST_TOKEN;
   if (!githubToken) {
+    // In CI environment, skip tests that require GitHub token
+    if (process.env.CI) {
+      console.log('⏭️  Skipping E2E tests in CI - GITHUB_TEST_TOKEN not available');
+      return {
+        githubToken: '',
+        skipTests: true
+      };
+    }
     throw new Error(
       'GITHUB_TEST_TOKEN is required. Please set it in .env.test.local or environment variables.\n' +
       'Create a token at: https://github.com/settings/tokens with "repo" scope'
