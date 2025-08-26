@@ -173,7 +173,7 @@ For emergency fixes to production:
 ```bash
 # 1. Create hotfix from main
 git checkout main && git pull
-git checkout -b hotfix/v1.6.6
+git checkout -b hotfix/v1.6.7
 
 # 2. Make fixes and update version
 npm run version:bump -- 1.6.6 --notes "Emergency fix for X"
@@ -181,15 +181,15 @@ npm run version:bump -- 1.6.6 --notes "Emergency fix for X"
 # 3. Commit
 git add -A
 git commit -m "hotfix: fix critical issue with X"
-git push -u origin hotfix/v1.6.6
+git push -u origin hotfix/v1.6.7
 
 # 4. PR to main
-gh pr create --base main --title "Hotfix v1.6.6"
+gh pr create --base main --title "Hotfix v1.6.7"
 
 # 5. After merge, tag
 git checkout main && git pull
-git tag v1.6.6
-git push origin v1.6.6
+git tag v1.6.7
+git push origin v1.6.7
 
 # 6. Merge to develop
 git checkout develop && git pull
@@ -197,7 +197,7 @@ git merge main
 git push
 
 # 7. Cleanup
-git push origin --delete hotfix/v1.6.6
+git push origin --delete hotfix/v1.6.7
 ```
 
 ## Using GitHub Actions (Alternative)
