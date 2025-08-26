@@ -5228,9 +5228,38 @@ Placeholders for custom format:
       }
 
       const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
-      const filePath = path.join(dirPath, `${elementName}.json`);
-      const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content);
+      
+      // FIX: Check for actual file extensions used by elements (.md, .json, .yaml)
+      // Elements are stored as markdown files with YAML frontmatter, not JSON files
+      const extensions = ['.md', '.json', '.yaml', '.yml'];
+      let content: string | null = null;
+      let foundFile: string | null = null;
+      
+      for (const ext of extensions) {
+        const filePath = path.join(dirPath, `${elementName}${ext}`);
+        try {
+          content = await fs.readFile(filePath, 'utf-8');
+          foundFile = filePath;
+          break; // Found the file, stop searching
+        } catch (err: any) {
+          // File doesn't exist with this extension, try the next one
+          if (err.code !== 'ENOENT') {
+            throw err; // Re-throw non-file-not-found errors
+          }
+        }
+      }
+      
+      if (!content || !foundFile) {
+        throw Object.assign(new Error(`File not found`), { code: 'ENOENT' });
+      }
+      
+      // Return the raw content - portfolio sync should handle the content as-is
+      // No need to parse as JSON since we're syncing the actual file content
+      return {
+        content: content,
+        filename: path.basename(foundFile),
+        type: elementType
+      };
     } catch (error: any) {
       // Check if this is our validation error for invalid element types
       if (error.message && error.message.includes('Invalid element type:')) {
@@ -5241,9 +5270,9 @@ Placeholders for custom format:
       let errorMessage: string;
       
       if (error.code === 'ENOENT') {
-        errorMessage = `Element '${elementName}' not found in ${elementType}. File does not exist.`;
+        errorMessage = `Element '${elementName}' not found in ${elementType}. Searched for: ${elementName}.md, ${elementName}.json, ${elementName}.yaml, ${elementName}.yml`;
       } else if (error instanceof SyntaxError) {
-        errorMessage = `Element '${elementName}' in ${elementType} contains invalid JSON: ${error.message}`;
+        errorMessage = `Element '${elementName}' in ${elementType} contains invalid content: ${error.message}`;
       } else {
         errorMessage = `Failed to load element '${elementName}' from ${elementType}: ${error.message || 'Unknown error'}`;
       }
