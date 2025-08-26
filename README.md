@@ -30,9 +30,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.6.3
+**📦 Version**: v1.6.4
 
-> **🎉 New in v1.6.3**: Fixed OAuth authentication with correct client ID and comprehensive error messages. The OAuth client ID has been corrected and detailed error codes added throughout the flow for better debugging.
+> **🎉 New in v1.6.4**: Fixed OAuth helper NPM packaging issue and performance testing workflow. OAuth authentication now works correctly for NPM users, and performance tests run properly in CI.
 
 > **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
@@ -42,7 +42,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.6.3 fixes OAuth with correct client ID!
+# ✅ v1.6.4 fixes OAuth NPM packaging!
 # Browse and submit to collection with or without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
@@ -1547,7 +1547,31 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.6.2 - August 25, 2025 (Current - Develop Branch)
+### v1.6.4 - August 25, 2025 (Current - Develop Branch)
+
+**Critical Fixes**: Fixed OAuth helper NPM packaging and performance testing workflow
+
+#### 🔧 Bug Fixes
+- **OAuth NPM Packaging**: Fixed missing `oauth-helper.mjs` file in NPM distribution
+  - File was present in repository but not included in published package
+  - OAuth authentication now works correctly for NPM users
+- **Performance Tests**: Fixed CI workflow running all tests instead of performance tests
+  - Performance monitoring now works correctly in GitHub Actions
+
+---
+
+### v1.6.3 - August 25, 2025
+
+**OAuth Authentication Fix**: Fixed invalid OAuth client ID and improved error handling
+
+#### 🔧 Bug Fixes
+- **OAuth Client ID**: Updated from incorrect ID to correct `Ov23li9gyNZP6m9aJ2EP`
+- **Error Handling**: Added comprehensive error codes throughout OAuth flow
+- **Debug Logging**: Added detailed logging at each authentication step
+
+---
+
+### v1.6.2 - August 25, 2025
 
 **Critical Hotfix**: Fixed OAuth default client ID not being used in `setup_github_auth` tool
 

@@ -155,6 +155,7 @@ describe('Portfolio Filtering Performance', () => {
       console.log(`Filtered down to ${elements.length} legitimate files from ${fileCount} total`);
     });
 
+    // Increase timeout for Windows Node 22 compatibility (60 seconds)
     it('should handle very large single directory efficiently', async () => {
       const fileCount = 5000;
       const elementDir = portfolioManager.getElementDir(ElementType.SKILL);
@@ -234,7 +235,7 @@ describe('Portfolio Filtering Performance', () => {
       expect(duration).toBeLessThan(1000); // Less than 1 second for 400 calls
       
       console.log(`ReDoS resistance: ${problematicInputs.length * iterations} calls in ${duration.toFixed(2)}ms`);
-    });
+    }, 60000); // 60 second timeout for Windows Node 22 compatibility
 
     it('should handle unicode and special characters efficiently', () => {
       const unicodeInputs = [

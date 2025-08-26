@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2025-08-25
+
+### Fixed
+- **OAuth Helper NPM Packaging** - Fixed missing oauth-helper.mjs file in NPM distribution
+  - Added `oauth-helper.mjs` to package.json files array for proper NPM packaging
+  - Added additional fallback path in src/index.ts for NPM package installations
+  - OAuth authentication now works correctly for users installing from NPM
+- **Performance Testing Workflow** - Fixed performance tests failing in CI
+  - Changed workflow to run only performance tests instead of entire test suite
+  - Used targeted command: `npm test -- test/__tests__/performance/ --no-coverage`
+  - Performance monitoring workflow now runs correctly in GitHub Actions
+
 ## [1.6.3] - 2025-08-25
 
 ### Fixed
