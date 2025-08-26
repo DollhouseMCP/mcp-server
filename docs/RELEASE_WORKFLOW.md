@@ -2,6 +2,8 @@
 
 This document outlines the complete release process for DollhouseMCP using GitFlow and the intelligent version update system.
 
+> **Note**: This document consolidates and replaces the previous manual workflow documentation. The intelligent version update system (PR #760) automates most version-related tasks.
+
 ## Prerequisites
 
 - You're on the `develop` branch with all features merged
