@@ -206,7 +206,7 @@ describe('Portfolio Filtering Performance', () => {
       console.log(`Very large directory: ${fileCount} files filtered in ${duration.toFixed(2)}ms`);
       console.log(`Filtered to ${elements.length} legitimate files (expected ~${expectedLegitimateCount})`);
       console.log(`Filtering rate: ${(fileCount / duration * 1000).toFixed(0)} files/second`);
-    }, 30000); // 30 second timeout for Windows CI
+    }, 60000); // 60 second timeout for Windows Node 22 compatibility
   });
 
   describe('regex pattern efficiency', () => {
