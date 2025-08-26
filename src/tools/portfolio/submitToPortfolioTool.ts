@@ -580,10 +580,22 @@ export class SubmitToPortfolioTool {
         const cleanPath = filePath.replace(/\x00/g, '');
         normalizedPath = path.normalize(cleanPath);
         
-        // Ensure the normalized path doesn't escape the intended directory
-        if (normalizedPath.includes('..') || normalizedPath.startsWith('/') || 
-            (process.platform === 'win32' && /^[a-zA-Z]:/.test(normalizedPath))) {
-          throw new Error('Path normalization resulted in directory traversal');
+        // Check if path is within the portfolio directory
+        const portfolioManager = PortfolioManager.getInstance();
+        const portfolioBase = portfolioManager.getBaseDir();
+        
+        // For absolute paths, verify they're within the portfolio directory
+        if (path.isAbsolute(normalizedPath)) {
+          const resolvedPath = path.resolve(normalizedPath);
+          const resolvedBase = path.resolve(portfolioBase);
+          
+          // Path must be within the portfolio directory
+          if (!resolvedPath.startsWith(resolvedBase)) {
+            throw new Error('Path is outside portfolio directory');
+          }
+        } else if (normalizedPath.includes('..')) {
+          // Relative paths with .. are not allowed
+          throw new Error('Path contains directory traversal');
         }
       } catch (error) {
         SecurityMonitor.logSecurityEvent({
