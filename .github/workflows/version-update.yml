@@ -70,12 +70,15 @@ jobs:
       
       - name: Update version in codebase
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
-          # Run the version update script
-          if [ -n "${{ inputs.release_notes }}" ]; then
-            node scripts/update-version.mjs "${{ inputs.version }}" --notes "${{ inputs.release_notes }}"
+          # Run the version update script with environment variables to prevent command injection
+          if [ -n "${RELEASE_NOTES}" ]; then
+            node scripts/update-version.mjs "${VERSION}" --notes "${RELEASE_NOTES}"
           else
-            node scripts/update-version.mjs "${{ inputs.version }}"
+            node scripts/update-version.mjs "${VERSION}"
           fi
       
       - name: Run tests
