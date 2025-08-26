@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.8] - 2025-08-26
+
+- Version bump
+
 ## [1.6.7] - 2025-08-26
 
 Fixed version update script and improved QA test reliability
