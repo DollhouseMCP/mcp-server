@@ -57,7 +57,7 @@ describe('CollectionBrowser MCP Filtering', () => {
     } as any;
 
     mockCollectionIndexManager = {
-      getIndex: jest.fn().mockRejectedValue(new Error('No index available for testing')),
+      getIndex: jest.fn<() => Promise<any>>().mockRejectedValue(new Error('No index available for testing')),
       refreshIndex: jest.fn()
     } as any;
 

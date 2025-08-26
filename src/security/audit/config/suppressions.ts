@@ -78,6 +78,21 @@ export const suppressions: Suppression[] = [
     reason: 'Test files may contain intentional security patterns for testing'
   },
   {
+    rule: 'DMCP-SEC-004',
+    file: 'test/**/*',
+    reason: 'Test utilities and E2E tests do not process untrusted user input'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'test/**/*',
+    reason: 'Audit logging not required for test utilities and E2E tests'
+  },
+  {
+    rule: 'OWASP-A03-003',
+    file: 'test/e2e/cleanup-test-data.ts',
+    reason: 'False positive - console.log message string literal, not a path operation'
+  },
+  {
     rule: 'OWASP-A01-001',
     file: '__tests__/**/*',
     reason: 'Test files use fake tokens and secrets for testing security features'
@@ -357,8 +372,18 @@ export const suppressions: Suppression[] = [
   // ========================================
   {
     rule: '*',
+    file: 'docs/**/*',
+    reason: 'Documentation files including QA metrics and reports'
+  },
+  {
+    rule: '*',
     file: '**/*.md',
     reason: 'Markdown documentation files'
+  },
+  {
+    rule: '*',
+    file: '**/*.json',
+    reason: 'JSON configuration and data files do not execute code'
   },
   {
     rule: '*',

@@ -135,7 +135,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
     {
       tool: {
         name: "sync_portfolio",
-        description: "Sync your local portfolio with GitHub repository. This uploads any new or modified elements to GitHub and can optionally pull remote changes.",
+        description: "Sync ALL elements in your local portfolio with your GitHub repository. WARNING: This uploads EVERY element from your local portfolio to GitHub. Use 'submit_content' instead if you want to upload only specific elements. This bulk operation is useful for backing up your entire portfolio but may include private elements you don't want public.",
         inputSchema: {
           type: "object",
           properties: {
