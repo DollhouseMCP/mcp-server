@@ -30,9 +30,9 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com (planned)  
-**📦 Version**: v1.6.4
+**📦 Version**: v1.6.5
 
-> **🎉 New in v1.6.4**: Fixed OAuth helper NPM packaging issue and performance testing workflow. OAuth authentication now works correctly for NPM users, and performance tests run properly in CI.
+> **🎉 New in v1.6.5**: Fixed OAuth helper NPM packaging issue and performance testing workflow. OAuth authentication now works correctly for NPM users, and performance tests run properly in CI.
 
 > **⚠️ Breaking Change**: PersonaTools have been streamlined in v1.6.0. 9 redundant tools were removed in favor of ElementTools. See [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md) for migration instructions.
 
@@ -42,7 +42,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.6.4 fixes OAuth NPM packaging!
+# ✅ v1.6.5 fixes OAuth NPM packaging!
 # Browse and submit to collection with or without authentication:
 # npm install -g @dollhousemcp/mcp-server@latest
 
@@ -1547,7 +1547,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 
 ## 🏷️ Version History
 
-### v1.6.4 - August 25, 2025 (Current - Develop Branch)
+### v1.6.5 - August 25, 2025 (Current - Develop Branch)
 
 **Critical Fixes**: Fixed OAuth helper NPM packaging and performance testing workflow
 

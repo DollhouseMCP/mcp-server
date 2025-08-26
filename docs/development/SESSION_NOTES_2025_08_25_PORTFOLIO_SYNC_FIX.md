@@ -2,14 +2,14 @@
 
 **Date**: August 25, 2025  
 **Time**: Evening session  
-**Branch**: main (post v1.6.4 release)  
-**Focus**: v1.6.4 release and portfolio sync bug discovery  
+**Branch**: main (post v1.6.5 release)  
+**Focus**: v1.6.5 release and portfolio sync bug discovery  
 
 ## Session Summary
 
-Completed the v1.6.4 release with critical fixes, then discovered and diagnosed a major bug preventing portfolio sync functionality from working.
+Completed the v1.6.5 release with critical fixes, then discovered and diagnosed a major bug preventing portfolio sync functionality from working.
 
-## Part 1: v1.6.4 Release Completion ✅
+## Part 1: v1.6.5 Release Completion ✅
 
 ### Issues Fixed
 1. **OAuth Helper NPM Packaging** 
@@ -30,7 +30,7 @@ Completed the v1.6.4 release with critical fixes, then discovered and diagnosed 
 - PR #752: OAuth and performance fixes → develop
 - PR #753: Version bump to v1.6.4 → develop  
 - PR #754: Release v1.6.4 → main
-- Tag: v1.6.4 created and pushed
+- Tag: v1.6.5 created and pushed
 - NPM publish triggered automatically
 
 ## Part 2: Portfolio Sync Bug Discovery 🐛
@@ -126,7 +126,7 @@ https://github.com/DollhouseMCP/mcp-server/issues/755
 
 ## Session Statistics
 - **PRs Merged**: 3 (#752, #753, #754)
-- **Release**: v1.6.4 tagged and published
+- **Release**: v1.6.5 tagged and published
 - **Bug Found**: Critical portfolio sync failure
 - **Root Cause**: Identified (wrong file extension)
 - **Solution**: Simple fix ready to implement
