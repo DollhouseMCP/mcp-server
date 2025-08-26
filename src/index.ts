@@ -3189,25 +3189,37 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // If no client_id provided, show current configuration status
       if (!client_id) {
-        const currentClientId = configManager.getGitHubClientId();
+        // Check what OAuth client ID will actually be used
+        // This matches the logic in GitHubAuthManager.getClientId()
+        const currentClientId = await GitHubAuthManager.getClientId();
         
         if (currentClientId) {
+          // Check if it's using the default or a custom config
+          const configuredClientId = configManager.getGitHubClientId();
+          const isUsingDefault = !configuredClientId;
+          
           // Show first 10 characters for security
           const maskedClientId = currentClientId.substring(0, 10) + '...';
+          
           return {
             content: [{
               type: "text",
               text: `${this.getPersonaIndicator()}✅ **GitHub OAuth Configuration**\n\n` +
-                    `**Current Status:** Configured\n` +
-                    `**Client ID:** ${maskedClientId}\n\n` +
+                    `**Current Status:** ${isUsingDefault ? 'Using Default' : 'Configured'}\n` +
+                    `**Client ID:** ${maskedClientId}\n` +
+                    `**Source:** ${isUsingDefault ? 'Built-in DollhouseMCP OAuth App' : 'Custom Configuration'}\n\n` +
                     `Your GitHub OAuth is ready to use! You can now:\n` +
                     `• Run setup_github_auth to connect\n` +
                     `• Submit content to the collection\n` +
                     `• Access authenticated features\n\n` +
-                    `To update the configuration, provide a new client_id parameter.`
+                    (isUsingDefault ? 
+                      `**Note:** Using the default DollhouseMCP OAuth app.\n` +
+                      `To use your own OAuth app, provide a client_id parameter.\n\n` : 
+                      `To update the configuration, provide a new client_id parameter.\n\n`)
             }]
           };
         } else {
+          // This should never happen since GitHubAuthManager.getClientId() always returns something
           return {
             content: [{
               type: "text",
