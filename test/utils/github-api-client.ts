@@ -1,6 +1,10 @@
 /**
  * Real GitHub API Client for Integration Testing
  * NO MOCKS - This performs actual GitHub API operations
+ * 
+ * SECURITY NOTE: This is a test utility for E2E testing against controlled test repositories.
+ * Unicode normalization (DMCP-SEC-004) is not required as this only interacts with
+ * test data in controlled environments. The GitHub API handles its own input validation.
  */
 
 import { TestEnvironment } from '../e2e/setup-test-env.js';

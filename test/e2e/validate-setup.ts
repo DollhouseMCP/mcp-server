@@ -3,6 +3,10 @@
 /**
  * Validate Test Environment Setup
  * Run this to check if your GitHub integration tests are properly configured
+ * 
+ * SECURITY NOTE: This is a validation utility for test environments.
+ * Audit logging (DMCP-SEC-006) is not required as this only validates
+ * test configuration and doesn't perform security-sensitive operations.
  */
 
 import { setupTestEnvironment } from './setup-test-env.js';

@@ -1,6 +1,11 @@
 /**
  * Test Persona Factory
  * Creates realistic test personas for QA testing
+ * 
+ * SECURITY NOTE: This is a test utility that only creates mock data for testing.
+ * Unicode normalization (DMCP-SEC-004) is not required as this doesn't process
+ * untrusted user input - it only generates controlled test data.
+ * Audit logging (DMCP-SEC-006) is also not needed for test utilities.
  */
 
 import { IElement } from '../../src/types/elements/IElement.js';

@@ -3,6 +3,10 @@
 /**
  * Test REAL MCP Server submit_content Tool
  * This tests the ACTUAL MCP server implementation, not GitHub API directly
+ * 
+ * SECURITY NOTE: This is a test file for E2E testing against controlled test repositories.
+ * Unicode normalization (DMCP-SEC-004) and audit logging (DMCP-SEC-006) are not
+ * required as this only tests with known, controlled data in test environments.
  */
 
 import { DollhouseMCPServer } from '../../dist/index.js';

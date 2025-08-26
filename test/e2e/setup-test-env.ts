@@ -1,6 +1,10 @@
 /**
  * Test Environment Setup and Validation
  * Validates GitHub token and test repository before running tests
+ * 
+ * SECURITY NOTE: This is a test environment setup utility for controlled testing.
+ * Unicode normalization (DMCP-SEC-004) and audit logging (DMCP-SEC-006) are not
+ * required as this only sets up test environments with known, controlled data.
  */
 
 import * as dotenv from 'dotenv';

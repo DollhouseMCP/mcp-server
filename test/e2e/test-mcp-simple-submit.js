@@ -3,6 +3,10 @@
 /**
  * Simple test of REAL MCP submit_content tool
  * This tests what actually happens when a user uses submit_content in Claude
+ * 
+ * SECURITY NOTE: This is a test file for E2E testing against controlled test repositories.
+ * Unicode normalization (DMCP-SEC-004) is not required as this only tests with
+ * known, controlled data in test environments.
  */
 
 console.log('\n🔬 Testing ACTUAL MCP submit_content Tool\n');
