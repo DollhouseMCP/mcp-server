@@ -50,7 +50,10 @@
     "qa:direct": "node scripts/qa-direct-test.js",
     "qa:inspector": "node scripts/qa-inspector-cli-test.js",
     "qa:all": "npm run qa:direct && npm run qa:inspector",
-    "qa:simple": "node scripts/qa-simple-test.js"
+    "qa:simple": "node scripts/qa-simple-test.js",
+    "update:version": "node scripts/update-version.mjs",
+    "version:bump": "node scripts/update-version.mjs",
+    "version:check": "node scripts/update-version.mjs --dry-run"
   },
   "keywords": [
     "mcp",
