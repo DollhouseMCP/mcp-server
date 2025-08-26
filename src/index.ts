@@ -5202,8 +5202,12 @@ Placeholders for custom format:
 
   /**
    * Helper method to load element by type
+   * Returns an object with content, filename, and type properties
    */
   private async loadElementByType(elementName: string, elementType: string): Promise<any> {
+    // SECURITY: Sanitize elementName early to use in error messages too
+    const sanitizedName = path.basename(elementName);
+    
     try {
       const localPortfolioManager = PortfolioManager.getInstance();
       let elementTypeEnum: ElementType;
@@ -5228,9 +5232,72 @@ Placeholders for custom format:
       }
 
       const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
-      const filePath = path.join(dirPath, `${elementName}.json`);
-      const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content);
+      
+      // FIX: Check for actual file extensions used by elements (.md, .json, .yaml)
+      // Elements are stored as markdown files with YAML frontmatter, not JSON files
+      // Priority order: .md (primary format), .json (legacy), .yaml/.yml (config)
+      const extensions = ['.md', '.json', '.yaml', '.yml'];
+      let content: string | null = null;
+      let foundFile: string | null = null;
+      
+      // Define reasonable file size limit (10MB)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+      
+      for (const ext of extensions) {
+        const filePath = path.join(dirPath, `${sanitizedName}${ext}`);
+        try {
+          // Check file size before reading to prevent memory issues
+          const stats = await fs.stat(filePath);
+          if (stats.size > MAX_FILE_SIZE) {
+            throw new Error(`File size exceeds limit of 10MB: ${stats.size} bytes`);
+          }
+          
+          content = await fs.readFile(filePath, 'utf-8');
+          foundFile = filePath;
+          break; // Found the file, stop searching
+        } catch (err: any) {
+          // File doesn't exist with this extension, try the next one
+          if (err.code !== 'ENOENT') {
+            throw err; // Re-throw non-file-not-found errors
+          }
+        }
+      }
+      
+      // FIX: Only check foundFile, not content (empty files are valid)
+      if (!foundFile) {
+        throw Object.assign(new Error(`File not found`), { code: 'ENOENT' });
+      }
+      
+      // Return a minimal IElement-like object that portfolioManager.saveElement can handle
+      // This preserves the raw markdown content for syncing to GitHub
+      return {
+        // IElement required properties
+        id: `${elementType}_${sanitizedName}_${Date.now()}`,
+        type: elementTypeEnum,
+        version: '1.0.0',
+        metadata: {
+          name: sanitizedName,
+          description: `Loaded from ${path.basename(foundFile)}`,
+          author: 'unknown',
+          created: new Date().toISOString(),
+          modified: new Date().toISOString(),
+          tags: []
+        },
+        
+        // IElement required methods (minimal implementations for sync)
+        validate: () => ({ 
+          isValid: true, 
+          errors: [] as any[], 
+          warnings: [] as any[] 
+        }),
+        serialize: () => content || '',
+        deserialize: () => { /* no-op */ },
+        getStatus: () => ({ status: 'active' as const }),
+        
+        // Additional properties for portfolio sync
+        content: content || '',
+        filename: path.basename(foundFile)
+      } as any; // Type assertion needed since we're duck-typing IElement
     } catch (error: any) {
       // Check if this is our validation error for invalid element types
       if (error.message && error.message.includes('Invalid element type:')) {
@@ -5241,15 +5308,16 @@ Placeholders for custom format:
       let errorMessage: string;
       
       if (error.code === 'ENOENT') {
-        errorMessage = `Element '${elementName}' not found in ${elementType}. File does not exist.`;
+        errorMessage = `Element '${sanitizedName}' not found in ${elementType}. Searched for: ${sanitizedName}.md, ${sanitizedName}.json, ${sanitizedName}.yaml, ${sanitizedName}.yml`;
       } else if (error instanceof SyntaxError) {
-        errorMessage = `Element '${elementName}' in ${elementType} contains invalid JSON: ${error.message}`;
+        errorMessage = `Element '${sanitizedName}' in ${elementType} contains invalid content: ${error.message}`;
       } else {
-        errorMessage = `Failed to load element '${elementName}' from ${elementType}: ${error.message || 'Unknown error'}`;
+        errorMessage = `Failed to load element '${sanitizedName}' from ${elementType}: ${error.message || 'Unknown error'}`;
       }
       
       logger.warn('Error in loadElementByType', { 
-        elementName, 
+        elementName: sanitizedName, 
+        originalName: elementName !== sanitizedName ? elementName : undefined,
         elementType, 
         error: error.message, 
         code: error.code 

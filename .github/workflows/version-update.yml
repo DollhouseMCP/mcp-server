@@ -1,0 +1,168 @@
+name: Version Update Assistant
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version number (e.g., 1.6.5)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (optional)'
+        required: false
+        type: string
+      create_pr:
+        description: 'Create pull request'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+      
+      - name: Validate version format
+        shell: bash
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
+            echo "❌ Invalid version format: ${{ inputs.version }}"
+            echo "Version must follow semantic versioning (e.g., 1.6.5 or 1.6.5-beta.1)"
+            exit 1
+          fi
+      
+      - name: Get current version
+        id: current_version
+        shell: bash
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT"
+      
+      - name: Check if version is newer
+        shell: bash
+        run: |
+          CURRENT="${{ steps.current_version.outputs.current }}"
+          NEW="${{ inputs.version }}"
+          
+          # Simple version comparison (works for most cases)
+          if [ "$CURRENT" = "$NEW" ]; then
+            echo "⚠️ Version $NEW is the same as current version"
+            exit 1
+          fi
+          
+          echo "✅ Updating from $CURRENT to $NEW"
+      
+      - name: Update version in codebase
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          # Run the version update script with environment variables to prevent command injection
+          if [ -n "${RELEASE_NOTES}" ]; then
+            node scripts/update-version.mjs "${VERSION}" --notes "${RELEASE_NOTES}"
+          else
+            node scripts/update-version.mjs "${VERSION}"
+          fi
+      
+      - name: Run tests
+        shell: bash
+        run: |
+          npm ci
+          npm test -- --maxWorkers=4
+      
+      - name: Create Pull Request
+        if: inputs.create_pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/update-version-${{ inputs.version }}
+          commit-message: |
+            chore: bump version to ${{ inputs.version }}
+            
+            Updates version from ${{ steps.current_version.outputs.current }} to ${{ inputs.version }}
+            
+            ${{ inputs.release_notes }}
+            
+            This is an automated version update.
+          committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          title: "chore: bump version to ${{ inputs.version }}"
+          body: |
+            ## Version Update
+            
+            This PR updates the version from `${{ steps.current_version.outputs.current }}` to `${{ inputs.version }}`.
+            
+            ### Release Notes
+            ${{ inputs.release_notes || 'No release notes provided.' }}
+            
+            ### Files Updated
+            - package.json
+            - package-lock.json
+            - README.md
+            - CHANGELOG.md
+            - Documentation files
+            - Version constants
+            
+            ### Checklist
+            - [x] Version numbers updated
+            - [x] Tests passing
+            - [ ] Changelog reviewed
+            - [ ] Ready for release
+            
+            ---
+            *This is an automated pull request created by the Version Update workflow.*
+          labels: |
+            chore
+            version-update
+            automated
+      
+      - name: Direct commit (no PR)
+        if: '!inputs.create_pr'
+        shell: bash
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add -A
+          git commit -m "chore: bump version to ${{ inputs.version }}
+          
+          Updates version from ${{ steps.current_version.outputs.current }} to ${{ inputs.version }}
+          
+          ${{ inputs.release_notes }}"
+          
+          git push origin ${{ github.ref }}
+          
+      - name: Summary
+        shell: bash
+        run: |
+          echo "## ✅ Version Update Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous version**: ${{ steps.current_version.outputs.current }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **New version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.create_pr }}" = "true" ]; then
+            echo "- **Pull Request**: Created on branch \`chore/update-version-${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Committed to**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.release_notes }}" ]; then
+            echo "### Release Notes" >> $GITHUB_STEP_SUMMARY
+            echo "${{ inputs.release_notes }}" >> $GITHUB_STEP_SUMMARY
+          fi

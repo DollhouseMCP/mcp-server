@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.5] - 2025-08-26
+
+- Portfolio sync fix for markdown elements (#759)
+- Intelligent version update system (#760)
+- Comprehensive release workflow documentation
+
 All notable changes to DollhouseMCP will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
