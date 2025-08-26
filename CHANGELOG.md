@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.6.8] - 2025-08-26
+
+### Fixed
+- OAuth client ID configuration display issue - `configure_oauth` tool now correctly shows "Using Default" instead of "Not Configured" when using the default GitHub OAuth client ID (#782)
+
 ## [1.6.7] - 2025-08-26
 
 Fixed version update script and improved QA test reliability
