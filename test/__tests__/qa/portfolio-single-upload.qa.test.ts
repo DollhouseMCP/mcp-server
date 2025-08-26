@@ -33,7 +33,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       // Mock fetch for GitHub API
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       // Mock checking if file exists (returns null for new file)
@@ -41,7 +41,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         ok: false,
         status: 404,
         json: async () => null
-      });
+      } as Response);
 
       // Mock successful file creation with standard response
       mockFetch.mockResolvedValueOnce({
@@ -57,7 +57,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
             html_url: 'https://github.com/test/portfolio/commit/abc123'
           }
         })
-      });
+      } as Response);
 
       // Create a test element
       const testElement = {
@@ -81,7 +81,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     it('should handle response with null commit (the bug from QA report)', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       // Mock checking if file exists
@@ -89,7 +89,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         ok: false,
         status: 404,
         json: async () => null
-      });
+      } as Response);
 
       // Mock the problematic response that caused the original error
       mockFetch.mockResolvedValueOnce({
@@ -102,7 +102,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           },
           commit: null  // THIS is what caused the error!
         })
-      });
+      } as Response);
 
       const testElement = {
         id: 'test_element',
@@ -127,14 +127,14 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     it('should use fallback URL when no commit or content URLs available', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
         json: async () => null
-      });
+      } as Response);
 
       // Minimal response with no URLs
       mockFetch.mockResolvedValueOnce({
@@ -147,7 +147,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           }
           // No commit at all
         })
-      });
+      } as Response);
 
       const testElement = {
         id: 'test_element',
@@ -171,14 +171,14 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     it('should use ultimate fallback when response has no useful data', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
         json: async () => null
-      });
+      } as Response);
 
       // Response with no useful data at all
       mockFetch.mockResolvedValueOnce({
@@ -188,7 +188,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           // Completely unexpected structure
           someField: 'value'
         })
-      });
+      } as Response);
 
       const testElement = {
         id: 'test_element',
@@ -214,13 +214,14 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     it('should upload only one element, not trigger bulk sync', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
       
       // Track all API calls
       const apiCalls: string[] = [];
-      mockFetch.mockImplementation(async (url: string, options?: any) => {
-        apiCalls.push(`${options?.method || 'GET'} ${url}`);
+      mockFetch.mockImplementation(async (url: RequestInfo | URL, options?: RequestInit) => {
+        const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : (url as Request).url;
+        apiCalls.push(`${options?.method || 'GET'} ${urlString}`);
         
         if (options?.method === 'PUT') {
           return {
@@ -235,9 +236,9 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
                 html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc' 
               }
             })
-          };
+          } as Response;
         }
-        return { ok: false, status: 404, json: async () => null };
+        return { ok: false, status: 404, json: async () => null } as Response;
       });
 
       const ziggyElement = {
@@ -270,7 +271,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     it('simulates real user flow: upload Ziggy persona to personal GitHub portfolio', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
       
       // User has multiple personas locally
@@ -283,7 +284,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       // Track what gets uploaded
       const uploadedElements: string[] = [];
       
-      mockFetch.mockImplementation(async (url: string, options?: any) => {
+      mockFetch.mockImplementation(async (url: RequestInfo | URL, options?: RequestInit) => {
         if (options?.method === 'PUT') {
           const body = JSON.parse(options.body);
           const content = Buffer.from(body.content, 'base64').toString();
@@ -301,9 +302,9 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
                 html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc' 
               }
             })
-          };
+          } as Response;
         }
-        return { ok: false, status: 404, json: async () => null };
+        return { ok: false, status: 404, json: async () => null } as Response;
       });
 
       // User action: Upload ONLY Ziggy
@@ -347,7 +348,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
     it('should return PORTFOLIO_SYNC_001 for authentication errors', async () => {
       portfolioManager.setToken('bad_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       // Mock 401 authentication error
@@ -357,7 +358,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
         json: async () => ({
           message: 'Bad credentials'
         })
-      });
+      } as Response);
 
       const testElement = {
         id: 'test_element',
@@ -380,14 +381,14 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
     it('should return PORTFOLIO_SYNC_006 for rate limit errors', async () => {
       portfolioManager.setToken('ghp_test_token');
       
-      const mockFetch = jest.fn();
+      const mockFetch = jest.fn<typeof fetch>();
       global.fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
         json: async () => null
-      });
+      } as Response);
 
       // Mock 403 rate limit error
       mockFetch.mockResolvedValueOnce({
@@ -396,7 +397,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
         json: async () => ({
           message: 'API rate limit exceeded'
         })
-      });
+      } as Response);
 
       const testElement = {
         id: 'test_element',
