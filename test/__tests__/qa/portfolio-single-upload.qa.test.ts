@@ -210,6 +210,139 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
     });
   });
 
+  describe('Single Element Upload Behavior', () => {
+    it('should upload only one element, not trigger bulk sync', async () => {
+      portfolioManager.setToken('ghp_test_token');
+      
+      const mockFetch = jest.fn();
+      global.fetch = mockFetch as any;
+      
+      // Track all API calls
+      const apiCalls: string[] = [];
+      mockFetch.mockImplementation(async (url: string, options?: any) => {
+        apiCalls.push(`${options?.method || 'GET'} ${url}`);
+        
+        if (options?.method === 'PUT') {
+          return {
+            ok: true,
+            status: 201,
+            json: async () => ({
+              content: { 
+                path: 'personas/ziggy.md',
+                html_url: 'https://github.com/testuser/dollhouse-portfolio/blob/main/personas/ziggy.md'
+              },
+              commit: { 
+                html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc' 
+              }
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => null };
+      });
+
+      const ziggyElement = {
+        id: 'ziggy_element',
+        type: 'personas' as any,
+        version: '1.0.0',
+        metadata: {
+          name: 'Ziggy',
+          description: 'Quantum Leap AI',
+          author: 'testuser'
+        },
+        validate: () => ({ isValid: true, errors: [] }),
+        serialize: () => '# Ziggy\nYou are Ziggy from Quantum Leap.'
+      };
+
+      // Upload single element
+      await portfolioManager.saveElement(ziggyElement, true);
+      
+      // Verify only ONE PUT request (single upload)
+      const putRequests = apiCalls.filter(call => call.startsWith('PUT'));
+      expect(putRequests).toHaveLength(1);
+      expect(putRequests[0]).toContain('personas/ziggy.md');
+      
+      // Verify we didn't scan for other elements (no bulk sync behavior)
+      // In bulk sync, we'd see multiple GET requests for different element types
+      const getRequests = apiCalls.filter(call => call.startsWith('GET'));
+      expect(getRequests.length).toBeLessThanOrEqual(1); // Only checking if file exists
+    });
+
+    it('simulates real user flow: upload Ziggy persona to personal GitHub portfolio', async () => {
+      portfolioManager.setToken('ghp_test_token');
+      
+      const mockFetch = jest.fn();
+      global.fetch = mockFetch as any;
+      
+      // User has multiple personas locally
+      const localPersonas = [
+        { name: 'Ziggy', private: false },
+        { name: 'Private Work Assistant', private: true },
+        { name: 'Family Helper', private: true }
+      ];
+      
+      // Track what gets uploaded
+      const uploadedElements: string[] = [];
+      
+      mockFetch.mockImplementation(async (url: string, options?: any) => {
+        if (options?.method === 'PUT') {
+          const body = JSON.parse(options.body);
+          const content = Buffer.from(body.content, 'base64').toString();
+          uploadedElements.push(content);
+          
+          return {
+            ok: true,
+            status: 201,
+            json: async () => ({
+              content: { 
+                path: 'personas/ziggy.md',
+                html_url: 'https://github.com/testuser/dollhouse-portfolio/blob/main/personas/ziggy.md'
+              },
+              commit: { 
+                html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc' 
+              }
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => null };
+      });
+
+      // User action: Upload ONLY Ziggy
+      const ziggyElement = {
+        id: 'ziggy_quantum_leap',
+        type: 'personas' as any,
+        version: '1.0.0',
+        metadata: {
+          name: 'Ziggy',
+          description: 'A matter-of-fact, snarky AI assistant persona based on Quantum Leap',
+          author: 'testuser'
+        },
+        validate: () => ({ isValid: true, errors: [] }),
+        serialize: () => `---
+name: Ziggy
+description: A matter-of-fact, snarky AI assistant persona based on Quantum Leap
+---
+
+# Ziggy - Quantum Leap Supercomputer Persona
+
+You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
+      };
+
+      const result = await portfolioManager.saveElement(ziggyElement, true);
+      
+      // Verify success
+      expect(result).toContain('github.com/testuser/dollhouse-portfolio');
+      
+      // CRITICAL: Verify only Ziggy was uploaded
+      expect(uploadedElements).toHaveLength(1);
+      expect(uploadedElements[0]).toContain('Ziggy');
+      expect(uploadedElements[0]).toContain('Quantum Leap');
+      
+      // Verify private personas were NOT uploaded
+      expect(uploadedElements[0]).not.toContain('Private Work');
+      expect(uploadedElements[0]).not.toContain('Family Helper');
+    });
+  });
+
   describe('Error Code Reporting', () => {
     it('should return PORTFOLIO_SYNC_001 for authentication errors', async () => {
       portfolioManager.setToken('bad_token');
