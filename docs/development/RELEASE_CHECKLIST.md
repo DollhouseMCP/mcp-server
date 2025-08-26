@@ -2,6 +2,8 @@
 
 Copy this checklist when preparing a new release.
 
+> **📚 Full Release Process**: See [RELEASE_WORKFLOW.md](../RELEASE_WORKFLOW.md) for detailed step-by-step instructions using the automated version update system.
+
 ## Release Version: vX.Y.Z
 
 ### 📝 Pre-Release Documentation
