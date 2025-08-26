@@ -52,6 +52,12 @@ if (currentVersion === newVersion) {
   process.exit(0);
 }
 
+// Helper function to escape special regex characters
+function escapeRegExp(string) {
+  // Escape all special regex characters including backslashes
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 console.log(`\n🔄 Updating version from ${currentVersion} to ${newVersion}`);
 if (isDryRun) {
   console.log('🧪 DRY RUN MODE - No files will be changed\n');
@@ -82,7 +88,7 @@ const updateConfigs = [
       },
       {
         // Update current version mentions (but not in history/changelog)
-        pattern: new RegExp(`\\bv?${currentVersion.replace(/\./g, '\\.')}\\b`, 'g'),
+        pattern: new RegExp(`\\bv?${escapeRegExp(currentVersion)}\\b`, 'g'),
         replacement: (match) => match.startsWith('v') ? `v${newVersion}` : newVersion,
         // Skip if line contains certain keywords
         skipLines: /changelog|history|previous|released|was |fixed in|since|before|after|from [\d\.]+ to|migrat|v[\d\.]+ \(/i
@@ -122,7 +128,7 @@ export const BUILD_DATE = "${new Date().toISOString()}";
     updates: [
       {
         // Update version references in documentation
-        pattern: new RegExp(`(?:Version|v)\\s*${currentVersion.replace(/\./g, '\\.')}\\b`, 'g'),
+        pattern: new RegExp(`(?:Version|v)\\s*${escapeRegExp(currentVersion)}\\b`, 'g'),
         replacement: (match) => match.replace(currentVersion, newVersion),
         // Skip historical references
         skipLines: /changelog|history|previous|released|deprecated|legacy|old version|upgrade from|PR #|Issue #|commit|merged/i
@@ -131,7 +137,7 @@ export const BUILD_DATE = "${new Date().toISOString()}";
   },
   {
     name: 'docker-compose.yml',
-    pattern: new RegExp(`dollhousemcp/mcp-server:${currentVersion.replace(/\./g, '\\.')}`, 'g'),
+    pattern: new RegExp(`dollhousemcp/mcp-server:${escapeRegExp(currentVersion)}`, 'g'),
     replacement: `dollhousemcp/mcp-server:${newVersion}`,
     optional: true // Don't fail if file doesn't exist
   },
