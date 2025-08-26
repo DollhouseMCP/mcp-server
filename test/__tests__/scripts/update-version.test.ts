@@ -15,8 +15,8 @@ import { execSync } from 'child_process';
 import * as os from 'os';
 
 describe('update-version.mjs', () => {
-  let tempDir;
-  let scriptPath;
+  let tempDir: string;
+  let scriptPath: string;
   
   beforeEach(() => {
     // Create a temporary directory for testing
