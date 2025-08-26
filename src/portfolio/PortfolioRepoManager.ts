@@ -301,13 +301,88 @@ export class PortfolioRepoManager {
         }
       );
 
-      return result.commit.html_url;
-    } catch (error) {
+      // FIX: GitHub API response structure varies - handle all cases
+      // The response may have commit data at different levels or not at all
+      if (!result) {
+        logger.error('[PORTFOLIO_SYNC_004] GitHub API returned null response', {
+          element: element.id,
+          username,
+          filePath
+        });
+        throw new Error(`[PORTFOLIO_SYNC_004] GitHub API returned null response for ${element.metadata.name}`);
+      }
+
+      // Try multiple paths to get the commit URL
+      let commitUrl: string;
+      
+      // Path 1: result.commit.html_url (standard for content API)
+      if (result.commit?.html_url) {
+        commitUrl = result.commit.html_url;
+      }
+      // Path 2: result.content.html_url (some API responses)
+      else if (result.content?.html_url) {
+        commitUrl = result.content.html_url;
+      }
+      // Path 3: Generate URL from response data
+      else if (result.content?.path) {
+        commitUrl = `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/blob/main/${result.content.path}`;
+      }
+      // Path 4: Fallback to repository URL (guaranteed to be set)
+      else {
+        logger.warn('[PORTFOLIO_SYNC_004] Could not extract commit URL from GitHub response, using fallback', {
+          element: element.id,
+          responseKeys: Object.keys(result),
+          hasCommit: !!result.commit,
+          hasContent: !!result.content
+        });
+        commitUrl = `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/tree/main/${element.type}`;
+      }
+
+      logger.debug('Successfully saved element to GitHub portfolio', {
+        element: element.id,
+        username,
+        filePath,
+        commitUrl
+      });
+
+      return commitUrl;
+    } catch (error: any) {
+      // Enhanced error reporting with specific error codes
+      let errorCode = 'PORTFOLIO_SYNC_005'; // Default network error
+      let enhancedMessage = 'Failed to save element to portfolio';
+      
+      // Check for specific error conditions
+      if (error.message?.includes('401') || error.message?.includes('authentication')) {
+        errorCode = 'PORTFOLIO_SYNC_001';
+        enhancedMessage = 'GitHub authentication failed. Please re-authenticate.';
+      } else if (error.message?.includes('404') || error.message?.includes('not found')) {
+        errorCode = 'PORTFOLIO_SYNC_002';
+        enhancedMessage = 'GitHub portfolio repository not found. Please run init_portfolio first.';
+      } else if (error.message?.includes('403') || error.message?.includes('rate limit')) {
+        errorCode = 'PORTFOLIO_SYNC_006';
+        enhancedMessage = 'GitHub API rate limit exceeded. Please try again later.';
+      } else if (error.message?.includes('Cannot read properties of null')) {
+        errorCode = 'PORTFOLIO_SYNC_004';
+        enhancedMessage = `GitHub API response parsing error: ${error.message}`;
+      }
+      
+      logger.error(`[${errorCode}] ${enhancedMessage}`, { 
+        elementId: element.id,
+        username,
+        originalError: error.message,
+        stack: error.stack
+      });
+      
       ErrorHandler.logError('PortfolioRepoManager.saveElementToRepo', error, { 
         elementId: element.id,
-        username 
+        username,
+        errorCode
       });
-      throw ErrorHandler.wrapError(error, 'Failed to save element to portfolio', ErrorCategory.NETWORK_ERROR);
+      
+      // Throw error with code for better handling upstream
+      const wrappedError = ErrorHandler.wrapError(error, `[${errorCode}] ${enhancedMessage}`, ErrorCategory.NETWORK_ERROR);
+      (wrappedError as any).code = errorCode;
+      throw wrappedError;
     }
   }
 

@@ -4674,14 +4674,32 @@ Placeholders for custom format:
                   });
                 }
               } catch (elementError: any) {
+                // Extract error code if present
+                const errorCode = elementError.code || (elementError.message?.match(/\[([A-Z_]+_\d+)\]/)?.[1]) || '';
                 const errorMessage = elementError.message || 'Unknown error during element sync';
-                syncText += ` ❌ (${errorMessage})\n`;
+                
+                // Clean up error message for display (remove code if already extracted)
+                const displayMessage = errorCode 
+                  ? errorMessage.replace(/\[[A-Z_]+_\d+\]\s*/, '')
+                  : errorMessage;
+                
+                // Show error code in output for better diagnostics
+                const errorOutput = errorCode 
+                  ? `${errorCode}: ${displayMessage}`
+                  : displayMessage;
+                
+                syncText += ` ❌ (${errorOutput})\n`;
                 failedElements.push({
                   type: elementType,
                   name: elementName,
-                  error: errorMessage
+                  error: errorOutput
                 });
-                logger.warn(`Failed to sync ${elementType}/${elementName}`, { error: errorMessage });
+                logger.warn(`Failed to sync ${elementType}/${elementName}`, { 
+                  error: errorMessage,
+                  errorCode,
+                  elementName,
+                  elementType
+                });
               }
             }
             
@@ -4735,12 +4753,48 @@ Placeholders for custom format:
             syncText += `\n`;
           }
           
-          // UX IMPROVEMENT: Add helpful suggestions for common issues
+          // UX IMPROVEMENT: Add helpful suggestions based on error codes found
           syncText += `💡 **Troubleshooting Tips**:\n`;
+          
+          // Check for specific error codes and provide targeted advice
+          const errorCodes = failedElements.map(f => f.error.match(/^([A-Z_]+_\d+):/)?.[1]).filter(Boolean);
+          const uniqueErrorCodes = [...new Set(errorCodes)];
+          
+          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_001')) {
+            syncText += `  • 🔐 **Auth Error**: Run \`setup_github_auth\` to re-authenticate\n`;
+          }
+          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_002')) {
+            syncText += `  • 📁 **Repo Missing**: Run \`init_portfolio\` to create your repository\n`;
+          }
+          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_004')) {
+            syncText += `  • 🔧 **API Error**: GitHub response format issue - please report this bug\n`;
+          }
+          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_006')) {
+            syncText += `  • ⏳ **Rate Limited**: Wait a few minutes and try again\n`;
+          }
+          
+          // General tips
           syncText += `  • Check element file formats and metadata\n`;
-          syncText += `  • Verify GitHub authentication is still valid\n`;
           syncText += `  • Try syncing individual elements with \`submit_content\`\n`;
           syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
+          
+          // Add error code legend if we found any
+          if (uniqueErrorCodes.length > 0) {
+            syncText += `📋 **Error Codes Detected**:\n`;
+            for (const code of uniqueErrorCodes) {
+              const errorDescriptions: Record<string, string> = {
+                'PORTFOLIO_SYNC_001': 'Authentication failure',
+                'PORTFOLIO_SYNC_002': 'Repository not found',
+                'PORTFOLIO_SYNC_003': 'File creation failed',
+                'PORTFOLIO_SYNC_004': 'API response parsing error',
+                'PORTFOLIO_SYNC_005': 'Network error',
+                'PORTFOLIO_SYNC_006': 'Rate limit exceeded'
+              };
+              const description = errorDescriptions[code as string] || 'Unknown error';
+              syncText += `  • ${code}: ${description}\n`;
+            }
+            syncText += `\n`;
+          }
         } else {
           syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
         }

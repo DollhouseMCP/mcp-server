@@ -130,7 +130,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     {
       tool: {
         name: "submit_content",
-        description: "Submit local content to the collection for community review. Use this when users want to 'share their persona' or 'submit a persona to the collection'. This handles all content types including personas (AI behavioral profiles).",
+        description: "Upload a single element (persona, skill, template, etc.) to your personal GitHub portfolio. After uploading to your portfolio, you'll have the option to also submit it to the community collection. Use this when users want to upload a specific element to their GitHub portfolio or share with the community. This handles all content types including personas (AI behavioral profiles).",
         inputSchema: {
           type: "object",
           properties: {
