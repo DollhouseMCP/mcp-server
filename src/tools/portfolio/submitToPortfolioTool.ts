@@ -36,6 +36,7 @@ import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as yaml from 'js-yaml';
 
 export interface SubmitToPortfolioParams {
   name: string;
@@ -366,19 +367,96 @@ export class SubmitToPortfolioTool {
    * @param authStatus Authentication status containing username
    * @returns Metadata object for the element
    */
-  private prepareElementMetadata(
+  private async prepareElementMetadata(
     safeName: string, 
     elementType: ElementType, 
-    authStatus: any
-  ): PortfolioElementMetadata {
-    return {
+    authStatus: any,
+    filePath?: string
+  ): Promise<PortfolioElementMetadata> {
+    // Try to extract metadata from the file if path is provided
+    let fileMetadata: any = null;
+    
+    if (filePath) {
+      fileMetadata = await this.extractElementMetadata(filePath);
+    }
+    
+    // Build metadata with real values from file, falling back to defaults
+    const metadata: PortfolioElementMetadata = {
       name: safeName,
-      description: `${elementType} submitted from local portfolio`,
-      author: authStatus.username || 'unknown',
-      created: new Date().toISOString(),
-      updated: new Date().toISOString(),
-      version: '1.0.0'
+      description: fileMetadata?.description || 
+                   fileMetadata?.summary || 
+                   `${elementType} submitted from local portfolio`,
+      author: authStatus.username || fileMetadata?.author || 'unknown',
+      created: fileMetadata?.created || 
+               fileMetadata?.created_date || 
+               new Date().toISOString(),
+      updated: fileMetadata?.updated || 
+               fileMetadata?.modified || 
+               new Date().toISOString(),
+      version: fileMetadata?.version || '1.0.0'
     };
+    
+    // Add additional metadata fields if present
+    if (fileMetadata) {
+      // Preserve other metadata fields that might be useful
+      if (fileMetadata.triggers) (metadata as any).triggers = fileMetadata.triggers;
+      if (fileMetadata.category) (metadata as any).category = fileMetadata.category;
+      if (fileMetadata.age_rating) (metadata as any).age_rating = fileMetadata.age_rating;
+      if (fileMetadata.ai_generated !== undefined) (metadata as any).ai_generated = fileMetadata.ai_generated;
+      if (fileMetadata.generation_method) (metadata as any).generation_method = fileMetadata.generation_method;
+      if (fileMetadata.license) (metadata as any).license = fileMetadata.license;
+      if (fileMetadata.tags) (metadata as any).tags = fileMetadata.tags;
+    }
+    
+    logger.info('Prepared element metadata', {
+      elementName: safeName,
+      hasFileMetadata: !!fileMetadata,
+      description: metadata.description.substring(0, 100) // Log first 100 chars
+    });
+    
+    return metadata;
+  }
+
+  /**
+   * Extracts metadata from an element file
+   * Parses YAML frontmatter to get the actual metadata
+   * @param filePath Path to the element file
+   * @returns Extracted metadata or null if parsing fails
+   */
+  private async extractElementMetadata(filePath: string): Promise<any> {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      
+      // Parse frontmatter YAML (content between --- markers)
+      const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+      
+      if (frontmatterMatch && frontmatterMatch[1]) {
+        const yamlContent = frontmatterMatch[1];
+        
+        // Use FAILSAFE_SCHEMA to prevent code execution
+        const metadata = yaml.load(yamlContent, { 
+          schema: yaml.FAILSAFE_SCHEMA 
+        });
+        
+        logger.debug('Extracted metadata from element file', {
+          path: filePath,
+          metadataKeys: metadata ? Object.keys(metadata) : []
+        });
+        
+        return metadata;
+      }
+      
+      // No frontmatter found, return null
+      logger.debug('No frontmatter found in element file', { path: filePath });
+      return null;
+      
+    } catch (error) {
+      logger.warn('Failed to extract metadata from element file', {
+        path: filePath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
 
   /**
@@ -1267,7 +1345,7 @@ export class SubmitToPortfolioTool {
       // Step 5: Prepare metadata for element
       logger.info('📝 Step 5/8: Preparing metadata...');
       const step5Start = Date.now();
-      const metadata = this.prepareElementMetadata(safeName!, elementType, authStatus);
+      const metadata = await this.prepareElementMetadata(safeName!, elementType, authStatus, localPath);
       timings['metadata'] = Date.now() - step5Start;
       logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
         author: metadata.author,
@@ -1433,25 +1511,73 @@ export class SubmitToPortfolioTool {
       const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
 
       // Format the issue body with all relevant information
+      // Build additional metadata fields for display
+      const additionalFields: string[] = [];
+      const meta = params.metadata as any;
+      
+      if (meta.category) additionalFields.push(`**Category**: ${meta.category}`);
+      if (meta.version) additionalFields.push(`**Version**: ${meta.version}`);
+      if (meta.triggers && Array.isArray(meta.triggers) && meta.triggers.length > 0) {
+        additionalFields.push(`**Triggers**: ${meta.triggers.join(', ')}`);
+      }
+      if (meta.age_rating) additionalFields.push(`**Age Rating**: ${meta.age_rating}`);
+      if (meta.ai_generated !== undefined) {
+        additionalFields.push(`**AI Generated**: ${meta.ai_generated ? 'Yes' : 'No'}`);
+      }
+      if (meta.generation_method) additionalFields.push(`**Generation Method**: ${meta.generation_method}`);
+      if (meta.license) additionalFields.push(`**License**: ${meta.license}`);
+      if (meta.tags && Array.isArray(meta.tags) && meta.tags.length > 0) {
+        additionalFields.push(`**Tags**: ${meta.tags.join(', ')}`);
+      }
+      
       const body = `## New ${params.elementType} Submission
 
-` +
-        `**Name**: ${params.elementName}\n` +
-        `**Author**: @${params.username}\n` +
-        `**Type**: ${params.elementType}\n` +
-        `**Description**: ${params.metadata.description || 'No description provided'}\n\n` +
-        `### Portfolio Link\n` +
-        `${params.portfolioUrl}\n\n` +
-        `### Metadata\n` +
-        `\`\`\`json\n${JSON.stringify(params.metadata, null, 2)}\n\`\`\`\n\n` +
-        `### Review Checklist\n` +
-        `- [ ] Content is appropriate and follows community guidelines\n` +
-        `- [ ] No security vulnerabilities or malicious patterns\n` +
-        `- [ ] Metadata is complete and accurate\n` +
-        `- [ ] Element works as described\n` +
-        `- [ ] No duplicate of existing collection content\n\n` +
-        `---\n` +
-        `*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
+**Name**: ${params.elementName}
+**Author**: @${params.username}
+**Type**: ${params.elementType}
+
+### Description
+${params.metadata.description || 'No description provided'}
+
+### Element Details
+${additionalFields.length > 0 ? additionalFields.join('\n') : '*No additional metadata available*'}
+
+### Portfolio Link
+${params.portfolioUrl}
+
+### Full Metadata
+\`\`\`yaml
+name: ${params.metadata.name}
+description: ${params.metadata.description}
+author: ${params.metadata.author}
+version: ${params.metadata.version}
+created: ${params.metadata.created}
+updated: ${params.metadata.updated}${
+  meta.category ? `\ncategory: ${meta.category}` : ''
+}${
+  meta.triggers ? `\ntriggers: [${meta.triggers.join(', ')}]` : ''
+}${
+  meta.age_rating ? `\nage_rating: ${meta.age_rating}` : ''
+}${
+  meta.ai_generated !== undefined ? `\nai_generated: ${meta.ai_generated}` : ''
+}${
+  meta.generation_method ? `\ngeneration_method: ${meta.generation_method}` : ''
+}${
+  meta.license ? `\nlicense: ${meta.license}` : ''
+}${
+  meta.tags ? `\ntags: [${meta.tags.join(', ')}]` : ''
+}
+\`\`\`
+
+### Review Checklist
+- [ ] Content is appropriate and follows community guidelines
+- [ ] No security vulnerabilities or malicious patterns
+- [ ] Metadata is complete and accurate
+- [ ] Element works as described
+- [ ] No duplicate of existing collection content
+
+---
+*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
 
       // Determine labels based on element type
       const labels = [
