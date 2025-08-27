@@ -64,6 +64,28 @@ export interface ElementDetectionResult {
   matches: ElementDetectionMatch[];
 }
 
+// Workflow step constants for consistent logging
+const WORKFLOW_STEPS = {
+  VALIDATION: 1,
+  AUTHENTICATION: 2,
+  CONTENT_DISCOVERY: 3,
+  SECURITY: 4,
+  METADATA: 5,
+  REPO_SETUP: 6,
+  SUBMISSION: 7,
+  REPORTING: 8,
+  TOTAL: 8
+} as const;
+
+// Logging configuration
+const LOGGING_CONFIG = {
+  // Set DOLLHOUSE_VERBOSE_LOGGING=true for detailed step-by-step logs
+  isVerbose: process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true',
+  // Set DOLLHOUSE_LOG_TIMING=true for timing measurements
+  shouldLogTiming: process.env.DOLLHOUSE_LOG_TIMING?.toLowerCase() === 'true' || 
+                   process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true'
+} as const;
+
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
@@ -685,9 +707,10 @@ export class SubmitToPortfolioTool {
         };
       }
 
-      // Log successful validation
+      // Log successful validation (using TOKEN_VALIDATION_SUCCESS since path-specific type doesn't exist)
+      // This is a fix for the bug where CONTENT_INJECTION_ATTEMPT was incorrectly used for successful validation
       SecurityMonitor.logSecurityEvent({
-        type: 'CONTENT_INJECTION_ATTEMPT',
+        type: 'TOKEN_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'SubmitToPortfolioTool.validatePortfolioPath',
         details: 'File path validation successful',
