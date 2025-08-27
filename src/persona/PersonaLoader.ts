@@ -64,6 +64,9 @@ export class PersonaLoader {
       const filePath = path.join(this.personasDir, filename);
       const fileContent = await fs.readFile(filePath, 'utf-8');
       
+      // DIAGNOSTIC: Log file content size
+      logger.debug(`[CONTENT-TRACE] Loading ${filename} - file size: ${fileContent.length} chars`);
+      
       // Use secure YAML parser instead of direct gray-matter
       let parsed;
       try {
@@ -78,6 +81,9 @@ export class PersonaLoader {
       
       const metadata = parsed.data as PersonaMetadata;
       const content = parsed.content;
+      
+      // DIAGNOSTIC: Log parsed content size
+      logger.debug(`[CONTENT-TRACE] Parsed ${filename} - content size: ${content.length} chars`);
       
       if (!metadata.name) {
         metadata.name = path.basename(filename, '.md');
@@ -114,9 +120,15 @@ export class PersonaLoader {
   async savePersona(persona: Persona): Promise<void> {
     const filePath = path.join(this.personasDir, persona.filename);
     
+    // DIAGNOSTIC: Log content size before save
+    logger.debug(`[CONTENT-TRACE] Saving ${persona.filename} - content size: ${persona.content.length} chars`);
+    
     // Use secure YAML stringification
     const secureParser = SecureYamlParser.createSecureMatterParser();
     const fileContent = secureParser.stringify(persona.content, persona.metadata);
+    
+    // DIAGNOSTIC: Log stringified content size
+    logger.debug(`[CONTENT-TRACE] Stringified ${persona.filename} - file content size: ${fileContent.length} chars`);
     
     // SECURITY FIX: Replace direct file write with atomic operation
     // FIXED: CVE-2025-XXXX - Non-atomic file write in persona save operation
@@ -124,6 +136,10 @@ export class PersonaLoader {
     // Security impact: Race conditions could cause data corruption or partial writes
     // Fix: Replaced with FileLockManager.atomicWriteFile for guaranteed atomicity
     await FileLockManager.atomicWriteFile(filePath, fileContent, { encoding: 'utf-8' });
+    
+    // DIAGNOSTIC: Verify file was written correctly
+    const writtenContent = await fs.readFile(filePath, 'utf-8');
+    logger.debug(`[CONTENT-TRACE] Verified ${persona.filename} - actual file size: ${writtenContent.length} chars`);
   }
   
   /**
