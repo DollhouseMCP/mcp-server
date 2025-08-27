@@ -7,7 +7,7 @@
  * Based on QA report: docs/QA/QA-version-1-6-5-save-to-github-portfolio-failure.md
  */
 
-import { jest } from '@jest/globals';
+import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { PortfolioRepoManager } from '../../../src/portfolio/PortfolioRepoManager.js';
@@ -15,15 +15,15 @@ import { PortfolioRepoManager } from '../../../src/portfolio/PortfolioRepoManage
 // We'll test PortfolioRepoManager directly since that's where the fix is
 describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
   let portfolioManager: PortfolioRepoManager;
-  let originalFetch: typeof global.fetch;
+  let originalFetch: typeof fetch;
 
   beforeEach(() => {
     portfolioManager = new PortfolioRepoManager();
-    originalFetch = global.fetch;
+    originalFetch = (global as any).fetch;
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
+    (global as any).fetch = originalFetch;
     jest.clearAllMocks();
   });
 
@@ -34,7 +34,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       
       // Mock fetch for GitHub API
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       // Mock checking if file exists (returns null for new file)
       mockFetch.mockResolvedValueOnce({
@@ -69,8 +69,10 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       // This should work and return the commit URL
@@ -82,7 +84,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       // Mock checking if file exists
       mockFetch.mockResolvedValueOnce({
@@ -113,8 +115,10 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       // With our fix, this should NOT throw and should use fallback
@@ -128,7 +132,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -158,8 +162,10 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       const result = await portfolioManager.saveElement(testElement, true);
@@ -172,7 +178,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -199,8 +205,10 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       const result = await portfolioManager.saveElement(testElement, true);
@@ -215,7 +223,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
       
       // Track all API calls
       const apiCalls: string[] = [];
@@ -250,8 +258,10 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'Quantum Leap AI',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => '# Ziggy\nYou are Ziggy from Quantum Leap.'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => '# Ziggy\nYou are Ziggy from Quantum Leap.',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       // Upload single element
@@ -272,7 +282,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
       
       // User has multiple personas locally
       const localPersonas = [
@@ -286,8 +296,8 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       
       mockFetch.mockImplementation(async (url: RequestInfo | URL, options?: RequestInit) => {
         if (options?.method === 'PUT') {
-          const body = JSON.parse(options.body);
-          const content = Buffer.from(body.content, 'base64').toString();
+          const body = JSON.parse(options.body as string);
+          const content = atob(body.content);
           uploadedElements.push(content);
           
           return {
@@ -317,7 +327,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
           description: 'A matter-of-fact, snarky AI assistant persona based on Quantum Leap',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
+        validate: () => ({ valid: true, errors: [] }),
         serialize: () => `---
 name: Ziggy
 description: A matter-of-fact, snarky AI assistant persona based on Quantum Leap
@@ -325,7 +335,9 @@ description: A matter-of-fact, snarky AI assistant persona based on Quantum Leap
 
 # Ziggy - Quantum Leap Supercomputer Persona
 
-You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
+You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       const result = await portfolioManager.saveElement(ziggyElement, true);
@@ -349,7 +361,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
       portfolioManager.setToken('bad_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       // Mock 401 authentication error
       mockFetch.mockResolvedValueOnce({
@@ -369,8 +381,10 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       await expect(portfolioManager.saveElement(testElement, true))
@@ -382,7 +396,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
       portfolioManager.setToken('ghp_test_token');
       
       const mockFetch = jest.fn<typeof fetch>();
-      global.fetch = mockFetch as any;
+      (global as any).fetch = mockFetch as any;
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -408,8 +422,10 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`
           description: 'Test',
           author: 'testuser'
         },
-        validate: () => ({ isValid: true, errors: [] }),
-        serialize: () => 'test content'
+        validate: () => ({ valid: true, errors: [] }),
+        serialize: () => 'test content',
+        deserialize: (data: string) => {},
+        getStatus: () => 'inactive' as any
       };
 
       await expect(portfolioManager.saveElement(testElement, true))

@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { PersonaLoader } from '../../../src/persona/PersonaLoader.js';
 import { PersonaElement } from '../../../src/persona/PersonaElement.js';
-import { Persona } from '../../../src/types.js';
+import { Persona } from '../../../src/types/persona.js';
 import { ElementType } from '../../../src/portfolio/types.js';
 
 describe('Content Truncation Investigation', () => {
