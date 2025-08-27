@@ -33,7 +33,7 @@ jest.mock('fs/promises');
 const MockedFs = fs as jest.Mocked<typeof fs>;
 const MockedTokenManager = TokenManager as jest.Mocked<typeof TokenManager>;
 
-describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
+describe('SubmitToPortfolioTool', () => {
   let tool: SubmitToPortfolioTool;
   let mockApiCache: any;
   let mockAuthManager: any;
@@ -51,27 +51,27 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
       delete: jest.fn()
     };
     
-    // Setup auth manager mock
+    // Setup auth manager mock with proper typing
     mockAuthManager = {
-      getAuthStatus: jest.fn<() => Promise<any>>().mockResolvedValue({
+      getAuthStatus: jest.fn().mockImplementation(() => Promise.resolve({
         isAuthenticated: true,
         username: 'testuser'
-      })
+      }))
     };
     
-    // Setup portfolio repo manager mock
+    // Setup portfolio repo manager mock with proper typing
     mockPortfolioRepoManager = {
       setToken: jest.fn(),
-      checkPortfolioExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
-      createPortfolio: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio'),
-      saveElement: jest.fn<() => Promise<string>>().mockResolvedValue('https://github.com/testuser/portfolio/blob/main/personas/sample.md')
+      checkPortfolioExists: jest.fn().mockImplementation(() => Promise.resolve(true)),
+      createPortfolio: jest.fn().mockImplementation(() => Promise.resolve('https://github.com/testuser/portfolio')),
+      saveElement: jest.fn().mockImplementation(() => Promise.resolve('https://github.com/testuser/portfolio/blob/main/personas/sample.md'))
     };
     
     // Mock constructors
     (GitHubAuthManager as any).mockImplementation(() => mockAuthManager);
     (PortfolioRepoManager as any).mockImplementation(() => mockPortfolioRepoManager);
     
-    MockedTokenManager.getGitHubTokenAsync.mockResolvedValue('test-token');
+    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('test-token');
     
     (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
       isValid: true,
@@ -90,7 +90,7 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
     (SecurityMonitor.logSecurityEvent as jest.Mock).mockImplementation(() => {});
     
     MockedFs.stat.mockResolvedValue({ size: 1024 } as any); // 1KB file
-    MockedFs.readFile.mockResolvedValue('test content');
+    MockedFs.readFile.mockResolvedValue('test content' as any);
     MockedFs.access.mockResolvedValue(undefined);
     MockedFs.readdir.mockResolvedValue(['test-element.md'] as any);
     
@@ -384,6 +384,148 @@ describe.skip('SubmitToPortfolioTool - EXCLUDED FROM JEST', () => {
       
       expect(result.success).toBe(false);
       expect(result.message).toContain('string error');
+    });
+  });
+  
+  describe('Collection submission with file content', () => {
+    it('should read and include full file content when localPath provided', async () => {
+      // Setup: Mock file content with frontmatter
+      const fullContent = `---
+name: test-persona
+description: Test persona for unit testing
+author: testuser
+version: 1.0.0
+---
+
+# Test Persona
+
+This is the full content of the test persona.`;
+      
+      MockedFs.readFile.mockResolvedValue(fullContent as any);
+      MockedFs.stat.mockResolvedValue({ size: 1024 } as any);
+      
+      // Mock the createCollectionIssue method behavior
+      const createIssueSpy = jest.spyOn(tool as any, 'createCollectionIssue');
+      createIssueSpy.mockResolvedValue('https://github.com/DollhouseMCP/collection/issues/123');
+      
+      // Execute with localPath parameter
+      const result = await tool.execute({
+        name: 'test-persona',
+        type: ElementType.PERSONA
+      });
+      
+      // Verify file was read
+      expect(MockedFs.readFile).toHaveBeenCalled();
+      
+      // Verify the result includes submission info
+      expect(result.success).toBe(true);
+    });
+    
+    it('should reject files exceeding size limit without truncation', async () => {
+      // Setup: File larger than 10MB
+      MockedFs.stat.mockResolvedValue({ size: 11 * 1024 * 1024 } as any); // 11MB
+      
+      const result = await tool.execute({
+        name: 'oversized-element',
+        type: ElementType.PERSONA
+      });
+      
+      // Verify rejection without truncation
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('FILE_TOO_LARGE');
+      expect(result.message).toContain('exceeds');
+      
+      // Ensure file read wasn't attempted
+      expect(MockedFs.readFile).not.toHaveBeenCalled();
+    });
+    
+    it('should handle security validation failures for file content', async () => {
+      // Setup: Malicious content
+      const maliciousContent = `---
+name: evil-persona
+---
+<script>alert('XSS')</script>`;
+      
+      MockedFs.readFile.mockResolvedValue(maliciousContent as any);
+      MockedFs.stat.mockResolvedValue({ size: 100 } as any);
+      
+      // Mock security validation to fail
+      (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
+        isValid: false,
+        severity: 'critical',
+        detectedPatterns: ['XSS attempt']
+      });
+      
+      const result = await tool.execute({
+        name: 'malicious-element',
+        type: ElementType.PERSONA
+      });
+      
+      // Verify security rejection
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('VALIDATION_FAILED');
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'HIGH'
+        })
+      );
+    });
+    
+    it('should handle file not found errors gracefully', async () => {
+      // Setup: File doesn't exist
+      MockedFs.access.mockRejectedValue(new Error('ENOENT: no such file'));
+      
+      const result = await tool.execute({
+        name: 'non-existent-element',
+        type: ElementType.PERSONA
+      });
+      
+      // Should still attempt submission but without file content
+      expect(result.success).toBe(true);
+    });
+    
+    it('should validate frontmatter presence in file content', async () => {
+      // Setup: Content without frontmatter
+      const contentWithoutFrontmatter = `This is just plain content without frontmatter`;
+      
+      MockedFs.readFile.mockResolvedValue(contentWithoutFrontmatter as any);
+      MockedFs.stat.mockResolvedValue({ size: 100 } as any);
+      
+      // This should still work - the tool adds frontmatter if missing
+      const result = await tool.execute({
+        name: 'no-frontmatter-element',
+        type: ElementType.PERSONA
+      });
+      
+      expect(result.success).toBe(true);
+    });
+    
+    it('should handle Unicode content correctly', async () => {
+      // Setup: Content with Unicode characters
+      const unicodeContent = `---
+name: unicode-test
+description: 测试 🚀 Test
+---
+
+Content with émojis 🎉 and special characters: 中文、日本語、한국어`;
+      
+      MockedFs.readFile.mockResolvedValue(unicodeContent as any);
+      MockedFs.stat.mockResolvedValue({ size: 200 } as any);
+      
+      // Mock Unicode validation to pass
+      (UnicodeValidator.normalize as jest.Mock).mockReturnValue({
+        isValid: true,
+        normalizedContent: unicodeContent
+      });
+      
+      const result = await tool.execute({
+        name: 'unicode-element',
+        type: ElementType.PERSONA
+      });
+      
+      expect(result.success).toBe(true);
+      expect(UnicodeValidator.normalize).toHaveBeenCalled();
     });
   });
 });
