@@ -1972,13 +1972,13 @@ export class DollhouseMCPServer implements IToolHandler {
       const validTypes = ['personas', 'skills', 'agents', 'templates'];  // Only MCP-supported types
       
       // Validate section if provided
-      const validatedSection = section ? sanitizeInput(section.toLowerCase()) : undefined;
+      const validatedSection = section ? sanitizeInput(section.toLowerCase(), 100) : undefined;
       if (validatedSection && !validSections.includes(validatedSection)) {
         throw new Error(`Invalid section '${validatedSection}'. Must be one of: ${validSections.join(', ')}`);
       }
       
       // Validate type if provided (only valid when section is 'library')
-      const validatedType = type ? sanitizeInput(type.toLowerCase()) : undefined;
+      const validatedType = type ? sanitizeInput(type.toLowerCase(), 100) : undefined;
       if (validatedType && validatedSection === 'library' && !validTypes.includes(validatedType)) {
         throw new Error(`Invalid type '${validatedType}'. Must be one of: ${validTypes.join(', ')}`);
       }
@@ -3315,7 +3315,8 @@ export class DollhouseMCPServer implements IToolHandler {
       // Sanitize and validate inputs
       const sanitizedName = sanitizeInput(name, 100);
       const sanitizedDescription = sanitizeInput(description, 500);
-      const sanitizedInstructions = sanitizeInput(instructions);
+      // FIX: Pass MAX_CONTENT_LENGTH to prevent truncation at default 1000 chars
+      const sanitizedInstructions = sanitizeInput(instructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
       const sanitizedTriggers = triggers ? sanitizeInput(triggers, 200) : '';
 
       // Validate name length and format

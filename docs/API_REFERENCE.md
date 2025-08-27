@@ -1,6 +1,6 @@
 # DollhouseMCP API Reference
 
-Complete reference for all MCP tools available in DollhouseMCP v1.6.8
+Complete reference for all MCP tools available in DollhouseMCP v1.6.9
 
 ## Overview
 
@@ -14,7 +14,7 @@ DollhouseMCP provides 42 MCP tools organized into these categories:
 - **User Tools**: User identity management
 - **Build Info Tools**: System information and diagnostics
 
-## Breaking Changes in v1.6.0 (Now in v1.6.8)
+## Breaking Changes in v1.6.0 (Now in v1.6.9)
 
 - **⚠️ PersonaTools Removal**: 9 redundant PersonaTools removed, reducing total from 51 to 42 tools
 - **Tool Count**: Reduced from 51 to 42 total tools for a cleaner API
@@ -938,7 +938,7 @@ submit_content "My Custom Helper"
 
 ## Version History
 
-- **v1.6.8**: Fixed version update script and improved release workflow reliability
+- **v1.6.9**: Fixed version update script and improved release workflow reliability
 - **v1.6.0**: 42 total tools (PersonaTools streamlined), portfolio management, enhanced search, build diagnostics
 - **v1.5.0**: GitHub OAuth authentication with secure token storage  
 - **v1.4.5**: Fixed Claude Desktop integration issues
