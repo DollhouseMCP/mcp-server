@@ -1706,7 +1706,8 @@ export class SubmitToPortfolioTool {
           logger.debug('Read and validated element file content for collection submission', {
             elementName: params.elementName,
             contentLength: elementContent.length,
-            securityIssues: validationResult.detectedPatterns?.length || 0
+            securityIssues: validationResult.detectedPatterns?.length || 0,
+            buildVersion: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
           });
         } catch (error) {
           logger.warn('Failed to read element file content, falling back to metadata only', {
@@ -1752,7 +1753,7 @@ ${elementContent}
 - [ ] No duplicate of existing collection content
 
 ---
-*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
+*This submission was created automatically via the DollhouseMCP submit_content tool (v1.6.9-beta1-collection-fix).*`;
 
       // Determine labels based on element type
       const labels = [
