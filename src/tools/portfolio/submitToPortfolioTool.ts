@@ -707,10 +707,10 @@ export class SubmitToPortfolioTool {
         };
       }
 
-      // Log successful validation (using TOKEN_VALIDATION_SUCCESS since path-specific type doesn't exist)
-      // This is a fix for the bug where CONTENT_INJECTION_ATTEMPT was incorrectly used for successful validation
+      // Log successful validation with correct event type for path validation
+      // Fixed: Was using TOKEN_VALIDATION_SUCCESS which is semantically incorrect for path validation
       SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_VALIDATION_SUCCESS',
+        type: 'PATH_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'SubmitToPortfolioTool.validatePortfolioPath',
         details: 'File path validation successful',
