@@ -224,7 +224,7 @@ describe('TokenManager - GitHub Token Security', () => {
       
       const result = await TokenManager.ensureTokenPermissions('read');
       expect(result.isValid).toBe(true);
-      expect(result.scopes).toContain('repo');
+      expect(result.scopes).toContain('public_repo');
       expect(mockFetch).toHaveBeenCalledWith('https://api.github.com/user', expect.any(Object));
     });
 
@@ -342,7 +342,7 @@ describe('TokenManager - GitHub Token Security', () => {
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(false);
-      expect(result.error).toContain('Missing required scopes: repo');
+      expect(result.error).toContain('Missing required scopes: public_repo');
     });
   });
 

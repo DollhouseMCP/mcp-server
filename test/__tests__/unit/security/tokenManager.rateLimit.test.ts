@@ -29,7 +29,7 @@ describe('TokenManager Rate Limiting', () => {
       headers: new Map([
         ['x-ratelimit-remaining', '4999'],
         ['x-ratelimit-reset', String(Math.floor(Date.now() / 1000) + 3600)],
-        ['x-oauth-scopes', 'repo, user:email']
+        ['x-oauth-scopes', 'public_repo, user:email']
       ]) as any,
       json: async () => ({ login: 'testuser', id: 123 })
     } as Response);
@@ -313,7 +313,7 @@ describe('TokenManager Rate Limiting', () => {
         headers: new Map([
           ['x-ratelimit-remaining', '59'],
           ['x-ratelimit-reset', String(Math.floor(Date.now() / 1000) + 3600)],
-          ['x-oauth-scopes', 'repo, user:email']
+          ['x-oauth-scopes', 'public_repo, user:email']
         ]) as any,
         json: async () => ({ login: 'testuser', id: 123 })
       } as Response);
