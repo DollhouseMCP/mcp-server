@@ -36,7 +36,7 @@ import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import * as yaml from 'js-yaml';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 
 export interface SubmitToPortfolioParams {
   name: string;
@@ -374,14 +374,25 @@ export class SubmitToPortfolioTool {
     filePath?: string
   ): Promise<PortfolioElementMetadata> {
     // Try to extract metadata from the file if path is provided
-    let fileMetadata: any = null;
+    let fileMetadata: Record<string, any> | null = null;
     
     if (filePath) {
       fileMetadata = await this.extractElementMetadata(filePath);
     }
     
+    // TYPE SAFETY: Define extended metadata interface for better type safety
+    interface ExtendedMetadata extends PortfolioElementMetadata {
+      triggers?: string[];
+      category?: string;
+      age_rating?: string;
+      ai_generated?: boolean;
+      generation_method?: string;
+      license?: string;
+      tags?: string[];
+    }
+    
     // Build metadata with real values from file, falling back to defaults
-    const metadata: PortfolioElementMetadata = {
+    const metadata: ExtendedMetadata = {
       name: safeName,
       description: fileMetadata?.description || 
                    fileMetadata?.summary || 
@@ -396,16 +407,30 @@ export class SubmitToPortfolioTool {
       version: fileMetadata?.version || '1.0.0'
     };
     
-    // Add additional metadata fields if present
+    // Add additional metadata fields if present (with type safety)
     if (fileMetadata) {
       // Preserve other metadata fields that might be useful
-      if (fileMetadata.triggers) (metadata as any).triggers = fileMetadata.triggers;
-      if (fileMetadata.category) (metadata as any).category = fileMetadata.category;
-      if (fileMetadata.age_rating) (metadata as any).age_rating = fileMetadata.age_rating;
-      if (fileMetadata.ai_generated !== undefined) (metadata as any).ai_generated = fileMetadata.ai_generated;
-      if (fileMetadata.generation_method) (metadata as any).generation_method = fileMetadata.generation_method;
-      if (fileMetadata.license) (metadata as any).license = fileMetadata.license;
-      if (fileMetadata.tags) (metadata as any).tags = fileMetadata.tags;
+      if (fileMetadata.triggers && Array.isArray(fileMetadata.triggers)) {
+        metadata.triggers = fileMetadata.triggers;
+      }
+      if (fileMetadata.category && typeof fileMetadata.category === 'string') {
+        metadata.category = fileMetadata.category;
+      }
+      if (fileMetadata.age_rating && typeof fileMetadata.age_rating === 'string') {
+        metadata.age_rating = fileMetadata.age_rating;
+      }
+      if (fileMetadata.ai_generated !== undefined) {
+        metadata.ai_generated = Boolean(fileMetadata.ai_generated);
+      }
+      if (fileMetadata.generation_method && typeof fileMetadata.generation_method === 'string') {
+        metadata.generation_method = fileMetadata.generation_method;
+      }
+      if (fileMetadata.license && typeof fileMetadata.license === 'string') {
+        metadata.license = fileMetadata.license;
+      }
+      if (fileMetadata.tags && Array.isArray(fileMetadata.tags)) {
+        metadata.tags = fileMetadata.tags;
+      }
     }
     
     logger.info('Prepared element metadata', {
@@ -418,37 +443,107 @@ export class SubmitToPortfolioTool {
   }
 
   /**
+   * Formats metadata as YAML string for display
+   * PERFORMANCE: Uses array join instead of string concatenation for better performance
+   */
+  private formatMetadataAsYaml(baseMetadata: PortfolioElementMetadata, extendedMeta: any): string {
+    const yamlLines: string[] = [
+      `name: ${baseMetadata.name}`,
+      `description: ${baseMetadata.description}`,
+      `author: ${baseMetadata.author}`,
+      `version: ${baseMetadata.version}`,
+      `created: ${baseMetadata.created}`,
+      `updated: ${baseMetadata.updated}`
+    ];
+    
+    // Add optional fields if present
+    if (extendedMeta.category) {
+      yamlLines.push(`category: ${extendedMeta.category}`);
+    }
+    if (extendedMeta.triggers && Array.isArray(extendedMeta.triggers) && extendedMeta.triggers.length > 0) {
+      yamlLines.push(`triggers: [${extendedMeta.triggers.join(', ')}]`);
+    }
+    if (extendedMeta.age_rating) {
+      yamlLines.push(`age_rating: ${extendedMeta.age_rating}`);
+    }
+    if (extendedMeta.ai_generated !== undefined) {
+      yamlLines.push(`ai_generated: ${extendedMeta.ai_generated}`);
+    }
+    if (extendedMeta.generation_method) {
+      yamlLines.push(`generation_method: ${extendedMeta.generation_method}`);
+    }
+    if (extendedMeta.license) {
+      yamlLines.push(`license: ${extendedMeta.license}`);
+    }
+    if (extendedMeta.tags && Array.isArray(extendedMeta.tags) && extendedMeta.tags.length > 0) {
+      yamlLines.push(`tags: [${extendedMeta.tags.join(', ')}]`);
+    }
+    
+    return yamlLines.join('\n');
+  }
+  
+  /**
    * Extracts metadata from an element file
    * Parses YAML frontmatter to get the actual metadata
+   * SECURITY: Uses SecureYamlParser instead of yaml.load to prevent code execution (DMCP-SEC-005)
    * @param filePath Path to the element file
    * @returns Extracted metadata or null if parsing fails
    */
-  private async extractElementMetadata(filePath: string): Promise<any> {
+  private async extractElementMetadata(filePath: string): Promise<Record<string, any> | null> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       
-      // Parse frontmatter YAML (content between --- markers)
-      const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-      
-      if (frontmatterMatch && frontmatterMatch[1]) {
-        const yamlContent = frontmatterMatch[1];
-        
-        // Use FAILSAFE_SCHEMA to prevent code execution
-        const metadata = yaml.load(yamlContent, { 
-          schema: yaml.FAILSAFE_SCHEMA 
+      // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
+      // Previously would have used: yaml.load(yamlContent) which is vulnerable
+      // Now: Uses SecureYamlParser.parse() which validates and sanitizes
+      try {
+        const parsed = SecureYamlParser.parse(content, {
+          maxYamlSize: 64 * 1024,  // 64KB limit for YAML
+          validateContent: false,    // Don't validate content field (just metadata)
+          validateFields: false      // Don't enforce persona-specific rules
         });
         
-        logger.debug('Extracted metadata from element file', {
-          path: filePath,
-          metadataKeys: metadata ? Object.keys(metadata) : []
-        });
+        // Ensure we got an object back
+        if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+          logger.debug('Extracted metadata from element file', {
+            path: filePath,
+            metadataKeys: Object.keys(parsed.data)
+          });
+          return parsed.data;
+        }
         
-        return metadata;
+        logger.debug('Parsed data is not a valid metadata object', { path: filePath });
+        return null;
+        
+      } catch (parseError) {
+        // SecureYamlParser throws on invalid YAML, try alternate frontmatter pattern
+        // Handle files that might have frontmatter without full document structure
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        
+        if (frontmatterMatch && frontmatterMatch[1]) {
+          try {
+            // Reconstruct full document for SecureYamlParser
+            const fullContent = `---\n${frontmatterMatch[1]}\n---\n`;
+            const parsed = SecureYamlParser.parse(fullContent, {
+              maxYamlSize: 64 * 1024,
+              validateContent: false,
+              validateFields: false
+            });
+            
+            if (parsed.data && typeof parsed.data === 'object') {
+              return parsed.data;
+            }
+          } catch (innerError) {
+            logger.debug('Failed to parse frontmatter with SecureYamlParser', {
+              path: filePath,
+              error: innerError instanceof Error ? innerError.message : String(innerError)
+            });
+          }
+        }
+        
+        logger.debug('No valid frontmatter found in element file', { path: filePath });
+        return null;
       }
-      
-      // No frontmatter found, return null
-      logger.debug('No frontmatter found in element file', { path: filePath });
-      return null;
       
     } catch (error) {
       logger.warn('Failed to extract metadata from element file', {
@@ -1512,8 +1607,19 @@ export class SubmitToPortfolioTool {
 
       // Format the issue body with all relevant information
       // Build additional metadata fields for display
+      // TYPE SAFETY: Define interface for extended metadata
+      interface ExtendedMeta extends PortfolioElementMetadata {
+        category?: string;
+        triggers?: string[];
+        age_rating?: string;
+        ai_generated?: boolean;
+        generation_method?: string;
+        license?: string;
+        tags?: string[];
+      }
+      
       const additionalFields: string[] = [];
-      const meta = params.metadata as any;
+      const meta = params.metadata as ExtendedMeta;
       
       if (meta.category) additionalFields.push(`**Category**: ${meta.category}`);
       if (meta.version) additionalFields.push(`**Version**: ${meta.version}`);
@@ -1547,26 +1653,7 @@ ${params.portfolioUrl}
 
 ### Full Metadata
 \`\`\`yaml
-name: ${params.metadata.name}
-description: ${params.metadata.description}
-author: ${params.metadata.author}
-version: ${params.metadata.version}
-created: ${params.metadata.created}
-updated: ${params.metadata.updated}${
-  meta.category ? `\ncategory: ${meta.category}` : ''
-}${
-  meta.triggers ? `\ntriggers: [${meta.triggers.join(', ')}]` : ''
-}${
-  meta.age_rating ? `\nage_rating: ${meta.age_rating}` : ''
-}${
-  meta.ai_generated !== undefined ? `\nai_generated: ${meta.ai_generated}` : ''
-}${
-  meta.generation_method ? `\ngeneration_method: ${meta.generation_method}` : ''
-}${
-  meta.license ? `\nlicense: ${meta.license}` : ''
-}${
-  meta.tags ? `\ntags: [${meta.tags.join(', ')}]` : ''
-}
+${this.formatMetadataAsYaml(params.metadata, meta)}
 \`\`\`
 
 ### Review Checklist
