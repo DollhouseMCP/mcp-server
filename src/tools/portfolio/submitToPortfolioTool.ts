@@ -36,6 +36,7 @@ import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 
 export interface SubmitToPortfolioParams {
   name: string;
@@ -366,19 +367,191 @@ export class SubmitToPortfolioTool {
    * @param authStatus Authentication status containing username
    * @returns Metadata object for the element
    */
-  private prepareElementMetadata(
+  private async prepareElementMetadata(
     safeName: string, 
     elementType: ElementType, 
-    authStatus: any
-  ): PortfolioElementMetadata {
-    return {
+    authStatus: any,
+    filePath?: string
+  ): Promise<PortfolioElementMetadata> {
+    // Try to extract metadata from the file if path is provided
+    let fileMetadata: Record<string, any> | null = null;
+    
+    if (filePath) {
+      fileMetadata = await this.extractElementMetadata(filePath);
+    }
+    
+    // TYPE SAFETY: Define extended metadata interface for better type safety
+    interface ExtendedMetadata extends PortfolioElementMetadata {
+      triggers?: string[];
+      category?: string;
+      age_rating?: string;
+      ai_generated?: boolean;
+      generation_method?: string;
+      license?: string;
+      tags?: string[];
+    }
+    
+    // Build metadata with real values from file, falling back to defaults
+    const metadata: ExtendedMetadata = {
       name: safeName,
-      description: `${elementType} submitted from local portfolio`,
-      author: authStatus.username || 'unknown',
-      created: new Date().toISOString(),
-      updated: new Date().toISOString(),
-      version: '1.0.0'
+      description: fileMetadata?.description || 
+                   fileMetadata?.summary || 
+                   `${elementType} submitted from local portfolio`,
+      author: authStatus.username || fileMetadata?.author || 'unknown',
+      created: fileMetadata?.created || 
+               fileMetadata?.created_date || 
+               new Date().toISOString(),
+      updated: fileMetadata?.updated || 
+               fileMetadata?.modified || 
+               new Date().toISOString(),
+      version: fileMetadata?.version || '1.0.0'
     };
+    
+    // Add additional metadata fields if present (with type safety)
+    if (fileMetadata) {
+      // Preserve other metadata fields that might be useful
+      if (fileMetadata.triggers && Array.isArray(fileMetadata.triggers)) {
+        metadata.triggers = fileMetadata.triggers;
+      }
+      if (fileMetadata.category && typeof fileMetadata.category === 'string') {
+        metadata.category = fileMetadata.category;
+      }
+      if (fileMetadata.age_rating && typeof fileMetadata.age_rating === 'string') {
+        metadata.age_rating = fileMetadata.age_rating;
+      }
+      if (fileMetadata.ai_generated !== undefined) {
+        metadata.ai_generated = Boolean(fileMetadata.ai_generated);
+      }
+      if (fileMetadata.generation_method && typeof fileMetadata.generation_method === 'string') {
+        metadata.generation_method = fileMetadata.generation_method;
+      }
+      if (fileMetadata.license && typeof fileMetadata.license === 'string') {
+        metadata.license = fileMetadata.license;
+      }
+      if (fileMetadata.tags && Array.isArray(fileMetadata.tags)) {
+        metadata.tags = fileMetadata.tags;
+      }
+    }
+    
+    logger.info('Prepared element metadata', {
+      elementName: safeName,
+      hasFileMetadata: !!fileMetadata,
+      description: metadata.description.substring(0, 100) // Log first 100 chars
+    });
+    
+    return metadata;
+  }
+
+  /**
+   * Formats metadata as YAML string for display
+   * PERFORMANCE: Uses array join instead of string concatenation for better performance
+   */
+  private formatMetadataAsYaml(baseMetadata: PortfolioElementMetadata, extendedMeta: any): string {
+    const yamlLines: string[] = [
+      `name: ${baseMetadata.name}`,
+      `description: ${baseMetadata.description}`,
+      `author: ${baseMetadata.author}`,
+      `version: ${baseMetadata.version}`,
+      `created: ${baseMetadata.created}`,
+      `updated: ${baseMetadata.updated}`
+    ];
+    
+    // Add optional fields if present
+    if (extendedMeta.category) {
+      yamlLines.push(`category: ${extendedMeta.category}`);
+    }
+    if (extendedMeta.triggers && Array.isArray(extendedMeta.triggers) && extendedMeta.triggers.length > 0) {
+      yamlLines.push(`triggers: [${extendedMeta.triggers.join(', ')}]`);
+    }
+    if (extendedMeta.age_rating) {
+      yamlLines.push(`age_rating: ${extendedMeta.age_rating}`);
+    }
+    if (extendedMeta.ai_generated !== undefined) {
+      yamlLines.push(`ai_generated: ${extendedMeta.ai_generated}`);
+    }
+    if (extendedMeta.generation_method) {
+      yamlLines.push(`generation_method: ${extendedMeta.generation_method}`);
+    }
+    if (extendedMeta.license) {
+      yamlLines.push(`license: ${extendedMeta.license}`);
+    }
+    if (extendedMeta.tags && Array.isArray(extendedMeta.tags) && extendedMeta.tags.length > 0) {
+      yamlLines.push(`tags: [${extendedMeta.tags.join(', ')}]`);
+    }
+    
+    return yamlLines.join('\n');
+  }
+  
+  /**
+   * Extracts metadata from an element file
+   * Parses YAML frontmatter to get the actual metadata
+   * SECURITY: Uses SecureYamlParser instead of yaml.load to prevent code execution (DMCP-SEC-005)
+   * @param filePath Path to the element file
+   * @returns Extracted metadata or null if parsing fails
+   */
+  private async extractElementMetadata(filePath: string): Promise<Record<string, any> | null> {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      
+      // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
+      // Previously would have used: yaml.load(yamlContent) which is vulnerable
+      // Now: Uses SecureYamlParser.parse() which validates and sanitizes
+      try {
+        const parsed = SecureYamlParser.parse(content, {
+          maxYamlSize: 64 * 1024,  // 64KB limit for YAML
+          validateContent: false,    // Don't validate content field (just metadata)
+          validateFields: false      // Don't enforce persona-specific rules
+        });
+        
+        // Ensure we got an object back
+        if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+          logger.debug('Extracted metadata from element file', {
+            path: filePath,
+            metadataKeys: Object.keys(parsed.data)
+          });
+          return parsed.data;
+        }
+        
+        logger.debug('Parsed data is not a valid metadata object', { path: filePath });
+        return null;
+        
+      } catch (parseError) {
+        // SecureYamlParser throws on invalid YAML, try alternate frontmatter pattern
+        // Handle files that might have frontmatter without full document structure
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        
+        if (frontmatterMatch && frontmatterMatch[1]) {
+          try {
+            // Reconstruct full document for SecureYamlParser
+            const fullContent = `---\n${frontmatterMatch[1]}\n---\n`;
+            const parsed = SecureYamlParser.parse(fullContent, {
+              maxYamlSize: 64 * 1024,
+              validateContent: false,
+              validateFields: false
+            });
+            
+            if (parsed.data && typeof parsed.data === 'object') {
+              return parsed.data;
+            }
+          } catch (innerError) {
+            logger.debug('Failed to parse frontmatter with SecureYamlParser', {
+              path: filePath,
+              error: innerError instanceof Error ? innerError.message : String(innerError)
+            });
+          }
+        }
+        
+        logger.debug('No valid frontmatter found in element file', { path: filePath });
+        return null;
+      }
+      
+    } catch (error) {
+      logger.warn('Failed to extract metadata from element file', {
+        path: filePath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
 
   /**
@@ -1267,7 +1440,7 @@ export class SubmitToPortfolioTool {
       // Step 5: Prepare metadata for element
       logger.info('📝 Step 5/8: Preparing metadata...');
       const step5Start = Date.now();
-      const metadata = this.prepareElementMetadata(safeName!, elementType, authStatus);
+      const metadata = await this.prepareElementMetadata(safeName!, elementType, authStatus, localPath);
       timings['metadata'] = Date.now() - step5Start;
       logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
         author: metadata.author,
@@ -1433,25 +1606,65 @@ export class SubmitToPortfolioTool {
       const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
 
       // Format the issue body with all relevant information
+      // Build additional metadata fields for display
+      // TYPE SAFETY: Define interface for extended metadata
+      interface ExtendedMeta extends PortfolioElementMetadata {
+        category?: string;
+        triggers?: string[];
+        age_rating?: string;
+        ai_generated?: boolean;
+        generation_method?: string;
+        license?: string;
+        tags?: string[];
+      }
+      
+      const additionalFields: string[] = [];
+      const meta = params.metadata as ExtendedMeta;
+      
+      if (meta.category) additionalFields.push(`**Category**: ${meta.category}`);
+      if (meta.version) additionalFields.push(`**Version**: ${meta.version}`);
+      if (meta.triggers && Array.isArray(meta.triggers) && meta.triggers.length > 0) {
+        additionalFields.push(`**Triggers**: ${meta.triggers.join(', ')}`);
+      }
+      if (meta.age_rating) additionalFields.push(`**Age Rating**: ${meta.age_rating}`);
+      if (meta.ai_generated !== undefined) {
+        additionalFields.push(`**AI Generated**: ${meta.ai_generated ? 'Yes' : 'No'}`);
+      }
+      if (meta.generation_method) additionalFields.push(`**Generation Method**: ${meta.generation_method}`);
+      if (meta.license) additionalFields.push(`**License**: ${meta.license}`);
+      if (meta.tags && Array.isArray(meta.tags) && meta.tags.length > 0) {
+        additionalFields.push(`**Tags**: ${meta.tags.join(', ')}`);
+      }
+      
       const body = `## New ${params.elementType} Submission
 
-` +
-        `**Name**: ${params.elementName}\n` +
-        `**Author**: @${params.username}\n` +
-        `**Type**: ${params.elementType}\n` +
-        `**Description**: ${params.metadata.description || 'No description provided'}\n\n` +
-        `### Portfolio Link\n` +
-        `${params.portfolioUrl}\n\n` +
-        `### Metadata\n` +
-        `\`\`\`json\n${JSON.stringify(params.metadata, null, 2)}\n\`\`\`\n\n` +
-        `### Review Checklist\n` +
-        `- [ ] Content is appropriate and follows community guidelines\n` +
-        `- [ ] No security vulnerabilities or malicious patterns\n` +
-        `- [ ] Metadata is complete and accurate\n` +
-        `- [ ] Element works as described\n` +
-        `- [ ] No duplicate of existing collection content\n\n` +
-        `---\n` +
-        `*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
+**Name**: ${params.elementName}
+**Author**: @${params.username}
+**Type**: ${params.elementType}
+
+### Description
+${params.metadata.description || 'No description provided'}
+
+### Element Details
+${additionalFields.length > 0 ? additionalFields.join('\n') : '*No additional metadata available*'}
+
+### Portfolio Link
+${params.portfolioUrl}
+
+### Full Metadata
+\`\`\`yaml
+${this.formatMetadataAsYaml(params.metadata, meta)}
+\`\`\`
+
+### Review Checklist
+- [ ] Content is appropriate and follows community guidelines
+- [ ] No security vulnerabilities or malicious patterns
+- [ ] Metadata is complete and accurate
+- [ ] Element works as described
+- [ ] No duplicate of existing collection content
+
+---
+*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
 
       // Determine labels based on element type
       const labels = [

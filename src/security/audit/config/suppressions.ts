@@ -131,6 +131,11 @@ export const suppressions: Suppression[] = [
     file: 'src/elements/skills/SkillManager.ts',
     reason: 'Uses yaml.load with FAILSAFE_SCHEMA and size validation - equivalent security to SecureYamlParser for raw YAML import'
   },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/tools/portfolio/submitToPortfolioTool.ts',
+    reason: 'False positive - Uses SecureYamlParser.parse() which is the secure implementation designed to prevent YAML vulnerabilities'
+  },
   
   // ========================================
   // Security Rule Definition Files
