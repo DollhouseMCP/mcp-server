@@ -13,7 +13,12 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { jest, describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+
+// Type for MCP tool call result
+interface ToolResult {
+  content: Array<{ text: string }>;
+}
 
 describe('Collection Submission Integration via MCP', () => {
   let client: Client;
@@ -116,9 +121,12 @@ You are a test assistant for validating collection submissions.
       // Validate response
       expect(result).toBeDefined();
       expect(result.content).toBeDefined();
-      expect(result.content[0]).toBeDefined();
       
-      const responseText = result.content[0].text;
+      // Type assertion for content
+      const content = result.content as Array<{ text: string }>;
+      expect(content[0]).toBeDefined();
+      
+      const responseText = content[0].text;
       expect(responseText).toContain('submitted');
       
       // Extract issue URL if present
@@ -160,7 +168,8 @@ description: Test for security validation
       });
       
       // Should be rejected or sanitized
-      const responseText = result.content[0].text;
+      const content = result.content as Array<{ text: string }>;
+      const responseText = content[0].text;
       
       // Check if it was rejected due to security
       if (responseText.includes('security') || responseText.includes('validation')) {
@@ -200,7 +209,8 @@ ${'x'.repeat(11 * 1024 * 1024)}`;
         }
       });
       
-      const responseText = result.content[0].text;
+      const content = result.content as Array<{ text: string }>;
+      const responseText = content[0].text;
       
       // Should be rejected due to size
       expect(responseText).toMatch(/size|large|exceeds|limit/i);
@@ -248,7 +258,8 @@ This content should appear in the GitHub issue when submitted.`;
           }
         });
         
-        const responseText = result.content[0].text;
+        const content = result.content as Array<{ text: string }>;
+        const responseText = content[0].text;
         
         // Check for successful submission or expected behavior
         if (responseText.includes('github.com/DollhouseMCP/collection/issues')) {
@@ -302,10 +313,11 @@ Content for concurrent test ${i}`;
       });
       
       // Check for rate limiting
-      const rateLimited = results.filter(r => 
-        r.content[0].text.includes('rate') || 
-        r.content[0].text.includes('limit')
-      );
+      const rateLimited = results.filter(r => {
+        const content = r.content as Array<{ text: string }>;
+        return content[0].text.includes('rate') || 
+               content[0].text.includes('limit');
+      });
       
       if (rateLimited.length > 0) {
         console.log(`${rateLimited.length} submissions were rate limited`);
