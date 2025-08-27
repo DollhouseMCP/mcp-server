@@ -19,7 +19,37 @@ describe('Metadata Detection - Edge Cases', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    // More robust cleanup with retry logic for macOS CI
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        break;
+      } catch (error: any) {
+        retries--;
+        if (retries === 0 || !error.message?.includes('ENOTEMPTY')) {
+          // On final retry or non-ENOTEMPTY errors, use platform-specific cleanup
+          if (process.platform === 'darwin') {
+            // macOS: Try using rmdir with force
+            try {
+              const { execSync } = require('child_process');
+              execSync(`rm -rf "${tempDir}"`, { stdio: 'ignore' });
+            } catch {
+              // Ignore cleanup errors in CI - temp dirs will be cleaned by the system
+              if (process.env.CI) {
+                console.warn(`Warning: Could not clean temp dir ${tempDir}, will be cleaned by system`);
+              } else {
+                throw error;
+              }
+            }
+          } else {
+            throw error;
+          }
+        }
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
     // CRITICAL MEMORY LEAK FIX: Clean up static caches to prevent memory accumulation
     DefaultElementProvider.cleanup();
   });
