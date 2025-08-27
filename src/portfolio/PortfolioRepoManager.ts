@@ -282,6 +282,11 @@ export class PortfolioRepoManager {
 
     // Prepare content (could be markdown with frontmatter)
     const content = this.formatElementContent(element);
+    
+    // DIAGNOSTIC: Log content size before sending to GitHub
+    logger.debug(`[CONTENT-TRACE] Saving element ${element.id} to GitHub - content size: ${content.length} chars`);
+    logger.debug(`[CONTENT-TRACE] First 200 chars: ${content.substring(0, 200)}`);
+    logger.debug(`[CONTENT-TRACE] Last 200 chars: ${content.substring(Math.max(0, content.length - 200))}`);
 
     // Save to GitHub
     try {
