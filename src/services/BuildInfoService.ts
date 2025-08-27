@@ -25,6 +25,7 @@ export interface BuildInfo {
     type: 'git' | 'npm' | 'unknown';
     gitCommit?: string;
     gitBranch?: string;
+    collectionFix?: string;  // Version identifier for verification
   };
   runtime: {
     nodeVersion: string;
@@ -84,7 +85,8 @@ export class BuildInfoService {
         timestamp: buildTimestamp,
         type: gitInfo.commit ? 'git' : buildTimestamp ? 'npm' : 'unknown',
         gitCommit: gitInfo.commit,
-        gitBranch: gitInfo.branch
+        gitBranch: gitInfo.branch,
+        collectionFix: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
       },
       runtime: {
         nodeVersion: process.version,
