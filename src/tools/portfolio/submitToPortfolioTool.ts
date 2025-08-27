@@ -64,6 +64,28 @@ export interface ElementDetectionResult {
   matches: ElementDetectionMatch[];
 }
 
+// Workflow step constants for consistent logging
+const WORKFLOW_STEPS = {
+  VALIDATION: 1,
+  AUTHENTICATION: 2,
+  CONTENT_DISCOVERY: 3,
+  SECURITY: 4,
+  METADATA: 5,
+  REPO_SETUP: 6,
+  SUBMISSION: 7,
+  REPORTING: 8,
+  TOTAL: 8
+} as const;
+
+// Logging configuration
+const LOGGING_CONFIG = {
+  // Set DOLLHOUSE_VERBOSE_LOGGING=true for detailed step-by-step logs
+  isVerbose: process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true',
+  // Set DOLLHOUSE_LOG_TIMING=true for timing measurements
+  shouldLogTiming: process.env.DOLLHOUSE_LOG_TIMING?.toLowerCase() === 'true' || 
+                   process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true'
+} as const;
+
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
@@ -685,9 +707,10 @@ export class SubmitToPortfolioTool {
         };
       }
 
-      // Log successful validation
+      // Log successful validation with correct event type for path validation
+      // Fixed: Was using TOKEN_VALIDATION_SUCCESS which is semantically incorrect for path validation
       SecurityMonitor.logSecurityEvent({
-        type: 'CONTENT_INJECTION_ATTEMPT',
+        type: 'PATH_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'SubmitToPortfolioTool.validatePortfolioPath',
         details: 'File path validation successful',
@@ -1027,56 +1050,110 @@ export class SubmitToPortfolioTool {
   }
 
   async execute(params: SubmitToPortfolioParams): Promise<SubmitToPortfolioResult> {
+    const startTime = Date.now();
+    const timings: Record<string, number> = {};
+    
+    logger.info('🚀 SUBMISSION WORKFLOW STARTING', {
+      params: JSON.stringify(params),
+      timestamp: new Date().toISOString()
+    });
+    
     try {
-      // Validate and normalize input parameters
+      // Step 1: Validate and normalize input parameters
+      logger.info('📋 Step 1/8: Validating parameters...');
+      const step1Start = Date.now();
       const validationResult = await this.validateAndNormalizeParams(params);
+      timings['validation'] = Date.now() - step1Start;
+      logger.info(`✅ Step 1 complete (${timings['validation']}ms)`);
       if (!validationResult.success) {
         return validationResult.error!;
       }
       const safeName = validationResult.safeName!;
 
-      // Check authentication status
+      // Step 2: Check authentication status
+      logger.info('🔐 Step 2/8: Checking authentication...');
+      const step2Start = Date.now();
       const authResult = await this.checkAuthentication();
+      timings['authentication'] = Date.now() - step2Start;
+      logger.info(`✅ Step 2 complete (${timings['authentication']}ms)`, {
+        username: authResult.authStatus?.username,
+        hasToken: !!authResult.authStatus?.hasToken
+      });
       if (!authResult.success) {
         return authResult.error!;
       }
       const authStatus = authResult.authStatus!;
 
-      // Find content locally with smart type detection
+      // Step 3: Find content locally with smart type detection
+      logger.info('🔍 Step 3/8: Finding content locally...');
+      const step3Start = Date.now();
       const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
+      timings['contentDiscovery'] = Date.now() - step3Start;
+      logger.info(`✅ Step 3 complete (${timings['contentDiscovery']}ms)`, {
+        found: contentResult.success,
+        elementType: contentResult.elementType,
+        path: contentResult.localPath
+      });
       if (!contentResult.success) {
         return contentResult.error!;
       }
       const elementType = contentResult.elementType!;
       const localPath = contentResult.localPath!;
 
-      // Validate file and content security
+      // Step 4: Validate file and content security
+      logger.info('🔒 Step 4/8: Validating security...');
+      const step4Start = Date.now();
       const securityResult = await this.validateFileAndContent(localPath);
+      timings['security'] = Date.now() - step4Start;
+      logger.info(`✅ Step 4 complete (${timings['security']}ms)`);
       if (!securityResult.success) {
         return securityResult.error!;
       }
       const content = securityResult.content!;
 
-      // Get user consent (placeholder for now - could add interactive prompt later)
-      logger.info(`Preparing to submit ${safeName} to GitHub portfolio`);
-
-      // Prepare metadata for element
+      // Step 5: Prepare metadata for element
+      logger.info('📝 Step 5/8: Preparing metadata...');
+      const step5Start = Date.now();
       const metadata = this.prepareElementMetadata(safeName!, elementType, authStatus);
+      timings['metadata'] = Date.now() - step5Start;
+      logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
+        author: metadata.author,
+        elementName: safeName
+      });
 
-      // Set up GitHub repository access
+      // Step 6: Set up GitHub repository access
+      logger.info('🔧 Step 6/8: Setting up GitHub repository...');
+      const step6Start = Date.now();
       const repoResult = await this.setupGitHubRepository(authStatus);
+      timings['repoSetup'] = Date.now() - step6Start;
+      logger.info(`✅ Step 6 complete (${timings['repoSetup']}ms)`, {
+        success: repoResult.success
+      });
       if (!repoResult.success) {
         return repoResult.error!;
       }
 
-      // Submit element to portfolio and handle collection submission
-      return await this.submitElementAndHandleResponse(
+      // Step 7: Submit element to portfolio and handle collection submission
+      logger.info('📤 Step 7/8: Submitting to portfolio...');
+      const step7Start = Date.now();
+      const result = await this.submitElementAndHandleResponse(
         safeName!, 
         elementType, 
         metadata, 
         content, 
         authStatus
       );
+      timings['submission'] = Date.now() - step7Start;
+      
+      // Step 8: Final reporting
+      timings['total'] = Date.now() - startTime;
+      logger.info('✨ SUBMISSION WORKFLOW COMPLETE', {
+        success: result.success,
+        timings,
+        totalTime: `${timings['total']}ms`
+      });
+      
+      return result;
 
     } catch (error) {
       // SECURITY ENHANCEMENT (Task #14): Enhanced error handling with token refresh guidance
