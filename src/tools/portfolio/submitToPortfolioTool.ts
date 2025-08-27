@@ -18,13 +18,11 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { PathValidator } from '../../security/pathValidator.js';
 import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
-import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ErrorHandler } from '../../utils/ErrorHandler.js';
 import { 
-  GITHUB_API_TIMEOUT, 
   FILE_SIZE_LIMITS, 
   RETRY_CONFIG, 
   SEARCH_CONFIG,
@@ -69,7 +67,6 @@ export interface ElementDetectionResult {
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
-  private contentValidator: ContentValidator;
 
   constructor(apiCache: APICache) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
@@ -77,7 +74,6 @@ export class SubmitToPortfolioTool {
     // Now: constructor(apiCache: APICache) with proper import
     this.authManager = new GitHubAuthManager(apiCache);
     this.portfolioManager = new PortfolioRepoManager();
-    this.contentValidator = new ContentValidator();
   }
 
   /**
@@ -395,10 +391,9 @@ export class SubmitToPortfolioTool {
 
       // Validate token with GitHub API to check expiration and permissions
       // NOTE: OAuth tokens use 'public_repo' scope, not 'repo'
-      const validationResult = await TokenManager.validateTokenScopes(token, {
-        required: ['public_repo'],
-        optional: ['user:email']
-      });
+      // Using centralized scope management for consistency
+      const requiredScopes = TokenManager.getRequiredScopes('collection');
+      const validationResult = await TokenManager.validateTokenScopes(token, requiredScopes);
 
       if (!validationResult.isValid) {
         SecurityMonitor.logSecurityEvent({
@@ -408,16 +403,26 @@ export class SubmitToPortfolioTool {
           details: `Token validation failed: ${validationResult.error}`
         });
 
-        // Check if it's specifically a scope issue
-        const errorCode = validationResult.error?.includes('Missing required scopes') 
-          ? CollectionErrorCode.COLL_AUTH_002
-          : CollectionErrorCode.COLL_AUTH_001;
+        // Enhanced OAuth-specific error messages
+        const tokenType = TokenManager.getTokenType(token);
+        let errorCode: CollectionErrorCode;
+        let enhancedDetails: string | undefined = validationResult.error;
+        
+        if (validationResult.error?.includes('Missing required scopes')) {
+          errorCode = CollectionErrorCode.COLL_AUTH_002;
+          // Provide OAuth-specific guidance if it's an OAuth token
+          if (tokenType === 'OAuth Access Token') {
+            enhancedDetails = `OAuth token missing 'public_repo' scope. Please re-authenticate with 'setup_github_auth' to get the correct scope.`;
+          }
+        } else {
+          errorCode = CollectionErrorCode.COLL_AUTH_001;
+        }
 
         return {
           isValid: false,
           error: {
             success: false,
-            message: formatCollectionError(errorCode, 3, 5, validationResult.error),
+            message: formatCollectionError(errorCode, 3, 5, enhancedDetails),
             error: errorCode
           }
         };
