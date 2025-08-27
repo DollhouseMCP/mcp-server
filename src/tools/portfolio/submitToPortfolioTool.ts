@@ -393,8 +393,9 @@ export class SubmitToPortfolioTool {
       }
 
       // Validate token with GitHub API to check expiration and permissions
+      // NOTE: OAuth tokens use 'public_repo' scope, not 'repo'
       const validationResult = await TokenManager.validateTokenScopes(token, {
-        required: ['repo'],
+        required: ['public_repo'],
         optional: ['user:email']
       });
 
