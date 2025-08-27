@@ -18,13 +18,11 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { PathValidator } from '../../security/pathValidator.js';
 import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
-import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ErrorHandler } from '../../utils/ErrorHandler.js';
 import { 
-  GITHUB_API_TIMEOUT, 
   FILE_SIZE_LIMITS, 
   RETRY_CONFIG, 
   SEARCH_CONFIG,
@@ -34,6 +32,7 @@ import {
 } from '../../config/portfolio-constants.js';
 import { githubRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
+import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -68,7 +67,6 @@ export interface ElementDetectionResult {
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
-  private contentValidator: ContentValidator;
 
   constructor(apiCache: APICache) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
@@ -76,7 +74,6 @@ export class SubmitToPortfolioTool {
     // Now: constructor(apiCache: APICache) with proper import
     this.authManager = new GitHubAuthManager(apiCache);
     this.portfolioManager = new PortfolioRepoManager();
-    this.contentValidator = new ContentValidator();
   }
 
   /**
@@ -393,10 +390,10 @@ export class SubmitToPortfolioTool {
       }
 
       // Validate token with GitHub API to check expiration and permissions
-      const validationResult = await TokenManager.validateTokenScopes(token, {
-        required: ['repo'],
-        optional: ['user:email']
-      });
+      // NOTE: OAuth tokens use 'public_repo' scope, not 'repo'
+      // Using centralized scope management for consistency
+      const requiredScopes = TokenManager.getRequiredScopes('collection');
+      const validationResult = await TokenManager.validateTokenScopes(token, requiredScopes);
 
       if (!validationResult.isValid) {
         SecurityMonitor.logSecurityEvent({
@@ -406,12 +403,27 @@ export class SubmitToPortfolioTool {
           details: `Token validation failed: ${validationResult.error}`
         });
 
+        // Enhanced OAuth-specific error messages
+        const tokenType = TokenManager.getTokenType(token);
+        let errorCode: CollectionErrorCode;
+        let enhancedDetails: string | undefined = validationResult.error;
+        
+        if (validationResult.error?.includes('Missing required scopes')) {
+          errorCode = CollectionErrorCode.COLL_AUTH_002;
+          // Provide OAuth-specific guidance if it's an OAuth token
+          if (tokenType === 'OAuth Access Token') {
+            enhancedDetails = `OAuth token missing 'public_repo' scope. Please re-authenticate with 'setup_github_auth' to get the correct scope.`;
+          }
+        } else {
+          errorCode = CollectionErrorCode.COLL_AUTH_001;
+        }
+
         return {
           isValid: false,
           error: {
             success: false,
-            message: 'GitHub token is invalid or expired. Please re-authenticate.',
-            error: 'TOKEN_VALIDATION_FAILED'
+            message: formatCollectionError(errorCode, 3, 5, enhancedDetails),
+            error: errorCode
           }
         };
       }
@@ -458,6 +470,13 @@ export class SubmitToPortfolioTool {
       // Handle rate limit exceeded specifically
       if (error?.code === 'RATE_LIMIT_EXCEEDED') {
         logger.warn('Token validation rate limited, allowing operation to proceed with cached status');
+        // Still allow operation but log with COLL_API_001
+        SecurityMonitor.logSecurityEvent({
+          type: 'TOKEN_VALIDATION_SUCCESS',
+          severity: 'LOW',
+          source: 'SubmitToPortfolioTool.validateTokenBeforeUsage',
+          details: 'Token validation rate limited but proceeding with cached status'
+        });
         return { isValid: true }; // Allow to proceed if rate limited, as basic format check passed
       }
 
@@ -1122,7 +1141,9 @@ export class SubmitToPortfolioTool {
       if (!autoSubmit) {
         // User hasn't opted in to auto-submission
         logger.info('Collection submission skipped (set DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION=true to enable)');
-        return { submitted: false, declined: true };
+        // Use COLL_CFG_001 error code for auto-submit disabled
+        const errorMessage = formatCollectionError(CollectionErrorCode.COLL_CFG_001, 5, 5);
+        return { submitted: false, declined: true, error: errorMessage };
       }
 
       logger.info('Auto-submitting to DollhouseMCP collection...');

@@ -343,20 +343,20 @@ export class TokenManager {
     switch (operation) {
       case 'read':
         return {
-          required: ['repo'],
+          required: ['public_repo'],  // OAuth tokens use 'public_repo' not 'repo'
           optional: ['user:email']
         };
       
       case 'write':
         return {
-          required: ['repo'],
+          required: ['public_repo'],  // OAuth tokens use 'public_repo' not 'repo'
           optional: ['user:email']
         };
       
       case 'marketplace': // Internal scope name kept for compatibility (PR #280)
       case 'collection': // New preferred name
         return {
-          required: ['repo'],
+          required: ['public_repo'],  // OAuth tokens use 'public_repo' not 'repo'
           optional: ['user:email']
         };
       
@@ -368,7 +368,7 @@ export class TokenManager {
       
       default:
         return {
-          required: ['repo']
+          required: ['public_repo']  // OAuth tokens use 'public_repo' not 'repo'
         };
     }
   }

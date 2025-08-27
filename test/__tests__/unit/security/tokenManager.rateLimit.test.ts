@@ -29,7 +29,7 @@ describe('TokenManager Rate Limiting', () => {
       headers: new Map([
         ['x-ratelimit-remaining', '4999'],
         ['x-ratelimit-reset', String(Math.floor(Date.now() / 1000) + 3600)],
-        ['x-oauth-scopes', 'repo, user:email']
+        ['x-oauth-scopes', 'public_repo, user:email']
       ]) as any,
       json: async () => ({ login: 'testuser', id: 123 })
     } as Response);
@@ -65,7 +65,7 @@ describe('TokenManager Rate Limiting', () => {
 
   describe('Rate Limit Integration in validateTokenScopes', () => {
     const validToken = 'ghp_' + 'x'.repeat(36);
-    const requiredScopes = { required: ['repo'] };
+    const requiredScopes = { required: ['public_repo'] };
 
     it('should allow token validation when under rate limit', async () => {
       const result = await TokenManager.validateTokenScopes(validToken, requiredScopes);
@@ -183,7 +183,7 @@ describe('TokenManager Rate Limiting', () => {
       jest.useFakeTimers();
       
       const validToken = 'ghp_' + 'x'.repeat(36);
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       // Exhaust rate limit with minimum delay
       for (let i = 0; i < 10; i++) {
@@ -208,7 +208,7 @@ describe('TokenManager Rate Limiting', () => {
 
     it('should reset rate limiter when explicitly requested', async () => {
       const validToken = 'ghp_' + 'x'.repeat(36);
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       // Make first call to trigger rate limiting
       await TokenManager.validateTokenScopes(validToken, requiredScopes);
@@ -230,7 +230,7 @@ describe('TokenManager Rate Limiting', () => {
   describe('Rate Limit Error Handling', () => {
     it('should log rate limit violations appropriately', async () => {
       const validToken = 'ghp_' + 'x'.repeat(36);
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       // Make first call
       await TokenManager.validateTokenScopes(validToken, requiredScopes);
@@ -249,7 +249,7 @@ describe('TokenManager Rate Limiting', () => {
 
     it('should not leak token information in error messages', async () => {
       const secretToken = 'ghp_' + 'secretvalue'.repeat(4) + 'abcd';
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       // Exhaust rate limit
       const rateLimiter = TokenManager.createTokenValidationLimiter();
@@ -303,7 +303,7 @@ describe('TokenManager Rate Limiting', () => {
   describe('Integration with GitHub API Rate Limits', () => {
     it('should track both local and GitHub API rate limits', async () => {
       const validToken = 'ghp_' + 'x'.repeat(36);
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       // Mock GitHub API response with rate limit info
       mockFetch.mockResolvedValueOnce({
@@ -313,7 +313,7 @@ describe('TokenManager Rate Limiting', () => {
         headers: new Map([
           ['x-ratelimit-remaining', '59'],
           ['x-ratelimit-reset', String(Math.floor(Date.now() / 1000) + 3600)],
-          ['x-oauth-scopes', 'repo, user:email']
+          ['x-oauth-scopes', 'public_repo, user:email']
         ]) as any,
         json: async () => ({ login: 'testuser', id: 123 })
       } as Response);
