@@ -8,6 +8,7 @@
  * 3. PERFORMANCE (PR #496 recommendation): Using FileDiscoveryUtil for optimized file search
  */
 
+import { createHash } from 'crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
 import { TokenManager } from '../../security/tokenManager.js';
@@ -944,6 +945,133 @@ export class SubmitToPortfolioTool {
   }
 
   /**
+   * Check if content already exists in the portfolio repository
+   * Prevents duplicate uploads by comparing content hashes
+   * @param repoFullName GitHub repository full name (owner/repo)
+   * @param filePath Path to the file in the repository
+   * @param content Content to check against existing
+   * @returns true if identical content exists, false otherwise
+   */
+  private async checkExistingContent(
+    repoFullName: string, 
+    filePath: string, 
+    content: string,
+    token: string
+  ): Promise<boolean> {
+    try {
+      // Attempt to fetch existing file from GitHub
+      const url = `https://api.github.com/repos/${repoFullName}/contents/${filePath}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+
+      if (response.status === 404) {
+        // File doesn't exist, not a duplicate
+        return false;
+      }
+
+      if (!response.ok) {
+        logger.warn('Failed to check existing content', {
+          status: response.status,
+          path: filePath
+        });
+        // On error, allow upload to proceed
+        return false;
+      }
+
+      const data = await response.json();
+      
+      // GitHub returns content as base64
+      const existingContent = Buffer.from(data.content, 'base64').toString('utf-8');
+      
+      // Compare content hashes
+      const existingHash = createHash('sha256').update(existingContent).digest('hex');
+      const newHash = createHash('sha256').update(content).digest('hex');
+      
+      const isDuplicate = existingHash === newHash;
+      
+      if (isDuplicate) {
+        logger.info('Duplicate content detected, skipping upload', {
+          path: filePath,
+          hash: newHash.substring(0, 8) // Log partial hash for debugging
+        });
+      }
+      
+      return isDuplicate;
+      
+    } catch (error) {
+      logger.warn('Error checking for existing content', {
+        error: error instanceof Error ? error.message : String(error),
+        path: filePath
+      });
+      // On error, allow upload to proceed rather than blocking
+      return false;
+    }
+  }
+
+  /**
+   * Check if an issue for this content already exists in the collection
+   * @param elementName Name of the element to check
+   * @param username User submitting the element
+   * @param token GitHub token for API access
+   * @returns URL of existing issue if found, null otherwise
+   */
+  private async checkExistingIssue(
+    elementName: string,
+    username: string,
+    token: string
+  ): Promise<string | null> {
+    try {
+      // Search for existing issues with this element name
+      // Using both title and author to ensure it's the same submission
+      const query = `repo:DollhouseMCP/collection is:issue "${elementName}" in:title author:${username}`;
+      const url = `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=created&order=desc`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+
+      if (!response.ok) {
+        logger.warn('Failed to search for existing issues', {
+          status: response.status
+        });
+        return null;
+      }
+
+      const data = await response.json();
+      
+      if (data.items && data.items.length > 0) {
+        // Found existing issue(s)
+        const existingIssue = data.items[0];
+        logger.info('Found existing collection issue', {
+          issueUrl: existingIssue.html_url,
+          elementName
+        });
+        return existingIssue.html_url;
+      }
+      
+      return null;
+      
+    } catch (error) {
+      logger.warn('Error checking for existing collection issue', {
+        error: error instanceof Error ? error.message : String(error),
+        elementName
+      });
+      // On error, allow submission to proceed
+      return null;
+    }
+  }
+
+  /**
    * Submits element to portfolio and handles the complete response workflow
    * @param safeName The normalized name of the element
    * @param elementType The type of the element
@@ -959,20 +1087,45 @@ export class SubmitToPortfolioTool {
     content: string,
     authStatus: any
   ): Promise<SubmitToPortfolioResult> {
-    // Create element structure to save
-    const element: PortfolioElement = {
-      type: elementType,
-      metadata,
-      content
-    };
+    // DUPLICATE DETECTION: Check if content already exists in portfolio
+    const repoFullName = `${authStatus.username}/dollhouse-portfolio`;
+    const filePath = `${elementType}/${safeName}.md`;
     
-    // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
-    // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
-    // Now: Clean adapter pattern that implements IElement interface properly
-    const adapter = new PortfolioElementAdapter(element);
+    // Prepare the full content that would be saved
+    const fullContent = `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
     
-    // UX IMPROVEMENT: Add retry logic for transient failures
-    const fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
+    const isDuplicate = await this.checkExistingContent(
+      repoFullName, 
+      filePath, 
+      fullContent,
+      authStatus.token
+    );
+    
+    let fileUrl: string | null = null;
+    
+    if (isDuplicate) {
+      // Content already exists, construct the URL without uploading
+      fileUrl = `https://github.com/${repoFullName}/blob/main/${filePath}`;
+      logger.info('Skipped duplicate upload to portfolio', {
+        elementName: safeName,
+        path: filePath
+      });
+    } else {
+      // Create element structure to save
+      const element: PortfolioElement = {
+        type: elementType,
+        metadata,
+        content
+      };
+      
+      // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
+      // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
+      // Now: Clean adapter pattern that implements IElement interface properly
+      const adapter = new PortfolioElementAdapter(element);
+      
+      // UX IMPROVEMENT: Add retry logic for transient failures
+      fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
+    }
     
     if (!fileUrl) {
       return {
@@ -1261,6 +1414,20 @@ export class SubmitToPortfolioTool {
     token: string;
   }): Promise<string | null> {
     try {
+      // DUPLICATE DETECTION: Check if issue already exists
+      const existingIssueUrl = await this.checkExistingIssue(
+        params.elementName,
+        params.username,
+        params.token
+      );
+      
+      if (existingIssueUrl) {
+        logger.info('Collection issue already exists, skipping creation', {
+          elementName: params.elementName,
+          issueUrl: existingIssueUrl
+        });
+        return existingIssueUrl;
+      }
 
       // Format the issue title
       const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
