@@ -1645,11 +1645,68 @@ export class SubmitToPortfolioTool {
       let elementContent = '';
       if (params.localPath) {
         try {
+          // SECURITY: Validate file size before reading to prevent memory exhaustion
+          const stats = await fs.stat(params.localPath);
+          if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
+            // DO NOT truncate user content - reject if too large
+            logger.error('Element file exceeds size limit for collection submission', {
+              elementName: params.elementName,
+              fileSize: stats.size,
+              maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'MEDIUM',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `File size ${stats.size} exceeds limit for collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                fileSize: stats.size,
+                limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+              }
+            });
+            
+            // Return error message instead of truncating
+            return null;
+          }
+          
           // Read the full markdown file with frontmatter and content
           elementContent = await fs.readFile(params.localPath, 'utf-8');
-          logger.debug('Read element file content for collection submission', {
+          
+          // SECURITY: Validate content for security issues
+          // Note: We already validated this content in validateFileAndContent()
+          // but we re-validate here since this is being posted to a public issue
+          const validationResult = ContentValidator.validateAndSanitize(elementContent);
+          
+          if (!validationResult.isValid && validationResult.severity === 'critical') {
+            logger.error('Element content failed security validation for collection submission', {
+              elementName: params.elementName,
+              issues: validationResult.detectedPatterns
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'HIGH',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `Critical security issues detected in collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                detectedPatterns: validationResult.detectedPatterns
+              }
+            });
+            
+            // DO NOT submit content with security issues
+            return null;
+          }
+          
+          // Use the sanitized content (but NOT truncated)
+          elementContent = validationResult.sanitizedContent || elementContent;
+          
+          logger.debug('Read and validated element file content for collection submission', {
             elementName: params.elementName,
-            contentLength: elementContent.length
+            contentLength: elementContent.length,
+            securityIssues: validationResult.detectedPatterns?.length || 0
           });
         } catch (error) {
           logger.warn('Failed to read element file content, falling back to metadata only', {
