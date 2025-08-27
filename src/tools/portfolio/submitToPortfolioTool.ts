@@ -34,6 +34,7 @@ import {
 } from '../../config/portfolio-constants.js';
 import { githubRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
+import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -407,12 +408,17 @@ export class SubmitToPortfolioTool {
           details: `Token validation failed: ${validationResult.error}`
         });
 
+        // Check if it's specifically a scope issue
+        const errorCode = validationResult.error?.includes('Missing required scopes') 
+          ? CollectionErrorCode.COLL_AUTH_002
+          : CollectionErrorCode.COLL_AUTH_001;
+
         return {
           isValid: false,
           error: {
             success: false,
-            message: 'GitHub token is invalid or expired. Please re-authenticate.',
-            error: 'TOKEN_VALIDATION_FAILED'
+            message: formatCollectionError(errorCode, 3, 5, validationResult.error),
+            error: errorCode
           }
         };
       }
@@ -459,6 +465,13 @@ export class SubmitToPortfolioTool {
       // Handle rate limit exceeded specifically
       if (error?.code === 'RATE_LIMIT_EXCEEDED') {
         logger.warn('Token validation rate limited, allowing operation to proceed with cached status');
+        // Still allow operation but log with COLL_API_001
+        SecurityMonitor.logSecurityEvent({
+          type: 'TOKEN_VALIDATION_SUCCESS',
+          severity: 'LOW',
+          source: 'SubmitToPortfolioTool.validateTokenBeforeUsage',
+          details: 'Token validation rate limited but proceeding with cached status'
+        });
         return { isValid: true }; // Allow to proceed if rate limited, as basic format check passed
       }
 
@@ -1123,7 +1136,9 @@ export class SubmitToPortfolioTool {
       if (!autoSubmit) {
         // User hasn't opted in to auto-submission
         logger.info('Collection submission skipped (set DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION=true to enable)');
-        return { submitted: false, declined: true };
+        // Use COLL_CFG_001 error code for auto-submit disabled
+        const errorMessage = formatCollectionError(CollectionErrorCode.COLL_CFG_001, 5, 5);
+        return { submitted: false, declined: true, error: errorMessage };
       }
 
       logger.info('Auto-submitting to DollhouseMCP collection...');

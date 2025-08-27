@@ -167,18 +167,18 @@ describe('TokenManager - GitHub Token Security', () => {
   describe('getRequiredScopes', () => {
     test('should return read scopes', () => {
       const scopes = TokenManager.getRequiredScopes('read');
-      expect(scopes.required).toContain('repo');
+      expect(scopes.required).toContain('public_repo');
       expect(scopes.optional).toContain('user:email');
     });
 
     test('should return write scopes', () => {
       const scopes = TokenManager.getRequiredScopes('write');
-      expect(scopes.required).toContain('repo');
+      expect(scopes.required).toContain('public_repo');
     });
 
     test('should return collection scopes', () => {
       const scopes = TokenManager.getRequiredScopes('collection');
-      expect(scopes.required).toContain('repo');
+      expect(scopes.required).toContain('public_repo');
     });
 
     test('should return gist scopes', () => {
@@ -188,7 +188,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
     test('should return default scopes for unknown operation', () => {
       const scopes = TokenManager.getRequiredScopes('unknown' as any);
-      expect(scopes.required).toContain('repo');
+      expect(scopes.required).toContain('public_repo');
     });
   });
 
@@ -206,7 +206,7 @@ describe('TokenManager - GitHub Token Security', () => {
       // Mock fetch to simulate GitHub API response
       const mockGet = jest.fn((header: string) => {
         switch (header) {
-          case 'x-oauth-scopes': return 'repo,user:email';
+          case 'x-oauth-scopes': return 'public_repo,user:email';
           case 'x-ratelimit-remaining': return '100';
           case 'x-ratelimit-reset': return '1640995200';
           default: return null;
@@ -292,11 +292,11 @@ describe('TokenManager - GitHub Token Security', () => {
   describe('validateTokenScopes', () => {
     test('should validate token with sufficient scopes', async () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
-      const requiredScopes = { required: ['repo'], optional: ['user:email'] };
+      const requiredScopes = { required: ['public_repo'], optional: ['user:email'] };
       
       const mockGet = jest.fn((header: string) => {
           switch (header) {
-            case 'x-oauth-scopes': return 'repo,user:email,gist';
+            case 'x-oauth-scopes': return 'public_repo,user:email,gist';
             case 'x-ratelimit-remaining': return '95';
             case 'x-ratelimit-reset': return '1640995200';
             default: return null;
@@ -314,13 +314,13 @@ describe('TokenManager - GitHub Token Security', () => {
       
       const result = await TokenManager.validateTokenScopes(token, requiredScopes);
       expect(result.isValid).toBe(true);
-      expect(result.scopes).toEqual(['repo', 'user:email', 'gist']);
+      expect(result.scopes).toEqual(['public_repo', 'user:email', 'gist']);
       expect(result.rateLimit?.remaining).toBe(95);
     });
 
     test('should handle empty scopes header', async () => {
       const token = 'ghp_1234567890123456789012345678901234567890';
-      const requiredScopes = { required: ['repo'] };
+      const requiredScopes = { required: ['public_repo'] };
       
       const mockGet = jest.fn((header: string) => {
           switch (header) {
