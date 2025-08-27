@@ -1258,7 +1258,8 @@ export class SubmitToPortfolioTool {
     elementType: ElementType,
     metadata: PortfolioElementMetadata,
     content: string,
-    authStatus: any
+    authStatus: any,
+    localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
     // DUPLICATE DETECTION: Check if content already exists in portfolio
     const repoFullName = `${authStatus.username}/dollhouse-portfolio`;
@@ -1351,7 +1352,8 @@ export class SubmitToPortfolioTool {
       portfolioUrl: fileUrl,
       username: authStatus.username || 'unknown',
       metadata,
-      token
+      token,
+      localPath  // Pass the local file path for reading content
     });
 
     // Build the response message based on what happened
@@ -1531,6 +1533,7 @@ export class SubmitToPortfolioTool {
     username: string;
     metadata: PortfolioElementMetadata;
     token: string;
+    localPath?: string;  // Path to the local element file
   }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string }> {
     try {
       // Create a simple prompt message for the user
@@ -1554,7 +1557,8 @@ export class SubmitToPortfolioTool {
       // Create the issue in the collection repository
       const issueUrl = await this.createCollectionIssue({
         ...params,
-        token: params.token
+        token: params.token,
+        localPath: params.localPath  // Pass through the file path
       });
 
       if (issueUrl) {
@@ -1585,6 +1589,7 @@ export class SubmitToPortfolioTool {
     username: string;
     metadata: PortfolioElementMetadata;
     token: string;
+    localPath?: string;  // Path to the local element file
   }): Promise<string | null> {
     try {
       // DUPLICATE DETECTION: Check if issue already exists
@@ -1636,6 +1641,89 @@ export class SubmitToPortfolioTool {
         additionalFields.push(`**Tags**: ${meta.tags.join(', ')}`);
       }
       
+      // Read the full element file content if path is provided
+      let elementContent = '';
+      if (params.localPath) {
+        try {
+          // SECURITY: Validate file size before reading to prevent memory exhaustion
+          const stats = await fs.stat(params.localPath);
+          if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
+            // DO NOT truncate user content - reject if too large
+            logger.error('Element file exceeds size limit for collection submission', {
+              elementName: params.elementName,
+              fileSize: stats.size,
+              maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'MEDIUM',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `File size ${stats.size} exceeds limit for collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                fileSize: stats.size,
+                limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+              }
+            });
+            
+            // Return error message instead of truncating
+            return null;
+          }
+          
+          // Read the full markdown file with frontmatter and content
+          elementContent = await fs.readFile(params.localPath, 'utf-8');
+          
+          // SECURITY: Validate content for security issues
+          // Note: We already validated this content in validateFileAndContent()
+          // but we re-validate here since this is being posted to a public issue
+          const validationResult = ContentValidator.validateAndSanitize(elementContent);
+          
+          if (!validationResult.isValid && validationResult.severity === 'critical') {
+            logger.error('Element content failed security validation for collection submission', {
+              elementName: params.elementName,
+              issues: validationResult.detectedPatterns
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'HIGH',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `Critical security issues detected in collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                detectedPatterns: validationResult.detectedPatterns
+              }
+            });
+            
+            // DO NOT submit content with security issues
+            return null;
+          }
+          
+          // Use the sanitized content (but NOT truncated)
+          elementContent = validationResult.sanitizedContent || elementContent;
+          
+          logger.debug('Read and validated element file content for collection submission', {
+            elementName: params.elementName,
+            contentLength: elementContent.length,
+            securityIssues: validationResult.detectedPatterns?.length || 0
+          });
+        } catch (error) {
+          logger.warn('Failed to read element file content, falling back to metadata only', {
+            elementName: params.elementName,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          // Fall back to just the metadata if we can't read the file
+          elementContent = this.formatMetadataAsYaml(params.metadata, meta);
+        }
+      } else {
+        // No file path provided, use metadata as fallback
+        logger.warn('No file path provided for collection submission, using metadata only', {
+          elementName: params.elementName
+        });
+        elementContent = this.formatMetadataAsYaml(params.metadata, meta);
+      }
+      
       const body = `## New ${params.elementType} Submission
 
 **Name**: ${params.elementName}
@@ -1651,9 +1739,9 @@ ${additionalFields.length > 0 ? additionalFields.join('\n') : '*No additional me
 ### Portfolio Link
 ${params.portfolioUrl}
 
-### Full Metadata
+### Element Content
 \`\`\`yaml
-${this.formatMetadataAsYaml(params.metadata, meta)}
+${elementContent}
 \`\`\`
 
 ### Review Checklist
