@@ -1288,9 +1288,11 @@ export class SubmitToPortfolioTool {
 
       // Determine labels based on element type
       const labels = [
-        'contribution',  // All submissions get this
-        'pending-review', // Needs review
-        params.elementType.toLowerCase() // Element type label
+        'element-submission',  // CRITICAL: Triggers automation workflow
+        'collection-repo',     // Indicates this is for the collection
+        'contribution',        // All submissions get this
+        'pending-review',      // Needs review
+        params.elementType.toLowerCase() // Element type label (e.g., 'personas')
       ];
 
       // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
