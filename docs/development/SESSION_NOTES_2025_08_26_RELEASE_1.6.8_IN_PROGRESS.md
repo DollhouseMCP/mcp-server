@@ -2,7 +2,7 @@
 
 **Time**: Evening session  
 **Branch**: `release/1.6.8`  
-**Context**: Creating v1.6.8 release following GitFlow exactly, stopping before tagging
+**Context**: Creating v1.6.9 release following GitFlow exactly, stopping before tagging
 
 ## Current Status: Release PR Created, Waiting for CI
 
@@ -18,7 +18,7 @@
 
 ### What This Release Contains
 
-**v1.6.8 - Bug Fix Release**
+**v1.6.9 - Bug Fix Release**
 - **Main Fix**: OAuth client ID configuration display issue (PR #782)
   - The `configure_oauth` tool was incorrectly showing "Not Configured" when using the default OAuth client ID
   - Fixed to properly show "Using Default" vs "Configured" status
@@ -33,7 +33,7 @@
 
 ### Current PR Status
 - **PR #783**: https://github.com/DollhouseMCP/mcp-server/pull/783
-- **Title**: Release v1.6.8
+- **Title**: Release v1.6.9
 - **Base**: main
 - **Head**: release/1.6.8
 - **CI Status**: Running (as of session end)
@@ -62,8 +62,8 @@ git pull origin main
 ### 5. After User Confirmation, Create Tag
 ```bash
 # Only after user says "okay to tag"
-git tag v1.6.8
-git push origin v1.6.8
+git tag v1.6.9
+git push origin v1.6.9
 ```
 
 ### 6. Complete GitFlow - Merge Back to Develop
@@ -130,12 +130,12 @@ git pull
 
 ## Key Decisions Made
 
-1. **Version 1.6.8** - Patch release for the OAuth display bug fix
+1. **Version 1.6.9** - Patch release for the OAuth display bug fix
 2. **Following GitFlow** - Creating proper release branch, PR to main, will tag after merge
 3. **Stopping before tag** - User explicitly requested visual confirmation before tagging
 
 ## Session Statistics
-- **PRs Created**: 1 (#783 - Release v1.6.8)
+- **PRs Created**: 1 (#783 - Release v1.6.9)
 - **Branches Created**: 1 (release/1.6.8)
 - **Version Bumped**: From 1.6.7 to 1.6.8
 - **Files Updated**: 8 files with version changes

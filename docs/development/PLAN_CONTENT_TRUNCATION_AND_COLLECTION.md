@@ -144,7 +144,7 @@ describe('Collection Error Codes', () => {
    - PersonaElement serialization preserves full content
    - Local save/load operations work correctly
 
-3. **Production v1.6.8 Not Affected**:
+3. **Production v1.6.9 Not Affected**:
    - Created test personas in production - no truncation
    - Issue specific to GitHub upload process
 
