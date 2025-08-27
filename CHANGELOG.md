@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.9] - 2025-08-27
+
+Fix content truncation in create_persona tool - personas were being truncated at 1000 chars
+
 ## [1.6.8] - 2025-08-26
 
 ### Fixed
