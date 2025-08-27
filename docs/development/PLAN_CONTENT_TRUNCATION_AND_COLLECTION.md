@@ -130,12 +130,51 @@ describe('Collection Error Codes', () => {
 - [ ] QA tests passing
 - [ ] Documentation updated
 
+## Investigation Results (August 27, 2025)
+
+### Key Findings
+
+1. **Truncation Location Identified**: 
+   - ARIA-7 in GitHub portfolio is truncated at exactly 1770 bytes
+   - Content ends mid-sentence: "you often wonder a"
+   - Truncation occurred during upload from Claude Desktop to GitHub
+
+2. **Local Operations Working**:
+   - Tested up to 500KB locally - NO truncation
+   - PersonaElement serialization preserves full content
+   - Local save/load operations work correctly
+
+3. **Production v1.6.8 Not Affected**:
+   - Created test personas in production - no truncation
+   - Issue specific to GitHub upload process
+
+4. **Pattern**:
+   - ARIA-7: 1770 bytes (truncated)
+   - J.A.R.V.I.S: 1791 bytes (complete)
+   - Not a universal size limit
+
+### Root Cause Hypothesis
+
+The truncation appears to happen during:
+1. Serialization before GitHub upload
+2. Base64 encoding for GitHub API
+3. A character limit in the upload process
+4. Possibly in PersonaElement.serialize() or formatElementContent()
+
+### Next Investigation Steps
+
+1. Check for any substring operations around 1700-1800 characters
+2. Test GitHub upload with known content sizes
+3. Add logging to track content through upload pipeline
+4. Check if issue is in serialize() method character limits
+
 ## Notes
 
-- Focus on truncation first (data loss)
+- Focus on truncation first (data loss) - **FOUND: GitHub upload issue**
 - Error codes second (diagnostics)
 - Consider compression for large content
 - Document any hard limits clearly
+- The 1770 byte truncation is suspiciously specific
 
 ---
 
