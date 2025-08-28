@@ -34,7 +34,10 @@ export interface TestEnvironment {
  * Load and validate test environment configuration
  */
 export async function setupTestEnvironment(): Promise<TestEnvironment> {
-  // Try to load .env.test.local first, then fall back to environment variables
+  // Store existing token if set (CI environment takes precedence)
+  const existingToken = process.env.GITHUB_TEST_TOKEN;
+  
+  // Try to load .env.test.local for other settings
   const envPath = path.join(__dirname, '.env.test.local');
   
   try {
@@ -43,6 +46,16 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
     console.log('✅ Loaded test configuration from .env.test.local');
   } catch {
     console.log('ℹ️ No .env.test.local found, using environment variables');
+  }
+
+  // Use existing token if it was set (CI), otherwise use the loaded one
+  if (existingToken) {
+    // Validate token looks reasonable (GitHub tokens are typically 40+ chars)
+    if (existingToken.length < 10) {
+      console.warn('⚠️  CI token appears invalid (too short), falling back to .env file');
+    } else {
+      process.env.GITHUB_TEST_TOKEN = existingToken;
+    }
   }
 
   // Validate required variables
