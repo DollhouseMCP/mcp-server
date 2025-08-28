@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.11] - 2025-08-28
+
+### Fixed
+- Collection index URL updated to use GitHub Pages instead of raw GitHub URL
+- E2E tests now properly prioritize CI environment tokens over local .env files
+- MCP tool flow tests handle both string and object response formats for backward compatibility
+- Test suite reliability improvements for CI environments
+
 ## [1.6.10] - 2025-08-28
 
 ### Fixed

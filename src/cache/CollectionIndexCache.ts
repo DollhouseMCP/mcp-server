@@ -14,7 +14,7 @@ import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 export class CollectionIndexCache {
   private cache: CachedIndex | null = null;
   private readonly TTL = 15 * 60 * 1000; // 15 minutes in milliseconds
-  private readonly INDEX_URL = 'https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json';
+  private readonly INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
   private cacheDir: string;
   private cacheFile: string;
   private githubClient: GitHubClient;

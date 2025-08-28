@@ -138,6 +138,20 @@ class MCPTestServer {
 }
 
 /**
+ * Helper function to extract text from various response formats
+ * Handles both legacy string responses and MCP object responses
+ */
+function extractResponseText(response: any): string {
+  if (typeof response === 'string') return response;
+  if (response?.content && Array.isArray(response.content) && response.content.length > 0) {
+    return response.content[0]?.text || '';
+  }
+  if (response?.text) return response.text;  // Handle direct text property
+  if (response?.message) return response.message;  // Handle error messages
+  return '';
+}
+
+/**
  * Simulate MCP tool calls
  * Since we can't directly test MCP protocol, we'll test the underlying functions
  * that the MCP tools call, ensuring the complete flow works
@@ -270,10 +284,8 @@ describe('MCP Tool Integration Flow', () => {
       // Use the submitContent function directly
       const submitResult = await server['submitContent'](`${testEnv.personaPrefix}test-ziggy`);
       
-      // Handle object response format
-      const submitText = typeof submitResult === 'string'
-        ? submitResult
-        : submitResult?.content?.[0]?.text || '';
+      // Extract text from response using helper function
+      const submitText = extractResponseText(submitResult);
       
       console.log('     Submit result:', submitText.substring(0, 100));
       
@@ -335,11 +347,11 @@ describe('MCP Tool Integration Flow', () => {
       // Try to check auth with bad token
       const authStatus = await server['checkGitHubAuth']();
       
-      // Should show not authenticated
-      // Handle both string and object response formats
-      const authErrorText = typeof authStatus === 'string'
-        ? authStatus
-        : authStatus?.content?.[0]?.text || '';
+      // Extract and validate authentication error message
+      const authErrorText = extractResponseText(authStatus);
+      
+      // Ensure we got a meaningful response
+      expect(authErrorText).toBeTruthy();
       expect(authErrorText).toMatch(/not authenticated|invalid|failed/i);
       console.log('     ✅ Auth error handled correctly');
       
@@ -366,10 +378,8 @@ describe('MCP Tool Integration Flow', () => {
       // Try to submit non-existent content
       const submitError = await server['submitContent']('non-existent-persona-xyz-123');
       
-      // Handle object response format
-      const errorMessage = typeof submitError === 'string'
-        ? submitError
-        : submitError?.content?.[0]?.text || '';
+      // Extract error message using helper function
+      const errorMessage = extractResponseText(submitError);
       
       // Should get helpful error message
       expect(errorMessage).toBeTruthy();
