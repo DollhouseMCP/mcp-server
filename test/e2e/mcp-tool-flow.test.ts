@@ -270,10 +270,17 @@ describe('MCP Tool Integration Flow', () => {
       // Use the submitContent function directly
       const submitResult = await server['submitContent'](`${testEnv.personaPrefix}test-ziggy`);
       
-      // Handle object response format
-      const submitText = typeof submitResult === 'string'
-        ? submitResult
-        : submitResult?.content?.[0]?.text || '';
+      // Handle object response format with validation
+      // Response can be either:
+      // 1. Legacy string format: direct text response
+      // 2. MCP object format: { content: [{ text: "..." }] }
+      // We validate the content array exists and has elements before accessing
+      let submitText = '';
+      if (typeof submitResult === 'string') {
+        submitText = submitResult;
+      } else if (submitResult?.content && Array.isArray(submitResult.content) && submitResult.content.length > 0) {
+        submitText = submitResult.content[0]?.text || '';
+      }
       
       console.log('     Submit result:', submitText.substring(0, 100));
       
@@ -336,10 +343,16 @@ describe('MCP Tool Integration Flow', () => {
       const authStatus = await server['checkGitHubAuth']();
       
       // Should show not authenticated
-      // Handle both string and object response formats
-      const authErrorText = typeof authStatus === 'string'
-        ? authStatus
-        : authStatus?.content?.[0]?.text || '';
+      // Handle both string and object response formats with validation
+      let authErrorText = '';
+      if (typeof authStatus === 'string') {
+        authErrorText = authStatus;
+      } else if (authStatus?.content && Array.isArray(authStatus.content) && authStatus.content.length > 0) {
+        authErrorText = authStatus.content[0]?.text || '';
+      }
+      
+      // Ensure we got a meaningful response
+      expect(authErrorText).toBeTruthy();
       expect(authErrorText).toMatch(/not authenticated|invalid|failed/i);
       console.log('     ✅ Auth error handled correctly');
       
@@ -366,10 +379,13 @@ describe('MCP Tool Integration Flow', () => {
       // Try to submit non-existent content
       const submitError = await server['submitContent']('non-existent-persona-xyz-123');
       
-      // Handle object response format
-      const errorMessage = typeof submitError === 'string'
-        ? submitError
-        : submitError?.content?.[0]?.text || '';
+      // Handle object response format with validation
+      let errorMessage = '';
+      if (typeof submitError === 'string') {
+        errorMessage = submitError;
+      } else if (submitError?.content && Array.isArray(submitError.content) && submitError.content.length > 0) {
+        errorMessage = submitError.content[0]?.text || '';
+      }
       
       // Should get helpful error message
       expect(errorMessage).toBeTruthy();
