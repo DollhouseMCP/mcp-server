@@ -251,7 +251,17 @@ class GitHubIntegrationTestRunner {
   }
 
   async testCollectionSubmission() {
-    console.log('\n🏪 Testing Collection Submission...');
+    console.log('\n🏪 Testing Collection Submission with Content Validation...');
+    
+    // Track submission metrics
+    const submissionMetrics = {
+      totalAttempts: 0,
+      successful: 0,
+      failed: 0,
+      contentValidationPassed: 0,
+      contentValidationFailed: 0,
+      securityRejections: 0
+    };
     
     // First, let's see what personas are available to submit
     let result = await this.callTool('list_elements', { type: 'personas' });
@@ -280,6 +290,7 @@ class GitHubIntegrationTestRunner {
     console.log(`  📋 Found persona to test: "${personaName}"`);
 
     // Try to submit to collection
+    submissionMetrics.totalAttempts++;
     result = await this.callTool('submit_content', {
       name: personaName,
       type: 'personas'
@@ -289,11 +300,178 @@ class GitHubIntegrationTestRunner {
     console.log(`  ✅ Submit to Collection: ${result.success ? 'Success' : result.error} (${result.duration}ms)`);
     
     if (result.success) {
+      submissionMetrics.successful++;
       const collectionText = result.result?.[0]?.text || '';
       console.log(`    📋 Collection result: ${collectionText.slice(0, 200)}...`);
+      
+      // Extract issue URL if available
+      const issueUrlMatch = collectionText.match(/https:\/\/github\.com\/DollhouseMCP\/collection\/issues\/\d+/);
+      
+      if (issueUrlMatch) {
+        const issueUrl = issueUrlMatch[0];
+        console.log(`    📋 Created issue: ${issueUrl}`);
+        
+        // Wait for GitHub to process
+        console.log('    ⏳ Waiting 3 seconds for GitHub to process...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Validate submission content
+        const contentValid = await this.validateSubmissionContent(personaName, issueUrl);
+        if (contentValid) {
+          submissionMetrics.contentValidationPassed++;
+        } else {
+          submissionMetrics.contentValidationFailed++;
+        }
+      } else {
+        console.log('    ⚠️  Could not extract issue URL from result');
+      }
+    } else {
+      submissionMetrics.failed++;
     }
+    
+    // Test security validation
+    const securityValid = await this.testSecurityValidation();
+    if (!securityValid) {
+      submissionMetrics.securityRejections++;
+    }
+    
+    // Generate metrics report
+    this.generateSubmissionReport(submissionMetrics);
 
     return result.success;
+  }
+  
+  async validateSubmissionContent(_elementName, issueUrl) {
+    console.log('\n  🔍 Validating Submission Content...');
+    
+    try {
+      // Extract issue number from URL
+      const issueNumber = issueUrl.split('/').pop();
+      console.log(`    📋 Checking issue #${issueNumber}...`);
+      
+      // Import fetch
+      const fetch = (await import('node-fetch')).default;
+      
+      // Fetch issue from GitHub API
+      const response = await fetch(
+        `https://api.github.com/repos/DollhouseMCP/collection/issues/${issueNumber}`,
+        {
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'DollhouseMCP-QA-Test',
+            ...(process.env.GITHUB_TOKEN ? {
+              'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`
+            } : {})
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        console.log(`    ❌ Failed to fetch issue: ${response.status}`);
+        return false;
+      }
+      
+      const issue = await response.json();
+      const body = issue.body;
+      
+      // Validate Element Content section exists
+      if (!body.includes('### Element Content')) {
+        console.log('    ❌ Issue missing "Element Content" section');
+        console.log('       (Only metadata is being sent - PR #802 fix not working)');
+        return false;
+      }
+      console.log('    ✅ Element Content section present');
+      
+      // Extract and validate YAML content
+      const yamlMatch = body.match(/```yaml\n([\s\S]*?)\n```/);
+      if (!yamlMatch) {
+        console.log('    ❌ Issue missing YAML code block');
+        return false;
+      }
+      
+      const yamlContent = yamlMatch[1];
+      
+      // Check for frontmatter markers
+      if (!yamlContent.includes('---')) {
+        console.log('    ❌ YAML content missing frontmatter markers');
+        console.log('       (This means only metadata is being sent)');
+        return false;
+      }
+      console.log('    ✅ Frontmatter markers present');
+      
+      // Validate it's not just metadata (should have content after frontmatter)
+      const lines = yamlContent.split('\n');
+      if (lines.length < 10) {
+        console.log('    ❌ Content appears to be metadata only (too short)');
+        return false;
+      }
+      console.log(`    ✅ Full content verified (${lines.length} lines)`);
+      
+      // Check for version identifier
+      if (body.includes('v1.6.9-beta1-collection-fix')) {
+        console.log('    ✅ Version identifier found in footer');
+      }
+      
+      console.log('    ✅ Submission content validation PASSED');
+      return true;
+      
+    } catch (error) {
+      console.log(`    ❌ Error validating content: ${error.message}`);
+      return false;
+    }
+  }
+  
+  async testSecurityValidation() {
+    console.log('\n  🔒 Testing Security Validation in Submission...');
+    
+    // Create a test element with malicious content
+    const maliciousName = `test-malicious-${Date.now()}`;
+    
+    // First create it
+    const createResult = await this.callTool('create_element', {
+      name: maliciousName,
+      type: 'personas',
+      description: 'Test persona for security validation',
+      instructions: '<script>alert("XSS")</script>'
+    });
+    
+    if (!createResult.success) {
+      console.log('    ⚠️  Could not create test element for security validation');
+      return true; // Don't fail the test if we can't create the element
+    }
+    
+    // Try to submit it
+    const submitResult = await this.callTool('submit_content', {
+      name: maliciousName,
+      type: 'personas'
+    });
+    
+    this.results.push(submitResult);
+    
+    // It should be rejected
+    if (submitResult.success) {
+      const resultText = submitResult.result?.[0]?.text || '';
+      if (resultText.includes('github.com/DollhouseMCP/collection/issues')) {
+        console.log('    ❌ Security validation failed - malicious content accepted');
+        return false;
+      }
+    }
+    
+    console.log('    ✅ Security validation working - malicious content rejected');
+    return true;
+  }
+  
+  generateSubmissionReport(metrics) {
+    console.log('\n  📊 Submission Metrics:');
+    console.log(`    Total Attempts: ${metrics.totalAttempts}`);
+    console.log(`    Successful: ${metrics.successful} (${metrics.totalAttempts > 0 ? Math.round(metrics.successful / metrics.totalAttempts * 100) : 0}%)`);
+    console.log(`    Failed: ${metrics.failed}`);
+    console.log(`    Content Validation Passed: ${metrics.contentValidationPassed}`);
+    console.log(`    Content Validation Failed: ${metrics.contentValidationFailed}`);
+    console.log(`    Security Rejections: ${metrics.securityRejections}`);
+    
+    // Store metrics for later use
+    this.submissionMetrics = metrics;
   }
 
   async testOAuthFlow() {

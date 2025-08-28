@@ -195,8 +195,10 @@ describe('MCP Tool Integration Flow', () => {
       process.env.GITHUB_TOKEN = testEnv.githubToken;
       process.env.DOLLHOUSE_USER = testEnv.githubUser;
       
-      // Initialize the server
-      await server['initialize']();
+      // Initialize the server by calling the private initialization methods
+      // These are normally called in run() but we can't use that in tests
+      await server['initializePortfolio']();
+      await server['completeInitialization']();
       console.log('     ✅ Server initialized');
       
       // Step 1: Check GitHub authentication (check_github_auth tool)
@@ -240,7 +242,7 @@ describe('MCP Tool Integration Flow', () => {
       // Search for it
       const searchResults = await server['searchPortfolio']({
         query: 'Ziggy',
-        type: 'personas'
+        elementType: 'personas'
       });
       
       expect(searchResults).toContain('Search Results');
@@ -252,7 +254,7 @@ describe('MCP Tool Integration Flow', () => {
       // Use the submitToPortfolio function directly
       const submitResult = await server['submitToPortfolio']({
         name: `${testEnv.personaPrefix}test-ziggy`,
-        repository_name: testEnv.testRepo.split('/')[1],
+        repository_name: testEnv.testRepo?.split('/')[1] || 'portfolio',
         auto_submit_issue: false
       });
       
@@ -290,7 +292,8 @@ describe('MCP Tool Integration Flow', () => {
       // Set invalid token
       process.env.GITHUB_TOKEN = 'ghp_invalid_token';
       
-      await server['initialize']();
+      await server['initializePortfolio']();
+      await server['completeInitialization']();
       
       // Try to check auth with bad token
       const authStatus = await server['checkGitHubAuth']();
@@ -316,13 +319,14 @@ describe('MCP Tool Integration Flow', () => {
       const server = new DollhouseMCPServer();
       
       process.env.GITHUB_TOKEN = testEnv.githubToken;
-      await server['initialize']();
+      await server['initializePortfolio']();
+      await server['completeInitialization']();
       
       // Try to submit non-existent content
       try {
         await server['submitToPortfolio']({
           name: 'non-existent-persona-xyz-123',
-          repository_name: testEnv.testRepo.split('/')[1]
+          repository_name: testEnv.testRepo?.split('/')[1] || 'portfolio'
         });
       } catch (error: any) {
         // Should get helpful error message

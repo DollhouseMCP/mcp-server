@@ -8,6 +8,7 @@
  * 3. PERFORMANCE (PR #496 recommendation): Using FileDiscoveryUtil for optimized file search
  */
 
+import { createHash } from 'crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
 import { TokenManager } from '../../security/tokenManager.js';
@@ -18,13 +19,11 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { PathValidator } from '../../security/pathValidator.js';
 import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
-import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
+import { ErrorHandler } from '../../utils/ErrorHandler.js';
 import { 
-  GITHUB_API_TIMEOUT, 
   FILE_SIZE_LIMITS, 
   RETRY_CONFIG, 
   SEARCH_CONFIG,
@@ -34,8 +33,10 @@ import {
 } from '../../config/portfolio-constants.js';
 import { githubRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
+import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 
 export interface SubmitToPortfolioParams {
   name: string;
@@ -65,10 +66,31 @@ export interface ElementDetectionResult {
   matches: ElementDetectionMatch[];
 }
 
+// Workflow step constants for consistent logging
+const WORKFLOW_STEPS = {
+  VALIDATION: 1,
+  AUTHENTICATION: 2,
+  CONTENT_DISCOVERY: 3,
+  SECURITY: 4,
+  METADATA: 5,
+  REPO_SETUP: 6,
+  SUBMISSION: 7,
+  REPORTING: 8,
+  TOTAL: 8
+} as const;
+
+// Logging configuration
+const LOGGING_CONFIG = {
+  // Set DOLLHOUSE_VERBOSE_LOGGING=true for detailed step-by-step logs
+  isVerbose: process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true',
+  // Set DOLLHOUSE_LOG_TIMING=true for timing measurements
+  shouldLogTiming: process.env.DOLLHOUSE_LOG_TIMING?.toLowerCase() === 'true' || 
+                   process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true'
+} as const;
+
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
   private portfolioManager: PortfolioRepoManager;
-  private contentValidator: ContentValidator;
 
   constructor(apiCache: APICache) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
@@ -76,7 +98,6 @@ export class SubmitToPortfolioTool {
     // Now: constructor(apiCache: APICache) with proper import
     this.authManager = new GitHubAuthManager(apiCache);
     this.portfolioManager = new PortfolioRepoManager();
-    this.contentValidator = new ContentValidator();
   }
 
   /**
@@ -346,19 +367,191 @@ export class SubmitToPortfolioTool {
    * @param authStatus Authentication status containing username
    * @returns Metadata object for the element
    */
-  private prepareElementMetadata(
+  private async prepareElementMetadata(
     safeName: string, 
     elementType: ElementType, 
-    authStatus: any
-  ): PortfolioElementMetadata {
-    return {
+    authStatus: any,
+    filePath?: string
+  ): Promise<PortfolioElementMetadata> {
+    // Try to extract metadata from the file if path is provided
+    let fileMetadata: Record<string, any> | null = null;
+    
+    if (filePath) {
+      fileMetadata = await this.extractElementMetadata(filePath);
+    }
+    
+    // TYPE SAFETY: Define extended metadata interface for better type safety
+    interface ExtendedMetadata extends PortfolioElementMetadata {
+      triggers?: string[];
+      category?: string;
+      age_rating?: string;
+      ai_generated?: boolean;
+      generation_method?: string;
+      license?: string;
+      tags?: string[];
+    }
+    
+    // Build metadata with real values from file, falling back to defaults
+    const metadata: ExtendedMetadata = {
       name: safeName,
-      description: `${elementType} submitted from local portfolio`,
-      author: authStatus.username || 'unknown',
-      created: new Date().toISOString(),
-      updated: new Date().toISOString(),
-      version: '1.0.0'
+      description: fileMetadata?.description || 
+                   fileMetadata?.summary || 
+                   `${elementType} submitted from local portfolio`,
+      author: authStatus.username || fileMetadata?.author || 'unknown',
+      created: fileMetadata?.created || 
+               fileMetadata?.created_date || 
+               new Date().toISOString(),
+      updated: fileMetadata?.updated || 
+               fileMetadata?.modified || 
+               new Date().toISOString(),
+      version: fileMetadata?.version || '1.0.0'
     };
+    
+    // Add additional metadata fields if present (with type safety)
+    if (fileMetadata) {
+      // Preserve other metadata fields that might be useful
+      if (fileMetadata.triggers && Array.isArray(fileMetadata.triggers)) {
+        metadata.triggers = fileMetadata.triggers;
+      }
+      if (fileMetadata.category && typeof fileMetadata.category === 'string') {
+        metadata.category = fileMetadata.category;
+      }
+      if (fileMetadata.age_rating && typeof fileMetadata.age_rating === 'string') {
+        metadata.age_rating = fileMetadata.age_rating;
+      }
+      if (fileMetadata.ai_generated !== undefined) {
+        metadata.ai_generated = Boolean(fileMetadata.ai_generated);
+      }
+      if (fileMetadata.generation_method && typeof fileMetadata.generation_method === 'string') {
+        metadata.generation_method = fileMetadata.generation_method;
+      }
+      if (fileMetadata.license && typeof fileMetadata.license === 'string') {
+        metadata.license = fileMetadata.license;
+      }
+      if (fileMetadata.tags && Array.isArray(fileMetadata.tags)) {
+        metadata.tags = fileMetadata.tags;
+      }
+    }
+    
+    logger.info('Prepared element metadata', {
+      elementName: safeName,
+      hasFileMetadata: !!fileMetadata,
+      description: metadata.description.substring(0, 100) // Log first 100 chars
+    });
+    
+    return metadata;
+  }
+
+  /**
+   * Formats metadata as YAML string for display
+   * PERFORMANCE: Uses array join instead of string concatenation for better performance
+   */
+  private formatMetadataAsYaml(baseMetadata: PortfolioElementMetadata, extendedMeta: any): string {
+    const yamlLines: string[] = [
+      `name: ${baseMetadata.name}`,
+      `description: ${baseMetadata.description}`,
+      `author: ${baseMetadata.author}`,
+      `version: ${baseMetadata.version}`,
+      `created: ${baseMetadata.created}`,
+      `updated: ${baseMetadata.updated}`
+    ];
+    
+    // Add optional fields if present
+    if (extendedMeta.category) {
+      yamlLines.push(`category: ${extendedMeta.category}`);
+    }
+    if (extendedMeta.triggers && Array.isArray(extendedMeta.triggers) && extendedMeta.triggers.length > 0) {
+      yamlLines.push(`triggers: [${extendedMeta.triggers.join(', ')}]`);
+    }
+    if (extendedMeta.age_rating) {
+      yamlLines.push(`age_rating: ${extendedMeta.age_rating}`);
+    }
+    if (extendedMeta.ai_generated !== undefined) {
+      yamlLines.push(`ai_generated: ${extendedMeta.ai_generated}`);
+    }
+    if (extendedMeta.generation_method) {
+      yamlLines.push(`generation_method: ${extendedMeta.generation_method}`);
+    }
+    if (extendedMeta.license) {
+      yamlLines.push(`license: ${extendedMeta.license}`);
+    }
+    if (extendedMeta.tags && Array.isArray(extendedMeta.tags) && extendedMeta.tags.length > 0) {
+      yamlLines.push(`tags: [${extendedMeta.tags.join(', ')}]`);
+    }
+    
+    return yamlLines.join('\n');
+  }
+  
+  /**
+   * Extracts metadata from an element file
+   * Parses YAML frontmatter to get the actual metadata
+   * SECURITY: Uses SecureYamlParser instead of yaml.load to prevent code execution (DMCP-SEC-005)
+   * @param filePath Path to the element file
+   * @returns Extracted metadata or null if parsing fails
+   */
+  private async extractElementMetadata(filePath: string): Promise<Record<string, any> | null> {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      
+      // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
+      // Previously would have used: yaml.load(yamlContent) which is vulnerable
+      // Now: Uses SecureYamlParser.parse() which validates and sanitizes
+      try {
+        const parsed = SecureYamlParser.parse(content, {
+          maxYamlSize: 64 * 1024,  // 64KB limit for YAML
+          validateContent: false,    // Don't validate content field (just metadata)
+          validateFields: false      // Don't enforce persona-specific rules
+        });
+        
+        // Ensure we got an object back
+        if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+          logger.debug('Extracted metadata from element file', {
+            path: filePath,
+            metadataKeys: Object.keys(parsed.data)
+          });
+          return parsed.data;
+        }
+        
+        logger.debug('Parsed data is not a valid metadata object', { path: filePath });
+        return null;
+        
+      } catch (parseError) {
+        // SecureYamlParser throws on invalid YAML, try alternate frontmatter pattern
+        // Handle files that might have frontmatter without full document structure
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        
+        if (frontmatterMatch && frontmatterMatch[1]) {
+          try {
+            // Reconstruct full document for SecureYamlParser
+            const fullContent = `---\n${frontmatterMatch[1]}\n---\n`;
+            const parsed = SecureYamlParser.parse(fullContent, {
+              maxYamlSize: 64 * 1024,
+              validateContent: false,
+              validateFields: false
+            });
+            
+            if (parsed.data && typeof parsed.data === 'object') {
+              return parsed.data;
+            }
+          } catch (innerError) {
+            logger.debug('Failed to parse frontmatter with SecureYamlParser', {
+              path: filePath,
+              error: innerError instanceof Error ? innerError.message : String(innerError)
+            });
+          }
+        }
+        
+        logger.debug('No valid frontmatter found in element file', { path: filePath });
+        return null;
+      }
+      
+    } catch (error) {
+      logger.warn('Failed to extract metadata from element file', {
+        path: filePath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
 
   /**
@@ -393,10 +586,10 @@ export class SubmitToPortfolioTool {
       }
 
       // Validate token with GitHub API to check expiration and permissions
-      const validationResult = await TokenManager.validateTokenScopes(token, {
-        required: ['repo'],
-        optional: ['user:email']
-      });
+      // NOTE: OAuth tokens use 'public_repo' scope, not 'repo'
+      // Using centralized scope management for consistency
+      const requiredScopes = TokenManager.getRequiredScopes('collection');
+      const validationResult = await TokenManager.validateTokenScopes(token, requiredScopes);
 
       if (!validationResult.isValid) {
         SecurityMonitor.logSecurityEvent({
@@ -406,12 +599,27 @@ export class SubmitToPortfolioTool {
           details: `Token validation failed: ${validationResult.error}`
         });
 
+        // Enhanced OAuth-specific error messages
+        const tokenType = TokenManager.getTokenType(token);
+        let errorCode: CollectionErrorCode;
+        let enhancedDetails: string | undefined = validationResult.error;
+        
+        if (validationResult.error?.includes('Missing required scopes')) {
+          errorCode = CollectionErrorCode.COLL_AUTH_002;
+          // Provide OAuth-specific guidance if it's an OAuth token
+          if (tokenType === 'OAuth Access Token') {
+            enhancedDetails = `OAuth token missing 'public_repo' scope. Please re-authenticate with 'setup_github_auth' to get the correct scope.`;
+          }
+        } else {
+          errorCode = CollectionErrorCode.COLL_AUTH_001;
+        }
+
         return {
           isValid: false,
           error: {
             success: false,
-            message: 'GitHub token is invalid or expired. Please re-authenticate.',
-            error: 'TOKEN_VALIDATION_FAILED'
+            message: formatCollectionError(errorCode, 3, 5, enhancedDetails),
+            error: errorCode
           }
         };
       }
@@ -458,6 +666,13 @@ export class SubmitToPortfolioTool {
       // Handle rate limit exceeded specifically
       if (error?.code === 'RATE_LIMIT_EXCEEDED') {
         logger.warn('Token validation rate limited, allowing operation to proceed with cached status');
+        // Still allow operation but log with COLL_API_001
+        SecurityMonitor.logSecurityEvent({
+          type: 'TOKEN_VALIDATION_SUCCESS',
+          severity: 'LOW',
+          source: 'SubmitToPortfolioTool.validateTokenBeforeUsage',
+          details: 'Token validation rate limited but proceeding with cached status'
+        });
         return { isValid: true }; // Allow to proceed if rate limited, as basic format check passed
       }
 
@@ -666,9 +881,10 @@ export class SubmitToPortfolioTool {
         };
       }
 
-      // Log successful validation
+      // Log successful validation with correct event type for path validation
+      // Fixed: Was using TOKEN_VALIDATION_SUCCESS which is semantically incorrect for path validation
       SecurityMonitor.logSecurityEvent({
-        type: 'CONTENT_INJECTION_ATTEMPT',
+        type: 'PATH_VALIDATION_SUCCESS',
         severity: 'LOW',
         source: 'SubmitToPortfolioTool.validatePortfolioPath',
         details: 'File path validation successful',
@@ -902,6 +1118,133 @@ export class SubmitToPortfolioTool {
   }
 
   /**
+   * Check if content already exists in the portfolio repository
+   * Prevents duplicate uploads by comparing content hashes
+   * @param repoFullName GitHub repository full name (owner/repo)
+   * @param filePath Path to the file in the repository
+   * @param content Content to check against existing
+   * @returns true if identical content exists, false otherwise
+   */
+  private async checkExistingContent(
+    repoFullName: string, 
+    filePath: string, 
+    content: string,
+    token: string
+  ): Promise<boolean> {
+    try {
+      // Attempt to fetch existing file from GitHub
+      const url = `https://api.github.com/repos/${repoFullName}/contents/${filePath}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+
+      if (response.status === 404) {
+        // File doesn't exist, not a duplicate
+        return false;
+      }
+
+      if (!response.ok) {
+        logger.warn('Failed to check existing content', {
+          status: response.status,
+          path: filePath
+        });
+        // On error, allow upload to proceed
+        return false;
+      }
+
+      const data = await response.json();
+      
+      // GitHub returns content as base64
+      const existingContent = Buffer.from(data.content, 'base64').toString('utf-8');
+      
+      // Compare content hashes
+      const existingHash = createHash('sha256').update(existingContent).digest('hex');
+      const newHash = createHash('sha256').update(content).digest('hex');
+      
+      const isDuplicate = existingHash === newHash;
+      
+      if (isDuplicate) {
+        logger.info('Duplicate content detected, skipping upload', {
+          path: filePath,
+          hash: newHash.substring(0, 8) // Log partial hash for debugging
+        });
+      }
+      
+      return isDuplicate;
+      
+    } catch (error) {
+      logger.warn('Error checking for existing content', {
+        error: error instanceof Error ? error.message : String(error),
+        path: filePath
+      });
+      // On error, allow upload to proceed rather than blocking
+      return false;
+    }
+  }
+
+  /**
+   * Check if an issue for this content already exists in the collection
+   * @param elementName Name of the element to check
+   * @param username User submitting the element
+   * @param token GitHub token for API access
+   * @returns URL of existing issue if found, null otherwise
+   */
+  private async checkExistingIssue(
+    elementName: string,
+    username: string,
+    token: string
+  ): Promise<string | null> {
+    try {
+      // Search for existing issues with this element name
+      // Using both title and author to ensure it's the same submission
+      const query = `repo:DollhouseMCP/collection is:issue "${elementName}" in:title author:${username}`;
+      const url = `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=created&order=desc`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'DollhouseMCP/1.0'
+        }
+      });
+
+      if (!response.ok) {
+        logger.warn('Failed to search for existing issues', {
+          status: response.status
+        });
+        return null;
+      }
+
+      const data = await response.json();
+      
+      if (data.items && data.items.length > 0) {
+        // Found existing issue(s)
+        const existingIssue = data.items[0];
+        logger.info('Found existing collection issue', {
+          issueUrl: existingIssue.html_url,
+          elementName
+        });
+        return existingIssue.html_url;
+      }
+      
+      return null;
+      
+    } catch (error) {
+      logger.warn('Error checking for existing collection issue', {
+        error: error instanceof Error ? error.message : String(error),
+        elementName
+      });
+      // On error, allow submission to proceed
+      return null;
+    }
+  }
+
+  /**
    * Submits element to portfolio and handles the complete response workflow
    * @param safeName The normalized name of the element
    * @param elementType The type of the element
@@ -915,22 +1258,48 @@ export class SubmitToPortfolioTool {
     elementType: ElementType,
     metadata: PortfolioElementMetadata,
     content: string,
-    authStatus: any
+    authStatus: any,
+    localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
-    // Create element structure to save
-    const element: PortfolioElement = {
-      type: elementType,
-      metadata,
-      content
-    };
+    // DUPLICATE DETECTION: Check if content already exists in portfolio
+    const repoFullName = `${authStatus.username}/dollhouse-portfolio`;
+    const filePath = `${elementType}/${safeName}.md`;
     
-    // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
-    // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
-    // Now: Clean adapter pattern that implements IElement interface properly
-    const adapter = new PortfolioElementAdapter(element);
+    // Prepare the full content that would be saved
+    const fullContent = `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
     
-    // UX IMPROVEMENT: Add retry logic for transient failures
-    const fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
+    const isDuplicate = await this.checkExistingContent(
+      repoFullName, 
+      filePath, 
+      fullContent,
+      authStatus.token
+    );
+    
+    let fileUrl: string | null = null;
+    
+    if (isDuplicate) {
+      // Content already exists, construct the URL without uploading
+      fileUrl = `https://github.com/${repoFullName}/blob/main/${filePath}`;
+      logger.info('Skipped duplicate upload to portfolio', {
+        elementName: safeName,
+        path: filePath
+      });
+    } else {
+      // Create element structure to save
+      const element: PortfolioElement = {
+        type: elementType,
+        metadata,
+        content
+      };
+      
+      // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
+      // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
+      // Now: Clean adapter pattern that implements IElement interface properly
+      const adapter = new PortfolioElementAdapter(element);
+      
+      // UX IMPROVEMENT: Add retry logic for transient failures
+      fileUrl = await this.saveElementWithRetry(adapter, safeName, elementType);
+    }
     
     if (!fileUrl) {
       return {
@@ -945,21 +1314,36 @@ export class SubmitToPortfolioTool {
       };
     }
 
-    // Log successful submission (DMCP-SEC-006)
-    logger.info(`Successfully submitted ${safeName} to GitHub portfolio`, {
-      elementType,
-      username: authStatus.username,
-      fileUrl
-    });
+    // Log submission result (DMCP-SEC-006)
+    // Check if this was a duplicate skip or actual upload
+    const wasDuplicate = fileUrl && fileUrl.includes('blob/main/') && !fileUrl.includes('/commit/');
+    
+    if (wasDuplicate) {
+      logger.info(`Skipped duplicate upload for ${safeName} - already in portfolio`, {
+        elementType,
+        username: authStatus.username,
+        fileUrl
+      });
+    } else {
+      logger.info(`Successfully submitted ${safeName} to GitHub portfolio`, {
+        elementType,
+        username: authStatus.username,
+        fileUrl
+      });
+    }
 
     // SECURITY ENHANCEMENT (Task #14): Smart token management for collection submission
     const collectionTokenManagement = await this.manageTokenForLongOperation('collection_submission');
     if (!collectionTokenManagement.canProceed) {
       // Token management failed for collection submission, but main submission succeeded
       const errorMessage = collectionTokenManagement.error?.message || 'Token management failed';
+      const portfolioMessage = wasDuplicate ? 
+        `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
+        `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
+      
       return {
         success: true,
-        message: `✅ Successfully uploaded ${safeName} to your GitHub portfolio!\n📁 Portfolio URL: ${fileUrl}\n\n⚠️ Collection submission skipped: ${errorMessage}`,
+        message: `${portfolioMessage}\n📁 Portfolio URL: ${fileUrl}\n\n⚠️ Collection submission skipped: ${errorMessage}`,
         url: fileUrl
       };
     }
@@ -983,16 +1367,26 @@ export class SubmitToPortfolioTool {
       portfolioUrl: fileUrl,
       username: authStatus.username || 'unknown',
       metadata,
-      token
+      token,
+      localPath  // Pass the local file path for reading content
     });
 
     // Build the response message based on what happened
-    let message = `✅ Successfully uploaded ${safeName} to your GitHub portfolio!\n`;
+    const portfolioMessage = wasDuplicate ? 
+      `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
+      `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
+    
+    let message = `${portfolioMessage}\n`;
     message += `📁 Portfolio URL: ${fileUrl}\n\n`;
     
     if (collectionSubmissionResult.submitted) {
-      message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
-      message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
+      if (collectionSubmissionResult.isDuplicate) {
+        message += `📋 Collection issue already exists (no new submission needed)\n`;
+        message += `🔗 Issue: ${collectionSubmissionResult.issueUrl}`;
+      } else {
+        message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
+        message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
+      }
     } else if (collectionSubmissionResult.declined) {
       message += `💡 You can submit to the collection later using the same command.`;
     } else if (collectionSubmissionResult.error) {
@@ -1008,56 +1402,111 @@ export class SubmitToPortfolioTool {
   }
 
   async execute(params: SubmitToPortfolioParams): Promise<SubmitToPortfolioResult> {
+    const startTime = Date.now();
+    const timings: Record<string, number> = {};
+    
+    logger.info('🚀 SUBMISSION WORKFLOW STARTING', {
+      params: JSON.stringify(params),
+      timestamp: new Date().toISOString()
+    });
+    
     try {
-      // Validate and normalize input parameters
+      // Step 1: Validate and normalize input parameters
+      logger.info('📋 Step 1/8: Validating parameters...');
+      const step1Start = Date.now();
       const validationResult = await this.validateAndNormalizeParams(params);
+      timings['validation'] = Date.now() - step1Start;
+      logger.info(`✅ Step 1 complete (${timings['validation']}ms)`);
       if (!validationResult.success) {
         return validationResult.error!;
       }
       const safeName = validationResult.safeName!;
 
-      // Check authentication status
+      // Step 2: Check authentication status
+      logger.info('🔐 Step 2/8: Checking authentication...');
+      const step2Start = Date.now();
       const authResult = await this.checkAuthentication();
+      timings['authentication'] = Date.now() - step2Start;
+      logger.info(`✅ Step 2 complete (${timings['authentication']}ms)`, {
+        username: authResult.authStatus?.username,
+        hasToken: !!authResult.authStatus?.hasToken
+      });
       if (!authResult.success) {
         return authResult.error!;
       }
       const authStatus = authResult.authStatus!;
 
-      // Find content locally with smart type detection
+      // Step 3: Find content locally with smart type detection
+      logger.info('🔍 Step 3/8: Finding content locally...');
+      const step3Start = Date.now();
       const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
+      timings['contentDiscovery'] = Date.now() - step3Start;
+      logger.info(`✅ Step 3 complete (${timings['contentDiscovery']}ms)`, {
+        found: contentResult.success,
+        elementType: contentResult.elementType,
+        path: contentResult.localPath
+      });
       if (!contentResult.success) {
         return contentResult.error!;
       }
       const elementType = contentResult.elementType!;
       const localPath = contentResult.localPath!;
 
-      // Validate file and content security
+      // Step 4: Validate file and content security
+      logger.info('🔒 Step 4/8: Validating security...');
+      const step4Start = Date.now();
       const securityResult = await this.validateFileAndContent(localPath);
+      timings['security'] = Date.now() - step4Start;
+      logger.info(`✅ Step 4 complete (${timings['security']}ms)`);
       if (!securityResult.success) {
         return securityResult.error!;
       }
       const content = securityResult.content!;
 
-      // Get user consent (placeholder for now - could add interactive prompt later)
-      logger.info(`Preparing to submit ${safeName} to GitHub portfolio`);
+      // Step 5: Prepare metadata for element
+      logger.info('📝 Step 5/8: Preparing metadata...');
+      const step5Start = Date.now();
+      const metadata = await this.prepareElementMetadata(safeName!, elementType, authStatus, localPath);
+      timings['metadata'] = Date.now() - step5Start;
+      logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
+        author: metadata.author,
+        elementName: safeName
+      });
 
-      // Prepare metadata for element
-      const metadata = this.prepareElementMetadata(safeName!, elementType, authStatus);
-
-      // Set up GitHub repository access
+      // Step 6: Set up GitHub repository access
+      logger.info('🔧 Step 6/8: Setting up GitHub repository...');
+      const step6Start = Date.now();
       const repoResult = await this.setupGitHubRepository(authStatus);
+      timings['repoSetup'] = Date.now() - step6Start;
+      logger.info(`✅ Step 6 complete (${timings['repoSetup']}ms)`, {
+        success: repoResult.success
+      });
       if (!repoResult.success) {
         return repoResult.error!;
       }
 
-      // Submit element to portfolio and handle collection submission
-      return await this.submitElementAndHandleResponse(
+      // Step 7: Submit element to portfolio and handle collection submission
+      logger.info('📤 Step 7/8: Submitting to portfolio...');
+      const step7Start = Date.now();
+      const result = await this.submitElementAndHandleResponse(
         safeName!, 
         elementType, 
         metadata, 
         content, 
-        authStatus
+        authStatus,
+        localPath  // Pass file path for collection submission
       );
+      timings['submission'] = Date.now() - step7Start;
+      
+      // Step 8: Final reporting
+      timings['total'] = Date.now() - startTime;
+      logger.info('✨ SUBMISSION WORKFLOW COMPLETE', {
+        success: result.success,
+        timings,
+        totalTime: `${timings['total']}ms`
+      });
+      
+      return result;
 
     } catch (error) {
       // SECURITY ENHANCEMENT (Task #14): Enhanced error handling with token refresh guidance
@@ -1109,7 +1558,8 @@ export class SubmitToPortfolioTool {
     username: string;
     metadata: PortfolioElementMetadata;
     token: string;
-  }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string }> {
+    localPath?: string;  // Path to the local element file
+  }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string; isDuplicate?: boolean }> {
     try {
       // Create a simple prompt message for the user
       // Note: In MCP context, we can't do interactive prompts, so we'll need to
@@ -1122,7 +1572,9 @@ export class SubmitToPortfolioTool {
       if (!autoSubmit) {
         // User hasn't opted in to auto-submission
         logger.info('Collection submission skipped (set DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION=true to enable)');
-        return { submitted: false, declined: true };
+        // Use COLL_CFG_001 error code for auto-submit disabled
+        const errorMessage = formatCollectionError(CollectionErrorCode.COLL_CFG_001, 5, 5);
+        return { submitted: false, declined: true, error: errorMessage };
       }
 
       logger.info('Auto-submitting to DollhouseMCP collection...');
@@ -1130,12 +1582,32 @@ export class SubmitToPortfolioTool {
       // Create the issue in the collection repository
       const issueUrl = await this.createCollectionIssue({
         ...params,
-        token: params.token
+        token: params.token,
+        localPath: params.localPath  // Pass through the file path
       });
 
       if (issueUrl) {
-        logger.info('Successfully created collection submission issue', { issueUrl });
-        return { submitted: true, declined: false, issueUrl };
+        // Check if this was an existing issue (duplicate) or newly created
+        // The checkExistingIssue method returns early with existing URL if duplicate found
+        const isDuplicate = issueUrl.includes('/issues/') && !issueUrl.includes('new');
+        
+        if (isDuplicate) {
+          logger.info('Collection issue already exists, returning existing issue', { issueUrl });
+          return { 
+            submitted: true, 
+            declined: false, 
+            issueUrl,
+            isDuplicate: true 
+          };
+        } else {
+          logger.info('Successfully created collection submission issue', { issueUrl });
+          return { 
+            submitted: true, 
+            declined: false, 
+            issueUrl,
+            isDuplicate: false 
+          };
+        }
       } else {
         return { submitted: false, declined: false, error: 'Failed to create issue' };
       }
@@ -1161,38 +1633,179 @@ export class SubmitToPortfolioTool {
     username: string;
     metadata: PortfolioElementMetadata;
     token: string;
+    localPath?: string;  // Path to the local element file
   }): Promise<string | null> {
     try {
+      // DUPLICATE DETECTION: Check if issue already exists
+      const existingIssueUrl = await this.checkExistingIssue(
+        params.elementName,
+        params.username,
+        params.token
+      );
+      
+      if (existingIssueUrl) {
+        logger.info('Collection issue already exists, skipping creation', {
+          elementName: params.elementName,
+          issueUrl: existingIssueUrl
+        });
+        return existingIssueUrl;
+      }
 
       // Format the issue title
       const title = `[${params.elementType}] Add ${params.elementName} by @${params.username}`;
 
       // Format the issue body with all relevant information
+      // Build additional metadata fields for display
+      // TYPE SAFETY: Define interface for extended metadata
+      interface ExtendedMeta extends PortfolioElementMetadata {
+        category?: string;
+        triggers?: string[];
+        age_rating?: string;
+        ai_generated?: boolean;
+        generation_method?: string;
+        license?: string;
+        tags?: string[];
+      }
+      
+      const additionalFields: string[] = [];
+      const meta = params.metadata as ExtendedMeta;
+      
+      if (meta.category) additionalFields.push(`**Category**: ${meta.category}`);
+      if (meta.version) additionalFields.push(`**Version**: ${meta.version}`);
+      if (meta.triggers && Array.isArray(meta.triggers) && meta.triggers.length > 0) {
+        additionalFields.push(`**Triggers**: ${meta.triggers.join(', ')}`);
+      }
+      if (meta.age_rating) additionalFields.push(`**Age Rating**: ${meta.age_rating}`);
+      if (meta.ai_generated !== undefined) {
+        additionalFields.push(`**AI Generated**: ${meta.ai_generated ? 'Yes' : 'No'}`);
+      }
+      if (meta.generation_method) additionalFields.push(`**Generation Method**: ${meta.generation_method}`);
+      if (meta.license) additionalFields.push(`**License**: ${meta.license}`);
+      if (meta.tags && Array.isArray(meta.tags) && meta.tags.length > 0) {
+        additionalFields.push(`**Tags**: ${meta.tags.join(', ')}`);
+      }
+      
+      // Read the full element file content if path is provided
+      let elementContent = '';
+      if (params.localPath) {
+        try {
+          // SECURITY: Validate file size before reading to prevent memory exhaustion
+          const stats = await fs.stat(params.localPath);
+          if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
+            // DO NOT truncate user content - reject if too large
+            logger.error('Element file exceeds size limit for collection submission', {
+              elementName: params.elementName,
+              fileSize: stats.size,
+              maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'MEDIUM',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `File size ${stats.size} exceeds limit for collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                fileSize: stats.size,
+                limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE
+              }
+            });
+            
+            // Return error message instead of truncating
+            return null;
+          }
+          
+          // Read the full markdown file with frontmatter and content
+          elementContent = await fs.readFile(params.localPath, 'utf-8');
+          
+          // SECURITY: Validate content for security issues
+          // Note: We already validated this content in validateFileAndContent()
+          // but we re-validate here since this is being posted to a public issue
+          const validationResult = ContentValidator.validateAndSanitize(elementContent);
+          
+          if (!validationResult.isValid && validationResult.severity === 'critical') {
+            logger.error('Element content failed security validation for collection submission', {
+              elementName: params.elementName,
+              issues: validationResult.detectedPatterns
+            });
+            
+            SecurityMonitor.logSecurityEvent({
+              type: 'CONTENT_INJECTION_ATTEMPT',
+              severity: 'HIGH',
+              source: 'SubmitToPortfolioTool.createCollectionIssue',
+              details: `Critical security issues detected in collection submission`,
+              metadata: {
+                elementName: params.elementName,
+                detectedPatterns: validationResult.detectedPatterns
+              }
+            });
+            
+            // DO NOT submit content with security issues
+            return null;
+          }
+          
+          // Use the sanitized content (but NOT truncated)
+          elementContent = validationResult.sanitizedContent || elementContent;
+          
+          logger.debug('Read and validated element file content for collection submission', {
+            elementName: params.elementName,
+            contentLength: elementContent.length,
+            securityIssues: validationResult.detectedPatterns?.length || 0,
+            buildVersion: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
+          });
+        } catch (error) {
+          logger.warn('Failed to read element file content, falling back to metadata only', {
+            elementName: params.elementName,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          // Fall back to just the metadata if we can't read the file
+          elementContent = this.formatMetadataAsYaml(params.metadata, meta);
+        }
+      } else {
+        // No file path provided, use metadata as fallback
+        logger.warn('No file path provided for collection submission, using metadata only', {
+          elementName: params.elementName
+        });
+        elementContent = this.formatMetadataAsYaml(params.metadata, meta);
+      }
+      
       const body = `## New ${params.elementType} Submission
 
-` +
-        `**Name**: ${params.elementName}\n` +
-        `**Author**: @${params.username}\n` +
-        `**Type**: ${params.elementType}\n` +
-        `**Description**: ${params.metadata.description || 'No description provided'}\n\n` +
-        `### Portfolio Link\n` +
-        `${params.portfolioUrl}\n\n` +
-        `### Metadata\n` +
-        `\`\`\`json\n${JSON.stringify(params.metadata, null, 2)}\n\`\`\`\n\n` +
-        `### Review Checklist\n` +
-        `- [ ] Content is appropriate and follows community guidelines\n` +
-        `- [ ] No security vulnerabilities or malicious patterns\n` +
-        `- [ ] Metadata is complete and accurate\n` +
-        `- [ ] Element works as described\n` +
-        `- [ ] No duplicate of existing collection content\n\n` +
-        `---\n` +
-        `*This submission was created automatically via the DollhouseMCP submit_content tool.*`;
+**Name**: ${params.elementName}
+**Author**: @${params.username}
+**Type**: ${params.elementType}
+
+### Description
+${params.metadata.description || 'No description provided'}
+
+### Element Details
+${additionalFields.length > 0 ? additionalFields.join('\n') : '*No additional metadata available*'}
+
+### Portfolio Link
+${params.portfolioUrl}
+
+### Element Content
+\`\`\`yaml
+${elementContent}
+\`\`\`
+
+### Review Checklist
+- [ ] Content is appropriate and follows community guidelines
+- [ ] No security vulnerabilities or malicious patterns
+- [ ] Metadata is complete and accurate
+- [ ] Element works as described
+- [ ] No duplicate of existing collection content
+
+---
+*This submission was created automatically via the DollhouseMCP submit_content tool (v1.6.9-beta1-collection-fix).*`;
 
       // Determine labels based on element type
       const labels = [
-        'contribution',  // All submissions get this
-        'pending-review', // Needs review
-        params.elementType.toLowerCase() // Element type label
+        'element-submission',  // CRITICAL: Triggers automation workflow
+        'collection-repo',     // Indicates this is for the collection
+        'contribution',        // All submissions get this
+        'pending-review',      // Needs review
+        params.elementType.toLowerCase() // Element type label (e.g., 'personas')
       ];
 
       // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
