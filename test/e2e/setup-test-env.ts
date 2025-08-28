@@ -50,7 +50,12 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
 
   // Use existing token if it was set (CI), otherwise use the loaded one
   if (existingToken) {
-    process.env.GITHUB_TEST_TOKEN = existingToken;
+    // Validate token looks reasonable (GitHub tokens are typically 40+ chars)
+    if (existingToken.length < 10) {
+      console.warn('⚠️  CI token appears invalid (too short), falling back to .env file');
+    } else {
+      process.env.GITHUB_TEST_TOKEN = existingToken;
+    }
   }
 
   // Validate required variables
