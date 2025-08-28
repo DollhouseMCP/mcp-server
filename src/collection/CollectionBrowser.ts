@@ -400,9 +400,12 @@ export class CollectionBrowser {
       
       textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${type ? `/${type}` : ''} (${items.length}):**\n`);
       items.forEach((item: any) => {
-        const fullPath = section + (type ? `/${type}` : '') + `/${item.name}`;
+        // Use item.path for correct GitHub file path, item.name for display
+        // This fixes the mismatch where browse returned "Code Review.md" but file is "code-review.md"
+        const fullPath = item.path || (section + (type ? `/${type}` : '') + `/${item.name}`);
+        const displayName = item.name.replace('.md', '');
         textParts.push(
-          `   ▫️ **${item.name.replace('.md', '')}**\n`,
+          `   ▫️ **${displayName}**\n`,
           `      📥 Install: \`install_content "${fullPath}"\`\n`,
           `      👁️ Details: \`get_collection_content "${fullPath}"\`\n\n`
         );

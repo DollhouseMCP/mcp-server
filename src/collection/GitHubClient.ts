@@ -88,6 +88,10 @@ export class GitHubClient {
         if (response.status === 401) {
           throw new Error('GitHub API authentication failed. Please check your GITHUB_TOKEN.');
         }
+        // Provide helpful error messages based on status code
+        if (response.status === 404) {
+          throw new Error(`File not found in collection. Try using search to get the correct path: search_collection_enhanced "your-search-term"`);
+        }
         throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
       }
       
