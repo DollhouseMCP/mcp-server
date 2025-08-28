@@ -1493,7 +1493,8 @@ export class SubmitToPortfolioTool {
         elementType, 
         metadata, 
         content, 
-        authStatus
+        authStatus,
+        localPath  // Pass file path for collection submission
       );
       timings['submission'] = Date.now() - step7Start;
       
