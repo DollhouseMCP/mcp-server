@@ -1314,21 +1314,36 @@ export class SubmitToPortfolioTool {
       };
     }
 
-    // Log successful submission (DMCP-SEC-006)
-    logger.info(`Successfully submitted ${safeName} to GitHub portfolio`, {
-      elementType,
-      username: authStatus.username,
-      fileUrl
-    });
+    // Log submission result (DMCP-SEC-006)
+    // Check if this was a duplicate skip or actual upload
+    const wasDuplicate = fileUrl && fileUrl.includes('blob/main/') && !fileUrl.includes('/commit/');
+    
+    if (wasDuplicate) {
+      logger.info(`Skipped duplicate upload for ${safeName} - already in portfolio`, {
+        elementType,
+        username: authStatus.username,
+        fileUrl
+      });
+    } else {
+      logger.info(`Successfully submitted ${safeName} to GitHub portfolio`, {
+        elementType,
+        username: authStatus.username,
+        fileUrl
+      });
+    }
 
     // SECURITY ENHANCEMENT (Task #14): Smart token management for collection submission
     const collectionTokenManagement = await this.manageTokenForLongOperation('collection_submission');
     if (!collectionTokenManagement.canProceed) {
       // Token management failed for collection submission, but main submission succeeded
       const errorMessage = collectionTokenManagement.error?.message || 'Token management failed';
+      const portfolioMessage = wasDuplicate ? 
+        `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
+        `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
+      
       return {
         success: true,
-        message: `✅ Successfully uploaded ${safeName} to your GitHub portfolio!\n📁 Portfolio URL: ${fileUrl}\n\n⚠️ Collection submission skipped: ${errorMessage}`,
+        message: `${portfolioMessage}\n📁 Portfolio URL: ${fileUrl}\n\n⚠️ Collection submission skipped: ${errorMessage}`,
         url: fileUrl
       };
     }
@@ -1357,12 +1372,21 @@ export class SubmitToPortfolioTool {
     });
 
     // Build the response message based on what happened
-    let message = `✅ Successfully uploaded ${safeName} to your GitHub portfolio!\n`;
+    const portfolioMessage = wasDuplicate ? 
+      `✅ ${safeName} already exists in your GitHub portfolio (no changes needed)` :
+      `✅ Successfully uploaded ${safeName} to your GitHub portfolio!`;
+    
+    let message = `${portfolioMessage}\n`;
     message += `📁 Portfolio URL: ${fileUrl}\n\n`;
     
     if (collectionSubmissionResult.submitted) {
-      message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
-      message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
+      if (collectionSubmissionResult.isDuplicate) {
+        message += `📋 Collection issue already exists (no new submission needed)\n`;
+        message += `🔗 Issue: ${collectionSubmissionResult.issueUrl}`;
+      } else {
+        message += `🎉 Also submitted to DollhouseMCP collection for community review!\n`;
+        message += `📋 Issue: ${collectionSubmissionResult.issueUrl}`;
+      }
     } else if (collectionSubmissionResult.declined) {
       message += `💡 You can submit to the collection later using the same command.`;
     } else if (collectionSubmissionResult.error) {
@@ -1534,7 +1558,7 @@ export class SubmitToPortfolioTool {
     metadata: PortfolioElementMetadata;
     token: string;
     localPath?: string;  // Path to the local element file
-  }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string }> {
+  }): Promise<{ submitted: boolean; declined: boolean; error?: string; issueUrl?: string; isDuplicate?: boolean }> {
     try {
       // Create a simple prompt message for the user
       // Note: In MCP context, we can't do interactive prompts, so we'll need to
@@ -1562,8 +1586,27 @@ export class SubmitToPortfolioTool {
       });
 
       if (issueUrl) {
-        logger.info('Successfully created collection submission issue', { issueUrl });
-        return { submitted: true, declined: false, issueUrl };
+        // Check if this was an existing issue (duplicate) or newly created
+        // The checkExistingIssue method returns early with existing URL if duplicate found
+        const isDuplicate = issueUrl.includes('/issues/') && !issueUrl.includes('new');
+        
+        if (isDuplicate) {
+          logger.info('Collection issue already exists, returning existing issue', { issueUrl });
+          return { 
+            submitted: true, 
+            declined: false, 
+            issueUrl,
+            isDuplicate: true 
+          };
+        } else {
+          logger.info('Successfully created collection submission issue', { issueUrl });
+          return { 
+            submitted: true, 
+            declined: false, 
+            issueUrl,
+            isDuplicate: false 
+          };
+        }
       } else {
         return { submitted: false, declined: false, error: 'Failed to create issue' };
       }
