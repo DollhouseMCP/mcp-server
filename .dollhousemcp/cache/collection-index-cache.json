@@ -1,0 +1,820 @@
+{
+  "data": {
+    "version": "2.0.0",
+    "generated": "2025-08-15T20:50:30.590Z",
+    "total_elements": 44,
+    "index": {
+      "personas": [
+        {
+          "path": "library/personas/business-consultant.md",
+          "type": "personas",
+          "name": "Business Consultant",
+          "description": "A strategic advisor focused on ROI, implementation, and practical business outcomes",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "business",
+            "strategy",
+            "consulting",
+            "analysis"
+          ],
+          "sha": "d97f62e8da5e0482",
+          "category": "professional",
+          "created": "2025-07-23T00:00:00.000Z",
+          "license": "CC-BY-SA-4.0"
+        },
+        {
+          "path": "library/personas/creative-writer.md",
+          "type": "personas",
+          "name": "Creative Writer",
+          "description": "An imaginative storyteller who crafts engaging narratives and helps with creative writing projects",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "writing",
+            "storytelling",
+            "creativity",
+            "narrative",
+            "fiction"
+          ],
+          "sha": "c092401a4122f82e",
+          "category": "creative",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        },
+        {
+          "path": "library/personas/debug-detective.md",
+          "type": "personas",
+          "name": "Debug Detective",
+          "description": "A systematic investigator specializing in troubleshooting and root cause analysis",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "debugging",
+            "troubleshooting",
+            "analysis",
+            "investigation"
+          ],
+          "sha": "a1ce4572d0d03749",
+          "category": "professional",
+          "created": "2025-07-23T00:00:00.000Z",
+          "license": "CC-BY-SA-4.0"
+        },
+        {
+          "path": "library/personas/eli5-explainer.md",
+          "type": "personas",
+          "name": "ELI5 Explainer",
+          "description": "A patient teacher who simplifies complex topics using everyday analogies and simple language",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "teaching",
+            "education",
+            "simplification",
+            "communication"
+          ],
+          "sha": "8eeb2543ef989f24",
+          "category": "educational",
+          "created": "2025-07-23T00:00:00.000Z",
+          "license": "CC-BY-SA-4.0"
+        },
+        {
+          "path": "library/personas/security-analyst.md",
+          "type": "personas",
+          "name": "Security Analyst",
+          "description": "Highly detail-oriented code security expert focused on vulnerability detection and secure coding practices",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "security",
+            "vulnerability",
+            "analysis",
+            "compliance"
+          ],
+          "sha": "f9daeb97c52bb296",
+          "category": "professional",
+          "created": "2025-07-23T00:00:00.000Z",
+          "license": "CC-BY-SA-4.0"
+        },
+        {
+          "path": "library/personas/technical-analyst.md",
+          "type": "personas",
+          "name": "Technical Analyst",
+          "description": "A systematic problem-solver focused on deep technical analysis and evidence-based solutions",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "technical",
+            "analysis",
+            "architecture",
+            "debugging"
+          ],
+          "sha": "a3880aaa1fc4e390",
+          "category": "professional",
+          "created": "2025-07-23T00:00:00.000Z",
+          "license": "CC-BY-SA-4.0"
+        }
+      ],
+      "agents": [
+        {
+          "path": "library/agents/academic-researcher.md",
+          "type": "agents",
+          "name": "Academic Researcher",
+          "description": "An autonomous agent specialized in conducting thorough academic research",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "research",
+            "academic",
+            "literature-review",
+            "citations"
+          ],
+          "sha": "a2bc07ad5cb8f94c",
+          "category": "educational",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        },
+        {
+          "path": "library/agents/code-reviewer.md",
+          "type": "agents",
+          "name": "Code Reviewer",
+          "description": "Automated code review agent with security, performance, and quality analysis",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "code-review",
+            "security",
+            "quality",
+            "automation",
+            "development"
+          ],
+          "sha": "9b536306d02271e8",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/agents/research-assistant.md",
+          "type": "agents",
+          "name": "Research Assistant",
+          "description": "Autonomous agent for conducting thorough research and synthesizing findings",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "research",
+            "analysis",
+            "information-gathering",
+            "synthesis",
+            "learning"
+          ],
+          "sha": "0b20b9973892f350",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/agents/roundtrip-test-agent.md",
+          "type": "agents",
+          "name": "Roundtrip Test Agent",
+          "description": "Automated testing agent that executes complete roundtrip workflow tests for MCP elements",
+          "version": "1.0.0",
+          "author": "dollhousemcp-test",
+          "tags": [
+            "automation",
+            "testing",
+            "validation",
+            "roundtrip",
+            "workflow"
+          ],
+          "sha": "49636eaeef90affb",
+          "category": "testing",
+          "created": "2025-08-14"
+        },
+        {
+          "path": "library/agents/roundtrip-test-reporter.md",
+          "type": "agents",
+          "name": "Roundtrip Test Reporter",
+          "description": "Generates a comprehensive roundtrip test execution plan and results template as an artifact for Claude Desktop",
+          "version": "1.0.0",
+          "author": "dollhousemcp-test",
+          "tags": [
+            "testing",
+            "validation",
+            "reporting",
+            "artifacts"
+          ],
+          "sha": "68e7abe6471790b0",
+          "category": "testing",
+          "created": "2025-08-14"
+        },
+        {
+          "path": "library/agents/task-manager.md",
+          "type": "agents",
+          "name": "Task Manager",
+          "description": "Goal-oriented agent for managing tasks, priorities, and project execution",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "tasks",
+            "project-management",
+            "planning",
+            "execution",
+            "productivity"
+          ],
+          "sha": "87827bbe29f42252",
+          "category": "personal",
+          "created": "2025-07-23"
+        }
+      ],
+      "skills": [
+        {
+          "path": "library/skills/code-review.md",
+          "type": "skills",
+          "name": "Code Review",
+          "description": "Systematic code analysis for quality, security, and best practices",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "code-quality",
+            "security",
+            "best-practices",
+            "review"
+          ],
+          "sha": "0403333fedaa2eca",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/creative-writing.md",
+          "type": "skills",
+          "name": "Creative Writing",
+          "description": "Storytelling, narrative construction, and creative content generation",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "writing",
+            "storytelling",
+            "creativity",
+            "narrative",
+            "fiction"
+          ],
+          "sha": "99756fe8f8f6a734",
+          "category": "creative",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/data-analysis.md",
+          "type": "skills",
+          "name": "Data Analysis",
+          "description": "Statistical analysis, visualization, and insights generation from data collections",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "data",
+            "statistics",
+            "visualization",
+            "insights",
+            "analytics"
+          ],
+          "sha": "b45977dcbabd7594",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/debugging-assistant.md",
+          "type": "skills",
+          "name": "Debugging Assistant",
+          "description": "A specialized skill for helping debug code across multiple programming languages",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "debugging",
+            "programming",
+            "troubleshooting",
+            "code-analysis"
+          ],
+          "sha": "f3e30d1d968efa6f",
+          "category": "professional",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        },
+        {
+          "path": "library/skills/penetration-testing.md",
+          "type": "skills",
+          "name": "Penetration Testing",
+          "description": "Systematic security testing methodology for identifying vulnerabilities through ethical hacking",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "penetration-testing",
+            "ethical-hacking",
+            "vulnerability-assessment",
+            "security",
+            "testing"
+          ],
+          "sha": "3b1943d6d2cb8795",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/research.md",
+          "type": "skills",
+          "name": "Research",
+          "description": "Comprehensive research methodology for gathering and synthesizing information",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "research",
+            "analysis",
+            "synthesis",
+            "investigation",
+            "fact-checking"
+          ],
+          "sha": "897e87fdd16a54ef",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/roundtrip-test-skill.md",
+          "type": "skills",
+          "name": "Roundtrip Test Skill",
+          "description": "A test skill designed to validate the complete collection submission workflow roundtrip",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "testing",
+            "integration",
+            "workflow",
+            "validation"
+          ],
+          "sha": "c23b1232834cabf0",
+          "category": "testing",
+          "created": "Mon Aug 11 2025 00:00:00 GMT+0000 (Coordinated Universal Time)"
+        },
+        {
+          "path": "library/skills/roundtrip-test-validator.md",
+          "type": "skills",
+          "name": "Roundtrip Test Validator",
+          "description": "A test skill for validating the MCP roundtrip workflow - helps verify element submission, installation, and processing",
+          "version": "1.0.0",
+          "author": "dollhousemcp-test",
+          "tags": [
+            "testing",
+            "validation",
+            "workflow",
+            "mcp",
+            "roundtrip"
+          ],
+          "sha": "8ed9ee300d4801f4",
+          "category": "professional",
+          "created": "2025-08-14"
+        },
+        {
+          "path": "library/skills/safe-roundtrip-tester.md",
+          "type": "skills",
+          "name": "Safe Roundtrip Tester",
+          "description": "A security-safe test skill for validating the complete MCP roundtrip workflow without triggering security alerts",
+          "version": "1.0.0",
+          "author": "dollhousemcp-test",
+          "tags": [
+            "testing",
+            "validation",
+            "workflow",
+            "mcp",
+            "safe"
+          ],
+          "sha": "8b2f9d7f1e3643e9",
+          "category": "professional",
+          "created": "2025-08-14"
+        },
+        {
+          "path": "library/skills/threat-modeling.md",
+          "type": "skills",
+          "name": "Threat Modeling",
+          "description": "Systematic approach to identifying, analyzing, and mitigating security threats in systems and applications",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "threat-modeling",
+            "security-analysis",
+            "risk-assessment",
+            "architecture",
+            "security-design"
+          ],
+          "sha": "e80894c8b5613ed4",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/skills/translation.md",
+          "type": "skills",
+          "name": "Translation",
+          "description": "Multi-language translation with cultural context and tone preservation",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "translation",
+            "languages",
+            "localization",
+            "culture"
+          ],
+          "sha": "d6e1c5432f49ceac",
+          "category": "professional",
+          "created": "2025-07-23"
+        }
+      ],
+      "templates": [
+        {
+          "path": "library/templates/code-documentation.md",
+          "type": "templates",
+          "name": "Code Documentation",
+          "description": "Technical documentation template for code modules, APIs, and functions",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "documentation",
+            "code",
+            "api",
+            "technical",
+            "reference"
+          ],
+          "sha": "8cc1e9a38383550a",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/report-executive.md",
+          "type": "templates",
+          "name": "Executive Report",
+          "description": "High-level report template for executive audiences with focus on insights and recommendations",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "report",
+            "executive",
+            "summary",
+            "business",
+            "strategy"
+          ],
+          "sha": "1c7e941c138b3baa",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/meeting-notes.md",
+          "type": "templates",
+          "name": "Meeting Notes",
+          "description": "Structured template for capturing and organizing meeting information",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "meeting",
+            "notes",
+            "documentation",
+            "collaboration"
+          ],
+          "sha": "91cdfe62840ec7b5",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/penetration-test-report.md",
+          "type": "templates",
+          "name": "Penetration Test Report",
+          "description": "Comprehensive penetration testing report with executive summary and technical findings",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "penetration-testing",
+            "security",
+            "assessment",
+            "report",
+            "ethical-hacking"
+          ],
+          "sha": "5ce59fb803f75af8",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/email-professional.md",
+          "type": "templates",
+          "name": "Professional Email",
+          "description": "Business email template with proper formatting and tone",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "email",
+            "business",
+            "communication",
+            "professional"
+          ],
+          "sha": "025a974390dc3374",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/project-brief.md",
+          "type": "templates",
+          "name": "Project Brief",
+          "description": "Comprehensive project overview template for planning and communication",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "project",
+            "planning",
+            "brief",
+            "documentation",
+            "management"
+          ],
+          "sha": "01da54de9a68d86c",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/project-proposal.md",
+          "type": "templates",
+          "name": "Project Proposal Template",
+          "description": "Professional template for creating comprehensive project proposals",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "business",
+            "project-management",
+            "proposals",
+            "documentation"
+          ],
+          "sha": "020fd0694dbd795b",
+          "category": "professional",
+          "created": "2025-07-15",
+          "license": "MIT"
+        },
+        {
+          "path": "library/templates/roundtrip-test-template.md",
+          "type": "templates",
+          "name": "Roundtrip Test Template",
+          "description": "Interactive checklist template for MCP roundtrip workflow testing",
+          "version": "1.0.0",
+          "author": "dollhousemcp-test",
+          "tags": [
+            "testing",
+            "validation",
+            "checklist",
+            "roundtrip"
+          ],
+          "sha": "efb3be4c98cd86d7",
+          "category": "testing",
+          "created": "2025-08-14"
+        },
+        {
+          "path": "library/templates/security-vulnerability-report.md",
+          "type": "templates",
+          "name": "Security Vulnerability Report",
+          "description": "Comprehensive vulnerability assessment report with technical details and remediation guidance",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "vulnerability",
+            "security",
+            "assessment",
+            "report",
+            "remediation"
+          ],
+          "sha": "33d8e12f36f683a3",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/templates/threat-assessment-report.md",
+          "type": "templates",
+          "name": "Threat Assessment Report",
+          "description": "Comprehensive threat modeling and risk assessment report with mitigation strategies",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "threat-modeling",
+            "risk-assessment",
+            "security-analysis",
+            "threat-intelligence"
+          ],
+          "sha": "f5880e320d70ea9f",
+          "category": "professional",
+          "created": "2025-07-23"
+        }
+      ],
+      "memories": [
+        {
+          "path": "library/memories/conversation-history.md",
+          "type": "memories",
+          "name": "Conversation History",
+          "description": "Maintains context and continuity across multiple conversation sessions",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "conversation",
+            "context",
+            "history",
+            "continuity",
+            "session"
+          ],
+          "sha": "e9dfbc117370e425",
+          "category": "personal",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/memories/learning-progress.md",
+          "type": "memories",
+          "name": "Learning Progress",
+          "description": "Tracks learning goals, progress, and personalized educational pathways",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "learning",
+            "progress",
+            "education",
+            "skills",
+            "knowledge-tracking"
+          ],
+          "sha": "f3ac3076af6d5d03",
+          "category": "educational",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/memories/project-context.md",
+          "type": "memories",
+          "name": "Project Context",
+          "description": "Persistent memory for project-specific information, decisions, and history",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "context",
+            "project",
+            "history",
+            "decisions",
+            "knowledge-base"
+          ],
+          "sha": "920305db13d5bda2",
+          "category": "professional",
+          "created": "2025-07-23"
+        }
+      ],
+      "ensembles": [
+        {
+          "path": "library/ensembles/business-advisor.md",
+          "type": "ensembles",
+          "name": "Business Advisor",
+          "description": "Strategic business advisory ensemble for analysis, planning, and decision-making",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "business",
+            "strategy",
+            "analysis",
+            "consulting",
+            "advisory"
+          ],
+          "sha": "d1b3bde97eb65c7d",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/ensembles/complete-productivity-suite.md",
+          "type": "ensembles",
+          "name": "Complete Productivity Suite",
+          "description": "A comprehensive collection of productivity-enhancing content for personal and professional use",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "productivity",
+            "organization",
+            "efficiency",
+            "workflow"
+          ],
+          "sha": "d0943602851193ed",
+          "category": "personal",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        },
+        {
+          "path": "library/ensembles/creative-studio.md",
+          "type": "ensembles",
+          "name": "Creative Studio",
+          "description": "Multi-disciplinary creative ensemble for content creation and storytelling",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "creative",
+            "writing",
+            "content",
+            "storytelling",
+            "multimedia"
+          ],
+          "sha": "0bccfb15cea0e4ed",
+          "category": "creative",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/ensembles/development-team.md",
+          "type": "ensembles",
+          "name": "Development Team",
+          "description": "Complete development team ensemble for full-stack software projects",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "development",
+            "full-stack",
+            "team",
+            "software",
+            "collaboration"
+          ],
+          "sha": "29f2062369518a48",
+          "category": "professional",
+          "created": "2025-07-23"
+        },
+        {
+          "path": "library/ensembles/full-stack-developer.md",
+          "type": "ensembles",
+          "name": "Full-Stack Developer Ensemble",
+          "description": "Complete development environment combining personas, tools, and skills for professional software development",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "development",
+            "programming",
+            "full-stack",
+            "software-engineering"
+          ],
+          "sha": "2e89a351e0da84a7",
+          "category": "professional",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        },
+        {
+          "path": "library/ensembles/security-analysis-team.md",
+          "type": "ensembles",
+          "name": "Security Analysis Team",
+          "description": "Elite security analysis ensemble combining threat modeling, penetration testing, and comprehensive vulnerability assessment",
+          "version": "1.0.0",
+          "author": "DollhouseMCP",
+          "tags": [
+            "security",
+            "analysis",
+            "penetration-testing",
+            "threat-modeling",
+            "vulnerability-assessment"
+          ],
+          "sha": "ebbc77791b4501be",
+          "category": "professional",
+          "created": "2025-07-23"
+        }
+      ],
+      "prompts": [
+        {
+          "path": "library/prompts/story-starter.md",
+          "type": "prompts",
+          "name": "Story Starter",
+          "description": "Creative writing prompt generator for various genres and styles",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "creative-writing",
+            "storytelling",
+            "fiction",
+            "prompts"
+          ],
+          "sha": "bf1fa57e822c5547",
+          "category": "creative",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        }
+      ],
+      "tools": [
+        {
+          "path": "library/tools/task-prioritizer.md",
+          "type": "tools",
+          "name": "Task Prioritizer",
+          "description": "MCP tool for intelligent task prioritization using multiple frameworks",
+          "version": "1.0.0",
+          "author": "dollhousemcp",
+          "tags": [
+            "productivity",
+            "task-management",
+            "prioritization",
+            "planning"
+          ],
+          "sha": "8a7d6967ba5fb573",
+          "category": "personal",
+          "created": "Tue Jul 15 2025 00:00:00 GMT+0000 (Coordinated Universal Time)",
+          "license": "MIT"
+        }
+      ]
+    },
+    "metadata": {
+      "build_time_ms": 57,
+      "file_count": 44,
+      "skipped_files": 0,
+      "categories": 8,
+      "nodejs_version": "v22.18.0",
+      "builder_version": "1.0.0"
+    }
+  },
+  "fetchedAt": "2025-08-28T21:21:05.123Z",
+  "etag": "W/\"c23e71778a8f5454d1a6223c3cc5352bb0ba2004b5c51b7efccae3edf0f7f6bf\""
+}

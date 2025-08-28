@@ -257,7 +257,7 @@ describe('GitHubClient', () => {
       mockApiCache.get.mockReturnValue(null);
 
       await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
-        .rejects.toThrow('GitHub API error: 404 Not Found');
+        .rejects.toThrow('Failed to fetch from GitHub: File not found in collection');
     });
 
     it('should handle partial network failures', async () => {
