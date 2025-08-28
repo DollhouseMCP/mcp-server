@@ -177,7 +177,7 @@ describe('CollectionIndexManager - Essential Tests', () => {
 
       expect(result).toEqual(mockCollectionIndex);
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json',
+        'https://dollhousemcp.github.io/collection/collection-index.json',
         expect.objectContaining({
           headers: expect.objectContaining({
             'Accept': 'application/json',
