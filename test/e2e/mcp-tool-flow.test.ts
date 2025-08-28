@@ -205,8 +205,13 @@ describe('MCP Tool Integration Flow', () => {
       console.log('\n  2️⃣ Tool: check_github_auth');
       const authStatus = await server['checkGitHubAuth']();
       
-      expect(authStatus).toContain('GitHub Connected');
-      expect(authStatus).toContain(testEnv.githubUser);
+      // Handle both string and object response formats
+      const authText = typeof authStatus === 'string' 
+        ? authStatus 
+        : authStatus?.content?.[0]?.text || '';
+      
+      expect(authText).toContain('GitHub Connected');
+      expect(authText).toContain(testEnv.githubUser);
       console.log('     ✅ Authentication verified');
       
       // Step 2: Check portfolio status (portfolio_status tool)
@@ -299,7 +304,11 @@ describe('MCP Tool Integration Flow', () => {
       const authStatus = await server['checkGitHubAuth']();
       
       // Should show not authenticated
-      expect(authStatus).toMatch(/not authenticated|invalid|failed/i);
+      // Handle both string and object response formats
+      const authErrorText = typeof authStatus === 'string'
+        ? authStatus
+        : authStatus?.content?.[0]?.text || '';
+      expect(authErrorText).toMatch(/not authenticated|invalid|failed/i);
       console.log('     ✅ Auth error handled correctly');
       
       // Restore good token for other tests
