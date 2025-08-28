@@ -21,7 +21,7 @@ jest.mock('../../../../src/utils/logger.js', () => ({
 }));
 
 // Get the fs mock functions
-const mockFs = getMocks();
+const mockFs = getMocks() as any;
 
 // Mock fetch globally
 const mockFetch = jest.fn<typeof fetch>();
@@ -156,18 +156,18 @@ describe('CollectionIndexManager - Essential Tests', () => {
   describe('getIndex - fetch from network', () => {
     test('should fetch and return collection index when no cache exists', async () => {
       // Mock no cache file
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       // Mock successful fetch
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: new Headers({
+        headers: {
           'etag': '"test-etag"',
           'last-modified': 'Wed, 22 Aug 2025 12:00:00 GMT'
-        })
-      } as Response);
+        }
+      }));
 
       // Mock successful file operations
       mockFs.mkdir.mockResolvedValue(undefined as any);
@@ -192,21 +192,20 @@ describe('CollectionIndexManager - Essential Tests', () => {
     });
 
     test('should handle network errors with retries', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       // First two attempts fail, third succeeds
       mockFetch
         .mockRejectedValueOnce(new Error('Network error'))
         .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({
+        .mockResolvedValueOnce(createMockResponse({
           ok: true,
           status: 200,
-          json: () => Promise.resolve(mockCollectionIndex),
-          headers: { get: () => null }
-        });
+          json: () => Promise.resolve(mockCollectionIndex)
+        }));
 
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.getIndex();
 
@@ -215,13 +214,13 @@ describe('CollectionIndexManager - Essential Tests', () => {
     });
 
     test('should handle HTTP errors', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
-      mockFetch.mockResolvedValue({
+      mockFetch.mockResolvedValue(createMockResponse({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error'
-      });
+      }));
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
       expect(mockFetch).toHaveBeenCalledTimes(4); // 1 + 3 retries
@@ -230,21 +229,20 @@ describe('CollectionIndexManager - Essential Tests', () => {
 
   describe('validation', () => {
     test('should validate collection index structure', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       const invalidIndex = { invalid: 'structure' };
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(invalidIndex),
-        headers: { get: () => null }
-      });
+        json: () => Promise.resolve(invalidIndex)
+      }));
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
     });
 
     test('should validate required version field', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       const incompleteIndex = {
         // missing version
@@ -254,18 +252,17 @@ describe('CollectionIndexManager - Essential Tests', () => {
         metadata: {}
       };
       
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(incompleteIndex),
-        headers: { get: () => null }
-      });
+        json: () => Promise.resolve(incompleteIndex)
+      }));
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
     });
 
     test('should validate required generated field', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       const incompleteIndex = {
         version: '1.0.0',
@@ -275,12 +272,11 @@ describe('CollectionIndexManager - Essential Tests', () => {
         metadata: {}
       };
       
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(incompleteIndex),
-        headers: { get: () => null }
-      });
+        json: () => Promise.resolve(incompleteIndex)
+      }));
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
     });
@@ -288,17 +284,17 @@ describe('CollectionIndexManager - Essential Tests', () => {
 
   describe('forceRefresh', () => {
     test('should force refresh and return fresh data', async () => {
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
         headers: {
-          get: (name: string) => name === 'etag' ? '"fresh-etag"' : null
+          'etag': '"fresh-etag"'
         }
-      });
+      }));
 
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.forceRefresh();
 
@@ -343,14 +339,13 @@ describe('CollectionIndexManager - Essential Tests', () => {
       mockFs.readFile.mockResolvedValue('invalid json{');
       
       // Mock successful fetch as fallback
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(mockCollectionIndex),
-        headers: { get: () => null }
-      });
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+        json: () => Promise.resolve(mockCollectionIndex)
+      }));
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.getIndex();
 
@@ -369,14 +364,13 @@ describe('CollectionIndexManager - Essential Tests', () => {
       mockFs.readFile.mockResolvedValue(JSON.stringify(invalidChecksumEntry));
       
       // Mock successful fetch as fallback
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(createMockResponse({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(mockCollectionIndex),
-        headers: { get: () => null }
-      });
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+        json: () => Promise.resolve(mockCollectionIndex)
+      }));
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.getIndex();
 
@@ -396,11 +390,11 @@ describe('CollectionIndexManager - Essential Tests', () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: { get: () => null }
+        headers: new Headers()
       });
 
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.getIndex();
       expect(result).toEqual(mockCollectionIndex);
@@ -410,16 +404,16 @@ describe('CollectionIndexManager - Essential Tests', () => {
 
   describe('error handling', () => {
     test('should handle cache file write errors gracefully', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: { get: () => null }
+        headers: new Headers()
       });
 
-      mockFs.mkdir.mockResolvedValue(undefined);
+      mockFs.mkdir.mockResolvedValue(undefined as any);
       mockFs.writeFile.mockRejectedValue(new Error('Disk full'));
 
       // Should still return data even if caching fails
@@ -428,13 +422,13 @@ describe('CollectionIndexManager - Essential Tests', () => {
     });
 
     test('should handle JSON parsing errors in response', async () => {
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' } as any);
       
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: () => Promise.reject(new Error('Invalid JSON')),
-        headers: { get: () => null }
+        headers: new Headers()
       });
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
