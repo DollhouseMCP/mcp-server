@@ -42,10 +42,6 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 # Install globally
 npm install -g @dollhousemcp/mcp-server
 
-# ✅ v1.6.9 fixes version management and release workflow!
-# Browse and submit to collection with or without authentication:
-# npm install -g @dollhousemcp/mcp-server@latest
-
 # Add to Claude Desktop config (see path below for your OS)
 # macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
 # Windows: %APPDATA%\Claude\claude_desktop_config.json  
