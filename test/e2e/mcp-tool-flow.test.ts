@@ -218,7 +218,13 @@ describe('MCP Tool Integration Flow', () => {
       console.log('\n  3️⃣ Tool: portfolio_status');
       const portfolioStatus = await server['portfolioStatus'](testEnv.githubUser);
       
-      expect(portfolioStatus).toBeTruthy();
+      // Handle object response format
+      const portfolioText = typeof portfolioStatus === 'string'
+        ? portfolioStatus
+        : portfolioStatus?.content?.[0]?.text || '';
+      
+      expect(portfolioText).toBeTruthy();
+      expect(portfolioText).toContain('Portfolio Status');
       console.log('     ✅ Portfolio status checked');
       
       // Step 3: Search for Ziggy persona (search_portfolio tool)
