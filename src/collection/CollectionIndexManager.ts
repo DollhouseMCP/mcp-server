@@ -35,7 +35,9 @@ export interface CollectionIndexManagerConfig {
 }
 
 export class CollectionIndexManager {
-  private readonly INDEX_URL = 'https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json';
+  // Use GitHub Pages index which is automatically updated by workflow
+  // Old URL was stale: https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json
+  private readonly INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
   private readonly TTL_MS: number;
   private readonly FETCH_TIMEOUT_MS: number;
   private readonly MAX_RETRIES: number;
