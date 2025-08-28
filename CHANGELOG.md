@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.10] - 2025-08-28
+
+### Fixed
+- Collection submission pipeline now includes full markdown content with frontmatter (#818)
+  - Added missing `localPath` parameter to `submitElementAndHandleResponse()` call
+  - Fixes "No frontmatter found" errors in collection workflow
+  - Enables proper processing of submitted elements
+
 ## [1.6.9] - 2025-08-27
 
 Fix content truncation in create_persona tool - personas were being truncated at 1000 chars
