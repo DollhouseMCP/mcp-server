@@ -24,14 +24,31 @@ jest.mock('../../../../src/utils/logger.js', () => ({
 const mockFs = getMocks();
 
 // Mock fetch globally
-const mockFetch = jest.fn();
-global.fetch = mockFetch;
+const mockFetch = jest.fn<typeof fetch>();
+global.fetch = mockFetch as any;
 
 // Mock AbortController
 global.AbortController = jest.fn().mockImplementation(() => ({
   signal: {},
   abort: jest.fn()
-}));
+})) as any;
+
+// Helper to create mock responses
+const createMockResponse = (options: {
+  ok: boolean;
+  status: number;
+  statusText?: string;
+  json?: () => Promise<any>;
+  headers?: Record<string, string>;
+}) => {
+  return {
+    ok: options.ok,
+    status: options.status,
+    statusText: options.statusText || '',
+    json: options.json || (() => Promise.resolve({})),
+    headers: options.headers ? new Headers(options.headers) : new Headers()
+  } as Response;
+};
 
 describe('CollectionIndexManager - Essential Tests', () => {
   let manager: CollectionIndexManager;
@@ -146,18 +163,15 @@ describe('CollectionIndexManager - Essential Tests', () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: {
-          get: (name: string) => {
-            if (name === 'etag') return '"test-etag"';
-            if (name === 'last-modified') return 'Wed, 22 Aug 2025 12:00:00 GMT';
-            return null;
-          }
-        }
-      });
+        headers: new Headers({
+          'etag': '"test-etag"',
+          'last-modified': 'Wed, 22 Aug 2025 12:00:00 GMT'
+        })
+      } as Response);
 
       // Mock successful file operations
-      mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockResolvedValue(undefined);
+      mockFs.mkdir.mockResolvedValue(undefined as any);
+      mockFs.writeFile.mockResolvedValue(undefined as any);
 
       const result = await manager.getIndex();
 

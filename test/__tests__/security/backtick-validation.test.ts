@@ -90,7 +90,7 @@ describe('Backtick Validation', () => {
         expect(['critical', 'high']).toContain(result.severity);
         // Should detect some dangerous pattern - just verify it detected something
         expect(result.detectedPatterns).toBeDefined();
-        expect(result.detectedPatterns.length).toBeGreaterThan(0);
+        expect(result.detectedPatterns?.length || 0).toBeGreaterThan(0);
       });
     });
 

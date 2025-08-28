@@ -86,7 +86,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Mock fetch to capture exactly what gets uploaded
     const uploadedData: any = {};
     
-    global.fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
+    global.fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string, options?: any) => {
       console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${url}`);
       
       // Check if file exists (should be 404 for new file)
@@ -156,7 +156,9 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
         tags: ['test', 'quantum-leap', 'snarky', 'ai-assistant']
       },
       validate: () => ({ isValid: true, errors: [] }),
-      serialize: () => TEST_ZIGGY_CONTENT
+      serialize: () => TEST_ZIGGY_CONTENT,
+      deserialize: (data: string) => {},
+      getStatus: () => 'inactive' as const
     };
 
     console.log('\n🚀 STARTING UPLOAD PROCESS...\n');
@@ -204,7 +206,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Track ALL API calls to prove we're not syncing everything
     const apiCalls: string[] = [];
     
-    global.fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
+    global.fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string, options?: any) => {
       const callDesc = `${options?.method || 'GET'} ${url}`;
       apiCalls.push(callDesc);
       
@@ -251,7 +253,9 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
         author: 'testuser'
       },
       validate: () => ({ isValid: true, errors: [] }),
-      serialize: () => TEST_ZIGGY_CONTENT
+      serialize: () => TEST_ZIGGY_CONTENT,
+      deserialize: (data: string) => {},
+      getStatus: () => 'inactive' as const
     };
 
     // Upload ONLY Test-Ziggy
