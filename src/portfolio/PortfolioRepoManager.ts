@@ -295,12 +295,35 @@ export class PortfolioRepoManager {
         `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
       );
 
-      // Create or update the file
+      // DUPLICATE DETECTION (Issue #792): Check if content is identical
+      if (existingFile && existingFile.content) {
+        // Decode existing content from base64
+        const existingContent = Buffer.from(existingFile.content, 'base64').toString('utf-8');
+        
+        // Compare with new content
+        if (existingContent === content) {
+          logger.info('Skipping duplicate portfolio upload - content identical', {
+            elementId: element.id,
+            elementName: element.metadata.name,
+            filePath
+          });
+          
+          // Return the existing file URL instead of creating duplicate commit
+          const existingUrl = existingFile.html_url || 
+            `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/blob/main/${filePath}`;
+          
+          return existingUrl;
+        }
+      }
+
+      // Create or update the file (only if content is different)
       const result = await this.githubRequest(
         `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`,
         'PUT',
         {
-          message: `Add ${element.metadata.name} to portfolio`,
+          message: existingFile ? 
+            `Update ${element.metadata.name} in portfolio` : 
+            `Add ${element.metadata.name} to portfolio`,
           content: Buffer.from(content).toString('base64'),
           sha: existingFile?.sha // Include SHA if updating existing file
         }
