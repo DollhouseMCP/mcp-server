@@ -240,7 +240,7 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 - **git**: For cloning the repository
 - **Operating System**: Windows, macOS, or Linux
 
-> **Note**: DollhouseMCP is developed on Node.js 24 but supports Node.js 20+ for broad compatibility.
+> **Note**: DollhouseMCP is developed on Node.js 22 (current) but supports Node.js 20+ (LTS) for broad compatibility.
 
 ## 🚀 Quick Start
 
