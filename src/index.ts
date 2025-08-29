@@ -3395,8 +3395,27 @@ export class DollhouseMCPServer implements IToolHandler {
       };
 
       // Create full persona content with sanitized values
+      // FIX: Use proper YAML formatting instead of JSON.stringify
+      // This ensures arrays and strings are properly formatted in YAML
       const frontmatter = Object.entries(metadata)
-        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+        .map(([key, value]) => {
+          if (Array.isArray(value)) {
+            // Format arrays properly in YAML
+            if (value.length === 0) {
+              return `${key}: []`;
+            }
+            return `${key}:\n${value.map(v => `  - ${typeof v === 'string' && v.includes(':') ? JSON.stringify(v) : v}`).join('\n')}`;
+          } else if (typeof value === 'string' && (value.includes(':') || value.includes('\n') || value.includes('"'))) {
+            // Quote strings that contain special characters
+            return `${key}: ${JSON.stringify(value)}`;
+          } else if (typeof value === 'string') {
+            // Simple strings don't need quotes
+            return `${key}: ${value}`;
+          } else {
+            // Numbers, booleans, etc.
+            return `${key}: ${value}`;
+          }
+        })
         .join('\n');
 
       const personaContent = `---
