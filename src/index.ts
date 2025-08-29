@@ -3409,6 +3409,11 @@ export class DollhouseMCPServer implements IToolHandler {
             // Quote strings that contain special characters
             return `${key}: ${JSON.stringify(value)}`;
           } else if (typeof value === 'string') {
+            // Quote version fields and numeric-like strings to preserve string type
+            // This prevents YAML parsers from converting "1.0" to number 1
+            if (key === 'version' || /^\d+\.?\d*$/.test(value)) {
+              return `${key}: "${value}"`;
+            }
             // Simple strings don't need quotes
             return `${key}: ${value}`;
           } else {
