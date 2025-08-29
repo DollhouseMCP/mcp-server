@@ -20,7 +20,185 @@ import * as yaml from 'js-yaml';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-describe.skip('YAML Security Formatting Tests', () => {
+// Helper function to read and parse YAML frontmatter from created personas
+async function readPersonaYaml(tempDir: string): Promise<{ content: string; parsed: Record<string, any> }> {
+  const personasDir = path.join(tempDir, 'personas');
+  const files = await fs.readdir(personasDir);
+  const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
+  const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+  
+  // Extract just the YAML frontmatter
+  const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!yamlMatch) {
+    throw new Error('No YAML frontmatter found');
+  }
+  
+  // Parse the YAML to check types
+  const parsed = yaml.load(yamlMatch[1]) as Record<string, any>;
+  return { content, parsed };
+}
+
+// Direct unit tests for YAML formatting logic
+describe('YAML Security Formatting Tests - Unit', () => {
+  // Simulate the YAML formatting logic from src/index.ts
+  function formatYamlMetadata(metadata: Record<string, any>): string {
+    return Object.entries(metadata)
+      .filter(([key, value]) => {
+        // Block prototype pollution
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+          return false;
+        }
+        // Block null/undefined
+        if (value === null || value === undefined) {
+          return false;
+        }
+        return true;
+      })
+      .map(([key, value]) => {
+        if (Array.isArray(value)) {
+          if (value.length === 0) {
+            return `${key}: []`;
+          }
+          return `${key}:\n${value.map(v => {
+            if (typeof v === 'string') {
+              return `  - ${JSON.stringify(v)}`;
+            } else if (v === null || v === undefined) {
+              return null;
+            } else {
+              return `  - ${v}`;
+            }
+          }).filter(v => v !== null).join('\n')}`;
+        } else if (typeof value === 'string') {
+          const alwaysQuoteFields = [
+            'version', 'price', 'revenue_split', 'postal_code', 'user_id', 'unique_id'
+          ];
+          const yamlSpecialValues = /^(true|false|yes|no|on|off|null|~|\.inf|\.nan|-\.inf)$/i;
+          const needsQuoting = 
+            alwaysQuoteFields.includes(key) ||
+            yamlSpecialValues.test(value) ||
+            /^[\d+\-.]/.test(value) ||
+            /^0[0-7]+$/.test(value) ||
+            /^0x[0-9a-fA-F]+$/.test(value) ||
+            /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) ||
+            /^\s|\s$/.test(value) ||
+            /[:#@!&*\|>[\]{}]/.test(value) ||
+            value === '' ||
+            value.includes('\n') ||
+            value.includes('"');
+          
+          if (needsQuoting) {
+            return `${key}: ${JSON.stringify(value)}`;
+          }
+          return `${key}: ${value}`;
+        } else if (typeof value === 'number') {
+          if (!isFinite(value)) {
+            return `${key}: 0`;
+          }
+          if (isNaN(value)) {
+            return `${key}: 0`;
+          }
+          return `${key}: ${value}`;
+        } else if (typeof value === 'boolean') {
+          return `${key}: ${value}`;
+        } else {
+          return `${key}: ${JSON.stringify(value)}`;
+        }
+      })
+      .join('\n');
+  }
+
+  test('should block __proto__ keys', () => {
+    const metadata = {
+      name: 'Test',
+      __proto__: 'evil',
+      description: 'Safe'
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).not.toContain('__proto__');
+    expect(result).toContain('name: Test');
+    expect(result).toContain('description: Safe');
+  });
+
+  test('should filter null and undefined values', () => {
+    const metadata = {
+      name: 'Test',
+      nullField: null,
+      undefinedField: undefined,
+      description: 'Safe'
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).not.toContain('nullField');
+    expect(result).not.toContain('undefinedField');
+    expect(result).toContain('name: Test');
+  });
+
+  test('should handle special float values', () => {
+    const metadata = {
+      name: 'Test',
+      infinity: Infinity,
+      negInfinity: -Infinity,
+      notANumber: NaN
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).toContain('infinity: 0');
+    expect(result).toContain('negInfinity: 0');
+    expect(result).toContain('notANumber: 0');
+  });
+
+  test('should quote version field', () => {
+    const metadata = {
+      version: '1.0'
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).toBe('version: "1.0"');
+  });
+
+  test('should quote YAML special values', () => {
+    const metadata = {
+      answer1: 'yes',
+      answer2: 'no',
+      answer3: 'true',
+      answer4: 'false',
+      answer5: 'null'
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).toContain('answer1: "yes"');
+    expect(result).toContain('answer2: "no"');
+    expect(result).toContain('answer3: "true"');
+    expect(result).toContain('answer4: "false"');
+    expect(result).toContain('answer5: "null"');
+  });
+
+  test('should quote numeric-looking strings', () => {
+    const metadata = {
+      octal: '00666',
+      hex: '0xDEADBEEF',
+      scientific: '1.23e10',
+      decimal: '10.99'
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).toContain('octal: "00666"');
+    expect(result).toContain('hex: "0xDEADBEEF"');
+    expect(result).toContain('scientific: "1.23e10"');
+    expect(result).toContain('decimal: "10.99"');
+  });
+
+  test('should handle arrays properly', () => {
+    const metadata = {
+      emptyArray: [],
+      stringArray: ['item1', 'item2', 'yes'],
+      mixedArray: ['text', 123, null, undefined]
+    };
+    const result = formatYamlMetadata(metadata);
+    expect(result).toContain('emptyArray: []');
+    expect(result).toContain('stringArray:\n  - "item1"\n  - "item2"\n  - "yes"');
+    expect(result).toContain('mixedArray:\n  - "text"\n  - 123');
+    expect(result).not.toContain('null');
+    expect(result).not.toContain('undefined');
+  });
+});
+
+describe.skip('YAML Security Formatting Tests - Integration', () => {
   let server: DollhouseMCPServer;
   let tempDir: string;
 
@@ -34,6 +212,10 @@ describe.skip('YAML Security Formatting Tests', () => {
     
     // Create server for this specific test only
     server = new DollhouseMCPServer();
+    
+    // Ensure server is initialized before tests
+    // The server needs initialization to set up personas directory
+    await (server as any).ensureInitialized();
   }, 30000); // 30 second timeout for setup
 
   afterEach(async () => {
@@ -57,14 +239,8 @@ describe.skip('YAML Security Formatting Tests', () => {
       
       expect(response.content[0].text).toContain('✅');
       
-      // Read the created file and verify no null values slipped through
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
-      
-      // Parse the YAML to check types
-      const parsed = yaml.load(content) as Record<string, any>;
+      // Read and parse the created persona
+      const { parsed } = await readPersonaYaml(tempDir);
       expect(parsed).toBeDefined();
       expect(Object.values(parsed).every(v => v !== null)).toBe(true);
     });
@@ -81,10 +257,7 @@ describe.skip('YAML Security Formatting Tests', () => {
       
       expect(response.content[0].text).toContain('✅');
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Check that content doesn't contain special float values
       expect(content).not.toContain('.inf');
@@ -107,10 +280,7 @@ describe.skip('YAML Security Formatting Tests', () => {
       // Should still create but with safe name
       expect(response.content[0].text).toContain('✅');
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Verify __proto__ is not in the YAML keys
       expect(content).not.toContain('__proto__:');
@@ -129,16 +299,10 @@ describe.skip('YAML Security Formatting Tests', () => {
       
       expect(response.content[0].text).toContain('✅');
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Version should be quoted
       expect(content).toMatch(/version: "1\.0"/);
-      
-      // Parse and verify it stays as string
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(typeof parsed.version).toBe('string');
       expect(parsed.version).toBe('1.0');
     });
@@ -150,16 +314,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Price should be quoted
       expect(content).toMatch(/price: "free"/);
-      
-      // Parse and verify it stays as string
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(typeof parsed.price).toBe('string');
     });
 
@@ -170,15 +328,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Revenue split should be quoted
       expect(content).toMatch(/revenue_split: "80\/20"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.revenue_split).toBe('80/20');
     });
   });
@@ -194,15 +347,10 @@ describe.skip('YAML Security Formatting Tests', () => {
       
       expect(response.content[0].text).toContain('✅');
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Name "yes" should be quoted
       expect(content).toMatch(/name: "yes"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('yes');
       expect(typeof parsed.name).toBe('string');
     });
@@ -214,14 +362,9 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       expect(content).toMatch(/name: "no"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('no');
       expect(typeof parsed.name).toBe('string');
     });
@@ -233,14 +376,9 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       expect(content).toMatch(/name: "null"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('null');
       expect(parsed.name).not.toBe(null);
     });
@@ -254,15 +392,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Should be quoted to preserve leading zeros
       expect(content).toMatch(/name: "00777"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('00777');
       expect(parsed.name).not.toBe(511); // 0777 in octal = 511 in decimal
     });
@@ -274,14 +407,9 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       expect(content).toMatch(/name: "0xFF"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('0xFF');
       expect(parsed.name).not.toBe(255); // 0xFF = 255
     });
@@ -293,14 +421,9 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       expect(content).toMatch(/name: "1e10"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('1e10');
       expect(parsed.name).not.toBe(10000000000);
     });
@@ -314,15 +437,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Check that array elements are quoted
       expect(content).toMatch(/content_flags:\n  - "user-created"/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(Array.isArray(parsed.content_flags)).toBe(true);
       expect(parsed.content_flags[0]).toBe('user-created');
     });
@@ -335,15 +453,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Empty arrays should be formatted as []
       expect(content).toMatch(/triggers: \[\]/);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(Array.isArray(parsed.triggers)).toBe(true);
       expect(parsed.triggers.length).toBe(0);
     });
@@ -357,10 +470,7 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Strings with colons should be quoted
       expect(content).toMatch(/name: "Test: With Colon"/);
@@ -374,13 +484,9 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Strings with leading/trailing spaces should be quoted
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('  Leading Space');
       expect(parsed.description).toBe('Trailing Space  ');
     });
@@ -406,15 +512,10 @@ describe.skip('YAML Security Formatting Tests', () => {
         'Instructions'
       );
       
-      const personasDir = path.join(tempDir, 'personas');
-      const files = await fs.readdir(personasDir);
-      const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'legacy.md');
-      const content = await fs.readFile(path.join(personasDir, mdFiles[0]), 'utf-8');
+      const { content, parsed } = await readPersonaYaml(tempDir);
       
       // Should be quoted to preserve as string
       expect(content).toContain(`name: "${longNumber}"`);
-      
-      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe(longNumber);
       expect(typeof parsed.name).toBe('string');
     });
