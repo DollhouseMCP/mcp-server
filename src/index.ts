@@ -3395,30 +3395,88 @@ export class DollhouseMCPServer implements IToolHandler {
       };
 
       // Create full persona content with sanitized values
-      // FIX: Use proper YAML formatting instead of JSON.stringify
-      // This ensures arrays and strings are properly formatted in YAML
+      // SECURITY: Comprehensive YAML formatting to prevent type confusion and injection attacks
       const frontmatter = Object.entries(metadata)
+        .filter(([key, value]) => {
+          // CRITICAL: Block prototype pollution attempts
+          if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            logger.warn(`Blocked potential prototype pollution attempt with key: ${key}`);
+            return false;
+          }
+          // CRITICAL: Block null/undefined values that could crash server
+          if (value === null || value === undefined) {
+            logger.warn(`Skipping null/undefined value for key: ${key}`);
+            return false;
+          }
+          return true;
+        })
         .map(([key, value]) => {
           if (Array.isArray(value)) {
             // Format arrays properly in YAML
             if (value.length === 0) {
               return `${key}: []`;
             }
-            return `${key}:\n${value.map(v => `  - ${typeof v === 'string' && v.includes(':') ? JSON.stringify(v) : v}`).join('\n')}`;
-          } else if (typeof value === 'string' && (value.includes(':') || value.includes('\n') || value.includes('"'))) {
-            // Quote strings that contain special characters
-            return `${key}: ${JSON.stringify(value)}`;
+            // SECURITY: Quote all array string elements to prevent type confusion
+            return `${key}:\n${value.map(v => {
+              if (typeof v === 'string') {
+                // Always quote string array elements to prevent YAML interpretation
+                return `  - ${JSON.stringify(v)}`;
+              } else if (v === null || v === undefined) {
+                // Skip null/undefined array elements
+                return null;
+              } else {
+                return `  - ${v}`;
+              }
+            }).filter(v => v !== null).join('\n')}`;
           } else if (typeof value === 'string') {
-            // Quote version fields and numeric-like strings to preserve string type
-            // This prevents YAML parsers from converting "1.0" to number 1
-            if (key === 'version' || /^\d+\.?\d*$/.test(value)) {
-              return `${key}: "${value}"`;
+            // Fields that must always be quoted to preserve type
+            const alwaysQuoteFields = [
+              'version',      // Prevent 1.0 -> 1
+              'price',        // Prevent 10.99 -> float
+              'revenue_split', // Prevent fraction interpretation
+              'postal_code',   // Prevent octal interpretation
+              'user_id',      // Prevent number conversion
+              'unique_id'     // Preserve exact format
+            ];
+            
+            // YAML special values that become boolean/null/float
+            const yamlSpecialValues = /^(true|false|yes|no|on|off|null|~|\.inf|\.nan|-\.inf)$/i;
+            
+            // Patterns that indicate string needs quoting
+            const needsQuoting = 
+              alwaysQuoteFields.includes(key) ||
+              yamlSpecialValues.test(value) ||           // YAML keywords
+              /^[\d+\-.]/.test(value) ||                 // Starts with number-like
+              /^0[0-7]+$/.test(value) ||                 // Octal numbers
+              /^0x[0-9a-fA-F]+$/.test(value) ||         // Hexadecimal
+              /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) || // Scientific notation
+              /^\s|\s$/.test(value) ||                   // Leading/trailing whitespace
+              /[:#@!&*\|>[\]{}]/.test(value) ||         // Special YAML characters
+              value === '' ||                             // Empty string
+              value.includes('\n') ||                    // Multiline
+              value.includes('"');                       // Contains quotes
+            
+            if (needsQuoting) {
+              return `${key}: ${JSON.stringify(value)}`;
             }
-            // Simple strings don't need quotes
+            return `${key}: ${value}`;
+          } else if (typeof value === 'number') {
+            // CRITICAL: Reject special float values that break logic
+            if (!isFinite(value)) {
+              logger.warn(`Rejected non-finite number for ${key}: ${value}`);
+              return `${key}: 0`; // Safe default
+            }
+            if (isNaN(value)) {
+              logger.warn(`Rejected NaN for ${key}`);
+              return `${key}: 0`; // Safe default
+            }
+            return `${key}: ${value}`;
+          } else if (typeof value === 'boolean') {
+            // Explicit boolean values
             return `${key}: ${value}`;
           } else {
-            // Numbers, booleans, etc.
-            return `${key}: ${value}`;
+            // Other types - stringify for safety
+            return `${key}: ${JSON.stringify(value)}`;
           }
         })
         .join('\n');
