@@ -63,7 +63,7 @@ describe('YAML Security Formatting Tests', () => {
       const content = await fs.readFile(path.join(personasDir, files[0]), 'utf-8');
       
       // Parse the YAML to check types
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed).toBeDefined();
       expect(Object.values(parsed).every(v => v !== null)).toBe(true);
     });
@@ -134,7 +134,7 @@ describe('YAML Security Formatting Tests', () => {
       expect(content).toMatch(/version: "1\.0"/);
       
       // Parse and verify it stays as string
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(typeof parsed.version).toBe('string');
       expect(parsed.version).toBe('1.0');
     });
@@ -154,7 +154,7 @@ describe('YAML Security Formatting Tests', () => {
       expect(content).toMatch(/price: "free"/);
       
       // Parse and verify it stays as string
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(typeof parsed.price).toBe('string');
     });
 
@@ -172,7 +172,7 @@ describe('YAML Security Formatting Tests', () => {
       // Revenue split should be quoted
       expect(content).toMatch(/revenue_split: "80\/20"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.revenue_split).toBe('80/20');
     });
   });
@@ -194,7 +194,7 @@ describe('YAML Security Formatting Tests', () => {
       // Name "yes" should be quoted
       expect(content).toMatch(/name: "yes"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('yes');
       expect(typeof parsed.name).toBe('string');
     });
@@ -212,7 +212,7 @@ describe('YAML Security Formatting Tests', () => {
       
       expect(content).toMatch(/name: "no"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('no');
       expect(typeof parsed.name).toBe('string');
     });
@@ -230,7 +230,7 @@ describe('YAML Security Formatting Tests', () => {
       
       expect(content).toMatch(/name: "null"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('null');
       expect(parsed.name).not.toBe(null);
     });
@@ -251,7 +251,7 @@ describe('YAML Security Formatting Tests', () => {
       // Should be quoted to preserve leading zeros
       expect(content).toMatch(/name: "00777"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('00777');
       expect(parsed.name).not.toBe(511); // 0777 in octal = 511 in decimal
     });
@@ -269,7 +269,7 @@ describe('YAML Security Formatting Tests', () => {
       
       expect(content).toMatch(/name: "0xFF"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('0xFF');
       expect(parsed.name).not.toBe(255); // 0xFF = 255
     });
@@ -287,7 +287,7 @@ describe('YAML Security Formatting Tests', () => {
       
       expect(content).toMatch(/name: "1e10"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('1e10');
       expect(parsed.name).not.toBe(10000000000);
     });
@@ -308,7 +308,7 @@ describe('YAML Security Formatting Tests', () => {
       // Check that array elements are quoted
       expect(content).toMatch(/content_flags:\n  - "user-created"/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(Array.isArray(parsed.content_flags)).toBe(true);
       expect(parsed.content_flags[0]).toBe('user-created');
     });
@@ -328,7 +328,7 @@ describe('YAML Security Formatting Tests', () => {
       // Empty arrays should be formatted as []
       expect(content).toMatch(/triggers: \[\]/);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(Array.isArray(parsed.triggers)).toBe(true);
       expect(parsed.triggers.length).toBe(0);
     });
@@ -363,7 +363,7 @@ describe('YAML Security Formatting Tests', () => {
       const content = await fs.readFile(path.join(personasDir, files[0]), 'utf-8');
       
       // Strings with leading/trailing spaces should be quoted
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe('  Leading Space');
       expect(parsed.description).toBe('Trailing Space  ');
     });
@@ -396,7 +396,7 @@ describe('YAML Security Formatting Tests', () => {
       // Should be quoted to preserve as string
       expect(content).toContain(`name: "${longNumber}"`);
       
-      const parsed = yaml.load(content);
+      const parsed = yaml.load(content) as Record<string, any>;
       expect(parsed.name).toBe(longNumber);
       expect(typeof parsed.name).toBe('string');
     });
