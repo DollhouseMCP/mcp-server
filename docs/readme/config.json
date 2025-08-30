@@ -1,0 +1,39 @@
+{
+  "versions": {
+    "npm": {
+      "description": "Focused README for NPM package page",
+      "chunks": [
+        "00-header",
+        "01-installation",
+        "02-quick-start",
+        "03-features",
+        "04-portfolio-brief",
+        "05-troubleshooting-brief",
+        "06-resources",
+        "08-license"
+      ],
+      "output": "../../README.npm.md"
+    },
+    "github": {
+      "description": "Complete README for GitHub repository",
+      "chunks": [
+        "00-header-extended",
+        "01-installation",
+        "02-quick-start",
+        "03-features",
+        "04-portfolio-full",
+        "05-security",
+        "06-development",
+        "07-architecture",
+        "08-troubleshooting-full",
+        "09-contributing",
+        "10-resources-extended",
+        "11-changelog-full",
+        "12-license"
+      ],
+      "output": "../../README.github.md"
+    }
+  },
+  "chunkDirectory": "chunks",
+  "separator": "\n\n"
+}
