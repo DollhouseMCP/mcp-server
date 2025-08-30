@@ -277,7 +277,7 @@ export class PortfolioRepoManager {
 
     // Generate file path based on element type
     // FIX: Don't add 's' - element.type is already plural (e.g., 'personas', 'skills')
-    const fileName = this.generateFileName(element.metadata.name);
+    const fileName = PortfolioRepoManager.generateFileName(element.metadata.name);
     const filePath = `${element.type}/${fileName}.md`;
 
     // Prepare content (could be markdown with frontmatter)
@@ -488,7 +488,7 @@ These elements can be imported into your DollhouseMCP installation.
    * SECURITY: Additional Unicode normalization for filenames
    * SECURITY FIX: Fixed ReDoS vulnerability with input length limit and optimized regex
    */
-  private generateFileName(name: string): string {
+  public static generateFileName(name: string): string {
     // SECURITY FIX: Limit input length to prevent ReDoS attacks
     // Even with optimized regex, very long inputs could cause performance issues
     const MAX_FILENAME_LENGTH = 255; // Common filesystem limit

@@ -138,7 +138,9 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       expect(result).not.toContain('null');
       expect(result).not.toContain('undefined');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
       
       console.log(`     ✅ Handled response correctly: ${result}`);
@@ -197,7 +199,9 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       expect(result).toBeTruthy();
       console.log('     ✅ Rate limit handling verified');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
     }, 30000);
   });
@@ -283,7 +287,9 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       expect(urlWorks).toBe(true);
       console.log('     ✅ URL is accessible');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
     }, 30000);
   });
