@@ -97,7 +97,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
           ok: false,
           status: 404,
           json: async () => null
-        };
+        } as Response;
       }
       
       // Capture the upload
@@ -138,10 +138,10 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
               }
             }
           })
-        };
+        } as Response;
       }
       
-      return { ok: false, status: 404, json: async () => null };
+      return { ok: false, status: 404, json: async () => null } as Response;
     });
 
     // Create the Test-Ziggy element
@@ -232,10 +232,10 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
               html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc123' 
             }
           })
-        };
+        } as Response;
       }
       
-      return { ok: false, status: 404, json: async () => null };
+      return { ok: false, status: 404, json: async () => null } as Response;
     });
 
     // Simulate having multiple personas locally
