@@ -15,6 +15,31 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Fetch with timeout helper
+ */
+async function fetchWithTimeout(url: string, options: RequestInit & { timeout?: number } = {}): Promise<Response> {
+  const { timeout = 5000, ...fetchOptions } = options;
+  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request to ${url} timed out after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
 export interface TestEnvironment {
   githubToken: string;
   testRepo?: string;
@@ -35,7 +60,8 @@ export interface TestEnvironment {
  */
 export async function setupTestEnvironment(): Promise<TestEnvironment> {
   // Store existing token if set (CI environment takes precedence)
-  const existingToken = process.env.GITHUB_TEST_TOKEN;
+  // Note: CI uses TEST_GITHUB_TOKEN, local uses GITHUB_TEST_TOKEN
+  const existingToken = process.env.TEST_GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN;
   
   // Try to load .env.test.local for other settings
   const envPath = path.join(__dirname, '.env.test.local');
@@ -59,7 +85,8 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   }
 
   // Validate required variables
-  const githubToken = process.env.GITHUB_TEST_TOKEN;
+  // Check both TEST_GITHUB_TOKEN (CI) and GITHUB_TEST_TOKEN (local)
+  const githubToken = process.env.TEST_GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN;
   if (!githubToken) {
     // In CI environment, skip tests that require GitHub token
     if (process.env.CI) {
@@ -103,11 +130,12 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
  * Get GitHub username from token
  */
 async function getGitHubUser(token: string): Promise<string> {
-  const response = await fetch('https://api.github.com/user', {
+  const response = await fetchWithTimeout('https://api.github.com/user', {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Accept': 'application/vnd.github.v3+json'
-    }
+    },
+    timeout: 5000
   });
 
   if (!response.ok) {
@@ -125,11 +153,12 @@ async function validateTestEnvironment(config: TestEnvironment): Promise<void> {
   console.log('\n🔍 Validating test environment...');
   
   // Check token scopes
-  const scopesResponse = await fetch('https://api.github.com/user', {
+  const scopesResponse = await fetchWithTimeout('https://api.github.com/user', {
     headers: {
       'Authorization': `Bearer ${config.githubToken}`,
       'Accept': 'application/vnd.github.v3+json'
-    }
+    },
+    timeout: 5000
   });
 
   if (!scopesResponse.ok) {
@@ -156,11 +185,12 @@ async function validateTestEnvironment(config: TestEnvironment): Promise<void> {
   
   // Check if test repo exists (create if needed)
   const [owner, repo] = config.testRepo.split('/');
-  const repoResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+  const repoResponse = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
     headers: {
       'Authorization': `Bearer ${config.githubToken}`,
       'Accept': 'application/vnd.github.v3+json'
-    }
+    },
+    timeout: 5000
   });
 
   if (!repoResponse.ok && repoResponse.status === 404) {
@@ -181,7 +211,7 @@ async function validateTestEnvironment(config: TestEnvironment): Promise<void> {
 async function createTestRepository(config: TestEnvironment): Promise<void> {
   const [_, repoName] = config.testRepo.split('/');
   
-  const response = await fetch('https://api.github.com/user/repos', {
+  const response = await fetchWithTimeout('https://api.github.com/user/repos', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${config.githubToken}`,
@@ -193,7 +223,8 @@ async function createTestRepository(config: TestEnvironment): Promise<void> {
       description: 'Test repository for DollhouseMCP QA testing',
       private: false,
       auto_init: true
-    })
+    }),
+    timeout: 10000
   });
 
   if (!response.ok) {
