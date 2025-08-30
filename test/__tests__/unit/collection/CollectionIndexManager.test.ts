@@ -391,7 +391,7 @@ describe('CollectionIndexManager - Essential Tests', () => {
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
         headers: new Headers()
-      });
+      } as Response);
 
       mockFs.mkdir.mockResolvedValue(undefined as any);
       mockFs.writeFile.mockResolvedValue(undefined as any);
@@ -411,7 +411,7 @@ describe('CollectionIndexManager - Essential Tests', () => {
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
         headers: new Headers()
-      });
+      } as Response);
 
       mockFs.mkdir.mockResolvedValue(undefined as any);
       mockFs.writeFile.mockRejectedValue(new Error('Disk full'));
@@ -429,7 +429,7 @@ describe('CollectionIndexManager - Essential Tests', () => {
         status: 200,
         json: () => Promise.reject(new Error('Invalid JSON')),
         headers: new Headers()
-      });
+      } as Response);
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
     });
