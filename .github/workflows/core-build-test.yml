@@ -135,7 +135,7 @@ jobs:
 
       - name: Run test suite (original method)
         id: original_tests
-        run: npm test
+        run: npm run test:ci
         continue-on-error: true
 
       - name: Debug failed tests environment
