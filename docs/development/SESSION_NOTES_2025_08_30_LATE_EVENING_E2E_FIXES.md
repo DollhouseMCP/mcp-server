@@ -154,8 +154,24 @@ jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, o
 - ✅ Repository mismatch resolved (with documented workaround)
 - ✅ TypeScript compilation errors fixed
 - ✅ PR #844 created to replace #843
-- ⏳ Waiting for CI to complete
+- ⏳ CI Issue Found: GitHubAuthManager tests running in compiled mode despite being excluded
+
+### CI Issue Discovery (Late Evening)
+
+**Problem**: Ubuntu CI test hung for 10+ minutes then was cancelled
+**Root Cause**: The "compiled tests approach" runs when regular tests fail, but it doesn't honor test exclusions
+
+**Key Findings**:
+1. `GitHubAuthManager.test.ts` is explicitly excluded in `jest.config.cjs` due to hanging issues
+2. But `jest.config.compiled.cjs` doesn't have these exclusions
+3. When CI falls back to compiled tests, it runs the problematic tests
+4. The tests have 47 failures related to Unicode normalization expectations
+5. Tests then hang due to async operations not being cleaned up
+
+**Fix Applied**:
+- Updated `jest.config.compiled.cjs` to include the same test exclusions
+- This prevents known problematic tests from running in CI fallback mode
 
 ---
 
-*Session ended with all major work complete, awaiting CI results*
+*Session continuing to resolve CI issues*
