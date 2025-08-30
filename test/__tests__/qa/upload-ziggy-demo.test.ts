@@ -86,11 +86,12 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Mock fetch to capture exactly what gets uploaded
     const uploadedData: any = {};
     
-    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string, options?: any) => {
-      console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${url}`);
+    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, options?: RequestInit) => {
+      const urlString = url.toString();
+      console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${urlString}`);
       
       // Check if file exists (should be 404 for new file)
-      if (url.includes('/contents/') && !options?.method) {
+      if (urlString.includes('/contents/') && !options?.method) {
         console.log('  ↳ Checking if test-ziggy.md already exists...');
         return {
           ok: false,
@@ -100,7 +101,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
       }
       
       // Capture the upload
-      if (url.includes('/contents/') && options?.method === 'PUT') {
+      if (urlString.includes('/contents/') && options?.method === 'PUT') {
         const body = JSON.parse(options.body);
         uploadedData.url = url;
         uploadedData.message = body.message;
@@ -206,7 +207,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Track ALL API calls to prove we're not syncing everything
     const apiCalls: string[] = [];
     
-    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string, options?: any) => {
+    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, options?: RequestInit) => {
       const callDesc = `${options?.method || 'GET'} ${url}`;
       apiCalls.push(callDesc);
       
