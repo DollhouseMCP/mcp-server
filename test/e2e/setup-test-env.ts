@@ -35,7 +35,7 @@ export interface TestEnvironment {
  */
 export async function setupTestEnvironment(): Promise<TestEnvironment> {
   // Store existing token if set (CI environment takes precedence)
-  const existingToken = process.env.GITHUB_TEST_TOKEN;
+  const existingToken = process.env.TEST_GITHUB_TOKEN;
   
   // Try to load .env.test.local for other settings
   const envPath = path.join(__dirname, '.env.test.local');
@@ -54,23 +54,23 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
     if (existingToken.length < 10) {
       console.warn('⚠️  CI token appears invalid (too short), falling back to .env file');
     } else {
-      process.env.GITHUB_TEST_TOKEN = existingToken;
+      process.env.TEST_GITHUB_TOKEN = existingToken;
     }
   }
 
   // Validate required variables
-  const githubToken = process.env.GITHUB_TEST_TOKEN;
+  const githubToken = process.env.TEST_GITHUB_TOKEN;
   if (!githubToken) {
     // In CI environment, skip tests that require GitHub token
     if (process.env.CI) {
-      console.log('⏭️  Skipping E2E tests in CI - GITHUB_TEST_TOKEN not available');
+      console.log('⏭️  Skipping E2E tests in CI - TEST_GITHUB_TOKEN not available');
       return {
         githubToken: '',
         skipTests: true
       };
     }
     throw new Error(
-      'GITHUB_TEST_TOKEN is required. Please set it in .env.test.local or environment variables.\n' +
+      'TEST_GITHUB_TOKEN is required. Please set it in .env.test.local or environment variables.\n' +
       'Create a token at: https://github.com/settings/tokens with "repo" scope'
     );
   }

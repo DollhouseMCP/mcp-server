@@ -30,7 +30,7 @@ nano test/e2e/.env.test.local
 
 Required configuration:
 ```env
-GITHUB_TEST_TOKEN=ghp_your_actual_token_here
+TEST_GITHUB_TOKEN=ghp_your_actual_token_here
 GITHUB_TEST_REPO=yourusername/dollhouse-portfolio-test
 GITHUB_TEST_USER=yourusername
 ```
@@ -70,7 +70,7 @@ npx jest test/e2e/mcp-tool-flow.test.ts --verbose
 
 ```bash
 # Override environment variables
-GITHUB_TEST_TOKEN=ghp_xxx TEST_CLEANUP_AFTER=false npm run test:e2e:real
+TEST_GITHUB_TOKEN=ghp_xxx TEST_CLEANUP_AFTER=false npm run test:e2e:real
 
 # Verbose logging for debugging
 TEST_VERBOSE_LOGGING=true npm run test:e2e:real
@@ -201,7 +201,7 @@ jobs:
         
       - name: Run real integration tests
         env:
-          GITHUB_TEST_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+          TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
           GITHUB_TEST_REPO: ${{ github.repository }}-test
           TEST_CLEANUP_AFTER: true
         run: npm run test:e2e:real
@@ -209,7 +209,7 @@ jobs:
 
 ### Required Secrets
 Add to repository secrets:
-- `GITHUB_TEST_TOKEN`: Personal access token with repo scope
+- `TEST_GITHUB_TOKEN`: Personal access token with repo scope
 
 ## Performance Benchmarks
 
