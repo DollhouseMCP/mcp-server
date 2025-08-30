@@ -42,7 +42,7 @@ jest.mock('fs/promises');
 const MockedFs = fs as jest.Mocked<typeof fs>;
 
 describe.skip('SubmitToPortfolioTool', () => {
-  let tool: SubmitToPortfolioTool;
+  let tool: InstanceType<typeof SubmitToPortfolioTool>;
   let mockApiCache: any;
   let mockAuthManager: any;
   let mockPortfolioRepoManager: any;
@@ -79,7 +79,7 @@ describe.skip('SubmitToPortfolioTool', () => {
     mockGitHubAuthManager.mockImplementation(() => mockAuthManager);
     mockPortfolioRepoManager.mockImplementation(() => mockPortfolioRepoManager);
     
-    (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('test-token');
+    (TokenManager.getGitHubTokenAsync as jest.Mock<() => Promise<string | null>>).mockResolvedValue('test-token');
     
     (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
       isValid: true,
@@ -275,7 +275,7 @@ describe.skip('SubmitToPortfolioTool', () => {
   
   describe('Token management', () => {
     it('should fail when token cannot be retrieved', async () => {
-      MockedTokenManager.getGitHubTokenAsync.mockResolvedValue(null);
+      (TokenManager.getGitHubTokenAsync as jest.Mock<() => Promise<string | null>>).mockResolvedValue(null);
       
       const result = await tool.execute({
         name: 'test-element'
