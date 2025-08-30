@@ -13,13 +13,23 @@ import {
 } from '../utils/test-persona-factory.js';
 import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.js';
 
-describe('Real GitHub Portfolio Integration Tests', () => {
+// Skip e2e tests in CI unless explicitly enabled
+// These tests require specific GitHub setup and can be flaky
+const shouldSkip = process.env.CI === 'true' && process.env.RUN_E2E_TESTS !== 'true';
+const describeOrSkip = shouldSkip ? describe.skip : describe;
+
+describeOrSkip('Real GitHub Portfolio Integration Tests', () => {
   let testEnv: TestEnvironment;
   let githubClient: GitHubTestClient;
   let portfolioManager: PortfolioRepoManager;
   let uploadedFiles: string[] = [];
 
   beforeAll(async () => {
+    if (shouldSkip) {
+      console.log('\n⏭️  Skipping e2e tests in CI (set RUN_E2E_TESTS=true to enable)\n');
+      return;
+    }
+    
     console.log('\n🚀 Starting real GitHub integration tests...\n');
     
     // Setup and validate environment

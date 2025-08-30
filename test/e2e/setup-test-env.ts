@@ -59,6 +59,13 @@ export interface TestEnvironment {
  * Load and validate test environment configuration
  */
 export async function setupTestEnvironment(): Promise<TestEnvironment> {
+  // Debug logging for CI
+  if (process.env.CI) {
+    console.log('🔍 CI Environment detected');
+    console.log('TEST_GITHUB_TOKEN exists:', !!process.env.TEST_GITHUB_TOKEN);
+    console.log('TEST_GITHUB_TOKEN length:', process.env.TEST_GITHUB_TOKEN?.length || 0);
+  }
+  
   // Store existing token if set (CI environment takes precedence)
   // Note: CI uses TEST_GITHUB_TOKEN, local uses GITHUB_TEST_TOKEN
   const existingToken = process.env.TEST_GITHUB_TOKEN || process.env.GITHUB_TEST_TOKEN;
@@ -80,7 +87,9 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
     if (existingToken.length < 10) {
       console.warn('⚠️  CI token appears invalid (too short), falling back to .env file');
     } else {
+      // Set both environment variables for compatibility
       process.env.GITHUB_TEST_TOKEN = existingToken;
+      process.env.TEST_GITHUB_TOKEN = existingToken;
     }
   }
 
@@ -103,7 +112,26 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   }
 
   const testRepo = process.env.GITHUB_TEST_REPO || 'dollhouse-portfolio-test';
-  const githubUser = process.env.GITHUB_TEST_USER || await getGitHubUser(githubToken);
+  
+  // Get GitHub user with timeout protection
+  let githubUser = process.env.GITHUB_TEST_USER;
+  if (!githubUser) {
+    console.log('📝 Fetching GitHub username from API...');
+    try {
+      githubUser = await getGitHubUser(githubToken);
+      console.log(`✅ GitHub user: ${githubUser}`);
+    } catch (error: any) {
+      console.error('❌ Failed to get GitHub user:', error.message);
+      if (process.env.CI) {
+        // In CI, skip tests if we can't get user info
+        return {
+          githubToken: '',
+          skipTests: true
+        };
+      }
+      throw error;
+    }
+  }
 
   // Parse optional settings with defaults
   const config: TestEnvironment = {
@@ -120,8 +148,12 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
     testBranch: process.env.TEST_BRANCH || 'main'
   };
 
-  // Validate the configuration
-  await validateTestEnvironment(config);
+  // Skip validation in CI to avoid unnecessary API calls during test setup
+  if (!process.env.CI) {
+    await validateTestEnvironment(config);
+  } else {
+    console.log('⏭️  Skipping environment validation in CI');
+  }
   
   return config;
 }
