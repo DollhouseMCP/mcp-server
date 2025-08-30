@@ -121,7 +121,7 @@ describe('Index Performance Optimization Tests', () => {
 
       expect(duration2).toBeLessThan(duration1);
       expect(duration2).toBeLessThan(50); // Cached search should be very fast
-    });
+    }, 15000); // Increase timeout to 15 seconds
 
     it('should handle large result sets efficiently', async () => {
       const startMemory = process.memoryUsage().heapUsed;

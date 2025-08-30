@@ -13,7 +13,10 @@ import {
 } from '../utils/test-persona-factory.js';
 import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.js';
 
-describe('Real GitHub Portfolio Integration Tests', () => {
+// Skip these tests in CI as they require real GitHub API access
+const describeOrSkip = process.env.CI && !process.env.ENABLE_E2E_TESTS ? describe.skip : describe;
+
+describeOrSkip('Real GitHub Portfolio Integration Tests', () => {
   let testEnv: TestEnvironment;
   let githubClient: GitHubTestClient;
   let portfolioManager: PortfolioRepoManager;
