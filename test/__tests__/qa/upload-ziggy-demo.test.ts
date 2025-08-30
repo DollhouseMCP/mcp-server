@@ -102,8 +102,8 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
       
       // Capture the upload
       if (urlString.includes('/contents/') && options?.method === 'PUT') {
-        const body = JSON.parse(options.body);
-        uploadedData.url = url;
+        const body = JSON.parse(options?.body as string || '{}');
+        uploadedData.url = urlString;
         uploadedData.message = body.message;
         uploadedData.encodedContent = body.content;
         uploadedData.decodedContent = Buffer.from(body.content, 'base64').toString('utf-8');
@@ -212,11 +212,11 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
       apiCalls.push(callDesc);
       
       if (options?.method === 'PUT') {
-        const body = JSON.parse(options.body);
+        const body = JSON.parse(options?.body as string || '{}');
         const content = Buffer.from(body.content, 'base64').toString('utf-8');
         
         console.log('\n🎯 SINGLE UPLOAD DETECTED:');
-        console.log('  File:', url.match(/\/contents\/(.+)$/)?.[1]);
+        console.log('  File:', urlString.match(/\/contents\/(.+)$/)?.[1]);
         console.log('  Content preview:', content.substring(0, 100) + '...');
         
         return {
