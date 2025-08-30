@@ -291,9 +291,16 @@ export class PortfolioRepoManager {
     // Save to GitHub
     try {
       // First, check if file exists to determine if this is create or update
-      const existingFile = await this.githubRequest(
-        `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
-      );
+      let existingFile = null;
+      try {
+        existingFile = await this.githubRequest(
+          `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
+        );
+      } catch (checkError) {
+        // If we get an error checking for the file, assume it doesn't exist
+        logger.debug(`File check returned error (likely doesn't exist): ${filePath}`);
+        existingFile = null;
+      }
 
       // DUPLICATE DETECTION (Issue #792): Check if content is identical
       if (existingFile && existingFile.content) {
@@ -317,16 +324,25 @@ export class PortfolioRepoManager {
       }
 
       // Create or update the file (only if content is different)
+      // DEBUG: Log what we're about to send
+      logger.debug(`[DEBUG] Creating/updating file. existingFile: ${!!existingFile}, sha: ${existingFile?.sha}`);
+      
+      const requestBody: any = {
+        message: existingFile ? 
+          `Update ${element.metadata.name} in portfolio` : 
+          `Add ${element.metadata.name} to portfolio`,
+        content: Buffer.from(content).toString('base64')
+      };
+      
+      // Only include sha if we have an existing file with a sha
+      if (existingFile && existingFile.sha) {
+        requestBody.sha = existingFile.sha;
+      }
+      
       const result = await this.githubRequest(
         `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`,
         'PUT',
-        {
-          message: existingFile ? 
-            `Update ${element.metadata.name} in portfolio` : 
-            `Add ${element.metadata.name} to portfolio`,
-          content: Buffer.from(content).toString('base64'),
-          sha: existingFile?.sha // Include SHA if updating existing file
-        }
+        requestBody
       );
 
       // FIX: GitHub API response structure varies - handle all cases

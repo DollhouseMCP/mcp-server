@@ -348,6 +348,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
         return;
       }
       
+      
       console.log('\n▶️ Test: Complete user flow simulation');
       console.log('  Simulating: User wants to upload Ziggy persona to GitHub portfolio');
       
