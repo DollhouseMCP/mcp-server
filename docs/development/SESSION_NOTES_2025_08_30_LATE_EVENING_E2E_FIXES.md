@@ -158,10 +158,11 @@ jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, o
 
 ### CI Issue Discovery (Late Evening)
 
-**Problem**: Ubuntu CI test hung for 10+ minutes then was cancelled
+**Problem**: Ubuntu CI test hung for 10+ minutes then was cancelled  
 **Root Cause**: The "compiled tests approach" runs when regular tests fail, but it doesn't honor test exclusions
 
 **Key Findings**:
+
 1. `GitHubAuthManager.test.ts` is explicitly excluded in `jest.config.cjs` due to hanging issues
 2. But `jest.config.compiled.cjs` doesn't have these exclusions
 3. When CI falls back to compiled tests, it runs the problematic tests
@@ -169,9 +170,10 @@ jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, o
 5. Tests then hang due to async operations not being cleaned up
 
 **Fix Applied**:
+
 - Updated `jest.config.compiled.cjs` to include the same test exclusions
 - This prevents known problematic tests from running in CI fallback mode
 
----
+## Status
 
-*Session continuing to resolve CI issues*
+Session continuing to resolve CI issues
