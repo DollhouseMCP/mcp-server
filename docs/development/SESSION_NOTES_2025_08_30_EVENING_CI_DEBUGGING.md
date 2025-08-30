@@ -56,11 +56,18 @@ Critical issues identified:
 ### Current Work - Proper Fix
 
 Creating new PR with correct approach:
-1. Export `generateFileName` as public static method ✅
-2. Use actual implementation in tests (not duplicate)
-3. Implement proper exponential backoff retry
-4. Keep tests strict - they should catch real bugs
+1. Export `generateFileName` as public static method ✅ DONE
+2. Use actual implementation in tests (not duplicate) ✅ DONE
+3. Implement proper exponential backoff retry - TODO
+4. Keep tests strict - they should catch real bugs - TODO
 5. Fix root causes, not symptoms
+
+#### Completed in this session:
+- Made `PortfolioRepoManager.generateFileName()` public static
+- Updated internal usage to use static method
+- Modified all E2E tests to use actual `generateFileName` method
+- This ensures Unicode normalization and truncation are consistent
+- Committed changes to `fix/e2e-tests-proper` branch
 
 ## Key Learnings
 
@@ -78,9 +85,11 @@ Creating new PR with correct approach:
 
 ## Files Modified
 
-- `src/portfolio/PortfolioRepoManager.ts` - Made generateFileName public static
-- `test/e2e/setup-test-env.ts` - Fixed env var names (PR #841)
-- `test/e2e/real-github-integration.test.ts` - Needs proper fix
+- `src/portfolio/PortfolioRepoManager.ts` - Made generateFileName public static ✅
+- `test/e2e/setup-test-env.ts` - Fixed env var names (PR #841) ✅
+- `test/e2e/real-github-integration.test.ts` - Updated to use actual generateFileName ✅
+- `test/e2e/*.js` - Fixed env var names (PR #841) ✅
+- `test/e2e/README.md` - Fixed env var documentation (PR #841) ✅
 
 ## Commands for Next Session
 

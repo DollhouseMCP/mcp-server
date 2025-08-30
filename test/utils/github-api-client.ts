@@ -121,9 +121,16 @@ export class GitHubTestClient {
 
   /**
    * Get a file from GitHub (real API call)
+   * 
+   * NOTE: This method uses 'dollhouse-portfolio' instead of the configured test repo
+   * because PortfolioRepoManager has a hardcoded PORTFOLIO_REPO_NAME = 'dollhouse-portfolio'.
+   * This is a temporary workaround until PortfolioRepoManager is made configurable.
+   * See: src/portfolio/PortfolioRepoManager.ts line 26
    */
   async getFile(filePath: string): Promise<GitHubFile | null> {
-    const [owner, repo] = this.config.testRepo.split('/');
+    const [owner] = this.config.testRepo.split('/');
+    // Use the hardcoded repo name from PortfolioRepoManager
+    const repo = 'dollhouse-portfolio';
     const url = `${this.baseUrl}/repos/${owner}/${repo}/contents/${filePath}`;
     
     try {
@@ -161,9 +168,12 @@ export class GitHubTestClient {
 
   /**
    * Delete a file from GitHub (for cleanup)
+   * 
+   * NOTE: Uses 'dollhouse-portfolio' to match PortfolioRepoManager's hardcoded repo name
    */
   async deleteFile(filePath: string, message: string = 'QA test cleanup'): Promise<boolean> {
-    const [owner, repo] = this.config.testRepo.split('/');
+    const [owner] = this.config.testRepo.split('/');
+    const repo = 'dollhouse-portfolio'; // Match PortfolioRepoManager's hardcoded value
     const url = `${this.baseUrl}/repos/${owner}/${repo}/contents/${filePath}`;
     
     try {
@@ -197,9 +207,12 @@ export class GitHubTestClient {
 
   /**
    * List files in a directory
+   * 
+   * NOTE: Uses 'dollhouse-portfolio' to match PortfolioRepoManager's hardcoded repo name
    */
   async listFiles(directory: string = ''): Promise<string[]> {
-    const [owner, repo] = this.config.testRepo.split('/');
+    const [owner] = this.config.testRepo.split('/');
+    const repo = 'dollhouse-portfolio'; // Match PortfolioRepoManager's hardcoded value
     const url = `${this.baseUrl}/repos/${owner}/${repo}/contents/${directory}`;
     
     try {
