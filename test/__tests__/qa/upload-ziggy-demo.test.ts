@@ -208,7 +208,8 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     const apiCalls: string[] = [];
     
     (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, options?: RequestInit) => {
-      const callDesc = `${options?.method || 'GET'} ${url}`;
+      const urlString = url.toString();
+      const callDesc = `${options?.method || 'GET'} ${urlString}`;
       apiCalls.push(callDesc);
       
       if (options?.method === 'PUT') {
