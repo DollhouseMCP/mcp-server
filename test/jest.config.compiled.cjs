@@ -31,9 +31,7 @@ const config = {
     'UpdateManager\\.npm\\.test\\.js$',
     'BackupManager\\.npm\\.test\\.js$',
     'InstallationDetector\\.test\\.js$',
-    'GitHubAuthManager\\.test\\.js$',  // Hanging due to complex mocking requirements
-    '/GitHubAuthManager\\.test\\.js$',  // Also try with leading slash
-    'auth/GitHubAuthManager\\.test\\.js$',  // And with parent directory
+    '**/GitHubAuthManager\\.test\\.js',  // Match anywhere in path
     'CollectionCache\\.test\\.js$'  // ESM mocking issues with fs/promises
   ],
   
