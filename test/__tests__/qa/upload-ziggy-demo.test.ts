@@ -86,7 +86,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Mock fetch to capture exactly what gets uploaded
     const uploadedData: any = {};
     
-    (global as any).fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
+    (global as any).fetch = jest.fn<(url: string, options?: any) => Promise<any>>().mockImplementation(async (url: string, options?: any) => {
       console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${url}`);
       
       // Check if file exists (should be 404 for new file)
@@ -206,7 +206,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Track ALL API calls to prove we're not syncing everything
     const apiCalls: string[] = [];
     
-    (global as any).fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
+    (global as any).fetch = jest.fn<(url: string, options?: any) => Promise<any>>().mockImplementation(async (url: string, options?: any) => {
       const callDesc = `${options?.method || 'GET'} ${url}`;
       apiCalls.push(callDesc);
       

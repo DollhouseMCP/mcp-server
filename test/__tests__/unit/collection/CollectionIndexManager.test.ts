@@ -390,8 +390,19 @@ describe('CollectionIndexManager - Essential Tests', () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: new Headers()
-      });
+        headers: new Headers(),
+        redirected: false,
+        statusText: 'OK',
+        type: 'basic',
+        url: 'https://api.github.com/test',
+        clone: () => ({}),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        blob: () => Promise.resolve(new Blob()),
+        formData: () => Promise.resolve(new FormData()),
+        text: () => Promise.resolve('')
+      } as Response);
 
       mockFs.mkdir.mockResolvedValue(undefined as any);
       mockFs.writeFile.mockResolvedValue(undefined as any);
@@ -410,8 +421,19 @@ describe('CollectionIndexManager - Essential Tests', () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockCollectionIndex),
-        headers: new Headers()
-      });
+        headers: new Headers(),
+        redirected: false,
+        statusText: 'OK',
+        type: 'basic',
+        url: 'https://api.github.com/test',
+        clone: () => ({}),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        blob: () => Promise.resolve(new Blob()),
+        formData: () => Promise.resolve(new FormData()),
+        text: () => Promise.resolve('')
+      } as Response);
 
       mockFs.mkdir.mockResolvedValue(undefined as any);
       mockFs.writeFile.mockRejectedValue(new Error('Disk full'));
@@ -428,8 +450,19 @@ describe('CollectionIndexManager - Essential Tests', () => {
         ok: true,
         status: 200,
         json: () => Promise.reject(new Error('Invalid JSON')),
-        headers: new Headers()
-      });
+        headers: new Headers(),
+        redirected: false,
+        statusText: 'OK',
+        type: 'basic',
+        url: 'https://api.github.com/test',
+        clone: () => ({}),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        blob: () => Promise.resolve(new Blob()),
+        formData: () => Promise.resolve(new FormData()),
+        text: () => Promise.resolve('')
+      } as Response);
 
       await expect(manager.getIndex()).rejects.toThrow('Collection index not available');
     });

@@ -31,7 +31,7 @@ describe('ToolCache', () => {
       cache.set('test-key', 'test-value');
       
       // Wait for expiry
-      return new Promise(resolve => {
+      return new Promise<void>(resolve => {
         setTimeout(() => {
           const retrieved = cache.get('test-key');
           expect(retrieved).toBeUndefined();
@@ -118,7 +118,7 @@ describe('ToolCache', () => {
       cache.set('key1', 'value1');
       cache.set('key2', 'value2');
       
-      return new Promise(resolve => {
+      return new Promise<void>(resolve => {
         setTimeout(() => {
           const cleanedCount = cache.cleanup();
           expect(cleanedCount).toBe(2);
