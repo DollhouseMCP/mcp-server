@@ -17,12 +17,12 @@ async function testMCPSubmit() {
   const { DollhouseMCPServer } = await import('../../dist/index.js');
   
   // Set token
-  process.env.GITHUB_TOKEN = process.env.GITHUB_TEST_TOKEN || process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = process.env.TEST_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   if (!process.env.GITHUB_TOKEN) {
     // Try to load from .env.test.local
     const dotenv = await import('dotenv');
     dotenv.config({ path: 'test/e2e/.env.test.local' });
-    process.env.GITHUB_TOKEN = process.env.GITHUB_TEST_TOKEN;
+    process.env.GITHUB_TOKEN = process.env.TEST_GITHUB_TOKEN;
   }
   
   console.log('Token available:', process.env.GITHUB_TOKEN ? 'Yes' : 'No');

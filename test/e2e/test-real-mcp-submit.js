@@ -34,7 +34,7 @@ async function testRealMCPSubmit() {
     const server = new DollhouseMCPServer();
     
     // Set the token from environment
-    process.env.GITHUB_TOKEN = process.env.GITHUB_TEST_TOKEN;
+    process.env.GITHUB_TOKEN = process.env.TEST_GITHUB_TOKEN;
     process.env.DOLLHOUSE_USER = 'mickdarling';
     
     // The server initializes itself, we just need to ensure it's ready
