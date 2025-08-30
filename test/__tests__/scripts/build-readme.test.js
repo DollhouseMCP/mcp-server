@@ -1,5 +1,8 @@
 /**
- * Tests for the modular README build script
+ * Unit tests for the modular README build script
+ * These tests validate helper functions and logic without executing the full script
+ * For integration tests that run the actual script, see build-readme.integration.test.js
+ * 
  * @fileoverview Unit tests for scripts/build-readme.js
  */
 
@@ -21,7 +24,7 @@ const TEST_README_DIR = path.join(PROJECT_ROOT, 'test-temp', 'readme-test');
 const TEST_CONFIG_PATH = path.join(TEST_README_DIR, 'config.json');
 const TEST_CHUNKS_DIR = path.join(TEST_README_DIR, 'chunks');
 
-describe('README Builder Script', () => {
+describe('README Builder Unit Tests', () => {
   beforeEach(async () => {
     // Create test directory structure
     await fs.mkdir(TEST_README_DIR, { recursive: true });
