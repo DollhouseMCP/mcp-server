@@ -322,6 +322,62 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   /**
+   * Find an element by name, supporting both exact display name and filename (slug) matching
+   * This provides better UX by allowing users to reference elements by either format
+   * @param name - The name to search for (can be display name or filename without extension)
+   * @param elementList - The list of elements to search through
+   * @returns The found element or undefined
+   */
+  private async findElementFlexibly(name: string, elementList: any[]): Promise<any> {
+    if (!name || !elementList || elementList.length === 0) {
+      return undefined;
+    }
+    
+    // Normalize the search name for comparison
+    const searchNameLower = name.toLowerCase();
+    const searchNameSlug = this.slugify(name);
+    
+    // First try exact name match (case-insensitive)
+    let element = elementList.find(e => 
+      e.metadata?.name?.toLowerCase() === searchNameLower
+    );
+    
+    // If not found, try slug match (filename without extension)
+    if (!element) {
+      element = elementList.find(e => {
+        const elementSlug = this.slugify(e.metadata?.name || '');
+        return elementSlug === searchNameSlug || elementSlug === searchNameLower;
+      });
+    }
+    
+    // If still not found, try partial match on filename
+    if (!element) {
+      element = elementList.find(e => {
+        const elementName = e.metadata?.name || '';
+        const elementSlug = this.slugify(elementName);
+        return elementSlug.includes(searchNameSlug) || 
+               elementName.toLowerCase().includes(searchNameLower);
+      });
+    }
+    
+    return element;
+  }
+  
+  /**
+   * Convert a string to a slug format (lowercase with hyphens)
+   * Matches the format used for element filenames
+   */
+  private slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '') // Remove non-word chars except spaces and hyphens
+      .replace(/[\s_]+/g, '-')  // Replace spaces and underscores with hyphens
+      .replace(/--+/g, '-')     // Replace multiple hyphens with single hyphen
+      .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
+  }
+  
+  /**
    * Sanitize metadata object to prevent prototype pollution
    * Removes any dangerous properties that could affect Object.prototype
    */
@@ -748,7 +804,9 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.activatePersona(name);
           
         case ElementType.SKILL: {
-          const skill = await this.skillManager.find(s => s.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allSkills = await this.skillManager.list();
+          const skill = await this.findElementFlexibly(name, allSkills);
           if (!skill) {
             return {
               content: [{
@@ -770,7 +828,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.TEMPLATE: {
-          const template = await this.templateManager.find(t => t.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allTemplates = await this.templateManager.list();
+          const template = await this.findElementFlexibly(name, allTemplates);
           if (!template) {
             return {
               content: [{
@@ -790,7 +850,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.AGENT: {
-          const agent = await this.agentManager.find(a => a.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allAgents = await this.agentManager.list();
+          const agent = await this.findElementFlexibly(name, allAgents);
           if (!agent) {
             return {
               content: [{
