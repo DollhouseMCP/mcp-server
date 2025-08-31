@@ -104,11 +104,7 @@ See [Quick Start](#quick-start) for complete setup instructions.
 
 #### 🎭 Personas
 Shape how your AI behaves and responds
-- **Creative Writer** - Imaginative storyteller for engaging narratives
-- **Business Consultant** - Strategic advisor for business decisions
-- **Debug Detective** - Systematic problem-solver for code issues
-- **Security Analyst** - Vulnerability assessment and threat analysis
-- **Technical Analyst** - Deep dive technical documentation
+- **Examples**: Creative Writer, Code Reviewer, Business Consultant
 - **Use**: `"Activate the creative writer persona"`
 
 </td>
@@ -116,12 +112,8 @@ Shape how your AI behaves and responds
 
 #### 💡 Skills  
 Add specialized capabilities your AI can use
-- **Code Review** - Analyze code quality and suggest improvements
-- **Data Analysis** - Statistical analysis and visualization
-- **Language Translation** - Multi-language communication
-- **API Integration** - Connect and interact with external services
-- **Testing Automation** - Generate and run test suites
-- **Use**: `"Enable the code review skill"`
+- **Examples**: Data Analysis, Code Generation, Language Translation
+- **Use**: `"Enable the data analysis skill"`
 
 </td>
 </tr>
@@ -130,24 +122,16 @@ Add specialized capabilities your AI can use
 
 #### 📝 Templates
 Ensure consistent, high-quality outputs
-- **Project Proposal** - Structured business proposals
-- **Penetration Test Report** - Security assessment documentation
-- **Meeting Notes** - Organized meeting summaries
-- **Code Review** - Systematic code evaluation format
-- **Documentation** - Technical documentation structure
-- **Use**: `"Use the project proposal template"`
+- **Examples**: Meeting Notes, Code Reviews, Email Drafts
+- **Use**: `"Use the meeting notes template"`
 
 </td>
 <td width="50%">
 
 #### 🤖 Agents
 Enable autonomous task completion
-- **Code Reviewer** - Automated code quality assessment
-- **Task Manager** - Project organization and tracking
-- **Research Assistant** - Information gathering and synthesis
-- **Academic Researcher** - Scholarly research and citations
-- **Security Fix Specialist** - Vulnerability remediation
-- **Use**: `"Run the code reviewer agent"`
+- **Examples**: Project Manager, Research Assistant, Code Debugger
+- **Use**: `"Run the project manager agent"`
 
 </td>
 </tr>
@@ -161,46 +145,16 @@ Enable autonomous task completion
 
 #### 🧠 Memory
 Persistent context across sessions
-- **Project Context** - Remember project details and decisions
-- **Learning Progress** - Track skill development over time
-- **Personal Preferences** - Store user-specific settings
-- **Conversation History** - Maintain dialogue continuity
-- **Status**: Coming Soon
+- **Examples**: Project Context, Learning Progress, Personal Preferences
+- **Status**: In Development
 
 </td>
 <td width="50%">
 
 #### 🎯 Ensembles
-Combine multiple elements as one unified entity
-- **Full-Stack Developer** - Frontend + Backend + DevOps skills
-- **Writing Suite** - Creative + Technical + Editorial capabilities
-- **Security Team** - Analyst + Auditor + Remediation skills
-- **Data Science Platform** - Analysis + Visualization + ML skills
-- **Status**: Coming Soon
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-#### 🔧 Tools
-External function calls and commands
-- **Git Operations** - Version control management
-- **Database Queries** - Direct database interaction
-- **API Calls** - External service integration
-- **File Operations** - Advanced file manipulation
-- **Status**: Planned
-
-</td>
-<td width="50%">
-
-#### 📋 Prompts
-Reusable instruction sets
-- **Code Review Checklist** - Systematic review steps
-- **Security Audit Guide** - Vulnerability assessment process
-- **Writing Guidelines** - Style and tone instructions
-- **Debug Workflow** - Problem-solving methodology
-- **Status**: Planned
+Combine multiple elements as one entity
+- **Examples**: Full-Stack Developer (multiple skills), Complete Writing Suite
+- **Status**: In Development
 
 </td>
 </tr>
@@ -1000,7 +954,6 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 - Hold us liable for damages
 - Use our trademarks without permission
 - Claim warranty or guarantee of fitness
-- Resell the software commercially as a standalone product
 
 ### Platform Stability Commitments
 
