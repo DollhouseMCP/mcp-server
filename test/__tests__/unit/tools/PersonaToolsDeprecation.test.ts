@@ -270,12 +270,8 @@ describe('PersonaTools Deprecation Tests', () => {
             const personasText = personasResponse.content[0].text;
             expect(personasText).toContain('Share Sample Persona');
 
-            // ✅ FIXED: Use persona name for sharing [AGENT-FIX-637]
-            // Test sharing persona (preserved share_persona tool)
-            const shareResponse = await server.sharePersona('Share Sample Persona');
-            expect(shareResponse).toBeDefined();
-            expect(shareResponse.content[0].type).toBe('text');
-            expect(shareResponse.content[0].text.length).toBeGreaterThan(0);
+            // Note: share_persona tool has been removed as it's not compatible
+            // with the current element system architecture
         });
     });
 

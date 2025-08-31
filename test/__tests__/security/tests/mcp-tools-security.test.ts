@@ -344,17 +344,7 @@ describe('MCP Tools Security Tests', () => {
       'gopher://localhost:8080/_GET / HTTP/1.1'
     ];
     
-    test.each(ssrfPayloads)(
-      'should prevent SSRF in import_from_url with payload: %s',
-      async (payload) => {
-        const result = await server.importFromUrl(payload);
-        
-        // Should reject internal/dangerous URLs
-        expect(result.content[0].text).toMatch(/invalid|blocked|not allowed|failed/i);
-        expect(result.content[0].text).not.toContain('/etc/passwd');
-        expect(result.content[0].text).not.toContain('meta-data');
-      }
-    );
+    // import_from_url tool has been removed - not compatible with element system
   });
   
   describe('Security Test Performance', () => {

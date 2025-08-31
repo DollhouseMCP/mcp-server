@@ -53,8 +53,6 @@ describe('Unicode Normalization in Tool Calls', () => {
       getIndicatorConfig: jest.fn(),
       exportPersona: jest.fn(),
       importPersona: jest.fn(),
-      sharePersona: jest.fn(),
-      importSharedPersona: jest.fn(),
       testTool: mockHandler // Our test handler
     };
     

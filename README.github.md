@@ -90,7 +90,7 @@ search_collection query="python" type="skills"
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **42 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **40 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
 | 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
