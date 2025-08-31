@@ -5,12 +5,46 @@
 
 echo "📦 Updating GitHub repository settings for DollhouseMCP/mcp-server..."
 
+# Check for required dependencies
+echo "🔍 Checking dependencies..."
+
+# Check for gh CLI
+if ! command -v gh &> /dev/null; then
+  echo "❌ GitHub CLI (gh) is not installed"
+  echo "   Please install it from: https://cli.github.com/"
+  echo "   Or via Homebrew: brew install gh"
+  exit 1
+fi
+
+# Check for jq
+if ! command -v jq &> /dev/null; then
+  echo "⚠️  jq is not installed (optional but recommended for formatted output)"
+  echo "   Install via Homebrew: brew install jq"
+  echo "   Or download from: https://stedolan.github.io/jq/"
+  JQ_AVAILABLE=false
+else
+  JQ_AVAILABLE=true
+fi
+
+# Check for Node.js
+if ! command -v node &> /dev/null; then
+  echo "❌ Node.js is not installed"
+  echo "   This script requires Node.js to read package.json"
+  echo "   Please install from: https://nodejs.org/"
+  exit 1
+fi
+
+echo "✅ All required dependencies found"
+echo ""
+
 # Get the homepage URL from package.json
 HOMEPAGE_URL=$(node -p "require('./package.json').homepage" 2>/dev/null)
 PACKAGE_NAME=$(node -p "require('./package.json').name" 2>/dev/null)
 
 if [ -z "$HOMEPAGE_URL" ]; then
   echo "❌ No homepage URL found in package.json"
+  echo "   Please add a 'homepage' field to package.json"
+  echo "   Example: \"homepage\": \"https://dollhousemcp.com\""
   exit 1
 fi
 
@@ -24,7 +58,14 @@ if [ $? -eq 0 ]; then
   echo "🔗 The website link should now appear on the GitHub repository page"
 else
   echo "❌ Failed to update repository settings"
-  echo "💡 Make sure you have the necessary permissions and gh CLI is authenticated"
+  echo ""
+  echo "   Possible reasons:"
+  echo "   1. You don't have write permissions to the repository"
+  echo "   2. GitHub CLI is not authenticated (run: gh auth login)"
+  echo "   3. Network connection issues"
+  echo "   4. Repository name or organization has changed"
+  echo ""
+  echo "   To check your authentication status, run: gh auth status"
   exit 1
 fi
 
@@ -32,6 +73,12 @@ fi
 echo ""
 echo "📝 Adding repository topics for better discoverability..."
 gh repo edit DollhouseMCP/mcp-server --add-topic "npm-package" --add-topic "mcp" --add-topic "model-context-protocol" --add-topic "ai" --add-topic "claude" --add-topic "persona-management"
+
+if [ $? -eq 0 ]; then
+  echo "✅ Successfully added repository topics"
+else
+  echo "⚠️  Failed to add some topics (they may already exist)"
+fi
 
 # Note about NPM package link
 echo ""
@@ -52,4 +99,13 @@ echo "   - repository.url: git+https://github.com/DollhouseMCP/mcp-server.git"
 # Verify the update
 echo ""
 echo "📊 Current repository settings:"
-gh repo view DollhouseMCP/mcp-server --json name,description,homepageUrl,repositoryTopics | jq '.'
+
+if [ "$JQ_AVAILABLE" = true ]; then
+  gh repo view DollhouseMCP/mcp-server --json name,description,homepageUrl,repositoryTopics | jq '.'
+else
+  echo "   (Install jq for formatted output)"
+  gh repo view DollhouseMCP/mcp-server --json name,description,homepageUrl,repositoryTopics
+fi
+
+echo ""
+echo "✨ Repository metadata update complete!"
