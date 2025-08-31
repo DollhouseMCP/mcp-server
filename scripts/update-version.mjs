@@ -375,6 +375,23 @@ async function main() {
       }
     }
     
+    // Build README files if build script exists
+    const readmeBuildScriptPath = path.join(path.dirname(__dirname), 'scripts/build-readme.js');
+    if (fs.existsSync(readmeBuildScriptPath)) {
+      console.log('\n📚 Building modular README files...');
+      try {
+        // Security: Use resolved path for cwd
+        const projectRoot = path.resolve(path.dirname(__dirname));
+        // Build both NPM and GitHub versions
+        execSync('npm run build:readme', { stdio: 'inherit', cwd: projectRoot });
+        console.log('  ✅ README files built successfully');
+      } catch (error) {
+        console.error('⚠️  Failed to build README files:', error.message);
+        // Non-critical, so we can continue but warn
+        console.log('  ℹ️  You may need to run "npm run build:readme" manually');
+      }
+    }
+    
     console.log('\n📝 Next steps:');
     console.log(`  1. Review the changes: git diff`);
     console.log(`  2. Update CHANGELOG.md with detailed release notes`);
