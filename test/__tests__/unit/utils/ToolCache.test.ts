@@ -35,7 +35,7 @@ describe('ToolCache', () => {
         setTimeout(() => {
           const retrieved = cache.get('test-key');
           expect(retrieved).toBeUndefined();
-          resolve();
+          resolve(undefined);
         }, 100); // Wait 100ms, longer than TTL
       });
     });
@@ -123,7 +123,7 @@ describe('ToolCache', () => {
           const cleanedCount = cache.cleanup();
           expect(cleanedCount).toBe(2);
           expect(cache.getStats().size).toBe(0);
-          resolve();
+          resolve(undefined);
         }, 100);
       });
     });

@@ -12,6 +12,7 @@ import {
   createTestPersonaSet 
 } from '../utils/test-persona-factory.js';
 import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.js';
+import { retryWithBackoff, retryIfRetryable } from './utils/retry.js';
 
 describe('Real GitHub Portfolio Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -85,12 +86,31 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       console.log(`     ✅ Upload successful: ${uploadResult}`);
       
       // Step 3: Extract file path from result
-      const filePath = `personas/${ziggyPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method for consistency
+      const fileName = PortfolioRepoManager.generateFileName(ziggyPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
       
       // Step 4: Verify file exists on GitHub by fetching it
       console.log('  3️⃣ Verifying file exists on GitHub...');
-      const githubFile = await githubClient.getFile(filePath);
+      // Use retry logic for eventual consistency
+      const githubFile = await retryWithBackoff(
+        async () => {
+          const file = await githubClient.getFile(filePath);
+          if (!file) {
+            throw new Error(`File not found at ${filePath}`);
+          }
+          return file;
+        },
+        {
+          maxAttempts: 3,
+          initialDelayMs: 1000,
+          maxDelayMs: 5000,
+          onRetry: (attempt, _error, delayMs) => {
+            console.log(`     ⏳ Retry ${attempt}/3: Waiting ${delayMs}ms for GitHub to process file...`);
+          }
+        }
+      );
       
       expect(githubFile).not.toBeNull();
       expect(githubFile?.content).toBeTruthy();
@@ -98,7 +118,6 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       
       // Step 5: Compare uploaded content with original
       console.log('  4️⃣ Comparing content...');
-      const originalContent = ziggyPersona.serialize();
       expect(githubFile?.content).toContain('Test Ziggy');
       expect(githubFile?.content).toContain('Quantum Leap');
       console.log('     ✅ Content matches original');
@@ -138,14 +157,36 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       expect(result).not.toContain('null');
       expect(result).not.toContain('undefined');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
       
       console.log(`     ✅ Handled response correctly: ${result}`);
+      console.log(`     📁 Expected file path: ${filePath}`);
       
-      // Verify file actually exists
-      const file = await githubClient.getFile(filePath);
+      // Verify file actually exists with proper retry logic
+      // GitHub API may have eventual consistency, so we retry with exponential backoff
+      const file = await retryWithBackoff(
+        async () => {
+          const fetchedFile = await githubClient.getFile(filePath);
+          if (!fetchedFile) {
+            throw new Error(`File not found at ${filePath}`);
+          }
+          return fetchedFile;
+        },
+        {
+          maxAttempts: 3,
+          initialDelayMs: 1000,
+          maxDelayMs: 5000,
+          onRetry: (attempt, _error, delayMs) => {
+            console.log(`     ⏳ Retry ${attempt}/3: File not yet available, waiting ${delayMs}ms...`);
+          }
+        }
+      );
+      
       expect(file).not.toBeNull();
+      expect(file.content).toBeTruthy();
       console.log('     ✅ File exists on GitHub despite response variations');
     }, 30000);
   });
@@ -191,13 +232,19 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       }
       
       // This won't trigger actual rate limit but tests the handling
-      const testPersona = createTestPersona();
+      const testPersona = createTestPersona({
+        author: testEnv.githubUser,
+        prefix: testEnv.personaPrefix,
+        name: `${testEnv.personaPrefix}rate-limit-test-${Date.now()}`
+      });
       const result = await portfolioManager.saveElement(testPersona, true);
       
       expect(result).toBeTruthy();
       console.log('     ✅ Rate limit handling verified');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
     }, 30000);
   });
@@ -227,7 +274,9 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const result = await portfolioManager.saveElement(publicPersona, true);
       expect(result).toBeTruthy();
       
-      const publicPath = `personas/${publicPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method for consistency
+      const publicFileName = PortfolioRepoManager.generateFileName(publicPersona.metadata.name || 'unnamed');
+      const publicPath = `personas/${publicFileName}.md`;
       uploadedFiles.push(publicPath);
       
       // Verify ONLY the public persona was uploaded
@@ -236,7 +285,8 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       // Check that private personas were NOT uploaded
       for (let i = 1; i < personas.length; i++) {
         const privatePersona = personas[i];
-        const privatePath = `personas/${privatePersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+        const privateFileName = PortfolioRepoManager.generateFileName(privatePersona.metadata.name || 'unnamed');
+        const privatePath = `personas/${privateFileName}.md`;
         
         const privateFile = await githubClient.getFile(privatePath);
         expect(privateFile).toBeNull();
@@ -245,7 +295,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       
       // List all files in personas directory
       const allFiles = await githubClient.listFiles('personas');
-      const testFiles = allFiles.filter(f => f.includes(testEnv.personaPrefix));
+      const testFiles = allFiles.filter(f => testEnv.personaPrefix && f.includes(testEnv.personaPrefix));
       
       console.log(`     📁 Test files in personas/: ${testFiles.length}`);
       console.log('     ✅ Confirmed: Only requested element was uploaded');
@@ -283,7 +333,9 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       expect(urlWorks).toBe(true);
       console.log('     ✅ URL is accessible');
       
-      const filePath = `personas/${testPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method from PortfolioRepoManager for consistency
+      const fileName = PortfolioRepoManager.generateFileName(testPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
     }, 30000);
   });
@@ -295,6 +347,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
         console.log('⏭️  Skipping test - no GitHub token available');
         return;
       }
+      
       
       console.log('\n▶️ Test: Complete user flow simulation');
       console.log('  Simulating: User wants to upload Ziggy persona to GitHub portfolio');
@@ -329,10 +382,29 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       
       // Step 4: User wants to verify it's really there
       console.log('\n  4️⃣ User verification: "Is it really on GitHub?"');
-      const filePath = `personas/${ziggyPersona.metadata.name?.toLowerCase().replace(/\s+/g, '-')}.md`;
+      // Use the actual generateFileName method for consistency
+      const fileName = PortfolioRepoManager.generateFileName(ziggyPersona.metadata.name || 'unnamed');
+      const filePath = `personas/${fileName}.md`;
       uploadedFiles.push(filePath);
       
-      const githubFile = await githubClient.getFile(filePath);
+      // Verify with retry for eventual consistency
+      const githubFile = await retryWithBackoff(
+        async () => {
+          const file = await githubClient.getFile(filePath);
+          if (!file) {
+            throw new Error(`File not found at ${filePath}`);
+          }
+          return file;
+        },
+        {
+          maxAttempts: 3,
+          initialDelayMs: 1000,
+          maxDelayMs: 5000,
+          onRetry: (attempt, _error, delayMs) => {
+            console.log(`     ⏳ Retry ${attempt}/3: Waiting ${delayMs}ms for file to be available...`);
+          }
+        }
+      );
       expect(githubFile).not.toBeNull();
       expect(githubFile?.content).toContain('Ziggy');
       console.log('     ✅ Yes! File exists on GitHub');
