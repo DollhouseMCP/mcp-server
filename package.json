@@ -61,7 +61,9 @@
     "qa:simple": "node scripts/qa-simple-test.js",
     "update:version": "node scripts/update-version.mjs",
     "version:bump": "node scripts/update-version.mjs",
-    "version:check": "node scripts/update-version.mjs --dry-run"
+    "version:check": "node scripts/update-version.mjs --dry-run",
+    "tools:count": "node scripts/count-tools.js",
+    "tools:list": "node scripts/count-tools.js --json"
   },
   "keywords": [
     "mcp",
