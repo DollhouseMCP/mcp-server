@@ -24,7 +24,7 @@
 
 #### Tool Discovery vs Execution Performance
 ```
-Tool Discovery:    ✅ SUCCESS - 42 tools registered, <1ms response
+Tool Discovery:    ✅ SUCCESS - 41 tools registered, <1ms response
 Server Connection: ✅ SUCCESS - ~40ms connection time  
 Tool Execution:    ❌ FAILURE - 100% timeout after 5 seconds
 ```
@@ -53,9 +53,9 @@ ZodError: [
 
 | SDK Version | Connection | Tool Discovery | Tool Execution | Error Pattern |
 |------------|------------|----------------|----------------|---------------|
-| 1.16.0     | ✅ 40ms    | ✅ <1ms (42 tools) | ❌ Timeout 5s | ZodError: params string vs object |
-| 1.17.0     | ✅ 41ms    | ✅ <1ms (42 tools) | ❌ Timeout 5s | ZodError: params string vs object |  
-| 1.17.3     | ✅ 39ms    | ✅ <1ms (42 tools) | ❌ Timeout 5s | ZodError: params string vs object |
+| 1.16.0     | ✅ 40ms    | ✅ <1ms (41 tools) | ❌ Timeout 5s | ZodError: params string vs object |
+| 1.17.0     | ✅ 41ms    | ✅ <1ms (41 tools) | ❌ Timeout 5s | ZodError: params string vs object |  
+| 1.17.3     | ✅ 39ms    | ✅ <1ms (41 tools) | ❌ Timeout 5s | ZodError: params string vs object |
 
 **Conclusion**: SDK version is not the root cause.
 
@@ -86,7 +86,7 @@ All exhibit identical ZodError pattern.
 
 ### 3. Server Architecture Analysis
 - ✅ CallToolRequest handler correctly extracts `request.params.name` and `request.params.arguments`
-- ✅ Tool registry properly registers 42 tools
+- ✅ Tool registry properly registers 41 tools
 - ✅ StdioServerTransport setup follows SDK best practices
 - ❌ Message deserialization fails before reaching tool handlers
 

@@ -6,7 +6,7 @@
 
 ## Overview
 
-In DollhouseMCP v1.6.0, we've streamlined the API by removing 9 redundant PersonaTools that had exact equivalents in the generic ElementTools system. This change reduces the total tool count from **51 to 42 tools** and provides a cleaner, more consistent API.
+In DollhouseMCP v1.6.0, we've streamlined the API by removing 9 redundant PersonaTools that had exact equivalents in the generic ElementTools system. This change reduces the total tool count from **50 to 41 tools** and provides a cleaner, more consistent API.
 
 ## What Changed
 
@@ -214,7 +214,7 @@ Verify that your migrated workflows function correctly with the new tool names a
 
 ### 2. **Reduced Complexity**
 - 9 fewer tools to learn and maintain
-- Cleaner tool list (42 instead of 51 tools)
+- Cleaner tool list (41 instead of 50 tools)
 - Less API surface area reduces potential for bugs
 
 ### 3. **Future-Proof**
