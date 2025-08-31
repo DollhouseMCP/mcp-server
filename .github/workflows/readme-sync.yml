@@ -1,0 +1,116 @@
+name: README Sync
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'docs/readme/chunks/**'
+      - 'scripts/build-readme.js'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build README files
+        run: |
+          echo "📚 Building README files..."
+          npm run build:readme
+          
+          # Copy GitHub README to main README
+          cp README.github.md README.md
+          
+          echo "✅ README files built successfully"
+          
+          # Show sizes
+          echo "📊 File sizes:"
+          ls -lh README*.md
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet README.md README.npm.md README.github.md; then
+            echo "No changes to README files"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "README files have changed"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Show what changed
+            echo "📝 Changes detected in:"
+            git diff --name-only README*.md
+          fi
+      
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add the README files
+          git add README.md README.npm.md README.github.md
+          
+          # Create commit message based on branch
+          BRANCH_NAME="${{ github.ref_name }}"
+          COMMIT_MSG="chore: Auto-sync README files on $BRANCH_NAME push"
+          
+          git commit -m "$COMMIT_MSG" -m "Automatically generated from docs/readme/chunks/"
+          
+          # Push the changes
+          git push origin HEAD
+          
+          echo "✅ README files synchronized successfully"
+      
+      - name: Create sync PR (if on develop)
+        if: github.ref == 'refs/heads/develop' && steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if there's already a PR from develop to main for README sync
+          EXISTING_PR=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number' || echo "")
+          
+          if [ -z "$EXISTING_PR" ]; then
+            echo "📤 Creating PR to sync README changes to main..."
+            gh pr create \
+              --base main \
+              --head develop \
+              --title "chore: Sync README updates from develop" \
+              --body "This PR automatically syncs README changes from develop to main.
+              
+              ### Changes
+              - README files have been automatically rebuilt from chunks
+              - Updates are from recent changes to documentation
+              
+              ### Files Changed
+              - README.md
+              - README.npm.md
+              - README.github.md
+              
+              This is an automated PR created by the README Sync workflow." \
+              --label "documentation" \
+              --label "automated"
+          else
+            echo "✅ PR #$EXISTING_PR already exists for README sync"
+          fi
