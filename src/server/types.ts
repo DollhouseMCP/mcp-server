@@ -58,12 +58,10 @@ export interface IToolHandler {
   configureCollectionSubmission(autoSubmit: boolean): Promise<any>;
   getCollectionSubmissionConfig(): Promise<any>;
   
-  // Export/Import/Share tools
+  // Export/Import tools
   exportPersona(persona: string): Promise<any>;
   exportAllPersonas(includeDefaults?: boolean): Promise<any>;
   importPersona(source: string, overwrite?: boolean): Promise<any>;
-  sharePersona(persona: string, expiryDays?: number): Promise<any>;
-  importFromUrl(url: string, overwrite?: boolean): Promise<any>;
   
   // Portfolio tools
   portfolioStatus(username?: string): Promise<any>;

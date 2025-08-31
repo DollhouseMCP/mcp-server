@@ -35,7 +35,7 @@ import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSear
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { GitHubAuthManager, type DeviceCodeResponse } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
-import { PersonaExporter, PersonaImporter, PersonaSharer } from './persona/export-import/index.js';
+import { PersonaExporter, PersonaImporter } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
@@ -89,7 +89,6 @@ export class DollhouseMCPServer implements IToolHandler {
   private serverSetup: ServerSetup;
   private personaExporter: PersonaExporter;
   private personaImporter?: PersonaImporter;
-  private personaSharer: PersonaSharer;
   private portfolioManager: PortfolioManager;
   private migrationManager: MigrationManager;
   private skillManager: SkillManager;
@@ -152,7 +151,6 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize export/import/share modules
     this.personaExporter = new PersonaExporter(this.currentUser);
     // PersonaImporter will be initialized after migration completes
-    this.personaSharer = new PersonaSharer(this.githubClient, this.currentUser);
     
     // Initialize server setup
     this.serverSetup = new ServerSetup();
@@ -4249,109 +4247,6 @@ Placeholders for custom format:
     }
   }
 
-  /**
-   * Share a persona via URL
-   */
-  async sharePersona(personaName: string, expiryDays = 7) {
-    try {
-      // Enhanced input validation
-      const validatedPersonaName = MCPInputValidator.validatePersonaIdentifier(personaName);
-      const validatedExpiryDays = MCPInputValidator.validateExpiryDays(expiryDays);
-      
-      const persona = this.personas.get(validatedPersonaName);
-      if (!persona) {
-        // Try by filename
-        const byFilename = Array.from(this.personas.values()).find(p => p.filename === validatedPersonaName);
-        if (!byFilename) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Persona not found: ${validatedPersonaName}`
-            }]
-          };
-        }
-        personaName = byFilename.metadata.name;
-      }
-
-      const result = await this.personaSharer.sharePersona(this.personas.get(personaName)!, validatedExpiryDays);
-      
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}${result.message}`
-        }]
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Share failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
-  }
-
-  /**
-   * Import from a shared URL
-   */
-  async importFromUrl(url: string, overwrite = false) {
-    try {
-      // Enhanced input validation for URL
-      const validatedUrl = MCPInputValidator.validateImportUrl(url);
-      
-      const fetchResult = await this.personaSharer.importFromUrl(validatedUrl);
-      
-      if (!fetchResult.success) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ ${fetchResult.message}`
-          }]
-        };
-      }
-
-      // Import the fetched data
-      if (!this.personaImporter) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Import functionality not available (initialization in progress)`
-          }]
-        };
-      }
-      const importResult = await this.personaImporter.importPersona(
-        JSON.stringify(fetchResult.data),
-        this.personas,
-        overwrite
-      );
-
-      if (importResult.success) {
-        // Reload personas
-        await this.loadPersonas();
-        
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ Successfully imported from URL!\n\n${importResult.message}\nTotal personas: ${this.personas.size}`
-          }]
-        };
-      } else {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ ${importResult.message}`
-          }]
-        };
-      }
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Import from URL failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
-  }
 
   /**
    * Portfolio management methods

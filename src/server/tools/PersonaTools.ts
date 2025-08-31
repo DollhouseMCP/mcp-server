@@ -62,48 +62,6 @@ export function getPersonaExportImportTools(server: IToolHandler): Array<{ tool:
         },
       },
       handler: (args: any) => server.importPersona(args.source, args.overwrite)
-    },
-    {
-      tool: {
-        name: "share_persona",
-        description: "Generate a shareable URL for a persona",
-        inputSchema: {
-          type: "object",
-          properties: {
-            persona: {
-              type: "string",
-              description: "The persona name or filename to share",
-            },
-            expiryDays: {
-              type: "number",
-              description: "Number of days the share link is valid (default: 7)",
-            },
-          },
-          required: ["persona"],
-        },
-      },
-      handler: (args: any) => server.sharePersona(args.persona, args.expiryDays)
-    },
-    {
-      tool: {
-        name: "import_from_url",
-        description: "Import a persona from a shared URL",
-        inputSchema: {
-          type: "object",
-          properties: {
-            url: {
-              type: "string",
-              description: "The shared URL to import from",
-            },
-            overwrite: {
-              type: "boolean",
-              description: "Overwrite if persona already exists (default: false)",
-            },
-          },
-          required: ["url"],
-        },
-      },
-      handler: (args: any) => server.importFromUrl(args.url, args.overwrite)
     }
   ];
 }
