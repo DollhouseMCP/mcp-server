@@ -48,9 +48,9 @@ For the complete license text, see [LICENSE](LICENSE).
 
 If you have questions about the license or what you can do with DollhouseMCP:
 
-- **Email**: legal@dollhousemcp.com
 - **Documentation**: [License FAQ](docs/LICENSE_FAQ.md)
-- **Issue**: Open a GitHub issue with the `license` label
+- **GitHub Issue**: Open an issue with the `license` label
+- **Discussions**: Ask in [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ---
 

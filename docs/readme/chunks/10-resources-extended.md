@@ -42,6 +42,6 @@
 
 ### Support
 
-- **Email**: support@dollhousemcp.com
-- **Security Issues**: security@dollhousemcp.com
-- **Business Inquiries**: business@dollhousemcp.com
+- **GitHub Issues**: [Report issues or request features](https://github.com/DollhouseMCP/mcp-server/issues)
+- **Security Issues**: [Private security advisories](https://github.com/DollhouseMCP/mcp-server/security/advisories)
+- **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)

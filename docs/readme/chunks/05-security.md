@@ -24,7 +24,7 @@ DollhouseMCP implements enterprise-grade security measures to protect your data 
 If you discover a security vulnerability, please:
 
 1. **DO NOT** create a public GitHub issue
-2. Email security@dollhousemcp.com with details
+2. Open a private security advisory on GitHub
 3. Include steps to reproduce if possible
 4. Allow up to 48 hours for initial response
 
