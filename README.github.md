@@ -165,7 +165,7 @@ DollhouseMCP implements enterprise-grade security measures to protect your data 
 If you discover a security vulnerability, please:
 
 1. **DO NOT** create a public GitHub issue
-2. Email security@dollhousemcp.com with details
+2. Open a private security advisory on GitHub
 3. Include steps to reproduce if possible
 4. Allow up to 48 hours for initial response
 
@@ -401,7 +401,6 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **[GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)** - Q&A and ideas
 - **[GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)** - Bug reports and features
 - **[Discord Server](#)** - Real-time chat (coming soon)
-- **[Twitter/X](#)** - Updates and announcements (coming soon)
 
 ### External Resources
 
@@ -424,9 +423,9 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Support
 
-- **Email**: support@dollhousemcp.com
-- **Security Issues**: security@dollhousemcp.com
-- **Business Inquiries**: business@dollhousemcp.com
+- **GitHub Issues**: [Report issues or request features](https://github.com/DollhouseMCP/mcp-server/issues)
+- **Security Issues**: [Private security advisories](https://github.com/DollhouseMCP/mcp-server/security/advisories)
+- **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 🏷️ Version History
 
@@ -539,7 +538,7 @@ This release introduces the complete portfolio management system with GitHub OAu
 - **Conflict Resolution**: Smart merging of local and remote changes
 - **Batch Operations**: Upload/download multiple elements efficiently
 
-##### 🛠️ New MCP Tools (37 total)
+##### 🛠️ New MCP Tools (42 total)
 - `setup_github_auth`: Interactive GitHub OAuth setup
 - `check_github_auth`: Verify authentication status
 - `refresh_github_token`: Rotate OAuth tokens
@@ -621,9 +620,9 @@ For the complete license text, see [LICENSE](LICENSE).
 
 If you have questions about the license or what you can do with DollhouseMCP:
 
-- **Email**: legal@dollhousemcp.com
 - **Documentation**: [License FAQ](docs/LICENSE_FAQ.md)
-- **Issue**: Open a GitHub issue with the `license` label
+- **GitHub Issue**: Open an issue with the `license` label
+- **Discussions**: Ask in [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ---
 
