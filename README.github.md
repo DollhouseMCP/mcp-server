@@ -1000,7 +1000,7 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 - Hold us liable for damages
 - Use our trademarks without permission
 - Claim warranty or guarantee of fitness
-- Resell the software commercially as a standalone product
+- Resell commercially
 
 ### Platform Stability Commitments
 

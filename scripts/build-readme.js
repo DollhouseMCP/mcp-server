@@ -79,7 +79,21 @@ async function loadConfig() {
  * @returns {Promise<string|null>} The chunk content or null if not found
  */
 async function loadChunk(chunkName, chunkDirectory) {
-  const chunkPath = path.join(README_DIR, chunkDirectory, `${chunkName}.md`);
+  // SECURITY FIX: Sanitize chunk name to prevent path traversal
+  // Remove any path separators and parent directory references
+  const sanitizedChunkName = chunkName
+    .replace(/[\/\\]/g, '_')  // Replace path separators with underscore
+    .replace(/\.\./g, '_')    // Replace parent directory references
+    .replace(/^\./, '_');     // Replace leading dots
+  
+  const chunkPath = path.join(README_DIR, chunkDirectory, `${sanitizedChunkName}.md`);
+  
+  // SECURITY FIX: Verify the resolved path is within the expected directory
+  const resolvedPath = path.resolve(chunkPath);
+  const expectedDir = path.resolve(path.join(README_DIR, chunkDirectory));
+  if (!resolvedPath.startsWith(expectedDir)) {
+    throw new Error(`Security: Path traversal attempt detected for chunk: ${chunkName}`);
+  }
   
   try {
     // Check if file exists first
