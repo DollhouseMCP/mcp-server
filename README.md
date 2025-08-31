@@ -396,12 +396,17 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 **Natural Language Examples:**
 - "Show me all the personas in the Dollhouse Collection"
-- "Show me all the skills in the Dollhouse Collection"
-- "Search for writing customization elements in the Dollhouse Collection"
-- "Find me some code review tools in the Dollhouse Collection"
+- "What skills are available?"
+- "I need a writing assistant - what's in the collection?"
+- "Find me some code review tools"
 - "Install the storyteller persona from the Dollhouse Collection"
-- "Install the code reviewer - it's in the Dollhouse Collection, right?"
-- "Go grab the email templates from the Dollhouse Collection"
+- "Can you grab that code reviewer from the collection?"
+- "Download the email templates"
+- "I'm looking for something to help with creative writing"
+- "What templates does the collection have?"
+- "Is there a data analysis skill I can install?"
+- "Show me what's popular in the collection right now"
+- "I want to see all the professional personas"
 
 **Tool Commands (if you prefer):**
 ```
@@ -425,17 +430,21 @@ get_collection_cache_health
 ### Managing Your Dollhouse Portfolio (Local and GitHub)
 
 **Natural Language Examples:**
-- "Check the status of my GitHub portfolio"
-- "Initialize my personal portfolio on GitHub"
-- "Create a new GitHub portfolio called my-ai-portfolio"
-- "Sync my local portfolio with my personal portfolio on GitHub"
-- "Push my local changes to my GitHub portfolio"
-- "Pull updates from my GitHub portfolio to my local computer"
-- "Search my local portfolio for writing tools"
-- "Find code review skills in my portfolio"
-- "Search everywhere for data analysis tools"
-- "Upload my custom persona to my GitHub portfolio"
-- "Submit my email template to my personal portfolio on GitHub"
+- "What's the status of my GitHub portfolio?"
+- "Set up my portfolio on GitHub"
+- "I want to create a portfolio called my-ai-tools"
+- "Sync everything up"
+- "Push my stuff to GitHub"
+- "Get the latest from my GitHub portfolio"
+- "Do I have any writing tools in my portfolio?"
+- "Search my portfolio for anything related to coding"
+- "Find me data analysis tools - check everywhere"
+- "Upload my custom persona to GitHub"
+- "Save this template to my portfolio"
+- "Back up my local changes to GitHub"
+- "What's in my local portfolio?"
+- "Show me everything I've customized"
+- "I made some changes - push them to my portfolio"
 
 **Tool Commands (if you prefer):**
 ```
@@ -468,18 +477,23 @@ get_collection_submission_config
 ### Your Dollhouse Portfolio Customization Element Management
 
 **Natural Language Examples:**
-- "Show me all my personas"
-- "List my skills"
-- "What templates do I have?"
-- "Activate the code reviewer skill"
-- "Turn on the professional persona"
-- "Use the email template"
-- "What's currently active?"
-- "Show me details about the code reviewer"
-- "Tell me more about my custom persona"
-- "Turn off the code reviewer"
-- "Deactivate all personas"
-- "Refresh my portfolio"
+- "What personas do I have?"
+- "List all my skills"
+- "Show my templates"
+- "Turn on code review mode"
+- "Switch to professional mode"
+- "I need that email template"
+- "What's active right now?"
+- "Tell me about the code reviewer"
+- "Give me info on my custom persona"
+- "I'm done with code review - turn it off"
+- "Go back to normal mode"
+- "Reload everything"
+- "What agents are available?"
+- "Show me all my customizations"
+- "Activate my debugging assistant"
+- "Can you list everything in my portfolio?"
+- "Switch off all the personas"
 
 **Tool Commands (if you prefer):**
 ```
@@ -508,10 +522,15 @@ reload_elements type="skills"
 ### Specialized Operations for Templates and Agents
 
 **Natural Language Examples:**
-- "Use the project update template with project name DollhouseMCP and status Released"
-- "Fill in the professional email template for John about a meeting"
-- "Have the project manager agent create a sprint plan for next week"
-- "Get the data analyst to analyze our Q3 sales trends"
+- "Use the project update template with DollhouseMCP as the project and Released as the status"
+- "Fill out that email template - it's for John about tomorrow's meeting"
+- "Hey project manager, can you plan next week's sprint?"
+- "I need the data analyst to look at Q3 sales"
+- "Generate a report using the monthly summary template"
+- "Ask the research agent to investigate our competitors"
+- "Use the bug report template for this issue I found"
+- "Get the code reviewer agent to check my latest changes"
+- "Can the writing assistant help me draft a proposal?"
 
 **Tool Commands (if you prefer):**
 ```
@@ -525,10 +544,16 @@ execute_agent name="data-analyst" goal="Analyze sales trends for Q3"
 ### System Information and Health Checks
 
 **Natural Language Examples:**
-- "What version of DollhouseMCP am I running?"
-- "Show me the system information"
-- "Check the environment details"
-- "What dependencies are installed?"
+- "What version am I running?"
+- "Show me system info"
+- "How's everything looking?"
+- "Check my setup"
+- "Is everything up to date?"
+- "What's my environment look like?"
+- "List the dependencies"
+- "Give me a health check"
+- "Show me the build details"
+- "Am I on the latest version?"
 
 **Tool Commands (if you prefer):**
 ```
@@ -541,11 +566,16 @@ get_build_info section="dependencies"
 ### Managing Your AI Personas
 
 **Natural Language Examples:**
-- "Show me all my personas"
-- "Activate the Study Buddy persona"
-- "Tell me more about the Study Buddy persona"
-- "Share my Study Buddy persona with the community"
-- "Upload Study Buddy to the Dollhouse Collection"
+- "What personas do I have?"
+- "Switch to Study Buddy mode"
+- "Tell me about Study Buddy"
+- "I want to share Study Buddy with everyone"
+- "Let's upload my persona to the collection"
+- "Turn on my creative writer persona"
+- "What does the technical analyst do?"
+- "Can I submit my custom persona to the community?"
+- "Show me the personas I've created"
+- "I'm done being Study Buddy - switch back"
 
 **Tool Commands (if you prefer):**
 ```
@@ -558,10 +588,15 @@ submit_persona "Study Buddy"
 ### Setting Your User Identity
 
 **Natural Language Examples:**
-- "Set my username to john_doe"
-- "What's my current identity?"
-- "Make me anonymous again"
-- "Clear my user identity"
+- "My username is john_doe"
+- "Who am I set as?"
+- "I want to be anonymous"
+- "Remove my identity"
+- "Set me as sarah_smith"
+- "Check my user info"
+- "Go back to anonymous mode"
+- "What's my username?"
+- "I don't want my name attached anymore"
 
 **Tool Commands (if you prefer):**
 ```
@@ -579,16 +614,26 @@ DollhouseMCP adds visual indicators to AI responses when a persona is active:
 [🎭 Creative Writer v2.1 by @mickdarling] Your creative response here...
 ```
 
-Configure indicators:
+**Natural Language Examples:**
+- "Turn off those persona indicators"
+- "I don't want to see the author names"
+- "Make the indicators minimal"
+- "Change the emoji to a robot"
+- "Use parentheses instead of brackets"
+- "Show me my indicator settings"
+- "Can you make the persona tags smaller?"
+- "Hide the version numbers in indicators"
+
+**Tool Commands (if you prefer):**
 ```
-get_indicator_config                       # View current settings
-configure_indicator enabled:false          # Disable indicators
-configure_indicator style:"minimal"        # Use minimal format: 🎭 Creative Writer
-configure_indicator style:"compact"        # Use compact: [Creative Writer v2.1]
-configure_indicator style:"full"           # Full format (default)
-configure_indicator emoji:"🤖"             # Change emoji
-configure_indicator showAuthor:false       # Hide author attribution
-configure_indicator bracketStyle:"round"   # Use (parentheses) instead of [brackets]
+get_indicator_config
+configure_indicator enabled:false
+configure_indicator style:"minimal"
+configure_indicator style:"compact"
+configure_indicator style:"full"
+configure_indicator emoji:"🤖"
+configure_indicator showAuthor:false
+configure_indicator bracketStyle:"round"
 ```
 
 Environment variables for persistent configuration:
@@ -602,73 +647,76 @@ export DOLLHOUSE_INDICATOR_EMOJI=🎨
 
 ### Setting Up Portfolio from Scratch
 
+**Natural Language Approach:**
+"Hey, I want to set up my portfolio. My username is john_doe. Can you check if I have a GitHub portfolio? If not, create one called my-ai-tools."
+
+**Or Step by Step:**
+
 **Step 1: Initial Setup**
 ```
-# Set your user identity for attribution
 set_user_identity "your-username"
-
-# Check current portfolio status
 portfolio_status
-
-# Initialize a new GitHub portfolio repository
 init_portfolio repoName="my-ai-portfolio"
 ```
 
 **Step 2: Browse and Install Elements**
+
+**Natural Language:**
+"Show me what's in the collection. I'm looking for code review tools and maybe a technical writing assistant. Install anything that looks good."
+
+**Or with commands:**
 ```
-# Browse the community collection
 browse_collection section="library" type="personas"
 browse_collection section="library" type="skills"
-
-# Search for specific elements
 search_collection query="code review"
 search_collection_enhanced query="data analysis" elementType="skills" maxResults=5
-
-# Install elements you like
 install_element path="library/skills/code-reviewer.md"
 install_element path="library/personas/technical-writer.md"
 install_element path="library/templates/project-update.md"
 ```
 
 **Step 3: Customize and Activate**
+
+**Natural Language:**
+"Turn on the code reviewer and technical writer. Show me what's active now."
+
+**Or with commands:**
 ```
-# Activate installed elements
 activate_element name="code-reviewer" type="skills"
 activate_element name="technical-writer" type="personas"
-
-# View your active elements
 get_active_elements
-
-# Get details about any element
 get_element_details name="technical-writer" type="personas"
 ```
 
 **Step 4: Sync and Share**
+
+**Natural Language:**
+"Upload my custom assistant to my GitHub portfolio and sync everything. Maybe share it with the community too."
+
+**Or with commands:**
 ```
-# Submit your custom content to GitHub portfolio
 submit_content name="My Assistant"
-
-# Sync everything to GitHub
 sync_portfolio direction="push"
-
-# Optionally submit personas to community collection
 submit_persona name="My Assistant"
 ```
 
 ### Searching Across All Sources
 
-**Unified Search Example**
+**Natural Language Examples:**
+- "Find me a writing assistant - check everywhere"
+- "Search for code review skills in all my sources"
+- "What templates are in the collection?"
+- "Look for my custom content locally"
+- "Check my GitHub for any data analysis tools"
+- "I need something for debugging - search all sources"
+
+**Unified Search Commands:**
 ```
-# Search everything (local portfolio, GitHub portfolio, community collection)
 search_all query="writing assistant"
-
-# Search with filters
 search_all query="code" elementType="skills" maxResults=10
-
-# Search specific sources
-search_all query="templates" source="collection"    # Collection only
-search_all query="my content" source="local"        # Local portfolio only
-search_all query="my content" source="github"       # GitHub portfolio only
+search_all query="templates" source="collection"
+search_all query="my content" source="local"
+search_all query="my content" source="github"
 ```
 
 **Advanced Portfolio Search**
@@ -721,43 +769,40 @@ sync_portfolio
 
 ### Daily Workflow Example
 
-**Morning Setup**
+**Morning Setup - Natural Language:**
+"Good morning! Check if there are any updates. Turn on my usual setup - code reviewer, professional mode, and load my email templates. What's active?"
+
+**Or with commands:**
 ```
-# Check for updates
 get_build_info section="version"
 portfolio_status
-
-# Activate your daily toolkit
 activate_element name="code-reviewer" type="skills"
 activate_element name="professional" type="personas"
 activate_element name="email-template" type="templates"
-
-# Check what's active
 get_active_elements
 ```
 
-**During Work**
+**During Work - Natural Language:**
+- "Use the email template for a sprint update to the team"
+- "Hey project manager, review our tasks and set priorities"
+- "I need debugging help - what tools do I have?"
+- "Find me something for code optimization"
+
+**Or with commands:**
 ```
-# Use templates for communication
 render_template name="email-template" variables='{"recipient": "team", "subject": "Sprint Update"}'
-
-# Deploy agents for tasks
 execute_agent name="project-manager" goal="Review pending tasks and prioritize"
-
-# Search for tools as needed
 search_all query="debugging" elementType="skills"
 ```
 
-**End of Day**
+**End of Day - Natural Language:**
+"Save my new skill and that daily template I created. Sync everything to GitHub. How's the system doing?"
+
+**Or with commands:**
 ```
-# Save any new content
 submit_content name="new-skill"
 submit_content name="daily-template"
-
-# Sync to GitHub
 sync_portfolio
-
-# Check system health
 get_collection_cache_health
 ```
 
