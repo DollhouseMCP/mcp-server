@@ -67,7 +67,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements 
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **42 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **39 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
 | 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
@@ -104,26 +104,11 @@ DollhouseMCP introduces a comprehensive portfolio system for customizing AI beha
 
 ### Managing Your Portfolio
 
-Use these new generic tools to manage any element type in your portfolio:
-
-- **`list_elements`** - Browse your portfolio elements by type
-- **`activate_element`** - Activate elements to customize AI behavior
-- **`get_active_elements`** - View currently active customizations
-- **`deactivate_element`** - Deactivate specific customizations
-- **`get_element_details`** - Examine element configuration and metadata
-- **`reload_elements`** - Refresh portfolio from filesystem
+Use the new generic element tools to manage any element type in your portfolio - browse, activate, deactivate, and manage all your AI customization elements through a unified interface.
 
 ### GitHub Portfolio Integration (NEW!)
 
-Manage your portfolio on GitHub for sharing and collaboration:
-
-- **`portfolio_status`** - Check your GitHub portfolio repository status
-- **`init_portfolio`** - Create a new GitHub portfolio repository
-- **`portfolio_config`** - Configure sync and submission settings
-- **`sync_portfolio`** - Synchronize local and GitHub repositories
-- **`search_portfolio`** - Search your local portfolio with advanced indexing
-- **`search_all`** - Unified search across local, GitHub, and collection sources
-- **`submit_content`** - Upload elements to your GitHub portfolio
+Manage your portfolio on GitHub for sharing and collaboration - check status, initialize repositories, configure settings, sync content, search across sources, and submit elements to your GitHub portfolio.
 
 > **📘 Getting Started**: New to portfolios? Follow our [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md) for step-by-step instructions.
 
@@ -166,10 +151,7 @@ DollhouseMCP gives you **complete freedom** to name your elements whatever you w
 
 ### Specialized Element Tools
 
-Some portfolio elements have specialized operations:
-
-- **`render_template`** - Generate content using template elements with variables
-- **`execute_agent`** - Deploy agent elements to accomplish specific goals
+Some portfolio elements have specialized operations for rendering templates with variables and executing agents with specific goals.
 
 ### Portfolio Examples
 
@@ -343,9 +325,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 42 DollhouseMCP tools will be available
+3. All 39 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (42 Total)
+## 🛠️ Available Tools (39 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -354,17 +336,17 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`deactivate_element`** - Deactivate a specific element
 - **`get_element_details`** - View detailed information about an element
 - **`reload_elements`** - Refresh elements from filesystem
+- **`create_element`** - Create a new element of any type
+- **`edit_element`** - Edit an existing element
+- **`delete_element`** - Delete an element
+- **`validate_element`** - Validate element structure and content
 
 ### Element-Specific Operations (NEW!)
 - **`render_template`** - Render a template element with provided variables
 - **`execute_agent`** - Execute an agent element with a specific goal
 
-### Persona Export/Import (Specialized Tools)
-- **`export_persona`** - Export single persona to JSON format
-- **`export_all_personas`** - Export all personas to JSON bundle  
+### Persona Import (Legacy Tool)
 - **`import_persona`** - Import persona from file path or JSON string
-- **`share_persona`** - Generate shareable URL for persona
-- **`import_from_url`** - Import persona from shared URL
 
 ### GitHub Collection Integration
 - **`browse_collection`** - Browse content by section and type (flat structure, no categories)
@@ -372,12 +354,12 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`search_collection_enhanced`** - Enhanced search with pagination, filtering, and sorting
 - **`get_collection_content`** - View detailed content info
 - **`get_collection_cache_health`** - Monitor collection cache status and performance
-- **`install_element`** - One-click download and installation of any element type
-- **`submit_persona`** - Submit to collection via GitHub issue
+- **`install_content`** - One-click download and installation of any element type
 
 ### GitHub Portfolio Management (NEW!)
 - **`portfolio_status`** - Check your GitHub portfolio repository status
 - **`init_portfolio`** - Create a new GitHub portfolio repository
+- **`portfolio_config`** - Configure portfolio settings
 - **`sync_portfolio`** - Synchronize local and GitHub repositories
 - **`search_portfolio`** - Search your local portfolio with advanced indexing
 - **`search_all`** - Unified search across local, GitHub, and collection sources
@@ -392,18 +374,19 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`get_user_identity`** - View current identity status
 - **`clear_user_identity`** - Return to anonymous mode
 
-
-### System Tools
-- **`get_build_info`** - Comprehensive build and runtime information
-
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
 - **`get_indicator_config`** - View current indicator configuration settings
+
+### System Tools
+- **`get_build_info`** - Get comprehensive build and runtime information about the server
 
 ### GitHub Authentication (NEW!)
 - **`setup_github_auth`** - Start GitHub OAuth device flow authentication
 - **`check_github_auth`** - Check current authentication status
 - **`clear_github_auth`** - Remove stored authentication credentials
+- **`configure_oauth`** - Configure OAuth settings
+- **`oauth_helper_status`** - Check OAuth helper service status
 
 ## 📖 Usage Examples
 
@@ -423,9 +406,9 @@ search_collection_enhanced query="data analysis" maxResults=10 elementType="skil
 search_collection_enhanced query="creative" page=2 resultsPerPage=5
 
 # Install elements from collection
-install_element path="library/personas/storyteller.md"        # Install persona
-install_element path="library/skills/code-reviewer.md"       # Install skill
-install_element path="library/templates/email-template.md"   # Install template
+install_content path="library/personas/storyteller.md"        # Install persona
+install_content path="library/skills/code-reviewer.md"       # Install skill
+install_content path="library/templates/email-template.md"   # Install template
 
 # Check collection cache health
 get_collection_cache_health
@@ -1616,7 +1599,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - 🔄 **Roundtrip Workflow** - Complete content submission cycle
 
 **Statistics**:
-- 42 total MCP tools (down from 51 - 9 PersonaTools removed, 5 preserved)
+- 39 total MCP tools (down from 51 - 9 PersonaTools removed, 1 preserved)
 - 89 commits ahead of main
 - 257 files changed
 - 50,857 lines added
