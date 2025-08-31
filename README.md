@@ -29,7 +29,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **🌐 Repository**: https://github.com/DollhouseMCP/mcp-server  
 **🏪 Collection**: https://github.com/DollhouseMCP/collection  
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
-**🌍 Website**: https://dollhousemcp.com (planned)  
+**🌍 Website**: https://dollhousemcp.com  
 **📦 Version**: v1.6.11
 
 > **🎉 New in v1.6.9**: Fixed version update script to prevent wrong file creation and package-lock.json corruption. The release workflow now works reliably with proper version management.
