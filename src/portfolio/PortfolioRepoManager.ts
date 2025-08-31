@@ -318,14 +318,20 @@ export class PortfolioRepoManager {
           `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
         );
       } catch (checkError: any) {
-        // Re-throw authentication and rate limit errors - these are not "file doesn't exist" errors
+        // IMPORTANT: Authentication and rate limit errors must be re-thrown!
+        // These are NOT "file doesn't exist" scenarios - they indicate we can't
+        // access the API at all. Only 404 (and similar) should be treated as 
+        // "file doesn't exist". This ensures auth errors are properly reported
+        // with correct error codes (e.g., PORTFOLIO_SYNC_001 for auth failures).
+        // See PR #846 and test: portfolio-single-upload.qa.test.ts
         if (checkError.status === 401 || checkError.code === 'PORTFOLIO_SYNC_001') {
           throw checkError; // Authentication error - don't continue
         }
         if (checkError.status === 403 || checkError.code === 'PORTFOLIO_SYNC_006') {
           throw checkError; // Rate limit or permission error - don't continue
         }
-        // For other errors (like 404), assume file doesn't exist
+        // For other errors (like 404), assume file doesn't exist and continue
+        // with file creation. This is the expected flow for new files.
         logger.debug(`File check returned error (likely doesn't exist): ${filePath}`);
         existingFile = null;
       }
