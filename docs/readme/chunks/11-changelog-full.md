@@ -109,7 +109,7 @@ This release introduces the complete portfolio management system with GitHub OAu
 - **Conflict Resolution**: Smart merging of local and remote changes
 - **Batch Operations**: Upload/download multiple elements efficiently
 
-##### 🛠️ New MCP Tools (37 total)
+##### 🛠️ New MCP Tools (42 total)
 - `setup_github_auth`: Interactive GitHub OAuth setup
 - `check_github_auth`: Verify authentication status
 - `refresh_github_token`: Rotate OAuth tokens

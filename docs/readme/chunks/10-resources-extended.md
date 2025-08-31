@@ -20,7 +20,6 @@
 - **[GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)** - Q&A and ideas
 - **[GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)** - Bug reports and features
 - **[Discord Server](#)** - Real-time chat (coming soon)
-- **[Twitter/X](#)** - Updates and announcements (coming soon)
 
 ### External Resources
 
