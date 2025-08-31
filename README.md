@@ -38,28 +38,27 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 ## 🚀 Quick Start
 
-```bash
-# Install globally
-npm install -g @dollhousemcp/mcp-server
-
-# Add to Claude Desktop config (see path below for your OS)
-# macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
-# Windows: %APPDATA%\Claude\claude_desktop_config.json  
-# Linux: ~/.config/Claude/claude_desktop_config.json
-```
+**No installation needed!** Add to your Claude Desktop config:
 
 ```json
 {
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "args": ["@dollhousemcp/mcp-server@latest"]
     }
   }
 }
 ```
 
-Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements type="personas"` to get started.
+**Config location:**
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Restart Claude Desktop and you're ready! Try `list_elements type="personas"` to get started.
+
+> **💡 Want other installation options?** See [Installation Options](#installation-options) for local install, global install, or building from source.
 
 > **🎯 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
 
@@ -226,34 +225,122 @@ DollhouseMCP implements comprehensive security measures to protect your personas
 
 ## 🚀 Quick Start
 
-### Installation
+### Installation Options
 
-#### NPM Installation (NEW! - Recommended)
+Choose the installation method that best fits your needs:
 
-```bash
-npm install -g @dollhousemcp/mcp-server
-```
+| Method | Best For | Pros | Cons |
+|--------|----------|------|------|
+| **Option A: Direct npx** | Quick testing, casual users | No installation needed, always latest | Slower startup, requires internet |
+| **Option B: Local Install** | Production use, developers | Fast, stable, version control | More setup steps |
+| **Option C: Global Install** | Frequent use, single version | Convenient command access | Version conflicts possible |
 
-After installation, add DollhouseMCP to your Claude Desktop configuration:
+#### Option A: Direct npx (Recommended for Most Users)
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
-**Linux**: `~/.config/Claude/claude_desktop_config.json`
+**Best for**: Quick testing, trying out DollhouseMCP, casual users who want automatic updates
+
+No installation needed! Just add to your Claude Desktop configuration:
+
+**Configuration file location:**
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "args": ["@dollhousemcp/mcp-server@latest"]
     }
   }
 }
 ```
 
-> **Note**: If you have other MCP servers configured, add dollhousemcp to your existing mcpServers object.
+**Pros:**
+- ✅ No installation required
+- ✅ Always uses the latest version
+- ✅ Simplest setup
 
-#### Automated Setup (Alternative) - Claude Desktop Only
+**Cons:**
+- ❌ Slower startup (downloads package each time)
+- ❌ Requires internet connection
+- ❌ May break if updates introduce changes
+
+#### Option B: Local Installation (Recommended for Production)
+
+**Best for**: Developers, production environments, users who need stability and fast startup
+
+```bash
+# Create a dedicated directory for MCP servers
+mkdir -p ~/mcp-servers/dollhousemcp
+cd ~/mcp-servers/dollhousemcp
+
+# Initialize npm and install
+npm init -y
+npm install @dollhousemcp/mcp-server
+```
+
+Then add to Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/dollhousemcp/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+**Note**: Replace `/Users/YOUR_USERNAME` with your actual home directory path.
+
+**Pros:**
+- ✅ Fast startup (no download needed)
+- ✅ Version control (lock to specific version)
+- ✅ Works offline
+- ✅ Can have multiple versions installed
+
+**Cons:**
+- ❌ Manual updates required
+- ❌ More initial setup
+- ❌ Takes up disk space
+
+#### Option C: Global Installation
+
+**Best for**: Power users who use DollhouseMCP frequently across projects
+
+```bash
+# Install globally
+npm install -g @dollhousemcp/mcp-server
+```
+
+Then add to Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "dollhousemcp"
+    }
+  }
+}
+```
+
+**Pros:**
+- ✅ Available system-wide
+- ✅ Simple command
+- ✅ Fast startup
+
+**Cons:**
+- ❌ Can conflict with project-specific versions
+- ❌ Requires npm global permissions
+- ❌ Single version for all projects
+
+> **Note**: If you have other MCP servers configured, add dollhousemcp to your existing mcpServers object rather than replacing the entire configuration.
+
+#### Alternative: Build from Source
 
 > [!WARNING]
 > **Claude Desktop Only**: The automated setup script is specifically designed for **Claude Desktop** integration. If you're using **Claude Code**, other AI platforms (ChatGPT, BoltAI, Gemini, etc.), or custom MCP implementations, please use the [Manual Installation](#manual-installation) process below.
