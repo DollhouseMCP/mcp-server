@@ -17,7 +17,7 @@
 #
 # Security considerations:
 #   - Branch names are sanitized to prevent command injection
-#   - Auto-commits include [skip ci] to prevent infinite loops
+#   - Auto-commits are detected and skipped to prevent infinite loops
 #   - Workflow checks for auto-commits and exits early to prevent recursion
 #
 # Performance optimizations:
@@ -177,7 +177,7 @@ jobs:
           COMMIT_MSG="chore: Auto-sync README files on ${CLEAN_BRANCH_NAME} push"
           
           # Commit with sanitized message
-          git commit -m "$COMMIT_MSG" -m "Automatically generated from docs/readme/chunks/" -m "[skip ci]"
+          git commit -m "$COMMIT_MSG" -m "Automatically generated from docs/readme/chunks/"
           
           # Push the changes
           git push origin HEAD
@@ -223,8 +223,7 @@ This PR automatically syncs README changes from develop to main.
 - ✅ File sizes verified
 - ✅ Content validated
 
-This is an automated PR created by the README Sync workflow.
-[skip ci]" \
+This is an automated PR created by the README Sync workflow." \
               --label "documentation" \
               --label "automated" \
               --label "chore"
