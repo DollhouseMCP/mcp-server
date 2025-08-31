@@ -26,6 +26,13 @@
 
 ---
 
+**🌐 Repository**: https://github.com/DollhouseMCP/mcp-server  
+**🏪 Collection**: https://github.com/DollhouseMCP/collection  
+**📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
+**🌍 Website**: https://dollhousemcp.com (planned)
+
+---
+
 <div align="center">
   <img src="docs/assets/dollhouse-logo.png" alt="DollhouseMCP" width="200" />
   
