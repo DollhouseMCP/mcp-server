@@ -23,10 +23,3 @@
 [![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Extended Node Compatibility](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml)
 [![Docker Testing](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml)
-
-A comprehensive Model Context Protocol (MCP) server that enables dynamic AI persona management with an integrated GitHub-powered collection. DollhouseMCP allows Claude and other compatible AI assistants to activate different behavioral personas while supporting community sharing and monetization.
-
-**🌐 Repository**: https://github.com/DollhouseMCP/mcp-server  
-**🏪 Collection**: https://github.com/DollhouseMCP/collection  
-**📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
-**🌍 Website**: https://dollhousemcp.com (planned)

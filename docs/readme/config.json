@@ -18,6 +18,7 @@
       "description": "Complete README for GitHub repository",
       "chunks": [
         "00-header-extended",
+        "00-hero-section",
         "01-installation",
         "02-quick-start",
         "03-features",
