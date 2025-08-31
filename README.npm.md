@@ -116,7 +116,7 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 
 - 📖 [Full Troubleshooting Guide](docs/TROUBLESHOOTING.md)
 - 💬 [GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)
-- 📧 Support: support@dollhousemcp.com
+- 💭 [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 📚 Resources
 
