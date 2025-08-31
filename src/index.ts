@@ -322,6 +322,53 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   /**
+   * Find an element by name, supporting both exact display name and filename (slug) matching
+   * This provides better UX by allowing users to reference elements by either format
+   * @param name - The name to search for (can be display name or filename without extension)
+   * @param elementList - The list of elements to search through
+   * @returns The found element or undefined
+   */
+  private async findElementFlexibly(name: string, elementList: any[]): Promise<any> {
+    if (!name || !elementList || elementList.length === 0) {
+      return undefined;
+    }
+    
+    // Normalize the search name for comparison
+    const searchNameLower = name.toLowerCase();
+    const searchNameSlug = slugify(name);
+    
+    // First try exact name match (case-insensitive)
+    let element = elementList.find(e => 
+      e.metadata?.name?.toLowerCase() === searchNameLower
+    );
+    
+    // If not found, try slug match (filename without extension)
+    if (!element) {
+      element = elementList.find(e => {
+        const elementSlug = slugify(e.metadata?.name || '');
+        return elementSlug === searchNameSlug || elementSlug === searchNameLower;
+      });
+    }
+    
+    // If still not found, try partial match on filename
+    if (!element) {
+      element = elementList.find(e => {
+        const elementName = e.metadata?.name || '';
+        const elementSlug = slugify(elementName);
+        return elementSlug.includes(searchNameSlug) || 
+               elementName.toLowerCase().includes(searchNameLower);
+      });
+    }
+    
+    return element;
+  }
+  
+  /**
+   * Convert a string to a slug format (lowercase with hyphens)
+   * Matches the format used for element filenames
+   */
+  
+  /**
    * Sanitize metadata object to prevent prototype pollution
    * Removes any dangerous properties that could affect Object.prototype
    */
@@ -748,7 +795,9 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.activatePersona(name);
           
         case ElementType.SKILL: {
-          const skill = await this.skillManager.find(s => s.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allSkills = await this.skillManager.list();
+          const skill = await this.findElementFlexibly(name, allSkills);
           if (!skill) {
             return {
               content: [{
@@ -770,7 +819,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.TEMPLATE: {
-          const template = await this.templateManager.find(t => t.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allTemplates = await this.templateManager.list();
+          const template = await this.findElementFlexibly(name, allTemplates);
           if (!template) {
             return {
               content: [{
@@ -780,7 +831,7 @@ export class DollhouseMCPServer implements IToolHandler {
             };
           }
           
-          const variables = template.metadata.variables?.map(v => v.name).join(', ') || 'none';
+          const variables = template.metadata.variables?.map((v: any) => v.name).join(', ') || 'none';
           return {
             content: [{
               type: "text",
@@ -790,7 +841,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.AGENT: {
-          const agent = await this.agentManager.find(a => a.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allAgents = await this.agentManager.list();
+          const agent = await this.findElementFlexibly(name, allAgents);
           if (!agent) {
             return {
               content: [{
@@ -925,7 +978,9 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.deactivatePersona();
           
         case ElementType.SKILL: {
-          const skill = await this.skillManager.find(s => s.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allSkills = await this.skillManager.list();
+          const skill = await this.findElementFlexibly(name, allSkills);
           if (!skill) {
             return {
               content: [{
@@ -939,7 +994,7 @@ export class DollhouseMCPServer implements IToolHandler {
           return {
             content: [{
               type: "text",
-              text: `✅ Skill '${name}' deactivated`
+              text: `✅ Skill '${skill.metadata.name}' deactivated`
             }]
           };
         }
@@ -954,7 +1009,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.AGENT: {
-          const agent = await this.agentManager.find(a => a.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allAgents = await this.agentManager.list();
+          const agent = await this.findElementFlexibly(name, allAgents);
           if (!agent) {
             return {
               content: [{
@@ -968,7 +1025,7 @@ export class DollhouseMCPServer implements IToolHandler {
           return {
             content: [{
               type: "text",
-              text: `✅ Agent '${name}' deactivated`
+              text: `✅ Agent '${agent.metadata.name}' deactivated`
             }]
           };
         }
@@ -1002,7 +1059,9 @@ export class DollhouseMCPServer implements IToolHandler {
           return this.getPersonaDetails(name);
           
         case ElementType.SKILL: {
-          const skill = await this.skillManager.find(s => s.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allSkills = await this.skillManager.list();
+          const skill = await this.findElementFlexibly(name, allSkills);
           if (!skill) {
             return {
               content: [{
@@ -1027,7 +1086,7 @@ export class DollhouseMCPServer implements IToolHandler {
           
           if (skill.metadata.parameters && skill.metadata.parameters.length > 0) {
             details.push('', '**Parameters**:');
-            skill.metadata.parameters.forEach(p => {
+            skill.metadata.parameters.forEach((p: any) => {
               details.push(`- ${p.name} (${p.type}): ${p.description}`);
             });
           }
@@ -1041,7 +1100,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.TEMPLATE: {
-          const template = await this.templateManager.find(t => t.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allTemplates = await this.templateManager.list();
+          const template = await this.findElementFlexibly(name, allTemplates);
           if (!template) {
             return {
               content: [{
@@ -1064,7 +1125,7 @@ export class DollhouseMCPServer implements IToolHandler {
           
           if (template.metadata.variables && template.metadata.variables.length > 0) {
             details.push('', '**Variables**:');
-            template.metadata.variables.forEach(v => {
+            template.metadata.variables.forEach((v: any) => {
               details.push(`- ${v.name} (${v.type}): ${v.description}`);
             });
           }
@@ -1078,7 +1139,9 @@ export class DollhouseMCPServer implements IToolHandler {
         }
         
         case ElementType.AGENT: {
-          const agent = await this.agentManager.find(a => a.metadata.name === name);
+          // Use flexible finding to support both display name and filename
+          const allAgents = await this.agentManager.list();
+          const agent = await this.findElementFlexibly(name, allAgents);
           if (!agent) {
             return {
               content: [{
