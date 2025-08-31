@@ -1,3 +1,30 @@
+# README Sync Workflow
+#
+# Purpose:
+#   Automatically rebuilds and synchronizes README files when documentation chunks are modified.
+#   This ensures that README.md, README.npm.md, and README.github.md stay in sync across branches
+#   and are always generated from the latest chunk files.
+#
+# Triggers:
+#   - Push to main or develop branches when chunks/build files change
+#   - Manual workflow dispatch for forced rebuilds
+#
+# How it works:
+#   1. Detects changes to documentation chunks
+#   2. Rebuilds all README files from chunks
+#   3. Commits changes if files were modified
+#   4. Optionally creates PR from develop to main for syncing
+#
+# Security considerations:
+#   - Branch names are sanitized to prevent command injection
+#   - Auto-commits include [skip ci] to prevent infinite loops
+#   - Workflow checks for auto-commits and exits early to prevent recursion
+#
+# Performance optimizations:
+#   - Early exit if no relevant files changed
+#   - Shallow clone (depth=2) for faster checkout
+#   - Conditional step execution to minimize resource usage
+
 name: README Sync
 
 on:
@@ -15,10 +42,18 @@ permissions:
   contents: write
   pull-requests: write
 
+# Configuration constants for maintainability
+env:
+  NODE_VERSION: '20.x'
+  BUILD_TIMEOUT: 10
+  WORKFLOW_TIMEOUT: 15
+  README_BUILD_COMMAND: 'npm run build:readme'
+  README_FILES_PATTERN: 'README*.md'
+
 jobs:
   build-and-sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ fromJSON(vars.WORKFLOW_TIMEOUT || '15') }}
     
     steps:
       - name: Checkout repository
@@ -64,7 +99,7 @@ jobs:
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: ${{ env.NODE_VERSION }}
       
       - name: Install dependencies
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
@@ -74,12 +109,12 @@ jobs:
       - name: Build README files
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
         id: build_readme
-        timeout-minutes: 10
+        timeout-minutes: ${{ fromJSON(env.BUILD_TIMEOUT) }}
         run: |
           echo "📚 Building README files..."
           
           # Attempt to build README files with error handling
-          if ! npm run build:readme; then
+          if ! ${{ env.README_BUILD_COMMAND }}; then
             echo "❌ README build failed"
             echo "build_failed=true" >> $GITHUB_OUTPUT
             exit 1
@@ -107,7 +142,7 @@ jobs:
         id: check_changes
         run: |
           # Check for changes in any README files (more flexible than hardcoded list)
-          if git diff --quiet README*.md 2>/dev/null; then
+          if git diff --quiet ${{ env.README_FILES_PATTERN }} 2>/dev/null; then
             echo "No changes to README files"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
@@ -116,7 +151,7 @@ jobs:
             
             # Show what changed
             echo "📝 Changes detected in:"
-            git diff --name-only README*.md 2>/dev/null || echo "Error listing changed files"
+            git diff --name-only ${{ env.README_FILES_PATTERN }} 2>/dev/null || echo "Error listing changed files"
           fi
       
       # HIGH PRIORITY FIX: Sanitize branch name to prevent command injection
@@ -131,7 +166,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           
           # Add the README files
-          git add README*.md
+          git add ${{ env.README_FILES_PATTERN }}
           
           # HIGH PRIORITY FIX: Sanitize branch name for commit message
           BRANCH_NAME="${{ github.ref_name }}"
