@@ -65,6 +65,7 @@ jobs:
       # HIGH PRIORITY FIX: Check if this is an auto-commit to prevent infinite loops
       - name: Check if this is an auto-commit
         id: check_auto_commit
+        shell: bash
         run: |
           COMMIT_MSG="${{ github.event.head_commit.message }}"
           if [[ "$COMMIT_MSG" == *"Auto-sync README files"* ]] || [[ "$COMMIT_MSG" == *"chore: Auto-sync README"* ]]; then
@@ -78,6 +79,7 @@ jobs:
       - name: Check if relevant files changed
         if: steps.check_auto_commit.outputs.skip != 'true'
         id: check_triggers
+        shell: bash
         run: |
           # Check if this is the initial run (workflow_dispatch) or if relevant files changed
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -103,6 +105,7 @@ jobs:
       
       - name: Install dependencies
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
+        shell: bash
         run: npm ci
       
       # MEDIUM PRIORITY FIX: Add error handling for build step
@@ -110,6 +113,7 @@ jobs:
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
         id: build_readme
         timeout-minutes: ${{ fromJSON(env.BUILD_TIMEOUT) }}
+        shell: bash
         run: |
           echo "📚 Building README files..."
           
@@ -140,6 +144,7 @@ jobs:
       - name: Check for changes
         if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true' && steps.build_readme.outputs.build_failed != 'true'
         id: check_changes
+        shell: bash
         run: |
           # Check for changes in any README files (more flexible than hardcoded list)
           if git diff --quiet ${{ env.README_FILES_PATTERN }} 2>/dev/null; then
@@ -161,6 +166,7 @@ jobs:
           steps.check_triggers.outputs.proceed == 'true' && 
           steps.check_changes.outputs.has_changes == 'true' &&
           steps.build_readme.outputs.build_failed != 'true'
+        shell: bash
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -193,6 +199,7 @@ jobs:
           steps.build_readme.outputs.build_failed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           # Check if there's already a PR from develop to main for README sync
           EXISTING_PR=$(gh pr list --base main --head develop --state open --json number,title --jq '.[] | select(.title | contains("README")) | .number' | head -1 || echo "")
@@ -200,30 +207,35 @@ jobs:
           if [ -z "$EXISTING_PR" ]; then
             echo "📤 Creating PR to sync README changes to main..."
             
-            # Create PR with improved description
+            # Create PR with improved description using HEREDOC
+            PR_BODY=$(cat <<'EOF'
+          ## Automated README Synchronization
+          
+          This PR automatically syncs README changes from develop to main.
+          
+          ### Changes
+          - README files have been automatically rebuilt from chunks
+          - Updates are from recent changes to documentation in develop branch
+          
+          ### Files Changed
+          - README.md (main display file)
+          - README.npm.md (NPM package documentation)
+          - README.github.md (GitHub repository documentation)
+          
+          ### Validation
+          - ✅ All README files successfully generated
+          - ✅ File sizes verified
+          - ✅ Content validated
+          
+          This is an automated PR created by the README Sync workflow.
+          EOF
+            )
+            
             gh pr create \
               --base main \
               --head develop \
               --title "chore: Sync README updates from develop" \
-              --body "## Automated README Synchronization
-
-This PR automatically syncs README changes from develop to main.
-
-### Changes
-- README files have been automatically rebuilt from chunks
-- Updates are from recent changes to documentation in develop branch
-
-### Files Changed
-- README.md (main display file)
-- README.npm.md (NPM package documentation)
-- README.github.md (GitHub repository documentation)
-
-### Validation
-- ✅ All README files successfully generated
-- ✅ File sizes verified
-- ✅ Content validated
-
-This is an automated PR created by the README Sync workflow." \
+              --body "$PR_BODY" \
               --label "documentation" \
               --label "automated" \
               --label "chore"
@@ -231,21 +243,26 @@ This is an automated PR created by the README Sync workflow." \
             echo "✅ PR #$EXISTING_PR already exists for README sync"
             
             # Add a comment to the existing PR about the new sync
-            gh pr comment "$EXISTING_PR" --body "📚 README files have been updated again via automatic sync.
-
-Latest sync includes changes from:
-- Branch: develop
-- Commit: ${{ github.sha }}
-- Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-
-Files updated:
-$(git diff --name-only HEAD~1 HEAD README*.md 2>/dev/null | sed 's/^/- /' || echo "- Unable to list files")
-"
+            COMMENT_BODY=$(cat <<EOF
+          📚 README files have been updated again via automatic sync.
+          
+          Latest sync includes changes from:
+          - Branch: develop
+          - Commit: ${{ github.sha }}
+          - Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          Files updated:
+          $(git diff --name-only HEAD~1 HEAD README*.md 2>/dev/null | sed 's/^/- /' || echo "- Unable to list files")
+          EOF
+            )
+            
+            gh pr comment "$EXISTING_PR" --body "$COMMENT_BODY"
           fi
       
       # LOW PRIORITY: Add summary output for better visibility
       - name: Summary
         if: always()
+        shell: bash
         run: |
           echo "## README Sync Workflow Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
