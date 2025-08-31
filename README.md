@@ -405,19 +405,19 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 **Tool Commands (if you prefer):**
 ```
-browse_collection section="library" type="personas"    # Browse all personas
-browse_collection section="library" type="skills"      # Browse skills
-browse_collection section="library" type="templates"   # Browse templates
+browse_collection section="library" type="personas"
+browse_collection section="library" type="skills"
+browse_collection section="library" type="templates"
 
-search_collection query="writing"                      # Search for writing personas
-search_collection query="code review"                  # Find code review skills
+search_collection query="writing"
+search_collection query="code review"
 
 search_collection_enhanced query="data analysis" maxResults=10 elementType="skills"
 search_collection_enhanced query="creative" page=2 resultsPerPage=5
 
-install_content path="library/personas/storyteller.md"        # Install persona
-install_content path="library/skills/code-reviewer.md"       # Install skill
-install_content path="library/templates/email-template.md"   # Install template
+install_content path="library/personas/storyteller.md"
+install_content path="library/skills/code-reviewer.md"
+install_content path="library/templates/email-template.md"
 
 get_collection_cache_health
 ```
@@ -439,30 +439,30 @@ get_collection_cache_health
 
 **Tool Commands (if you prefer):**
 ```
-portfolio_status                                       # Check repository status
+portfolio_status
 
-init_portfolio                                         # Create GitHub repository
-init_portfolio repoName="my-ai-portfolio"             # Custom repository name
+init_portfolio
+init_portfolio repoName="my-ai-portfolio"
 
-sync_portfolio                                         # Sync both directions
-sync_portfolio direction="push"                        # Push local to GitHub
-sync_portfolio direction="pull"                        # Pull GitHub to local
+sync_portfolio
+sync_portfolio direction="push"
+sync_portfolio direction="pull"
 
-search_portfolio query="writing"                       # Search all element types
-search_portfolio query="code" elementType="skills"     # Search specific type
-search_portfolio query="email" fuzzyMatch=true         # Enable fuzzy matching
+search_portfolio query="writing"
+search_portfolio query="code" elementType="skills"
+search_portfolio query="email" fuzzyMatch=true
 
-search_all query="data analysis"                       # Search everywhere
-search_all query="creative writing" maxResults=20      # Limit results
-search_all query="templates" source="local"            # Search specific source
+search_all query="data analysis"
+search_all query="creative writing" maxResults=20
+search_all query="templates" source="local"
 
-submit_content name="code-review"                      # Auto-detects element type
-submit_content name="my-persona" elementType="personas" # Explicit type
+submit_content name="code-review"
+submit_content name="my-persona" elementType="personas"
 submit_content name="email-template" description="Professional email template"
 
-configure_collection_submission autoSubmit=true        # Enable auto-submit
-configure_collection_submission defaultLicense="MIT"   # Set default license
-get_collection_submission_config                       # View current config
+configure_collection_submission autoSubmit=true
+configure_collection_submission defaultLicense="MIT"
+get_collection_submission_config
 ```
 
 ### Your Dollhouse Portfolio Customization Element Management
@@ -483,26 +483,26 @@ get_collection_submission_config                       # View current config
 
 **Tool Commands (if you prefer):**
 ```
-list_elements type="personas"                          # List personas
-list_elements type="skills"                            # List skills  
-list_elements type="templates"                         # List templates
-list_elements type="agents"                            # List agents
+list_elements type="personas"
+list_elements type="skills"
+list_elements type="templates"
+list_elements type="agents"
 
-activate_element name="code-reviewer" type="skills"    # Activate skill
-activate_element name="professional" type="personas"   # Activate persona
-activate_element name="email-format" type="templates"  # Activate template
+activate_element name="code-reviewer" type="skills"
+activate_element name="professional" type="personas"
+activate_element name="email-format" type="templates"
 
-get_active_elements                                     # All active elements
-get_active_elements type="skills"                      # Active skills only
+get_active_elements
+get_active_elements type="skills"
 
-get_element_details name="code-reviewer" type="skills" # View skill details
-get_element_details name="my-persona" type="personas"  # View persona details
+get_element_details name="code-reviewer" type="skills"
+get_element_details name="my-persona" type="personas"
 
-deactivate_element name="code-reviewer" type="skills"  # Deactivate specific
-deactivate_element type="personas"                     # Deactivate all personas
+deactivate_element name="code-reviewer" type="skills"
+deactivate_element type="personas"
 
-reload_elements                                         # Reload all elements
-reload_elements type="skills"                          # Reload specific type
+reload_elements
+reload_elements type="skills"
 ```
 
 ### Specialized Operations for Templates and Agents
@@ -532,10 +532,10 @@ execute_agent name="data-analyst" goal="Analyze sales trends for Q3"
 
 **Tool Commands (if you prefer):**
 ```
-get_build_info                                         # Full system info
-get_build_info section="version"                       # Version info only
-get_build_info section="environment"                   # Environment details
-get_build_info section="dependencies"                  # Dependency versions
+get_build_info
+get_build_info section="version"
+get_build_info section="environment"
+get_build_info section="dependencies"
 ```
 
 ### Managing Your AI Personas
@@ -552,7 +552,7 @@ get_build_info section="dependencies"                  # Dependency versions
 list_elements type="personas"
 activate_element name="Study Buddy" type="personas"
 get_element_details name="Study Buddy" type="personas"
-submit_persona "Study Buddy"               # Share with community
+submit_persona "Study Buddy"
 ```
 
 ### Setting Your User Identity
@@ -565,9 +565,9 @@ submit_persona "Study Buddy"               # Share with community
 
 **Tool Commands (if you prefer):**
 ```
-set_user_identity "your-username"          # Set attribution
-get_user_identity                          # Check current status
-clear_user_identity                        # Return to anonymous
+set_user_identity "your-username"
+get_user_identity
+clear_user_identity
 ```
 
 
