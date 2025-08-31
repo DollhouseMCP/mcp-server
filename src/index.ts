@@ -335,7 +335,7 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Normalize the search name for comparison
     const searchNameLower = name.toLowerCase();
-    const searchNameSlug = this.slugify(name);
+    const searchNameSlug = slugify(name);
     
     // First try exact name match (case-insensitive)
     let element = elementList.find(e => 
@@ -345,7 +345,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // If not found, try slug match (filename without extension)
     if (!element) {
       element = elementList.find(e => {
-        const elementSlug = this.slugify(e.metadata?.name || '');
+        const elementSlug = slugify(e.metadata?.name || '');
         return elementSlug === searchNameSlug || elementSlug === searchNameLower;
       });
     }
@@ -354,7 +354,7 @@ export class DollhouseMCPServer implements IToolHandler {
     if (!element) {
       element = elementList.find(e => {
         const elementName = e.metadata?.name || '';
-        const elementSlug = this.slugify(elementName);
+        const elementSlug = slugify(elementName);
         return elementSlug.includes(searchNameSlug) || 
                elementName.toLowerCase().includes(searchNameLower);
       });
@@ -367,15 +367,6 @@ export class DollhouseMCPServer implements IToolHandler {
    * Convert a string to a slug format (lowercase with hyphens)
    * Matches the format used for element filenames
    */
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .trim()
-      .replace(/[^\w\s-]/g, '') // Remove non-word chars except spaces and hyphens
-      .replace(/[\s_]+/g, '-')  // Replace spaces and underscores with hyphens
-      .replace(/--+/g, '-')     // Replace multiple hyphens with single hyphen
-      .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
-  }
   
   /**
    * Sanitize metadata object to prevent prototype pollution
