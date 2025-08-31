@@ -9,7 +9,7 @@ DollhouseMCP follows a modular, extensible architecture built on the Model Conte
 #### MCP Server
 - **Transport**: StdioServerTransport for Claude Desktop integration
 - **Protocol**: JSON-RPC 2.0 communication
-- **Tools**: 42+ MCP tools for comprehensive functionality
+- **Tools**: 41 MCP tools for comprehensive functionality
 
 #### Element System
 - **BaseElement**: Abstract base class for all elements
