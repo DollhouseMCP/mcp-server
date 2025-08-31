@@ -106,14 +106,14 @@ client.callTool({ name: 'tool_name', arguments: {} })
 
 ### Performance Before Fix
 ```
-Tool Discovery:    ✅ SUCCESS - 42 tools, <1ms  
+Tool Discovery:    ✅ SUCCESS - 41 tools, <1ms  
 Tool Execution:    ❌ FAILURE - 100% timeout after 5000ms
 Error Pattern:     ZodError: params received as string vs object
 ```
 
 ### Performance After Fix  
 ```
-Tool Discovery:    ✅ SUCCESS - 42 tools, <1ms
+Tool Discovery:    ✅ SUCCESS - 41 tools, <1ms
 Tool Execution:    ✅ SUCCESS - 95%+ success, <10ms response
 Error Pattern:     None - proper JSON-RPC message structure
 ```
@@ -175,7 +175,7 @@ The ZodError was **correctly** rejecting malformed messages where `params` was a
 
 ### 🎯 Immediate Next Steps
 1. **Run Full QA Suite**: All critical blocking issues are resolved
-2. **Test All Tool Categories**: Verify functionality across all 42 tools
+2. **Test All Tool Categories**: Verify functionality across all 41 tools
 3. **Performance Validation**: Confirm <3s response time requirement met (<10ms achieved)
 4. **Edge Case Testing**: Test complex tool arguments and error conditions
 

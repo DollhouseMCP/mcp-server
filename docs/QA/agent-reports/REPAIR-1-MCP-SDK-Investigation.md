@@ -34,7 +34,7 @@
    - ❌ Tool execution (`CallToolRequest`) fails with 100% timeout rate
 
 4. **Tool Execution Pipeline**
-   - ✅ Tools are registered correctly (42 tools discovered)
+   - ✅ Tools are registered correctly (41 tools discovered)
    - ✅ Server connects and initializes successfully (~1000ms)
    - ❌ **CRITICAL**: All tool calls timeout exactly after 3-5 seconds
    - ❌ Even instant-response tools timeout, indicating SDK-level issue

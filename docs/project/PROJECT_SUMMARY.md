@@ -209,11 +209,11 @@ install_element "library/personas/study-buddy.md"
 - **Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/`
 - **Git Status**: Clean, all changes committed and pushed
 - **Build Status**: TypeScript compiling successfully
-- **Server Status**: All 42 MCP tools verified functional
+- **Server Status**: All 41 MCP tools verified functional
 - **Test Status**: Server startup and tool registration confirmed
 
 ### Repository Health
-- **Main Repo**: Streamlined codebase with 42 MCP tools, proper .gitignore, no build artifacts
+- **Main Repo**: Streamlined codebase with 41 MCP tools, proper .gitignore, no build artifacts
 - **Marketplace Repo**: 8 files with initial persona collection
 - **Documentation**: Comprehensive claude.md with current state
 - **Setup Scripts**: Cross-platform installation support

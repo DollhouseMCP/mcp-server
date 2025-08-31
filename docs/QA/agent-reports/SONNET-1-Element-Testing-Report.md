@@ -50,7 +50,7 @@
 Based on testing, the DollhouseMCP element system shows:
 
 1. **Connection Stability:** MCP server connects successfully
-2. **Tool Availability:** 42 tools detected and accessible
+2. **Tool Availability:** 41 tools detected and accessible
 3. **Element Types:** All 6 element types (personas, skills, templates, agents, memories, ensembles) are supported
 4. **Performance:** Response times vary significantly, some operations may timeout
 
