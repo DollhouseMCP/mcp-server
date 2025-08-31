@@ -102,6 +102,14 @@ export class PortfolioRepoManager {
 
     const response = await fetch(url, options);
     
+    // Check if response exists before accessing properties
+    if (!response) {
+      const error: any = new Error('No response received from GitHub API');
+      error.status = 0;
+      error.code = 'PORTFOLIO_SYNC_005';
+      throw error;
+    }
+    
     if (response.status === 404) {
       return null; // Not found is often expected
     }
@@ -109,28 +117,41 @@ export class PortfolioRepoManager {
     const data = await response.json();
 
     if (!response.ok) {
-      // Provide more specific error messages for common status codes
+      // Create error with status code attached for better classification
       let errorMessage = data.message || `GitHub API error: ${response.status}`;
+      let errorCode = 'PORTFOLIO_SYNC_005'; // Default
       
       switch (response.status) {
+        case 401:
+          errorMessage = 'GitHub authentication failed. Please check your token.';
+          errorCode = 'PORTFOLIO_SYNC_001';
+          break;
+        case 403:
+          if (data.message?.includes('rate limit')) {
+            errorMessage = `GitHub API rate limit exceeded: ${data.message}`;
+            errorCode = 'PORTFOLIO_SYNC_006';
+          } else {
+            errorMessage = `GitHub API access forbidden: ${data.message || 'insufficient permissions'}`;
+            errorCode = 'PORTFOLIO_SYNC_001'; // Treat as auth issue
+          }
+          break;
         case 422:
           // Validation failed - often means repository already exists
           errorMessage = `Repository validation failed: ${data.message || 'name already exists on this account'}`;
-          break;
-        case 401:
-          errorMessage = 'GitHub authentication failed. Please check your token.';
-          break;
-        case 403:
-          errorMessage = `GitHub API access forbidden: ${data.message || 'insufficient permissions or rate limit exceeded'}`;
+          errorCode = 'PORTFOLIO_SYNC_003';
           break;
         case 500:
           errorMessage = 'GitHub API server error. Please try again later.';
+          errorCode = 'PORTFOLIO_SYNC_005';
           break;
         default:
           errorMessage = `GitHub API error (${response.status}): ${data.message || 'Unknown error'}`;
       }
       
-      throw new Error(errorMessage);
+      const error: any = new Error(errorMessage);
+      error.status = response.status;
+      error.code = errorCode;
+      throw error;
     }
 
     return data;
@@ -296,8 +317,15 @@ export class PortfolioRepoManager {
         existingFile = await this.githubRequest(
           `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
         );
-      } catch (checkError) {
-        // If we get an error checking for the file, assume it doesn't exist
+      } catch (checkError: any) {
+        // Re-throw authentication and rate limit errors - these are not "file doesn't exist" errors
+        if (checkError.status === 401 || checkError.code === 'PORTFOLIO_SYNC_001') {
+          throw checkError; // Authentication error - don't continue
+        }
+        if (checkError.status === 403 || checkError.code === 'PORTFOLIO_SYNC_006') {
+          throw checkError; // Rate limit or permission error - don't continue
+        }
+        // For other errors (like 404), assume file doesn't exist
         logger.debug(`File check returned error (likely doesn't exist): ${filePath}`);
         existingFile = null;
       }
@@ -391,41 +419,76 @@ export class PortfolioRepoManager {
 
       return commitUrl;
     } catch (error: any) {
-      // Enhanced error reporting with specific error codes
-      let errorCode = 'PORTFOLIO_SYNC_005'; // Default network error
+      // Use error code if already set by githubRequest
+      let errorCode = error.code || 'PORTFOLIO_SYNC_005'; // Default network error
       let enhancedMessage = 'Failed to save element to portfolio';
       
-      // Check for specific error conditions
-      if (error.message?.includes('401') || error.message?.includes('authentication')) {
-        errorCode = 'PORTFOLIO_SYNC_001';
-        enhancedMessage = 'GitHub authentication failed. Please re-authenticate.';
-      } else if (error.message?.includes('404') || error.message?.includes('not found')) {
-        errorCode = 'PORTFOLIO_SYNC_002';
-        enhancedMessage = 'GitHub portfolio repository not found. Please run init_portfolio first.';
-      } else if (error.message?.includes('403') || error.message?.includes('rate limit')) {
-        errorCode = 'PORTFOLIO_SYNC_006';
-        enhancedMessage = 'GitHub API rate limit exceeded. Please try again later.';
-      } else if (error.message?.includes('Cannot read properties of null')) {
-        errorCode = 'PORTFOLIO_SYNC_004';
-        enhancedMessage = `GitHub API response parsing error: ${error.message}`;
+      // Check error status first (more reliable than message parsing)
+      if (error.status) {
+        switch (error.status) {
+          case 401:
+            errorCode = 'PORTFOLIO_SYNC_001';
+            enhancedMessage = 'GitHub authentication failed. Please re-authenticate.';
+            break;
+          case 403:
+            if (error.message?.includes('rate limit')) {
+              errorCode = 'PORTFOLIO_SYNC_006';
+              enhancedMessage = 'GitHub API rate limit exceeded. Please try again later.';
+            } else {
+              errorCode = 'PORTFOLIO_SYNC_001';
+              enhancedMessage = 'GitHub API access forbidden. Check token permissions.';
+            }
+            break;
+          case 404:
+            errorCode = 'PORTFOLIO_SYNC_002';
+            enhancedMessage = 'GitHub portfolio repository not found. Please run init_portfolio first.';
+            break;
+          case 422:
+            errorCode = 'PORTFOLIO_SYNC_003';
+            enhancedMessage = 'Repository validation failed.';
+            break;
+          default:
+            // Keep the error code from githubRequest if set
+            if (!error.code) {
+              errorCode = 'PORTFOLIO_SYNC_005';
+            }
+        }
+      } else if (!error.code) {
+        // Fall back to message parsing only if no status code available
+        if (error.message?.includes('401') || error.message?.includes('authentication')) {
+          errorCode = 'PORTFOLIO_SYNC_001';
+          enhancedMessage = 'GitHub authentication failed. Please re-authenticate.';
+        } else if (error.message?.includes('404') || error.message?.includes('not found')) {
+          errorCode = 'PORTFOLIO_SYNC_002';
+          enhancedMessage = 'GitHub portfolio repository not found. Please run init_portfolio first.';
+        } else if (error.message?.includes('403') || error.message?.includes('rate limit')) {
+          errorCode = 'PORTFOLIO_SYNC_006';
+          enhancedMessage = 'GitHub API rate limit exceeded. Please try again later.';
+        } else if (error.message?.includes('Cannot read properties')) {
+          errorCode = 'PORTFOLIO_SYNC_004';
+          enhancedMessage = `GitHub API response parsing error: ${error.message}`;
+        }
       }
       
       logger.error(`[${errorCode}] ${enhancedMessage}`, { 
         elementId: element.id,
         username,
         originalError: error.message,
+        errorStatus: error.status,
         stack: error.stack
       });
       
       ErrorHandler.logError('PortfolioRepoManager.saveElementToRepo', error, { 
         elementId: element.id,
         username,
-        errorCode
+        errorCode,
+        errorStatus: error.status
       });
       
       // Throw error with code for better handling upstream
       const wrappedError = ErrorHandler.wrapError(error, `[${errorCode}] ${enhancedMessage}`, ErrorCategory.NETWORK_ERROR);
       (wrappedError as any).code = errorCode;
+      (wrappedError as any).status = error.status;
       throw wrappedError;
     }
   }
