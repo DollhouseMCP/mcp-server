@@ -104,6 +104,7 @@ jobs:
           echo "✅ Changelog generated successfully"
 
       - name: Build README files
+        shell: bash
         run: |
           echo "📚 Building modular README files for NPM..."
           npm run build:readme
