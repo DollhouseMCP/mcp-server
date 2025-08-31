@@ -67,7 +67,7 @@ Restart Claude Desktop and you're ready to use DollhouseMCP! Try `list_elements 
 
 | Feature | Description |
 |---------|-------------|
-| 🎭 **40 MCP Tools** | Complete portfolio element management through chat interface |
+| 🎭 **39 MCP Tools** | Complete portfolio element management through chat interface |
 | 🏪 **GitHub Collection** | Browse, search, install, and submit personas to community collection |
 | 🔄 **Roundtrip Workflow** | Complete cycle: discover → customize → share → collaborate |
 | 📁 **GitHub Portfolio** | Personal repository for storing and versioning your AI elements |
@@ -325,9 +325,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 **🔄 After configuration:**
 1. Save the file
 2. Restart Claude Desktop completely
-3. All 40 DollhouseMCP tools will be available
+3. All 39 DollhouseMCP tools will be available
 
-## 🛠️ Available Tools (40 Total)
+## 🛠️ Available Tools (39 Total)
 
 ### Portfolio Element Management (NEW!)
 - **`list_elements`** - List all elements of a specific type
@@ -345,9 +345,7 @@ Add DollhouseMCP to your Claude Desktop configuration:
 - **`render_template`** - Render a template element with provided variables
 - **`execute_agent`** - Execute an agent element with a specific goal
 
-### Persona Export/Import (Specialized Tools)
-- **`export_persona`** - Export single persona to JSON format
-- **`export_all_personas`** - Export all personas to JSON bundle  
+### Persona Import (Legacy Tool)
 - **`import_persona`** - Import persona from file path or JSON string
 
 ### GitHub Collection Integration
@@ -379,6 +377,9 @@ Add DollhouseMCP to your Claude Desktop configuration:
 ### Persona Indicators
 - **`configure_indicator`** - Configure how persona indicators appear in AI responses
 - **`get_indicator_config`** - View current indicator configuration settings
+
+### System Tools
+- **`get_build_info`** - Get comprehensive build and runtime information about the server
 
 ### GitHub Authentication (NEW!)
 - **`setup_github_auth`** - Start GitHub OAuth device flow authentication
@@ -1598,7 +1599,7 @@ This project is licensed under the **AGPL-3.0** License with Platform Stability 
 - 🔄 **Roundtrip Workflow** - Complete content submission cycle
 
 **Statistics**:
-- 40 total MCP tools (down from 51 - 9 PersonaTools removed, 3 preserved)
+- 39 total MCP tools (down from 51 - 9 PersonaTools removed, 1 preserved)
 - 89 commits ahead of main
 - 257 files changed
 - 50,857 lines added
