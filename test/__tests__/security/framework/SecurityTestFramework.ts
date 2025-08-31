@@ -377,9 +377,6 @@ export class SecurityTestFramework {
             case 'import_persona':
               result = await server.importPersona(payload);
               break;
-            case 'share_persona':
-              result = await server.sharePersona(payload);
-              break;
             default:
               throw new Error(`Unknown tool: ${toolName}`);
           }

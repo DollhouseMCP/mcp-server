@@ -153,7 +153,7 @@ describe('Portfolio Filtering Performance', () => {
       
       console.log(`Large file filtering: ${fileCount} files filtered in ${duration.toFixed(2)}ms`);
       console.log(`Filtered down to ${elements.length} legitimate files from ${fileCount} total`);
-    });
+    }, 30000); // Increase timeout to 30 seconds for Windows CI
 
     // Increase timeout for Windows Node 22 compatibility (60 seconds)
     it('should handle very large single directory efficiently', async () => {

@@ -196,6 +196,7 @@ export class PortfolioElementAdapter implements IElement {
       ...existingMetadata, // Existing metadata first
       ...this.metadata,    // Our validated metadata overwrites
       id: this.id,         // Always use our ID
+      unique_id: this.id,  // CRITICAL FIX: Add unique_id for collection workflow compatibility
       type: this.type,     // Always use our type
       version: this.version // Always use our version
     };
@@ -223,6 +224,7 @@ export class PortfolioElementAdapter implements IElement {
       // Fall back to minimal safe metadata
       const safeMetadata = {
         id: this.id,
+        unique_id: this.id,  // CRITICAL FIX: Include unique_id for collection workflow
         type: this.type,
         version: this.version,
         name: this.normalizeString(this.metadata.name || 'Untitled'),

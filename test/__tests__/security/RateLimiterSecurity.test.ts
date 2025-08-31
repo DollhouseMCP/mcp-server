@@ -114,26 +114,14 @@ describe('RateLimiter Security Tests', () => {
   });
 
   describe('PersonaSharer Rate Limiting Integration', () => {
-    it('should use appropriate rate limits for authenticated vs unauthenticated', async () => {
-      // Test is in PersonaSharer.ts constructor
+    it.skip('should use appropriate rate limits for authenticated vs unauthenticated', async () => {
+      // SKIPPED: PersonaSharer has been disabled as export_persona tools were removed
+      // This test was for the PersonaSharer rate limiting integration
       // When GITHUB_TOKEN exists: 100 requests/hour
       // When no token: 30 requests/hour (conservative)
       
-      // This ensures the integration is working
-      const { PersonaSharer } = await import('../../../src/persona/export-import/PersonaSharer.js');
-      
-      // Mock TokenManager
-      jest.mock('../../../src/security/tokenManager.js', () => ({
-        TokenManager: {
-          getGitHubToken: jest.fn().mockReturnValue(null)
-        }
-      }));
-      
-      const mockClient = {} as any;
-      const sharer = new PersonaSharer(mockClient, 'test-user');
-      
-      // The rate limiter should be initialized (internal to PersonaSharer)
-      expect(sharer).toBeDefined();
+      // The PersonaSharer module no longer exists after disabling export tools
+      // Rate limiting is still tested in other tests in this file
     });
   });
 

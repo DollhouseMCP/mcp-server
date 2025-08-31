@@ -517,7 +517,7 @@ validate_persona "Study Buddy"      # Check quality and format
 
 ### Testing Status
 - ✅ **Build System**: TypeScript compilation working perfectly
-- ✅ **Server Startup**: DollhouseMCP server boots correctly with all 23 MCP tools
+- ✅ **Server Startup**: DollhouseMCP server boots correctly with all 41 MCP tools
 - ✅ **Comprehensive Test Suite**: 309 tests all passing (up from 221)
 - ✅ **CI/CD Pipeline**: All workflows passing at 100% reliability
 - ✅ **Auto-Update System**: Complete test coverage including edge cases and security validation
@@ -537,7 +537,7 @@ validate_persona "Study Buddy"      # Check quality and format
 
 **Current Working Directory**: `/Users/mick/Developer/MCP-Servers/DollhouseMCP/`  
 **Git Status**: On feature/ensemble-element-implementation branch  
-**Build Status**: All TypeScript compiling correctly (23 MCP tools)  
+**Build Status**: All TypeScript compiling correctly (41 MCP tools)  
 **Test Status**: Element tests all passing  
 **Security Status**: All alerts resolved (0 active)  
 **Dependencies**: All updated (Node.js 24, MCP SDK 1.15.0, Jest 30.0.4)  

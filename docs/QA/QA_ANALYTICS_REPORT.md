@@ -10,7 +10,7 @@ Analysis of 4 QA test runs reveals a system with **inconsistent reliability patt
 - **Critical Issue**: `browse_collection` tool shows timeout failures in earlier runs
 - **Performance**: Excellent with sub-millisecond response times for most operations
 - **Memory**: Stable with consistent 73-82MB RSS usage
-- **Tool Availability**: All 42 tools consistently available
+- **Tool Availability**: All 41 tools consistently available
 
 **Priority Actions Required:**
 1. Fix `browse_collection` timeout issues

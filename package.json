@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "1.6.11",
+  "version": "1.7.0",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -18,7 +18,11 @@
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "setup": "npm install && npm run build",
-    "prepublishOnly": "BUILD_TYPE=npm npm run build",
+    "build:readme": "node scripts/build-readme.js",
+    "build:readme:npm": "node scripts/build-readme.js --target=npm",
+    "build:readme:github": "node scripts/build-readme.js --target=github",
+    "prepublishOnly": "npm run build:readme:npm && cp README.md README.md.backup 2>/dev/null || true && cp README.npm.md README.md && BUILD_TYPE=npm npm run build",
+    "postpublish": "if [ -f README.md.backup ]; then mv README.md.backup README.md; else echo 'No backup found, README.md unchanged'; fi",
     "test": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs",
     "test:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs --watch",
     "test:coverage": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config test/jest.config.cjs --coverage",
@@ -57,7 +61,9 @@
     "qa:simple": "node scripts/qa-simple-test.js",
     "update:version": "node scripts/update-version.mjs",
     "version:bump": "node scripts/update-version.mjs",
-    "version:check": "node scripts/update-version.mjs --dry-run"
+    "version:check": "node scripts/update-version.mjs --dry-run",
+    "tools:count": "node scripts/count-tools.js",
+    "tools:list": "node scripts/count-tools.js --json"
   },
   "keywords": [
     "mcp",

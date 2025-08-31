@@ -103,6 +103,19 @@ jobs:
           
           echo "✅ Changelog generated successfully"
 
+      - name: Build README files
+        shell: bash
+        run: |
+          echo "📚 Building modular README files for NPM..."
+          npm run build:readme
+          echo "✅ README files built successfully"
+          
+          # Show the generated README size for NPM
+          if [ -f "README.npm.md" ]; then
+            SIZE=$(stat -f%z "README.npm.md" 2>/dev/null || stat -c%s "README.npm.md" 2>/dev/null || echo "unknown")
+            echo "📦 README.npm.md size: $SIZE bytes"
+          fi
+
       - name: Publish to NPM
         run: npm publish --access public
         env:

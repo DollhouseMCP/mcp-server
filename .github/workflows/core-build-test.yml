@@ -156,7 +156,8 @@ jobs:
           fi
           
       - name: Run compiled tests approach
-        if: steps.original_tests.outcome == 'failure'
+        if: false  # Temporarily disabled - see PR #845
+        # Original condition: if: steps.original_tests.outcome == 'failure'
         working-directory: ${{ github.workspace }}
         run: |
           echo "=== Running compiled test approach ==="

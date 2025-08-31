@@ -42,7 +42,7 @@ jest.mock('fs/promises');
 const MockedFs = fs as jest.Mocked<typeof fs>;
 
 describe.skip('SubmitToPortfolioTool', () => {
-  let tool: SubmitToPortfolioTool;
+  let tool: any; // Using any since SubmitToPortfolioTool is a class, not a type
   let mockApiCache: any;
   let mockAuthManager: any;
   let mockPortfolioRepoManager: any;
@@ -79,6 +79,7 @@ describe.skip('SubmitToPortfolioTool', () => {
     mockGitHubAuthManager.mockImplementation(() => mockAuthManager);
     mockPortfolioRepoManager.mockImplementation(() => mockPortfolioRepoManager);
     
+    // @ts-ignore - Mock for skipped test
     (TokenManager.getGitHubTokenAsync as jest.Mock).mockResolvedValue('test-token');
     
     (ContentValidator.validateAndSanitize as jest.Mock).mockReturnValue({
@@ -275,7 +276,8 @@ describe.skip('SubmitToPortfolioTool', () => {
   
   describe('Token management', () => {
     it('should fail when token cannot be retrieved', async () => {
-      MockedTokenManager.getGitHubTokenAsync.mockResolvedValue(null);
+      // @ts-ignore - Mock for skipped test
+      TokenManager.getGitHubTokenAsync.mockResolvedValue(null);
       
       const result = await tool.execute({
         name: 'test-element'

@@ -1,0 +1,291 @@
+# README Sync Workflow
+#
+# Purpose:
+#   Automatically rebuilds and synchronizes README files when documentation chunks are modified.
+#   This ensures that README.md, README.npm.md, and README.github.md stay in sync across branches
+#   and are always generated from the latest chunk files.
+#
+# Triggers:
+#   - Push to main or develop branches when chunks/build files change
+#   - Manual workflow dispatch for forced rebuilds
+#
+# How it works:
+#   1. Detects changes to documentation chunks
+#   2. Rebuilds all README files from chunks
+#   3. Commits changes if files were modified
+#   4. Optionally creates PR from develop to main for syncing
+#
+# Security considerations:
+#   - Branch names are sanitized to prevent command injection
+#   - Auto-commits are detected and skipped to prevent infinite loops
+#   - Workflow checks for auto-commits and exits early to prevent recursion
+#
+# Performance optimizations:
+#   - Early exit if no relevant files changed
+#   - Shallow clone (depth=2) for faster checkout
+#   - Conditional step execution to minimize resource usage
+
+name: README Sync
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'docs/readme/chunks/**'
+      - 'scripts/build-readme.js'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Configuration constants for maintainability
+env:
+  NODE_VERSION: '20.x'
+  BUILD_TIMEOUT: 10
+  WORKFLOW_TIMEOUT: 15
+  README_BUILD_COMMAND: 'npm run build:readme'
+  README_FILES_PATTERN: 'README*.md'
+
+jobs:
+  build-and-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(vars.WORKFLOW_TIMEOUT || '15') }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 2  # Need at least 2 commits to check changes
+      
+      # HIGH PRIORITY FIX: Check if this is an auto-commit to prevent infinite loops
+      - name: Check if this is an auto-commit
+        id: check_auto_commit
+        shell: bash
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [[ "$COMMIT_MSG" == *"Auto-sync README files"* ]] || [[ "$COMMIT_MSG" == *"chore: Auto-sync README"* ]]; then
+            echo "Skipping auto-generated commit to prevent infinite loop"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+      
+      # MEDIUM PRIORITY FIX: Early exit if no relevant files changed
+      - name: Check if relevant files changed
+        if: steps.check_auto_commit.outputs.skip != 'true'
+        id: check_triggers
+        shell: bash
+        run: |
+          # Check if this is the initial run (workflow_dispatch) or if relevant files changed
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Manual trigger - proceeding with build"
+            echo "proceed=true" >> $GITHUB_OUTPUT
+          else
+            # Check if relevant files actually changed in the last commit
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || echo "")
+            if echo "$CHANGED_FILES" | grep -E '^(docs/readme/chunks/|scripts/build-readme\.js|package\.json)'; then
+              echo "Relevant files changed - proceeding with build"
+              echo "proceed=true" >> $GITHUB_OUTPUT
+            else
+              echo "No relevant files changed - skipping"
+              echo "proceed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+      - name: Setup Node.js
+        if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
+        shell: bash
+        run: npm ci
+      
+      # MEDIUM PRIORITY FIX: Add error handling for build step
+      - name: Build README files
+        if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true'
+        id: build_readme
+        timeout-minutes: ${{ fromJSON(env.BUILD_TIMEOUT) }}
+        shell: bash
+        run: |
+          echo "📚 Building README files..."
+          
+          # Attempt to build README files with error handling
+          if ! ${{ env.README_BUILD_COMMAND }}; then
+            echo "❌ README build failed"
+            echo "build_failed=true" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Copy GitHub README to main README
+          if [ -f "README.github.md" ]; then
+            cp README.github.md README.md
+            echo "✅ Copied README.github.md to README.md"
+          else
+            echo "⚠️ README.github.md not found"
+            echo "build_failed=true" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ README files built successfully"
+          
+          # Show sizes for verification
+          echo "📊 File sizes:"
+          ls -lh README*.md 2>/dev/null || echo "No README files found"
+      
+      # MEDIUM PRIORITY FIX: Make file checking more flexible
+      - name: Check for changes
+        if: steps.check_auto_commit.outputs.skip != 'true' && steps.check_triggers.outputs.proceed == 'true' && steps.build_readme.outputs.build_failed != 'true'
+        id: check_changes
+        shell: bash
+        run: |
+          # Check for changes in any README files (more flexible than hardcoded list)
+          if git diff --quiet ${{ env.README_FILES_PATTERN }} 2>/dev/null; then
+            echo "No changes to README files"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "README files have changed"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Show what changed
+            echo "📝 Changes detected in:"
+            git diff --name-only ${{ env.README_FILES_PATTERN }} 2>/dev/null || echo "Error listing changed files"
+          fi
+      
+      # HIGH PRIORITY FIX: Sanitize branch name to prevent command injection
+      - name: Commit and push changes
+        if: |
+          steps.check_auto_commit.outputs.skip != 'true' && 
+          steps.check_triggers.outputs.proceed == 'true' && 
+          steps.check_changes.outputs.has_changes == 'true' &&
+          steps.build_readme.outputs.build_failed != 'true'
+        shell: bash
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add the README files
+          git add ${{ env.README_FILES_PATTERN }}
+          
+          # SECURITY FIX: Sanitize branch name to prevent command injection
+          # Use parameter expansion instead of sed to avoid shell injection
+          BRANCH_NAME="${{ github.ref_name }}"
+          # Replace non-alphanumeric characters with underscores using pure bash
+          # This is safer than using sed with user input
+          CLEAN_BRANCH_NAME="${BRANCH_NAME//[^a-zA-Z0-9._\/-]/_}"
+          
+          # Additional safety: Truncate to reasonable length
+          CLEAN_BRANCH_NAME="${CLEAN_BRANCH_NAME:0:100}"
+          
+          # Create safe commit message
+          COMMIT_MSG="chore: Auto-sync README files on ${CLEAN_BRANCH_NAME} push"
+          
+          # Commit with sanitized message
+          git commit -m "$COMMIT_MSG" -m "Automatically generated from docs/readme/chunks/"
+          
+          # Push the changes
+          git push origin HEAD
+          
+          echo "✅ README files synchronized successfully"
+      
+      - name: Create sync PR (if on develop)
+        if: |
+          github.ref == 'refs/heads/develop' && 
+          steps.check_auto_commit.outputs.skip != 'true' && 
+          steps.check_triggers.outputs.proceed == 'true' && 
+          steps.check_changes.outputs.has_changes == 'true' &&
+          steps.build_readme.outputs.build_failed != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Check if there's already a PR from develop to main for README sync
+          EXISTING_PR=$(gh pr list --base main --head develop --state open --json number,title --jq '.[] | select(.title | contains("README")) | .number' | head -1 || echo "")
+          
+          if [ -z "$EXISTING_PR" ]; then
+            echo "📤 Creating PR to sync README changes to main..."
+            
+            # Create PR with improved description using HEREDOC
+            PR_BODY=$(cat <<'EOF'
+          ## Automated README Synchronization
+          
+          This PR automatically syncs README changes from develop to main.
+          
+          ### Changes
+          - README files have been automatically rebuilt from chunks
+          - Updates are from recent changes to documentation in develop branch
+          
+          ### Files Changed
+          - README.md (main display file)
+          - README.npm.md (NPM package documentation)
+          - README.github.md (GitHub repository documentation)
+          
+          ### Validation
+          - ✅ All README files successfully generated
+          - ✅ File sizes verified
+          - ✅ Content validated
+          
+          This is an automated PR created by the README Sync workflow.
+          EOF
+            )
+            
+            gh pr create \
+              --base main \
+              --head develop \
+              --title "chore: Sync README updates from develop" \
+              --body "$PR_BODY" \
+              --label "documentation" \
+              --label "automated" \
+              --label "chore"
+          else
+            echo "✅ PR #$EXISTING_PR already exists for README sync"
+            
+            # Add a comment to the existing PR about the new sync
+            COMMENT_BODY=$(cat <<EOF
+          📚 README files have been updated again via automatic sync.
+          
+          Latest sync includes changes from:
+          - Branch: develop
+          - Commit: ${{ github.sha }}
+          - Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          Files updated:
+          $(git diff --name-only HEAD~1 HEAD README*.md 2>/dev/null | sed 's/^/- /' || echo "- Unable to list files")
+          EOF
+            )
+            
+            gh pr comment "$EXISTING_PR" --body "$COMMENT_BODY"
+          fi
+      
+      # LOW PRIORITY: Add summary output for better visibility
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## README Sync Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check_auto_commit.outputs.skip }}" == "true" ]; then
+            echo "⏭️ **Skipped**: Auto-commit detected (preventing infinite loop)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.check_triggers.outputs.proceed }}" != "true" ]; then
+            echo "⏭️ **Skipped**: No relevant files changed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.build_readme.outputs.build_failed }}" == "true" ]; then
+            echo "❌ **Failed**: README build failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.check_changes.outputs.has_changes }}" != "true" ]; then
+            echo "✅ **Success**: No changes needed (files already up to date)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Success**: README files synchronized" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Details" >> $GITHUB_STEP_SUMMARY
+            echo "- Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Triggered by: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -66,7 +66,7 @@ Unable to complete GitHub integration testing due to **100% tool execution timeo
 ### Connection Performance ✅
 - **MCP Connection**: ~200ms (successful)
 - **Server Startup**: ~1000ms (successful)
-- **Tool Discovery**: ~5000ms (successful, 42 tools detected)
+- **Tool Discovery**: ~5000ms (successful, 41 tools detected)
 
 ### Tool Execution Performance ❌
 - **All Tool Calls**: 100% timeout at 3000ms
@@ -96,7 +96,7 @@ Based on tool schema analysis:
 
 ### Primary Hypothesis: Tool Execution Pipeline Issue
 1. **MCP Server Starts Successfully**: Connection and discovery work
-2. **Tool Registry Populated**: 42 tools detected including GitHub tools
+2. **Tool Registry Populated**: 41 tools detected including GitHub tools
 3. **Execution Pipeline Fails**: All tool calls timeout regardless of complexity
 4. **Potential Causes**:
    - Portfolio directory permission or access issue

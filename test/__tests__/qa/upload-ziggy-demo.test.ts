@@ -86,23 +86,24 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Mock fetch to capture exactly what gets uploaded
     const uploadedData: any = {};
     
-    (global as any).fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
-      console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${url}`);
+    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, options?: RequestInit) => {
+      const urlString = url.toString();
+      console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${urlString}`);
       
       // Check if file exists (should be 404 for new file)
-      if (url.includes('/contents/') && !options?.method) {
+      if (urlString.includes('/contents/') && !options?.method) {
         console.log('  ↳ Checking if test-ziggy.md already exists...');
         return {
           ok: false,
           status: 404,
           json: async () => null
-        };
+        } as Response;
       }
       
       // Capture the upload
-      if (url.includes('/contents/') && options?.method === 'PUT') {
-        const body = JSON.parse(options.body);
-        uploadedData.url = url;
+      if (urlString.includes('/contents/') && options?.method === 'PUT') {
+        const body = JSON.parse(options?.body as string || '{}');
+        uploadedData.url = urlString;
         uploadedData.message = body.message;
         uploadedData.encodedContent = body.content;
         uploadedData.decodedContent = Buffer.from(body.content, 'base64').toString('utf-8');
@@ -137,10 +138,10 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
               }
             }
           })
-        };
+        } as Response;
       }
       
-      return { ok: false, status: 404, json: async () => null };
+      return { ok: false, status: 404, json: async () => null } as Response;
     });
 
     // Create the Test-Ziggy element
@@ -206,16 +207,17 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     // Track ALL API calls to prove we're not syncing everything
     const apiCalls: string[] = [];
     
-    (global as any).fetch = jest.fn().mockImplementation(async (url: string, options?: any) => {
-      const callDesc = `${options?.method || 'GET'} ${url}`;
+    (global as any).fetch = jest.fn<typeof fetch>().mockImplementation(async (url: string | URL | Request, options?: RequestInit) => {
+      const urlString = url.toString();
+      const callDesc = `${options?.method || 'GET'} ${urlString}`;
       apiCalls.push(callDesc);
       
       if (options?.method === 'PUT') {
-        const body = JSON.parse(options.body);
+        const body = JSON.parse(options?.body as string || '{}');
         const content = Buffer.from(body.content, 'base64').toString('utf-8');
         
         console.log('\n🎯 SINGLE UPLOAD DETECTED:');
-        console.log('  File:', url.match(/\/contents\/(.+)$/)?.[1]);
+        console.log('  File:', urlString.match(/\/contents\/(.+)$/)?.[1]);
         console.log('  Content preview:', content.substring(0, 100) + '...');
         
         return {
@@ -230,10 +232,10 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
               html_url: 'https://github.com/testuser/dollhouse-portfolio/commit/abc123' 
             }
           })
-        };
+        } as Response;
       }
       
-      return { ok: false, status: 404, json: async () => null };
+      return { ok: false, status: 404, json: async () => null } as Response;
     });
 
     // Simulate having multiple personas locally
