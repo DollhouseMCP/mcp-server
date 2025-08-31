@@ -9,39 +9,41 @@ import { IToolHandler } from '../types.js';
 
 export function getPersonaExportImportTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
-    {
-      tool: {
-        name: "export_persona",
-        description: "Export a single persona to a JSON format",
-        inputSchema: {
-          type: "object",
-          properties: {
-            persona: {
-              type: "string",
-              description: "The persona name or filename to export",
-            },
-          },
-          required: ["persona"],
-        },
-      },
-      handler: (args: any) => server.exportPersona(args.persona)
-    },
-    {
-      tool: {
-        name: "export_all_personas",
-        description: "Export all personas to a JSON bundle",
-        inputSchema: {
-          type: "object",
-          properties: {
-            includeDefaults: {
-              type: "boolean",
-              description: "Include default personas in export (default: true)",
-            },
-          },
-        },
-      },
-      handler: (args: any) => server.exportAllPersonas(args.includeDefaults)
-    },
+    // Disabled: export_persona and export_all_personas are not compatible with the current element system
+    // These tools may be re-implemented once the element system is fully stabilized
+    // {
+    //   tool: {
+    //     name: "export_persona",
+    //     description: "Export a single persona to a JSON format",
+    //     inputSchema: {
+    //       type: "object",
+    //       properties: {
+    //         persona: {
+    //           type: "string",
+    //           description: "The persona name or filename to export",
+    //         },
+    //       },
+    //       required: ["persona"],
+    //     },
+    //   },
+    //   handler: (args: any) => server.exportPersona(args.persona)
+    // },
+    // {
+    //   tool: {
+    //     name: "export_all_personas",
+    //     description: "Export all personas to a JSON bundle",
+    //     inputSchema: {
+    //       type: "object",
+    //       properties: {
+    //         includeDefaults: {
+    //           type: "boolean",
+    //           description: "Include default personas in export (default: true)",
+    //         },
+    //       },
+    //     },
+    //   },
+    //   handler: (args: any) => server.exportAllPersonas(args.includeDefaults)
+    // },
     {
       tool: {
         name: "import_persona",
