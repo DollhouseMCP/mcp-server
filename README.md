@@ -33,6 +33,14 @@
 
 ---
 
+## Demo
+
+<div align="center">
+  <img src="docs/assets/dollhouse-reddit-demo.gif" alt="DollhouseMCP Demo" width="800" />
+</div>
+
+---
+
 <div align="center">
   <img src="docs/assets/dollhouse-logo.png" alt="DollhouseMCP" width="200" />
   
