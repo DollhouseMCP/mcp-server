@@ -390,131 +390,180 @@ Add DollhouseMCP to your Claude Desktop configuration:
 
 ## 📖 Usage Examples
 
-### Collection Operations
+**DollhouseMCP is designed for natural language interaction.** Simply ask for the actions you want - you don't need to be overly specific. The system will try to figure out what you need. Ask questions about what you can and can't do, and what things are available.
+
+### Importing and Downloading Content from the Dollhouse Collection
+
+**Natural Language Examples:**
+- "Show me all the personas in the Dollhouse Collection"
+- "Show me all the skills in the Dollhouse Collection"
+- "Search for writing customization elements in the Dollhouse Collection"
+- "Find me some code review tools in the Dollhouse Collection"
+- "Install the storyteller persona from the Dollhouse Collection"
+- "Install the code reviewer - it's in the Dollhouse Collection, right?"
+- "Go grab the email templates from the Dollhouse Collection"
+
+**Tool Commands (if you prefer):**
 ```
-# Browse collection content by type
 browse_collection section="library" type="personas"    # Browse all personas
 browse_collection section="library" type="skills"      # Browse skills
 browse_collection section="library" type="templates"   # Browse templates
 
-# Search collection content
 search_collection query="writing"                      # Search for writing personas
 search_collection query="code review"                  # Find code review skills
 
-# Enhanced collection search with pagination
 search_collection_enhanced query="data analysis" maxResults=10 elementType="skills"
 search_collection_enhanced query="creative" page=2 resultsPerPage=5
 
-# Install elements from collection
 install_content path="library/personas/storyteller.md"        # Install persona
 install_content path="library/skills/code-reviewer.md"       # Install skill
 install_content path="library/templates/email-template.md"   # Install template
 
-# Check collection cache health
 get_collection_cache_health
 ```
 
-### Portfolio Workflow (NEW!)
+### Managing Your Dollhouse Portfolio (Local and GitHub)
+
+**Natural Language Examples:**
+- "Check the status of my GitHub portfolio"
+- "Initialize my personal portfolio on GitHub"
+- "Create a new GitHub portfolio called my-ai-portfolio"
+- "Sync my local portfolio with my personal portfolio on GitHub"
+- "Push my local changes to my GitHub portfolio"
+- "Pull updates from my GitHub portfolio to my local computer"
+- "Search my local portfolio for writing tools"
+- "Find code review skills in my portfolio"
+- "Search everywhere for data analysis tools"
+- "Upload my custom persona to my GitHub portfolio"
+- "Submit my email template to my personal portfolio on GitHub"
+
+**Tool Commands (if you prefer):**
 ```
-# Check GitHub portfolio status
 portfolio_status                                       # Check repository status
 
-# Initialize a new GitHub portfolio (first time setup)
 init_portfolio                                         # Create GitHub repository
 init_portfolio repoName="my-ai-portfolio"             # Custom repository name
 
-# Synchronize local and GitHub portfolios
 sync_portfolio                                         # Sync both directions
 sync_portfolio direction="push"                        # Push local to GitHub
 sync_portfolio direction="pull"                        # Pull GitHub to local
 
-# Search your local portfolio with advanced indexing
 search_portfolio query="writing"                       # Search all element types
 search_portfolio query="code" elementType="skills"     # Search specific type
 search_portfolio query="email" fuzzyMatch=true         # Enable fuzzy matching
 
-# Unified search across all sources (local, GitHub, collection)
 search_all query="data analysis"                       # Search everywhere
 search_all query="creative writing" maxResults=20      # Limit results
 search_all query="templates" source="local"            # Search specific source
 
-# Submit content with smart auto-detection
 submit_content name="code-review"                      # Auto-detects element type
 submit_content name="my-persona" elementType="personas" # Explicit type
 submit_content name="email-template" description="Professional email template"
 
-# Configure collection submission settings
 configure_collection_submission autoSubmit=true        # Enable auto-submit
 configure_collection_submission defaultLicense="MIT"   # Set default license
 get_collection_submission_config                       # View current config
 ```
 
-### Portfolio Element Management
+### Your Dollhouse Portfolio Customization Element Management
+
+**Natural Language Examples:**
+- "Show me all my personas"
+- "List my skills"
+- "What templates do I have?"
+- "Activate the code reviewer skill"
+- "Turn on the professional persona"
+- "Use the email template"
+- "What's currently active?"
+- "Show me details about the code reviewer"
+- "Tell me more about my custom persona"
+- "Turn off the code reviewer"
+- "Deactivate all personas"
+- "Refresh my portfolio"
+
+**Tool Commands (if you prefer):**
 ```
-# List elements by type (works with all element types)
 list_elements type="personas"                          # List personas
 list_elements type="skills"                            # List skills  
 list_elements type="templates"                         # List templates
 list_elements type="agents"                            # List agents
 
-# Activate elements to customize AI behavior
 activate_element name="code-reviewer" type="skills"    # Activate skill
 activate_element name="professional" type="personas"   # Activate persona
 activate_element name="email-format" type="templates"  # Activate template
 
-# View active elements
 get_active_elements                                     # All active elements
 get_active_elements type="skills"                      # Active skills only
 
-# Get detailed element information
 get_element_details name="code-reviewer" type="skills" # View skill details
 get_element_details name="my-persona" type="personas"  # View persona details
 
-# Deactivate elements
 deactivate_element name="code-reviewer" type="skills"  # Deactivate specific
 deactivate_element type="personas"                     # Deactivate all personas
 
-# Refresh elements from filesystem
 reload_elements                                         # Reload all elements
 reload_elements type="skills"                          # Reload specific type
 ```
 
-### Specialized Element Operations
+### Specialized Operations for Templates and Agents
+
+**Natural Language Examples:**
+- "Use the project update template with project name DollhouseMCP and status Released"
+- "Fill in the professional email template for John about a meeting"
+- "Have the project manager agent create a sprint plan for next week"
+- "Get the data analyst to analyze our Q3 sales trends"
+
+**Tool Commands (if you prefer):**
 ```
-# Render templates with variables
 render_template name="project-update" variables='{"project": "DollhouseMCP", "status": "Released"}'
 render_template name="email-professional" variables='{"recipient": "John", "subject": "Meeting"}'
 
-# Execute agents with specific goals
 execute_agent name="project-manager" goal="Create a sprint plan for next week"
 execute_agent name="data-analyst" goal="Analyze sales trends for Q3"
 ```
 
-### System Information
+### System Information and Health Checks
+
+**Natural Language Examples:**
+- "What version of DollhouseMCP am I running?"
+- "Show me the system information"
+- "Check the environment details"
+- "What dependencies are installed?"
+
+**Tool Commands (if you prefer):**
 ```
-# Get comprehensive build and runtime information
 get_build_info                                         # Full system info
 get_build_info section="version"                       # Version info only
 get_build_info section="environment"                   # Environment details
 get_build_info section="dependencies"                  # Dependency versions
 ```
 
-### Persona Management with ElementTools
+### Managing Your AI Personas
+
+**Natural Language Examples:**
+- "Show me all my personas"
+- "Activate the Study Buddy persona"
+- "Tell me more about the Study Buddy persona"
+- "Share my Study Buddy persona with the community"
+- "Upload Study Buddy to the Dollhouse Collection"
+
+**Tool Commands (if you prefer):**
 ```
-# List all personas
 list_elements type="personas"
-
-# Activate a persona
 activate_element name="Study Buddy" type="personas"
-
-# Get persona details
 get_element_details name="Study Buddy" type="personas"
-
-# Submit to community collection
 submit_persona "Study Buddy"               # Share with community
 ```
 
-### User Identity
+### Setting Your User Identity
+
+**Natural Language Examples:**
+- "Set my username to john_doe"
+- "What's my current identity?"
+- "Make me anonymous again"
+- "Clear my user identity"
+
+**Tool Commands (if you prefer):**
 ```
 set_user_identity "your-username"          # Set attribution
 get_user_identity                          # Check current status
