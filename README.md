@@ -33,6 +33,14 @@
 
 ---
 
+## Demo
+
+<div align="center">
+  <img src="https://github.com/DollhouseMCP/mcp-server/releases/download/untagged-0f6eeb58129e51fa8b78/Dollhouse-Reddit-demo-2.gif" alt="DollhouseMCP Demo" width="800" />
+</div>
+
+---
+
 <div align="center">
   <img src="docs/assets/dollhouse-logo.png" alt="DollhouseMCP" width="200" />
   
