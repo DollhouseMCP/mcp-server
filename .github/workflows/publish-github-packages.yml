@@ -1,0 +1,64 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.2.3
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-gpr:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@DollhouseMCP'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Configure package.json for GitHub Packages
+        run: |
+          # Create a temporary package.json for GitHub Packages
+          # GitHub Packages requires the package name to match the org/repo format
+          node -e "
+          const pkg = require('./package.json');
+          pkg.name = '@DollhouseMCP/mcp-server';
+          pkg.publishConfig = {
+            registry: 'https://npm.pkg.github.com'
+          };
+          require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          console.log('Updated package name for GitHub Packages: ' + pkg.name);
+          "
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore original package.json
+        if: always()
+        run: |
+          git checkout -- package.json
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "✅ Successfully published to GitHub Packages!"
+          echo "📦 Package will appear in the repository's Packages section"
