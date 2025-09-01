@@ -36,8 +36,7 @@
 ## Demo
 
 <div align="center">
-  <!-- Upload the GIF to issue #873 and replace this URL with the GitHub CDN URL -->
-  <img src="https://github.com/user-attachments/assets/REPLACE-WITH-ACTUAL-URL" alt="DollhouseMCP Demo" width="800" />
+  <img src="https://github.com/DollhouseMCP/mcp-server/releases/download/untagged-0f6eeb58129e51fa8b78/Dollhouse-Reddit-demo-2.gif" alt="DollhouseMCP Demo" width="800" />
 </div>
 
 ---
