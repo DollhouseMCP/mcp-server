@@ -170,27 +170,67 @@ Task({
 ```
 ```
 
-## Real Elements in DollhouseMCP
+## Dynamic Element Discovery
 
-### Currently Available Personas
-- alex-sterling
-- verification-specialist
-- session-notes-writer
+### Cascading Search Strategy
 
-### Currently Available Skills
-- (Skills need to be created as part of element implementation)
+When an orchestration needs an element, search in this order:
 
-### Available Agent Types (via Task tool)
-- general-purpose
-- statusline-setup
-- output-style-setup
+#### 1. Local Portfolio (Fastest)
+```bash
+# Query what's actually available locally
+mcp__dollhousemcp-production__list_elements type="personas"
+mcp__dollhousemcp-production__list_elements type="skills"
+```
 
-### Available Templates
-- coordination-template.md
-- task-tracker.md
-- verification-checklist.md
-- session-notes-template.md
-- feature-implementation.md
+#### 2. User's GitHub Portfolio (If authenticated)
+```bash
+# Check user's portfolio on GitHub
+mcp__dollhousemcp-production__search_portfolio query="code-review"
+
+# If found but not local, sync it
+mcp__dollhousemcp-production__sync_portfolio direction="pull"
+```
+
+#### 3. DollhouseMCP Collection (Fallback)
+```bash
+# Search the community collection
+mcp__dollhousemcp-production__search_collection query="code-review"
+
+# If found, install it
+mcp__dollhousemcp-production__install_content path="library/skills/code-review.md"
+```
+
+### Runtime Validation Function
+
+```javascript
+async function ensureElementAvailable(elementName, elementType) {
+  // Step 1: Check local
+  const localElements = await listElements(elementType);
+  if (localElements.includes(elementName)) {
+    return { found: true, source: 'local' };
+  }
+  
+  // Step 2: Check GitHub portfolio
+  try {
+    const portfolioResult = await searchPortfolio(elementName);
+    if (portfolioResult.found) {
+      await syncFromPortfolio(elementName, elementType);
+      return { found: true, source: 'github-portfolio' };
+    }
+  } catch (e) {
+    console.log('GitHub portfolio not available');
+  }
+  
+  // Step 3: Check collection
+  const collectionResult = await searchCollection(elementName);
+  if (collectionResult.found) {
+    await installFromCollection(collectionResult.path);
+    return { found: true, source: 'collection' };
+  }
+  
+  return { found: false, source: null };
+}
 
 ## Integration with Orchestration
 
