@@ -141,7 +141,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 ✅ **Issue Templates** - 4 templates (feature, bug, task, research) for organized tracking
 ✅ **Label System** - Priority (critical/high/medium/low) and area-based categorization
 ✅ **Milestones** - v1.1.0 through v1.4.0 with clear timelines and goals
-✅ **Project Automation** - Workflow for auto-adding issues and status tracking
+✅ **Project Automation** - ~~Workflow removed (was misplaced, belongs in collection repo)~~
 ✅ **Management Tools** - Interactive scripts for issue management and metrics
 ✅ **Documentation** - CONTRIBUTING.md, PROJECT_SETUP.md, QUICK_START.md guides
 

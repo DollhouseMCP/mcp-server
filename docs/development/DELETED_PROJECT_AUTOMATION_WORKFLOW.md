@@ -1,3 +1,32 @@
+# Deleted Project Automation Workflow
+
+**Date Deleted**: September 7, 2025
+**Reason**: Workflow was in wrong repository (belongs in collection repo, not mcp-server)
+
+## Original Purpose
+
+This workflow was likely accidentally created in mcp-server when it should have been in the collection repository. The collection repo has the correct version at `.github/workflows/project-integration.yml`.
+
+## What It Did
+
+### Triggered On:
+- Issues: opened, closed, assigned, unassigned, labeled
+- Pull requests: opened, closed, ready_for_review, converted_to_draft
+
+### Job 1: Add to Project
+- **When**: New issues opened
+- **Action**: Added issue to `https://github.com/users/mickdarling/projects/1`
+- **Problem**: This user project doesn't exist (should use org project)
+
+### Job 2: Auto-label Management
+- **When**: Any issue event
+- **Actions**:
+  1. New issues → Added `status: needs-triage` label
+  2. Issue assigned → Removed `needs-triage`, added `status: in-progress`
+
+## Original Content
+
+```yaml
 ---
 name: Project Automation
 
@@ -66,3 +95,21 @@ jobs:
               repo: context.repo.repo,
               labels: ['status: in-progress']
             })
+```
+
+## Why Deleted
+
+1. **Wrong repository** - This belongs in the collection repo for element submissions
+2. **Wrong project URL** - Points to user project instead of org project
+3. **Causing CI failures** - Failed on every issue creation since Sept 2
+4. **Not needed** - MCP-server doesn't need automated project management
+
+## If Needed Again
+
+The correct version exists in the collection repository at:
+`/active/collection/.github/workflows/project-integration.yml`
+
+If project automation is needed for mcp-server:
+1. Create an org-level project at https://github.com/orgs/DollhouseMCP/projects/
+2. Use the collection's workflow as a template
+3. Update the project URL to point to the new project
