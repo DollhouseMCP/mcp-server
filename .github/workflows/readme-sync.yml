@@ -30,8 +30,7 @@ name: README Sync
 on:
   push:
     branches:
-      - main
-      - develop
+      - develop  # Only sync on develop - main receives updates via GitFlow merges
     paths:
       - 'docs/readme/chunks/**'
       - 'scripts/build-readme.js'
