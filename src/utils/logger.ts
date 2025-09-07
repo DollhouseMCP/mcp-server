@@ -25,17 +25,27 @@ class MCPLogger {
   // Performance: Maximum depth for object sanitization
   private static readonly MAX_DEPTH = 10;
   
-  // List of sensitive field patterns to redact (case-insensitive matching)
-  private static readonly SENSITIVE_PATTERNS = [
-    'password', 'token', 'secret', 'key', 'apikey', 'api_key',
-    'authorization', 'auth', 'credential', 'private', 'oauth',
-    'access_token', 'refresh_token', 'client_secret', 'bearer',
-    'client_id', 'session', 'cookie'
+  // Sensitive field patterns with different matching strategies
+  // Exact match patterns - must match the entire field name
+  private static readonly EXACT_MATCH_PATTERNS = [
+    'password', 'token', 'secret', 'key', 'authorization',
+    'auth', 'credential', 'private', 'session', 'cookie'
   ];
   
-  // Performance optimization: Pre-compiled regex for sensitive field detection
-  private static readonly SENSITIVE_REGEX = new RegExp(
-    MCPLogger.SENSITIVE_PATTERNS.join('|'),
+  // Substring match patterns - can appear anywhere in field name
+  private static readonly SUBSTRING_PATTERNS = [
+    'api_key', 'apikey', 'access_token', 'refresh_token',
+    'client_secret', 'client_id', 'bearer', 'oauth'
+  ];
+  
+  // Performance optimization: Pre-compiled regex patterns
+  private static readonly EXACT_MATCH_REGEX = new RegExp(
+    `^(${MCPLogger.EXACT_MATCH_PATTERNS.join('|')})$`,
+    'i'
+  );
+  
+  private static readonly SUBSTRING_REGEX = new RegExp(
+    MCPLogger.SUBSTRING_PATTERNS.join('|'),
     'i'
   );
   
@@ -48,12 +58,18 @@ class MCPLogger {
 
   /**
    * Check if a field name contains sensitive patterns
-   * Performance optimized with pre-compiled regex
+   * Uses both exact matching and substring matching for better precision
    * @param fieldName - The field name to check
    * @returns true if the field name matches sensitive patterns
    */
   private isSensitiveField(fieldName: string): boolean {
-    return MCPLogger.SENSITIVE_REGEX.test(fieldName);
+    // First check exact matches (e.g., "password" but not "password_hint")
+    if (MCPLogger.EXACT_MATCH_REGEX.test(fieldName)) {
+      return true;
+    }
+    
+    // Then check substring patterns (e.g., "api_key", "access_token")
+    return MCPLogger.SUBSTRING_REGEX.test(fieldName);
   }
 
   /**

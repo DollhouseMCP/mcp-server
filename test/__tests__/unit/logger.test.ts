@@ -173,7 +173,12 @@ describe('MCPLogger', () => {
         password: 'secret123',
         api_key: 'sk-1234567890',
         token: 'bearer-token-here',
-        oauth: { access_token: 'oauth-token', refresh_token: 'refresh-token' }
+        oauth_token: 'oauth-direct-token',
+        nested: { 
+          access_token: 'nested-token',
+          refresh_token: 'refresh-token',
+          safe_field: 'not-sensitive'
+        }
       };
       
       logger.info('Sensitive data test', sensitiveData);
@@ -181,10 +186,34 @@ describe('MCPLogger', () => {
       const logs = logger.getLogs();
       expect(logs[0].data).toEqual({
         user: 'testuser',
-        password: '[REDACTED]',
-        api_key: '[REDACTED]',
-        token: '[REDACTED]',
-        oauth: '[REDACTED]'  // oauth field is redacted entirely
+        password: '[REDACTED]',  // Exact match
+        api_key: '[REDACTED]',   // Substring match
+        token: '[REDACTED]',     // Exact match
+        oauth_token: '[REDACTED]',  // Substring match (contains 'oauth')
+        nested: {
+          access_token: '[REDACTED]',  // Substring match
+          refresh_token: '[REDACTED]', // Substring match
+          safe_field: 'not-sensitive'  // Not sensitive, preserved
+        }
+      });
+    });
+    
+    it('should not have false positives for similar field names', () => {
+      const data = {
+        error_message: 'This is an error',  // Should NOT be redacted (no "error" in sensitive list)
+        password_hint: 'Should be preserved', // Should be preserved (not exact match)
+        user_key_info: 'Some info',  // Should be preserved (not exact match for "key")
+        authentication_method: 'oauth2'  // Should be preserved (not exact match for "auth")
+      };
+      
+      logger.info('False positive test', data);
+      
+      const logs = logger.getLogs();
+      expect(logs[0].data).toEqual({
+        error_message: 'This is an error',
+        password_hint: 'Should be preserved',
+        user_key_info: 'Some info',
+        authentication_method: 'oauth2'
       });
     });
   });
