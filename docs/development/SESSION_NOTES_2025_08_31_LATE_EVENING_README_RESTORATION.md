@@ -1,4 +1,4 @@
-# Session Notes - August 31, 2025 Late Evening - README Restoration & Tool Count Fix
+/# Session Notes - August 31, 2025 Late Evening - README Restoration & Tool Count Fix
 
 ## Session Overview
 **Date**: August 31, 2025  

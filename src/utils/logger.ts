@@ -30,14 +30,57 @@ class MCPLogger {
   }
   
   /**
+   * Sanitize sensitive data before logging
+   * Security fix: Prevents exposure of OAuth tokens, API keys, passwords, etc.
+   */
+  private sanitizeData(data: any): any {
+    if (!data) return data;
+    
+    // List of sensitive field names to redact (case-insensitive matching)
+    const sensitiveFields = [
+      'password', 'token', 'secret', 'key', 'apikey', 'api_key',
+      'authorization', 'auth', 'credential', 'private', 'oauth',
+      'access_token', 'refresh_token', 'client_secret', 'bearer',
+      'client_id', 'session', 'cookie'
+    ];
+    
+    const sanitize = (obj: any): any => {
+      if (typeof obj !== 'object' || obj === null) return obj;
+      
+      if (Array.isArray(obj)) {
+        return obj.map(item => sanitize(item));
+      }
+      
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const lowerKey = key.toLowerCase();
+        // Check if the field name contains any sensitive keywords
+        if (sensitiveFields.some(field => lowerKey.includes(field))) {
+          sanitized[key] = '[REDACTED]';
+        } else if (typeof value === 'object') {
+          sanitized[key] = sanitize(value);
+        } else {
+          sanitized[key] = value;
+        }
+      }
+      return sanitized;
+    };
+    
+    return sanitize(data);
+  }
+  
+  /**
    * Internal logging method
    */
   private log(level: LogEntry['level'], message: string, data?: any): void {
+    // Sanitize data before storing to prevent sensitive info in memory
+    const sanitizedData = this.sanitizeData(data);
+    
     const entry: LogEntry = {
       timestamp: new Date(),
       level,
       message,
-      data
+      data: sanitizedData
     };
     
     // Store in memory
@@ -52,18 +95,18 @@ class MCPLogger {
       const isTest = process.env.NODE_ENV === 'test';
       if (!isTest) {
         const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
-        const fullMessage = data 
-          ? `${prefix} ${message} ${JSON.stringify(data)}`
-          : `${prefix} ${message}`;
+        // Security fix: Never log data objects to console to prevent sensitive information disclosure
+        // Only log the message itself, data is available in memory logs if needed for debugging
+        const safeMessage = `${prefix} ${message}`;
         
         // During initialization, we can use console
         if (level === 'error') {
-          console.error(fullMessage);
+          console.error(safeMessage);
         } else if (level === 'warn') {
-          console.warn(fullMessage);
+          console.warn(safeMessage);
         } else {
           // For MCP, even during init, avoid stdout for info/debug
-          console.error(fullMessage);
+          console.error(safeMessage);
         }
       }
     }

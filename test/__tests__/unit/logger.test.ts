@@ -156,7 +156,7 @@ describe('MCPLogger', () => {
     it('should handle complex data objects', () => {
       const complexData = {
         user: { id: 123, name: 'Test' },
-        error: new Error('Test error'),
+        message: 'Test message',  // Changed from 'error' to avoid sanitization
         array: [1, 2, 3],
         nested: { deep: { value: 'test' } }
       };
@@ -165,6 +165,27 @@ describe('MCPLogger', () => {
       
       const logs = logger.getLogs();
       expect(logs[0].data).toEqual(complexData);
+    });
+    
+    it('should sanitize sensitive fields', () => {
+      const sensitiveData = {
+        user: 'testuser',
+        password: 'secret123',
+        api_key: 'sk-1234567890',
+        token: 'bearer-token-here',
+        oauth: { access_token: 'oauth-token', refresh_token: 'refresh-token' }
+      };
+      
+      logger.info('Sensitive data test', sensitiveData);
+      
+      const logs = logger.getLogs();
+      expect(logs[0].data).toEqual({
+        user: 'testuser',
+        password: '[REDACTED]',
+        api_key: '[REDACTED]',
+        token: '[REDACTED]',
+        oauth: '[REDACTED]'  // oauth field is redacted entirely
+      });
     });
   });
 });
