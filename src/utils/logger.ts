@@ -52,13 +52,14 @@ class MCPLogger {
   );
   
   // Patterns for detecting sensitive data in log messages
+  // CodeQL[js/clear-text-logging-sensitive-data] - False positive: These are detection patterns used to IDENTIFY and REDACT sensitive data, not actual credentials
   private static readonly MESSAGE_SENSITIVE_PATTERNS = [
     /\b(token|password|secret|key|auth|bearer)\s*[:=]\s*[\w\-_\.]+/gi,
     /\b(api[_-]?key)\s*[:=]\s*[\w\-_\.]+/gi,
     /\b(access[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
     /\b(refresh[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
-    /\b(client[_-]?secret)\s*[:=]\s*[\w\-_\.]+/gi,
-    /\b(client[_-]?id)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(client[_-]?secret)\s*[:=]\s*[\w\-_\.]+/gi,  // CodeQL false positive: Pattern for detection, not actual secret
+    /\b(client[_-]?id)\s*[:=]\s*[\w\-_\.]+/gi,       // CodeQL false positive: Pattern for detection, not actual ID
     /Bearer\s+[\w\-_\.]+/gi,
     /\b(sk|pk|api)[-_][\w\-]+/gi  // API keys like sk-xxxxx or pk-xxxxx
   ];
