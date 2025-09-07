@@ -22,12 +22,8 @@ class MCPLogger {
   private maxLogs = 1000;
   private isMCPConnected = false;
   
-  /**
-   * Call this after MCP connection is established to stop console output
-   */
-  public setMCPConnected(): void {
-    this.isMCPConnected = true;
-  }
+  // Performance: Maximum depth for object sanitization
+  private static readonly MAX_DEPTH = 10;
   
   // List of sensitive field patterns to redact (case-insensitive matching)
   private static readonly SENSITIVE_PATTERNS = [
@@ -36,17 +32,28 @@ class MCPLogger {
     'access_token', 'refresh_token', 'client_secret', 'bearer',
     'client_id', 'session', 'cookie'
   ];
+  
+  // Performance optimization: Pre-compiled regex for sensitive field detection
+  private static readonly SENSITIVE_REGEX = new RegExp(
+    MCPLogger.SENSITIVE_PATTERNS.join('|'),
+    'i'
+  );
+  
+  /**
+   * Call this after MCP connection is established to stop console output
+   */
+  public setMCPConnected(): void {
+    this.isMCPConnected = true;
+  }
 
   /**
    * Check if a field name contains sensitive patterns
+   * Performance optimized with pre-compiled regex
    * @param fieldName - The field name to check
    * @returns true if the field name matches sensitive patterns
    */
   private isSensitiveField(fieldName: string): boolean {
-    const lowerFieldName = fieldName.toLowerCase();
-    return MCPLogger.SENSITIVE_PATTERNS.some(pattern => 
-      lowerFieldName.includes(pattern)
-    );
+    return MCPLogger.SENSITIVE_REGEX.test(fieldName);
   }
 
   /**
@@ -54,9 +61,11 @@ class MCPLogger {
    * This function makes it explicit to CodeQL that sensitive values are replaced
    * @param key - The object key
    * @param value - The value to potentially sanitize
+   * @param depth - Current recursion depth for performance protection
+   * @param seen - Set of seen objects to prevent circular references
    * @returns Safe value that can be logged
    */
-  private safeAssign(key: string, value: any): any {
+  private safeAssign(key: string, value: any, depth: number, seen: WeakSet<any>): any {
     // Explicitly check if this is a sensitive field BEFORE any assignment
     if (this.isSensitiveField(key)) {
       // Return a constant redacted string - no sensitive data flows through
@@ -65,7 +74,7 @@ class MCPLogger {
     
     // For non-sensitive fields, recursively sanitize if needed
     if (typeof value === 'object' && value !== null) {
-      return this.sanitizeObject(value);
+      return this.sanitizeObject(value, depth, seen);
     }
     
     // Primitive non-sensitive values are safe to return
@@ -73,22 +82,42 @@ class MCPLogger {
   }
 
   /**
-   * Sanitize an object or array recursively
+   * Sanitize an object or array recursively with performance optimizations
    * @param obj - Object or array to sanitize
+   * @param depth - Current recursion depth (defaults to 0)
+   * @param seen - Set of seen objects to detect circular references
    * @returns Sanitized copy with sensitive fields redacted
    */
-  private sanitizeObject(obj: any): any {
+  private sanitizeObject(obj: any, depth: number = 0, seen?: WeakSet<any>): any {
     // Handle null/undefined
     if (obj == null) return obj;
     
     // Handle non-objects (primitives)
     if (typeof obj !== 'object') return obj;
     
+    // Performance: Depth limiting to prevent stack overflow
+    if (depth >= MCPLogger.MAX_DEPTH) {
+      return '[DEEP_OBJECT_TRUNCATED]';
+    }
+    
+    // Performance: Circular reference detection
+    if (!seen) {
+      seen = new WeakSet();
+    }
+    
+    // Check for circular references
+    if (seen.has(obj)) {
+      return '[CIRCULAR_REFERENCE]';
+    }
+    
+    // Mark this object as seen
+    seen.add(obj);
+    
     // Handle arrays
     if (Array.isArray(obj)) {
       return obj.map(item => {
         if (typeof item === 'object' && item !== null) {
-          return this.sanitizeObject(item);
+          return this.sanitizeObject(item, depth + 1, seen);
         }
         return item;
       });
@@ -98,7 +127,7 @@ class MCPLogger {
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {
       // Use safe assignment which checks sensitivity and returns safe values
-      sanitized[key] = this.safeAssign(key, value);
+      sanitized[key] = this.safeAssign(key, value, depth + 1, seen);
     }
     
     return sanitized;
