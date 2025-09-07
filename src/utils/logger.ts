@@ -33,6 +33,7 @@ class MCPLogger {
   ];
   
   // Substring match patterns - can appear anywhere in field name
+  // lgtm[js/clear-text-logging]
   private static readonly SUBSTRING_PATTERNS = [
     'api_key', 'apikey', 'access_token', 'refresh_token',
     'client_secret', 'client_id', 'bearer', 'oauth'
@@ -52,15 +53,18 @@ class MCPLogger {
   );
   
   // Patterns for detecting sensitive data in log messages
-  // CodeQL[js/clear-text-logging-sensitive-data] - False positive: These are detection patterns used to IDENTIFY and REDACT sensitive data, not actual credentials
+  // These are detection patterns used to IDENTIFY and REDACT sensitive data, not actual credentials
   private static readonly MESSAGE_SENSITIVE_PATTERNS = [
     /\b(token|password|secret|key|auth|bearer)\s*[:=]\s*[\w\-_\.]+/gi,
     /\b(api[_-]?key)\s*[:=]\s*[\w\-_\.]+/gi,
+    // lgtm[js/clear-text-logging]
     /\b(access[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
     /\b(refresh[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
-    /\b(client[_-]?secret)\s*[:=]\s*[\w\-_\.]+/gi,  // CodeQL false positive: Pattern for detection, not actual secret
-    /\b(client[_-]?id)\s*[:=]\s*[\w\-_\.]+/gi,       // CodeQL false positive: Pattern for detection, not actual ID
+    // lgtm[js/clear-text-logging]
+    /\b(client[_-]?secret)\s*[:=]\s*[\w\-_\.]+/gi,  // Pattern for detection, not actual secret
+    /\b(client[_-]?id)\s*[:=]\s*[\w\-_\.]+/gi,       // Pattern for detection, not actual ID
     /Bearer\s+[\w\-_\.]+/gi,
+    // lgtm[js/clear-text-logging]
     /\b(sk|pk|api)[-_][\w\-]+/gi  // API keys like sk-xxxxx or pk-xxxxx
   ];
   
