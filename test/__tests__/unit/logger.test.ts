@@ -216,5 +216,68 @@ describe('MCPLogger', () => {
         authentication_method: 'oauth2'
       });
     });
+    
+    it('should handle circular references without crashing', () => {
+      const circularData: any = {
+        name: 'test',
+        password: 'secret'
+      };
+      circularData.self = circularData; // Create circular reference
+      
+      logger.info('Circular reference test', circularData);
+      
+      const logs = logger.getLogs();
+      expect(logs[0].data).toEqual({
+        name: 'test',
+        password: '[REDACTED]',
+        self: '[CIRCULAR_REFERENCE]'
+      });
+    });
+    
+    it('should handle deeply nested objects with depth limiting', () => {
+      // Create a deeply nested object (15 levels deep)
+      let deepObject: any = { value: 'bottom' };
+      for (let i = 0; i < 15; i++) {
+        deepObject = { level: i, nested: deepObject };
+      }
+      
+      logger.info('Deep nesting test', { data: deepObject });
+      
+      const logs = logger.getLogs();
+      const result = logs[0].data.data;
+      
+      // Count the nesting depth
+      let depth = 0;
+      let current = result;
+      while (current && current.nested && depth < 20) {
+        depth++;
+        current = current.nested;
+      }
+      
+      // Should stop at MAX_DEPTH (10)
+      expect(depth).toBeLessThanOrEqual(10);
+      expect(JSON.stringify(result)).toContain('[DEEP_OBJECT_TRUNCATED]');
+    });
+    
+    it('should handle arrays with sensitive data', () => {
+      const arrayData = {
+        users: [
+          { name: 'user1', password: 'pass1' },
+          { name: 'user2', token: 'token2' }
+        ],
+        api_keys: ['key1', 'key2', 'key3']
+      };
+      
+      logger.info('Array test', arrayData);
+      
+      const logs = logger.getLogs();
+      expect(logs[0].data).toEqual({
+        users: [
+          { name: 'user1', password: '[REDACTED]' },
+          { name: 'user2', token: '[REDACTED]' }
+        ],
+        api_keys: '[REDACTED]'  // Entire field is sensitive
+      });
+    });
   });
 });
