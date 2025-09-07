@@ -44,10 +44,24 @@ class MCPLogger {
     'i'
   );
   
+  // Use partial word boundaries - start boundary but allow suffixes
+  // This catches "oauth_token" and "api_keys" but not "authentication"
   private static readonly SUBSTRING_REGEX = new RegExp(
-    MCPLogger.SUBSTRING_PATTERNS.join('|'),
+    `(^|[^a-zA-Z])(${MCPLogger.SUBSTRING_PATTERNS.join('|')})`,
     'i'
   );
+  
+  // Patterns for detecting sensitive data in log messages
+  private static readonly MESSAGE_SENSITIVE_PATTERNS = [
+    /\b(token|password|secret|key|auth|bearer)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(api[_-]?key)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(access[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(refresh[_-]?token)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(client[_-]?secret)\s*[:=]\s*[\w\-_\.]+/gi,
+    /\b(client[_-]?id)\s*[:=]\s*[\w\-_\.]+/gi,
+    /Bearer\s+[\w\-_\.]+/gi,
+    /\b(sk|pk|api)[-_][\w\-]+/gi  // API keys like sk-xxxxx or pk-xxxxx
+  ];
   
   /**
    * Call this after MCP connection is established to stop console output
@@ -68,8 +82,16 @@ class MCPLogger {
       return true;
     }
     
-    // Then check substring patterns (e.g., "api_key", "access_token")
-    return MCPLogger.SUBSTRING_REGEX.test(fieldName);
+    // Then check substring patterns (e.g., "api_key", "access_token", "oauth_token")
+    // Also check if the field name itself contains these patterns
+    const lowerFieldName = fieldName.toLowerCase();
+    for (const pattern of MCPLogger.SUBSTRING_PATTERNS) {
+      if (lowerFieldName.includes(pattern)) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   /**
@@ -167,16 +189,57 @@ class MCPLogger {
   }
   
   /**
+   * Sanitize sensitive information from log messages
+   * Security fix: Prevents exposure of credentials that may be embedded in message strings
+   * @param message - The log message to sanitize
+   * @returns Sanitized message with sensitive data replaced with '[REDACTED]'
+   */
+  private sanitizeMessage(message: string): string {
+    if (!message || typeof message !== 'string') {
+      return message;
+    }
+    
+    let sanitized = message;
+    
+    // Apply each sensitive pattern to detect and redact sensitive data
+    MCPLogger.MESSAGE_SENSITIVE_PATTERNS.forEach(pattern => {
+      sanitized = sanitized.replace(pattern, (match) => {
+        // For key=value patterns, preserve the key but redact the value
+        if (match.includes('=') || match.includes(':')) {
+          const separator = match.includes('=') ? '=' : ':';
+          const parts = match.split(separator);
+          if (parts.length >= 2) {
+            return `${parts[0]}${separator}[REDACTED]`;
+          }
+        }
+        // For Bearer tokens or standalone sensitive values
+        if (match.toLowerCase().startsWith('bearer')) {
+          return 'Bearer [REDACTED]';
+        }
+        // For API keys like sk-xxxxx
+        if (/^(sk|pk|api)[-_]/i.test(match)) {
+          return match.substring(0, 3) + '[REDACTED]';
+        }
+        // Default: redact the entire match
+        return '[REDACTED]';
+      });
+    });
+    
+    return sanitized;
+  }
+  
+  /**
    * Internal logging method
    */
   private log(level: LogEntry['level'], message: string, data?: any): void {
-    // Sanitize data before storing to prevent sensitive info in memory
+    // Sanitize both message and data to prevent sensitive info exposure
+    const sanitizedMessage = this.sanitizeMessage(message);
     const sanitizedData = this.sanitizeData(data);
     
     const entry: LogEntry = {
       timestamp: new Date(),
       level,
-      message,
+      message: sanitizedMessage,  // Store sanitized message
       data: sanitizedData
     };
     
@@ -192,9 +255,9 @@ class MCPLogger {
       const isTest = process.env.NODE_ENV === 'test';
       if (!isTest) {
         const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
-        // Security fix: Never log data objects to console to prevent sensitive information disclosure
-        // Only log the message itself, data is available in memory logs if needed for debugging
-        const safeMessage = `${prefix} ${message}`;
+        // Security fix: Use sanitized message to prevent sensitive information disclosure
+        // Both message and data are sanitized before any output
+        const safeMessage = `${prefix} ${sanitizedMessage}`;
         
         // During initialization, we can use console
         if (level === 'error') {

@@ -279,5 +279,48 @@ describe('MCPLogger', () => {
         api_keys: '[REDACTED]'  // Entire field is sensitive
       });
     });
+    
+    it('should sanitize sensitive data in log messages', () => {
+      // Test various formats of sensitive data in messages
+      logger.error('Failed to authenticate with token: sk-1234567890abcdef');
+      logger.warn('API key=api_key_12345 is invalid');
+      logger.info('Using Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+      logger.debug('password: mysecretpass123 failed');
+      logger.error('client_secret=cs_987654321 expired');
+      
+      const logs = logger.getLogs();
+      
+      // Check that sensitive data is redacted in messages
+      expect(logs[0].message).toBe('Failed to authenticate with token:[REDACTED]');
+      expect(logs[1].message).toBe('API key=[REDACTED] is invalid');
+      expect(logs[2].message).toBe('Using Bearer [REDACTED]');
+      expect(logs[3].message).toBe('password:[REDACTED] failed');
+      expect(logs[4].message).toBe('client_secret=[REDACTED] expired');
+    });
+    
+    it('should preserve non-sensitive message content', () => {
+      logger.info('This is a normal message with no secrets');
+      logger.error('Error: Database connection failed');
+      logger.warn('Warning: High memory usage detected');
+      
+      const logs = logger.getLogs();
+      
+      // Messages without sensitive data should remain unchanged
+      expect(logs[0].message).toBe('This is a normal message with no secrets');
+      expect(logs[1].message).toBe('Error: Database connection failed');
+      expect(logs[2].message).toBe('Warning: High memory usage detected');
+    });
+    
+    it('should handle API key patterns in messages', () => {
+      logger.error('Invalid API key: sk-proj-1234567890abcdefghijklmnop');
+      logger.warn('Using pk-test-51234567890');
+      logger.info('api-key-abcdef1234567890 is deprecated');
+      
+      const logs = logger.getLogs();
+      
+      expect(logs[0].message).toBe('Invalid API key:[REDACTED]');
+      expect(logs[1].message).toBe('Using pk-[REDACTED]');
+      expect(logs[2].message).toBe('api[REDACTED] is deprecated');
+    });
   });
 });
