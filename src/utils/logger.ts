@@ -184,6 +184,7 @@ class MCPLogger {
    * @param data - Data to sanitize (can be any type)
    * @returns Sanitized copy with sensitive fields replaced with '[REDACTED]'
    */
+  // lgtm[js/clear-text-logging] - This method sanitizes sensitive data, it doesn't log it
   private sanitizeData(data: any): any {
     // Fast path for null/undefined
     if (data == null) return data;
@@ -201,6 +202,7 @@ class MCPLogger {
    * @param message - The log message to sanitize
    * @returns Sanitized message with sensitive data replaced with '[REDACTED]'
    */
+  // lgtm[js/clear-text-logging] - This method sanitizes sensitive data, it doesn't log it
   private sanitizeMessage(message: string): string {
     if (!message || typeof message !== 'string') {
       return message;
@@ -268,11 +270,14 @@ class MCPLogger {
         
         // During initialization, we can use console
         if (level === 'error') {
+          // lgtm[js/clear-text-logging] - safeMessage is pre-sanitized by sanitizeMessage()
           console.error(safeMessage);
         } else if (level === 'warn') {
+          // lgtm[js/clear-text-logging] - safeMessage is pre-sanitized by sanitizeMessage()
           console.warn(safeMessage);
         } else {
           // For MCP, even during init, avoid stdout for info/debug
+          // lgtm[js/clear-text-logging] - safeMessage is pre-sanitized by sanitizeMessage()
           console.error(safeMessage);
         }
       }
