@@ -104,11 +104,15 @@ describe('ConfigManager', () => {
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockAccess = fs.access as jest.MockedFunction<typeof fs.access>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
       
       // Simulate file doesn't exist
+      mockAccess.mockRejectedValue({ code: 'ENOENT' }); // File doesn't exist
       mockReadFile.mockRejectedValue({ code: 'ENOENT' });
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
       await configManager.initialize();
@@ -618,9 +622,10 @@ collection:
       const configManager1 = ConfigManager.getInstance();
       await configManager1.initialize();
       
-      // Set some values
-      await configManager1.setUserIdentity('testuser', 'test@example.com');
-      await configManager1.setSyncEnabled(true);
+      // Set some values using updateSetting
+      await configManager1.updateSetting('user.username', 'testuser');
+      await configManager1.updateSetting('user.email', 'test@example.com');
+      await configManager1.updateSetting('sync.enabled', true);
       
       // Capture what was written (should be YAML format)
       const writtenYaml = mockWriteFile.mock.calls[0]?.[1] as string;
@@ -665,8 +670,9 @@ sync:
       expect(config.user.email).toBeNull();
       expect(config.sync.enabled).toBe(false);
       
-      // Now set values
-      await configManager.setUserIdentity('newuser', 'new@example.com');
+      // Now set values using updateSetting
+      await configManager.updateSetting('user.username', 'newuser');
+      await configManager.updateSetting('user.email', 'new@example.com');
       
       // Values should be updated
       const updatedConfig = configManager.getConfig();
