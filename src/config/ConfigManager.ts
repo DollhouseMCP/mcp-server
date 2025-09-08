@@ -239,6 +239,9 @@ export class ConfigManager {
    * Initialize configuration
    */
   public async initialize(): Promise<void> {
+    // Always reload config from disk if it exists, even if we have defaults in memory
+    // This ensures we pick up any manual edits or saved settings
+    
     try {
       // Ensure config directory exists
       await fs.mkdir(this.configDir, { recursive: true });
@@ -289,6 +292,9 @@ export class ConfigManager {
       
       // Merge with defaults to ensure all fields exist
       this.config = this.mergeWithDefaults(parsed.data as Partial<DollhouseConfig>);
+      
+      // Fix any string booleans that might have been saved incorrectly
+      this.fixConfigTypes();
       
       logger.debug('Configuration loaded successfully', {
         username: this.config.user.username,
@@ -513,6 +519,74 @@ export class ConfigManager {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Fix incorrect types in config (e.g., string booleans)
+   */
+  private fixConfigTypes(): void {
+    if (!this.config) return;
+    
+    // Helper to convert string booleans to actual booleans
+    const fixBoolean = (value: any): any => {
+      if (typeof value === 'string') {
+        const lower = value.toLowerCase();
+        if (lower === 'true') return true;
+        if (lower === 'false') return false;
+      }
+      return value;
+    };
+    
+    // Fix sync settings
+    if (this.config.sync) {
+      this.config.sync.enabled = fixBoolean(this.config.sync.enabled);
+      
+      if (this.config.sync.individual) {
+        this.config.sync.individual.require_confirmation = fixBoolean(this.config.sync.individual.require_confirmation);
+        this.config.sync.individual.show_diff_before_sync = fixBoolean(this.config.sync.individual.show_diff_before_sync);
+        this.config.sync.individual.track_versions = fixBoolean(this.config.sync.individual.track_versions);
+      }
+      
+      if (this.config.sync.bulk) {
+        this.config.sync.bulk.upload_enabled = fixBoolean(this.config.sync.bulk.upload_enabled);
+        this.config.sync.bulk.download_enabled = fixBoolean(this.config.sync.bulk.download_enabled);
+        this.config.sync.bulk.require_preview = fixBoolean(this.config.sync.bulk.require_preview);
+        this.config.sync.bulk.respect_local_only = fixBoolean(this.config.sync.bulk.respect_local_only);
+      }
+      
+      if (this.config.sync.privacy) {
+        this.config.sync.privacy.scan_for_secrets = fixBoolean(this.config.sync.privacy.scan_for_secrets);
+        this.config.sync.privacy.scan_for_pii = fixBoolean(this.config.sync.privacy.scan_for_pii);
+        this.config.sync.privacy.warn_on_sensitive = fixBoolean(this.config.sync.privacy.warn_on_sensitive);
+      }
+    }
+    
+    // Fix collection settings
+    if (this.config.collection) {
+      this.config.collection.auto_submit = fixBoolean(this.config.collection.auto_submit);
+      this.config.collection.require_review = fixBoolean(this.config.collection.require_review);
+      this.config.collection.add_attribution = fixBoolean(this.config.collection.add_attribution);
+    }
+    
+    // Fix display settings
+    if (this.config.display) {
+      if (this.config.display.persona_indicators) {
+        this.config.display.persona_indicators.enabled = fixBoolean(this.config.display.persona_indicators.enabled);
+        this.config.display.persona_indicators.include_emoji = fixBoolean(this.config.display.persona_indicators.include_emoji);
+      }
+      this.config.display.verbose_logging = fixBoolean(this.config.display.verbose_logging);
+      this.config.display.show_progress = fixBoolean(this.config.display.show_progress);
+    }
+    
+    // Fix github settings
+    if (this.config.github) {
+      if (this.config.github.portfolio) {
+        this.config.github.portfolio.auto_create = fixBoolean(this.config.github.portfolio.auto_create);
+      }
+      if (this.config.github.auth) {
+        this.config.github.auth.use_oauth = fixBoolean(this.config.github.auth.use_oauth);
+      }
     }
   }
 

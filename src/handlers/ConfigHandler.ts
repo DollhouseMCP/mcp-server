@@ -116,13 +116,32 @@ export class ConfigHandler {
       };
     }
     
-    await this.configManager.updateSetting(options.setting, options.value);
+    // Type coercion for common string-to-type conversions
+    let coercedValue = options.value;
+    
+    // Convert string booleans to actual booleans
+    if (typeof coercedValue === 'string') {
+      const lowerValue = coercedValue.toLowerCase();
+      if (lowerValue === 'true') {
+        coercedValue = true;
+      } else if (lowerValue === 'false') {
+        coercedValue = false;
+      } else if (/^\d+$/.test(coercedValue)) {
+        // Convert numeric strings to numbers
+        const numValue = parseInt(coercedValue, 10);
+        if (!isNaN(numValue)) {
+          coercedValue = numValue;
+        }
+      }
+    }
+    
+    await this.configManager.updateSetting(options.setting, coercedValue);
     
     return {
       content: [{
         type: "text",
         text: `${indicator}✅ **Configuration Updated**\n\n` +
-              `**${options.setting}** set to: ${JSON.stringify(options.value, null, 2)}\n\n` +
+              `**${options.setting}** set to: ${JSON.stringify(coercedValue, null, 2)}\n\n` +
               `Changes have been saved to the configuration file.`
       }]
     };

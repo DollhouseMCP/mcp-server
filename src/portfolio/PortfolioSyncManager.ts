@@ -315,14 +315,35 @@ export class PortfolioSyncManager {
       // Get GitHub index
       const index = await this.indexer.getIndex();
       
-      // Find the element
+      // Find the element - first try exact match, then fuzzy match
       const entries = index.elements.get(elementType) || [];
-      const entry = entries.find(e => e.name === elementName);
+      let entry = entries.find(e => e.name === elementName);
+      
+      // If exact match not found, try fuzzy matching
+      if (!entry) {
+        // Try case-insensitive exact match first
+        entry = entries.find(e => e.name.toLowerCase() === elementName.toLowerCase());
+        
+        // If still not found, try fuzzy matching
+        if (!entry) {
+          const fuzzyMatch = this.findFuzzyMatch(elementName, entries);
+          if (fuzzyMatch) {
+            logger.info(`Fuzzy match found: '${elementName}' matched to '${fuzzyMatch.name}'`);
+            entry = fuzzyMatch;
+          }
+        }
+      }
       
       if (!entry) {
+        // Generate helpful suggestions
+        const suggestions = this.getSuggestions(elementName, entries);
+        const suggestionText = suggestions.length > 0 
+          ? `\n\nDid you mean one of these?\n${suggestions.map(s => `  • ${s.name}`).join('\n')}`
+          : '';
+        
         return {
           success: false,
-          message: `Element '${elementName}' (${elementType}) not found in GitHub portfolio`
+          message: `Element '${elementName}' (${elementType}) not found in GitHub portfolio${suggestionText}`
         };
       }
       
@@ -887,5 +908,92 @@ export class PortfolioSyncManager {
     }
     
     return diff || 'No differences found';
+  }
+  
+  /**
+   * Find a fuzzy match for an element name
+   */
+  private findFuzzyMatch(searchName: string, entries: GitHubIndexEntry[]): GitHubIndexEntry | null {
+    const search = searchName.toLowerCase().replace(/[-_]/g, '');
+    let bestMatch: typeof entries[0] | null = null;
+    let bestScore = 0;
+    
+    for (const entry of entries) {
+      // Normalize the entry name for comparison
+      const normalized = entry.name.toLowerCase().replace(/[-_]/g, '');
+      
+      // Calculate similarity score
+      const score = this.calculateSimilarity(search, normalized);
+      if (score > bestScore && score > 0.5) { // Minimum threshold of 0.5
+        bestScore = score;
+        bestMatch = entry;
+      }
+    }
+    
+    return bestMatch;
+  }
+  
+  /**
+   * Get suggestions for similar element names
+   */
+  private getSuggestions(searchName: string, entries: GitHubIndexEntry[]): Array<{name: string}> {
+    const search = searchName.toLowerCase().replace(/[-_]/g, '');
+    const scored: Array<{entry: typeof entries[0]; score: number}> = [];
+    
+    for (const entry of entries) {
+      const normalized = entry.name.toLowerCase().replace(/[-_]/g, '');
+      const score = this.calculateSimilarity(search, normalized);
+      if (score > 0.3) { // Lower threshold for suggestions
+        scored.push({ entry, score });
+      }
+    }
+    
+    // Sort by score and return top 5
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map(s => ({ name: s.entry.name }));
+  }
+  
+  /**
+   * Calculate similarity between two strings
+   * Returns a score between 0 and 1
+   */
+  private calculateSimilarity(a: string, b: string): number {
+    // Exact match
+    if (a === b) return 1.0;
+    
+    // One contains the other
+    if (a.includes(b) || b.includes(a)) return 0.8;
+    
+    // Calculate word overlap
+    const wordsA = a.split(/[^a-z0-9]+/);
+    const wordsB = b.split(/[^a-z0-9]+/);
+    
+    let matches = 0;
+    for (const wordA of wordsA) {
+      if (wordA && wordsB.some(wordB => wordB === wordA)) {
+        matches++;
+      }
+    }
+    
+    if (matches > 0) {
+      const overlap = (matches * 2) / (wordsA.length + wordsB.length);
+      return Math.max(0.6, overlap); // At least 0.6 for any word match
+    }
+    
+    // Check for partial matches
+    for (const wordA of wordsA) {
+      for (const wordB of wordsB) {
+        if (wordA.length > 3 && wordB.length > 3) {
+          if (wordA.includes(wordB) || wordB.includes(wordA)) {
+            return 0.5;
+          }
+        }
+      }
+    }
+    
+    // No significant similarity
+    return 0;
   }
 }
