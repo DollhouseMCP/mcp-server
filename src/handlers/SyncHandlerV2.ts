@@ -42,9 +42,10 @@ export class SyncHandler {
     try {
       await this.configManager.initialize();
       
-      // Check if sync is enabled
+      // Check if sync is enabled (allow list-remote and compare even when disabled)
       const syncEnabled = this.configManager.getSetting('sync.enabled');
-      if (!syncEnabled && options.operation !== 'list-remote') {
+      const readOnlyOperations = ['list-remote', 'compare'];
+      if (!syncEnabled && !readOnlyOperations.includes(options.operation)) {
         return {
           content: [{
             type: "text",
@@ -52,7 +53,7 @@ export class SyncHandler {
                   `Portfolio sync is currently disabled for privacy.\n\n` +
                   `To enable sync:\n` +
                   `\`dollhouse_config action: "set", setting: "sync.enabled", value: true\`\n\n` +
-                  `You can still use \`list-remote\` to view GitHub portfolio contents.`
+                  `You can still use \`list-remote\` and \`compare\` to view differences.`
           }]
         };
       }
@@ -61,7 +62,7 @@ export class SyncHandler {
       const syncOp: SyncOperation = {
         operation: this.mapOperation(options.operation),
         element_name: options.element_name,
-        element_type: options.element_type,
+        element_type: options.element_type || options.filter?.type, // Use filter.type if element_type not provided
         bulk: options.operation.includes('bulk'),
         show_diff: options.operation === 'compare',
         force: options.options?.force,

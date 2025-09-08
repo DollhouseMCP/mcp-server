@@ -130,7 +130,7 @@ export class PortfolioSyncManager {
       // Handle operations
       switch (params.operation) {
         case 'list-remote':
-          return await this.listRemoteElements();
+          return await this.listRemoteElements(params.element_type);
           
         case 'download':
           if (params.bulk) {
@@ -222,7 +222,7 @@ export class PortfolioSyncManager {
   /**
    * List elements available in GitHub portfolio
    */
-  private async listRemoteElements(): Promise<SyncResult> {
+  private async listRemoteElements(filterType?: ElementType): Promise<SyncResult> {
     try {
       // Get GitHub token
       const token = await TokenManager.getGitHubTokenAsync();
@@ -250,6 +250,11 @@ export class PortfolioSyncManager {
       const elements: SyncElementInfo[] = [];
       
       for (const [type, entries] of index.elements) {
+        // Skip if filtering by type and this isn't the requested type
+        if (filterType && type !== filterType) {
+          continue;
+        }
+        
         for (const entry of entries) {
           elements.push({
             name: entry.name,

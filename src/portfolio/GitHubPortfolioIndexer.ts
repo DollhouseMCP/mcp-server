@@ -362,14 +362,24 @@ export class GitHubPortfolioIndexer {
     }
     
     // Fetch content for each element type
+    logger.info(`Fetching content for all element types from GitHub portfolio...`);
+    
     for (const elementType of Object.values(ElementType)) {
       try {
+        logger.debug(`Fetching ${elementType} from GitHub...`);
         const entries = await this.fetchElementTypeContent(normalizedUsername, repository, elementType);
         index.elements.set(elementType, entries);
         index.totalElements += entries.length;
+        
+        if (entries.length > 0) {
+          logger.info(`✅ Found ${entries.length} ${elementType} in GitHub portfolio`);
+        } else {
+          logger.debug(`📁 No ${elementType} found (directory may not exist yet)`);
+        }
       } catch (error) {
-        logger.warn(`Failed to fetch ${elementType} from GitHub portfolio`, {
-          error: error instanceof Error ? error.message : String(error)
+        logger.warn(`❌ Failed to fetch ${elementType} from GitHub portfolio`, {
+          error: error instanceof Error ? error.message : String(error),
+          elementType
         });
         // Continue with other element types
       }
@@ -423,10 +433,27 @@ export class GitHubPortfolioIndexer {
       return entries;
       
     } catch (error) {
-      // Directory might not exist
-      if (error instanceof Error && error.message.includes('404')) {
+      // Directory might not exist - check for 404 errors
+      // The GitHubClient throws "File not found in collection..." for 404s
+      if (error instanceof Error && 
+          (error.message.includes('404') || 
+           error.message.includes('File not found') ||
+           error.message.includes('not found'))) {
+        logger.debug(`Directory ${elementType} not found in GitHub repository (this is normal if not yet created)`);
         return [];
       }
+      
+      // For McpError, check the error code
+      if (error && typeof error === 'object' && 'code' in error) {
+        const mcpError = error as any;
+        if (mcpError.data?.originalMessage?.includes('404') || 
+            mcpError.data?.originalMessage?.includes('not found')) {
+          logger.debug(`Directory ${elementType} not found in GitHub repository`);
+          return [];
+        }
+      }
+      
+      // Re-throw other errors
       throw error;
     }
   }
