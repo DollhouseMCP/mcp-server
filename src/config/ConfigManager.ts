@@ -279,12 +279,45 @@ export class ConfigManager {
     try {
       const content = await fs.readFile(this.configPath, 'utf-8');
       
-      // Use js-yaml directly for config files (not markdown with frontmatter)
-      // The config file is pure YAML, not markdown with frontmatter
+      /**
+       * IMPORTANT: Parser Selection for Different File Types
+       * 
+       * We use DIFFERENT parsers for different file types:
+       * 
+       * 1. js-yaml (used here) - For PURE YAML files:
+       *    - Configuration files (config.yml)
+       *    - Data files without markdown content
+       *    - Any .yml or .yaml file that's just YAML
+       *    Example format:
+       *    ```yaml
+       *    version: 1.0.0
+       *    user:
+       *      username: johndoe
+       *      email: john@example.com
+       *    ```
+       * 
+       * 2. SecureYamlParser - For MARKDOWN files with YAML frontmatter:
+       *    - Persona files (*.md in personas/)
+       *    - Skill files (*.md in skills/)
+       *    - Template files (*.md in templates/)
+       *    - Any .md file with frontmatter between --- markers
+       *    Example format:
+       *    ```markdown
+       *    ---
+       *    name: Creative Writer
+       *    description: A creative assistant
+       *    ---
+       *    # Instructions
+       *    You are a creative writer...
+       *    ```
+       * 
+       * The config file is PURE YAML, so we use js-yaml directly with FAILSAFE_SCHEMA
+       * for security (prevents code execution via YAML tags).
+       */
       let loadedData: any;
       try {
         loadedData = yaml.load(content, {
-          schema: yaml.FAILSAFE_SCHEMA // Use safe schema to prevent code execution
+          schema: yaml.FAILSAFE_SCHEMA // Safe schema prevents code execution
         });
       } catch (yamlError) {
         throw new Error(`Invalid YAML in configuration file: ${yamlError instanceof Error ? yamlError.message : String(yamlError)}`);
@@ -482,11 +515,14 @@ export class ConfigManager {
       }
       
       // Convert to YAML
+      // Note: We use js-yaml's dump() for pure YAML output (no frontmatter markers)
+      // This creates a standard YAML file, not a markdown file with frontmatter
       const yamlContent = yaml.dump(this.config, {
         indent: 2,
         lineWidth: 120,
         noRefs: true,
         sortKeys: false
+        // Using default schema (not FAILSAFE) for dump to preserve types like booleans
       });
       
       // Write atomically
