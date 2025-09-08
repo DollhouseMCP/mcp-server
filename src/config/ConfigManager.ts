@@ -279,19 +279,27 @@ export class ConfigManager {
     try {
       const content = await fs.readFile(this.configPath, 'utf-8');
       
-      // Use SecureYamlParser for safety
-      const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: 64 * 1024, // 64KB max config size
-        validateContent: false,
-        validateFields: false
-      });
-      
-      if (!parsed.data || typeof parsed.data !== 'object') {
-        throw new Error('Invalid configuration format');
+      // Use js-yaml directly for config files (not markdown with frontmatter)
+      // The config file is pure YAML, not markdown with frontmatter
+      let loadedData: any;
+      try {
+        loadedData = yaml.load(content, {
+          schema: yaml.FAILSAFE_SCHEMA // Use safe schema to prevent code execution
+        });
+      } catch (yamlError) {
+        throw new Error(`Invalid YAML in configuration file: ${yamlError instanceof Error ? yamlError.message : String(yamlError)}`);
       }
       
-      // Merge with defaults to ensure all fields exist
-      this.config = this.mergeWithDefaults(parsed.data as Partial<DollhouseConfig>);
+      if (!loadedData || typeof loadedData !== 'object') {
+        throw new Error('Invalid configuration format');
+      }
+      logger.debug('Loaded config from file', {
+        username: loadedData.user?.username,
+        email: loadedData.user?.email,
+        syncEnabled: loadedData.sync?.enabled
+      });
+      
+      this.config = this.mergeWithDefaults(loadedData);
       
       // Fix any string booleans that might have been saved incorrectly
       this.fixConfigTypes();
@@ -599,8 +607,9 @@ export class ConfigManager {
     return {
       version: partial.version || defaults.version,
       user: {
-        ...defaults.user,
-        ...partial.user
+        username: partial.user?.username || defaults.user.username,
+        email: partial.user?.email || defaults.user.email,
+        display_name: partial.user?.display_name || defaults.user.display_name
       },
       github: {
         portfolio: {
