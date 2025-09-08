@@ -65,7 +65,7 @@ export class GitHubAuthManager {
     // Check ConfigManager for stored configuration
     try {
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       const configClientId = configManager.getGitHubClientId();
       if (configClientId) {
         logger.debug('Using OAuth Client ID from config');

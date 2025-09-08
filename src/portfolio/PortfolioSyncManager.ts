@@ -23,7 +23,7 @@ import { ContentValidator } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ElementType } from './types.js';
-import * as yaml from 'js-yaml';
+import { IElement, ElementStatus } from '../types/elements/IElement.js';
 
 export interface SyncOperation {
   operation: 'download' | 'upload' | 'compare' | 'list-remote';
@@ -32,6 +32,8 @@ export interface SyncOperation {
   bulk?: boolean;
   version?: string;
   show_diff?: boolean;
+  force?: boolean;
+  confirm?: boolean;
 }
 
 export interface SyncResult {
@@ -132,12 +134,13 @@ export class PortfolioSyncManager {
           
         case 'download':
           if (params.bulk) {
-            return await this.bulkDownload(params.element_type);
+            return await this.bulkDownload(params.element_type, params.confirm);
           } else if (params.element_name) {
             return await this.downloadElement(
               params.element_name,
               params.element_type!,
-              params.version
+              params.version,
+              params.force
             );
           } else {
             return {
@@ -148,11 +151,12 @@ export class PortfolioSyncManager {
           
         case 'upload':
           if (params.bulk) {
-            return await this.bulkUpload(params.element_type);
+            return await this.bulkUpload(params.element_type, params.confirm);
           } else if (params.element_name) {
             return await this.uploadElement(
               params.element_name,
-              params.element_type!
+              params.element_type!,
+              params.confirm
             );
           } else {
             return {
@@ -277,7 +281,8 @@ export class PortfolioSyncManager {
   private async downloadElement(
     elementName: string,
     elementType: ElementType,
-    version?: string
+    version?: string,
+    force?: boolean
   ): Promise<SyncResult> {
     try {
       const config = this.configManager.getConfig();
@@ -363,8 +368,8 @@ export class PortfolioSyncManager {
           };
         }
         
-        // Show confirmation for overwrite
-        if (config.sync.individual.require_confirmation) {
+        // Show confirmation for overwrite unless force flag is set
+        if (config.sync.individual.require_confirmation && !force) {
           const diff = await this.generateDiff(localContent, remoteContent);
           
           return {
@@ -403,7 +408,8 @@ export class PortfolioSyncManager {
    */
   private async uploadElement(
     elementName: string,
-    elementType: ElementType
+    elementType: ElementType,
+    confirm?: boolean
   ): Promise<SyncResult> {
     try {
       const config = this.configManager.getConfig();
@@ -446,12 +452,28 @@ export class PortfolioSyncManager {
       
       // Scan for sensitive content if configured
       if (config.sync.privacy.scan_for_secrets) {
-        // Add secret scanning logic here
         logger.debug('Scanning for secrets before upload');
+        // Implement actual secret scanning
+        const secretPatterns = [
+          /api[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi,
+          /secret\s*[:=]\s*['"][^'"]+['"]/gi,
+          /password\s*[:=]\s*['"][^'"]+['"]/gi,
+          /token\s*[:=]\s*['"][^'"]+['"]/gi,
+          /private[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi
+        ];
+        
+        for (const pattern of secretPatterns) {
+          if (pattern.test(content)) {
+            return {
+              success: false,
+              message: `Potential secret detected in content. Please review and remove sensitive information before uploading.`
+            };
+          }
+        }
       }
       
-      // Get confirmation if required
-      if (config.sync.individual.require_confirmation) {
+      // Get confirmation if required (unless already confirmed)
+      if (config.sync.individual.require_confirmation && !confirm) {
         return {
           success: false,
           message: `Please confirm upload of '${elementName}' (${elementType}) to GitHub.\n\nContent preview:\n${content.substring(0, 500)}...\n\nTo proceed, use --confirm flag`,
@@ -459,12 +481,62 @@ export class PortfolioSyncManager {
         };
       }
       
-      // Note: Actual upload would use the existing submitToPortfolioTool
-      // For now, return a message indicating the element would be uploaded
-      return {
-        success: true,
-        message: `Element '${elementName}' ready for upload. Use submit_content tool for actual upload.`
+      // Get token and validate
+      const token = await TokenManager.getGitHubTokenAsync();
+      if (!token) {
+        return {
+          success: false,
+          message: 'GitHub authentication required'
+        };
+      }
+      
+      // Create an IElement object for the PortfolioRepoManager
+      const element: IElement = {
+        id: `${elementType}_${elementName}_${Date.now()}`,
+        type: elementType,
+        version: parsed.data?.version || '1.0.0',
+        metadata: {
+          name: elementName,
+          description: parsed.data?.description || '',
+          author: parsed.data?.author || 'unknown',
+          created: parsed.data?.created || new Date().toISOString(),
+          modified: new Date().toISOString(),
+          tags: parsed.data?.tags || [],
+          custom: parsed.data
+        },
+        validate: () => ({ valid: true, errors: [], warnings: [] }),
+        serialize: () => content,
+        deserialize: () => {},
+        getStatus: () => ElementStatus.ACTIVE
       };
+      
+      // Use PortfolioRepoManager to upload
+      this.repoManager.setToken(token);
+      
+      try {
+        const url = await this.repoManager.saveElement(element, true); // consent is true since we've already checked
+        
+        logger.info('Element uploaded to GitHub', {
+          element: elementName,
+          type: elementType,
+          url
+        });
+        
+        return {
+          success: true,
+          message: `Successfully uploaded '${elementName}' (${elementType}) to GitHub portfolio`,
+          data: { url }
+        };
+      } catch (uploadError) {
+        // Handle specific errors
+        if (uploadError instanceof Error && uploadError.message.includes('repository does not exist')) {
+          return {
+            success: false,
+            message: `GitHub portfolio repository not found. Please initialize it first using init_portfolio tool.`
+          };
+        }
+        throw uploadError;
+      }
       
     } catch (error) {
       return {
@@ -584,7 +656,7 @@ export class PortfolioSyncManager {
   /**
    * Bulk download elements
    */
-  private async bulkDownload(elementType?: ElementType): Promise<SyncResult> {
+  private async bulkDownload(elementType?: ElementType, confirm?: boolean): Promise<SyncResult> {
     const config = this.configManager.getConfig();
     
     if (!config.sync.bulk.download_enabled) {
@@ -614,8 +686,8 @@ export class PortfolioSyncManager {
       };
     }
     
-    // Show preview if required
-    if (config.sync.bulk.require_preview) {
+    // Show preview if required (unless already confirmed)
+    if (config.sync.bulk.require_preview && !confirm) {
       return {
         success: false,
         message: `Bulk download preview:\n\n${elementsToDownload.length} elements will be downloaded:\n${elementsToDownload.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
@@ -624,18 +696,52 @@ export class PortfolioSyncManager {
       };
     }
     
-    // Note: Actual bulk download would iterate and download each
+    // Perform actual bulk download
+    const results = {
+      downloaded: [] as string[],
+      skipped: [] as string[],
+      failed: [] as { name: string; error: string }[]
+    };
+    
+    for (const element of elementsToDownload) {
+      try {
+        const result = await this.downloadElement(element.name, element.type, undefined, true); // force=true to skip individual confirmations
+        if (result.success) {
+          results.downloaded.push(element.name);
+        } else if (result.message?.includes('already up to date')) {
+          results.skipped.push(element.name);
+        } else {
+          results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
+        }
+      } catch (error) {
+        results.failed.push({ 
+          name: element.name, 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+      }
+    }
+    
+    // Build summary message
+    let message = `Bulk download complete:\n`;
+    message += `- Downloaded: ${results.downloaded.length} elements\n`;
+    message += `- Skipped (up to date): ${results.skipped.length} elements\n`;
+    message += `- Failed: ${results.failed.length} elements`;
+    
+    if (results.failed.length > 0) {
+      message += `\n\nFailed downloads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
+    }
+    
     return {
-      success: true,
-      message: `Ready to download ${elementsToDownload.length} elements. Implementation pending.`,
-      elements: elementsToDownload
+      success: results.failed.length === 0,
+      message,
+      data: results
     };
   }
   
   /**
    * Bulk upload elements
    */
-  private async bulkUpload(elementType?: ElementType): Promise<SyncResult> {
+  private async bulkUpload(elementType?: ElementType, confirm?: boolean): Promise<SyncResult> {
     const config = this.configManager.getConfig();
     
     if (!config.sync.bulk.upload_enabled) {
@@ -646,11 +752,101 @@ export class PortfolioSyncManager {
     }
     
     // Get list of local elements
-    // This would scan the local portfolio directories
+    const types = elementType ? [elementType] : [
+      ElementType.PERSONA,
+      ElementType.SKILL,
+      ElementType.TEMPLATE,
+      ElementType.AGENT,
+      ElementType.MEMORY,
+      ElementType.ENSEMBLE
+    ];
+    
+    const localElements: { name: string; type: ElementType; path: string }[] = [];
+    
+    for (const type of types) {
+      const dir = this.portfolioManager.getElementDir(type);
+      try {
+        const files = await fs.readdir(dir);
+        for (const file of files) {
+          if (file.endsWith('.md')) {
+            localElements.push({
+              name: file.replace('.md', ''),
+              type,
+              path: path.join(dir, file)
+            });
+          }
+        }
+      } catch (error) {
+        // Directory may not exist yet
+        logger.debug(`Directory for ${type} does not exist yet`);
+      }
+    }
+    
+    if (localElements.length === 0) {
+      return {
+        success: true,
+        message: 'No local elements to upload',
+        elements: []
+      };
+    }
+    
+    // Show preview if required (unless already confirmed)
+    if (config.sync.bulk.require_preview && !confirm) {
+      // Convert to SyncElementInfo format for preview
+      const previewElements: SyncElementInfo[] = localElements.map(e => ({
+        name: e.name,
+        type: e.type,
+        status: 'local-only' as const,
+        action: 'upload' as const
+      }));
+      
+      return {
+        success: false,
+        message: `Bulk upload preview:\n\n${localElements.length} elements will be uploaded:\n${localElements.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
+        data: { requiresConfirmation: true },
+        elements: previewElements
+      };
+    }
+    
+    // Perform actual bulk upload
+    const results = {
+      uploaded: [] as string[],
+      skipped: [] as string[],
+      failed: [] as { name: string; error: string }[]
+    };
+    
+    for (const element of localElements) {
+      try {
+        const result = await this.uploadElement(element.name, element.type, true); // confirm=true to skip individual confirmations
+        if (result.success) {
+          results.uploaded.push(element.name);
+        } else if (result.message?.includes('local-only')) {
+          results.skipped.push(element.name);
+        } else {
+          results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
+        }
+      } catch (error) {
+        results.failed.push({ 
+          name: element.name, 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+      }
+    }
+    
+    // Build summary message
+    let message = `Bulk upload complete:\n`;
+    message += `- Uploaded: ${results.uploaded.length} elements\n`;
+    message += `- Skipped (local-only): ${results.skipped.length} elements\n`;
+    message += `- Failed: ${results.failed.length} elements`;
+    
+    if (results.failed.length > 0) {
+      message += `\n\nFailed uploads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
+    }
     
     return {
-      success: true,
-      message: 'Bulk upload implementation pending'
+      success: results.failed.length === 0,
+      message,
+      data: results
     };
   }
   

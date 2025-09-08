@@ -70,4 +70,8 @@ export interface IToolHandler {
   syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}): Promise<any>;
   searchPortfolio(options: {query: string; elementType?: string; fuzzyMatch?: boolean; maxResults?: number; includeKeywords?: boolean; includeTags?: boolean; includeTriggers?: boolean; includeDescriptions?: boolean}): Promise<any>;
   searchAll(options: {query: string; sources?: string[]; elementType?: string; page?: number; pageSize?: number; sortBy?: string}): Promise<any>;
+  
+  // New unified config and sync handlers
+  handleConfigOperation(options: any): Promise<any>;
+  handleSyncOperation(options: any): Promise<any>;
 }
