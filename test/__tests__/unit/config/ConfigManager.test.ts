@@ -37,7 +37,7 @@ const { ConfigManager } = await import('../../../../src/config/ConfigManager.js'
 describe('ConfigManager', () => {
   const mockHomedir = '/home/testuser';
   const configDir = path.join(mockHomedir, '.dollhouse');
-  const configPath = path.join(configDir, 'config.json');
+  const configPath = path.join(configDir, 'config.yml');
   
   beforeEach(() => {
     // Clear all mocks
@@ -90,7 +90,7 @@ describe('ConfigManager', () => {
       mockWriteFile.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // Should create directory with proper permissions
       expect(mockMkdir).toHaveBeenCalledWith(
@@ -110,41 +110,39 @@ describe('ConfigManager', () => {
       mockWriteFile.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
-      // Should write default config (atomic write uses temp file)
+      // Should write default config in YAML format (atomic write uses temp file)
       expect(mockWriteFile).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
-        JSON.stringify({ version: '1.0.0' }, null, 2),
+        expect.stringMatching(/version:/), // YAML format
         { mode: 384 }
       );
     });
     
     it('should load existing config file', async () => {
-      const mockConfig = {
-        version: '1.0.0',
-        oauth: {
-          githubClientId: 'Ov23liTestClientId123'
-        }
-      };
+      const yamlConfig = `version: '1.0.0'
+github:
+  auth:
+    client_id: 'Ov23liTestClientId123'`;
       
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
-      mockReadFile.mockResolvedValue(JSON.stringify(mockConfig));
+      mockReadFile.mockResolvedValue(yamlConfig);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       const clientId = configManager.getGitHubClientId();
       expect(clientId).toBe('Ov23liTestClientId123');
     });
     
-    it('should handle corrupted JSON gracefully', async () => {
+    it('should handle corrupted YAML gracefully', async () => {
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
       
-      // Simulate corrupted JSON
-      mockReadFile.mockResolvedValue('{ invalid json');
+      // Simulate corrupted YAML
+      mockReadFile.mockResolvedValue('invalid: yaml: content: :::');
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
       
@@ -153,10 +151,10 @@ describe('ConfigManager', () => {
       // Should not throw, should create new config
       await expect(configManager.loadConfig()).resolves.not.toThrow();
       
-      // Should write new default config (atomic write uses temp file)
+      // Should write new default config in YAML format (atomic write uses temp file)
       expect(mockWriteFile).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
-        JSON.stringify({ version: '1.0.0' }, null, 2),
+        expect.stringMatching(/version:/), // YAML format
         { mode: 384 }
       );
     });
@@ -187,7 +185,7 @@ describe('ConfigManager', () => {
       mockMkdir.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       expect(mockMkdir).toHaveBeenCalledWith(
         configDir,
@@ -226,14 +224,14 @@ describe('ConfigManager', () => {
       
       await configManager.setGitHubClientId(testClientId);
       
-      // Mock reading the saved config
-      mockReadFile.mockResolvedValue(JSON.stringify({
-        version: '1.0.0',
-        oauth: { githubClientId: testClientId }
-      }));
+      // Mock reading the saved config in YAML format
+      mockReadFile.mockResolvedValue(`version: '1.0.0'
+github:
+  auth:
+    client_id: ${testClientId}`);
       
       // Reload and verify
-      await configManager.loadConfig();
+      await configManager.initialize();
       const retrievedId = configManager.getGitHubClientId();
       
       expect(retrievedId).toBe(testClientId);
@@ -278,15 +276,15 @@ describe('ConfigManager', () => {
       // Set environment variable
       process.env.DOLLHOUSE_GITHUB_CLIENT_ID = 'Ov23liEnvVarClient111';
       
-      // Mock config file with different ID
+      // Mock config file with different ID in YAML format
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
-      mockReadFile.mockResolvedValue(JSON.stringify({
-        version: '1.0.0',
-        oauth: { githubClientId: 'Ov23liConfigFileId222' }
-      }));
+      mockReadFile.mockResolvedValue(`version: '1.0.0'
+github:
+  auth:
+    client_id: 'Ov23liConfigFileId222'`);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // Should return env var value
       const clientId = configManager.getGitHubClientId();
@@ -295,10 +293,10 @@ describe('ConfigManager', () => {
     
     it('should return null if no client ID is configured', async () => {
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
-      mockReadFile.mockResolvedValue(JSON.stringify({ version: '1.0.0' }));
+      mockReadFile.mockResolvedValue(`version: '1.0.0'`);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       const clientId = configManager.getGitHubClientId();
       expect(clientId).toBeNull();
@@ -318,7 +316,7 @@ describe('ConfigManager', () => {
   });
   
   describe('Config File Format', () => {
-    it('should use correct JSON structure', async () => {
+    it('should use correct YAML structure', async () => {
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
       
@@ -328,43 +326,41 @@ describe('ConfigManager', () => {
       const configManager = ConfigManager.getInstance();
       await configManager.setGitHubClientId('Ov23liStructureTest1');
       
-      // Verify the structure of written JSON
+      // Verify the structure of written YAML
       const writeCall = mockWriteFile.mock.calls[0];
-      const writtenContent = JSON.parse(writeCall[1] as string);
+      const writtenContent = writeCall[1] as string;
       
-      expect(writtenContent).toHaveProperty('version');
-      expect(writtenContent).toHaveProperty('oauth.githubClientId');
-      expect(writtenContent.oauth.githubClientId).toBe('Ov23liStructureTest1');
+      expect(writtenContent).toMatch(/version:/);  
+      expect(writtenContent).toMatch(/github:/);  
+      expect(writtenContent).toMatch(/client_id: ['"]*Ov23liStructureTest1/);
     });
     
     it('should preserve unknown fields when updating', async () => {
-      const existingConfig = {
-        version: '1.0.0',
-        oauth: {
-          githubClientId: 'Ov23liOldId123'
-        },
-        futureFeature: {
-          someValue: 'preserve-me'
-        }
-      };
+      const existingConfig = `version: '1.0.0'
+github:
+  auth:
+    client_id: 'Ov23liOldId123'
+futureFeature:
+  someValue: 'preserve-me'`;
       
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
       
-      mockReadFile.mockResolvedValue(JSON.stringify(existingConfig));
+      mockReadFile.mockResolvedValue(existingConfig);
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       await configManager.setGitHubClientId('Ov23liNewId456789012');
       
-      // Check that unknown fields are preserved
+      // Check that unknown fields are preserved in YAML
       const writeCall = mockWriteFile.mock.calls[0];
-      const writtenContent = JSON.parse(writeCall[1] as string);
+      const writtenContent = writeCall[1] as string;
       
-      expect(writtenContent.futureFeature).toEqual({ someValue: 'preserve-me' });
+      expect(writtenContent).toMatch(/futureFeature:/);  
+      expect(writtenContent).toMatch(/someValue: ['"]*preserve-me/);
     });
   });
   
@@ -381,7 +377,7 @@ describe('ConfigManager', () => {
       mockMkdir.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // Should use Windows path
       const expectedPath = path.join(windowsHome, '.dollhouse');
@@ -403,7 +399,7 @@ describe('ConfigManager', () => {
       mockMkdir.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // Should use macOS path
       const expectedPath = path.join(macHome, '.dollhouse');
@@ -425,7 +421,7 @@ describe('ConfigManager', () => {
       mockMkdir.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // Should use Linux path
       const expectedPath = path.join(linuxHome, '.dollhouse');
@@ -449,7 +445,7 @@ describe('ConfigManager', () => {
       
       // Should contain proper separators for the platform
       expect(configPath).toContain('.dollhouse');
-      expect(configPath).toContain('config.json');
+      expect(configPath).toContain('config.yml');
     });
   });
   
@@ -465,13 +461,13 @@ describe('ConfigManager', () => {
       await expect(configManager.loadConfig()).rejects.toThrow('File system error');
     });
     
-    it('should handle JSON parse errors gracefully', async () => {
+    it('should handle YAML parse errors gracefully', async () => {
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
       
-      // Return invalid JSON
-      mockReadFile.mockResolvedValue('not valid json at all');
+      // Return invalid YAML  
+      mockReadFile.mockResolvedValue('not: valid: yaml: at: : : all');
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
       
@@ -533,6 +529,147 @@ describe('ConfigManager', () => {
       
       // Should rename atomically
       expect(mockRename).toHaveBeenCalled();
+    });
+  });
+  
+  describe('YAML Parser Selection (Regression Test for Config Persistence Bug)', () => {
+    it('should use js-yaml for config files, NOT SecureYamlParser', async () => {
+      // This test ensures we don't regress to using SecureYamlParser
+      // which expects markdown with frontmatter and returns empty {} for pure YAML
+      // This was the critical bug that caused config values to reset on every load
+      
+      const yamlConfig = `version: '1.0.0'
+user:
+  username: mickdarling
+  email: mick@mickdarling.com
+sync:
+  enabled: true
+  bulk:
+    download_enabled: true
+    upload_enabled: false
+github:
+  portfolio:
+    repository_url: 'https://github.com/mickdarling/dollhouse-portfolio'`;
+      
+      const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+      mockReadFile.mockResolvedValue(yamlConfig);
+      
+      const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
+      
+      // These should NOT be null - the bug was they were returning null
+      // because SecureYamlParser was returning empty {} for pure YAML
+      const config = configManager.getConfig();
+      expect(config.user.username).toBe('mickdarling');
+      expect(config.user.email).toBe('mick@mickdarling.com');
+      expect(config.sync.enabled).toBe(true);
+      expect(config.sync.bulk.download_enabled).toBe(true);
+      expect(config.github.portfolio.repository_url).toBe('https://github.com/mickdarling/dollhouse-portfolio');
+    });
+    
+    it('should persist config values between ConfigManager instances', async () => {
+      const yamlConfig = `version: '1.0.0'
+user:
+  username: testuser
+  email: test@example.com
+  display_name: 'Test User'
+sync:
+  enabled: true
+  individual:
+    require_confirmation: false
+collection:
+  auto_submit: true`;
+      
+      const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+      const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+      const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
+      
+      // First instance saves config
+      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' }); // First load - no file
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
+      
+      const configManager1 = ConfigManager.getInstance();
+      await configManager1.initialize();
+      
+      // Set some values
+      await configManager1.setUserIdentity('testuser', 'test@example.com');
+      await configManager1.setSyncEnabled(true);
+      
+      // Capture what was written (should be YAML format)
+      const writtenYaml = mockWriteFile.mock.calls[0]?.[1] as string;
+      expect(writtenYaml).toMatch(/username: testuser/);
+      expect(writtenYaml).toMatch(/email: test@example\.com/);
+      
+      // Reset singleton for test
+      (ConfigManager as any).instance = null;
+      (ConfigManager as any).instanceLock = false;
+      
+      // Second instance loads saved config
+      mockReadFile.mockResolvedValue(writtenYaml || yamlConfig);
+      
+      const configManager2 = ConfigManager.getInstance();
+      await configManager2.initialize();
+      
+      // Values should persist
+      const config = configManager2.getConfig();
+      expect(config.user.username).toBe('testuser');
+      expect(config.user.email).toBe('test@example.com');
+      expect(config.sync.enabled).toBe(true);
+    });
+    
+    it('should handle null and empty values correctly', async () => {
+      // This was part of the bug - null values were not handled properly
+      const yamlConfig = `version: '1.0.0'
+user:
+  username: null
+  email: null
+  display_name: null
+sync:
+  enabled: false`;
+      
+      const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+      mockReadFile.mockResolvedValue(yamlConfig);
+      
+      const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
+      
+      const config = configManager.getConfig();
+      expect(config.user.username).toBeNull();
+      expect(config.user.email).toBeNull();
+      expect(config.sync.enabled).toBe(false);
+      
+      // Now set values
+      await configManager.setUserIdentity('newuser', 'new@example.com');
+      
+      // Values should be updated
+      const updatedConfig = configManager.getConfig();
+      expect(updatedConfig.user.username).toBe('newuser');
+      expect(updatedConfig.user.email).toBe('new@example.com');
+    });
+    
+    it('should merge with defaults without overwriting saved values', async () => {
+      // Another part of the bug - mergeWithDefaults was overwriting saved values
+      const yamlConfig = `version: '1.0.0'
+user:
+  username: 'saveduser'
+  email: 'saved@example.com'`;
+      
+      const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+      mockReadFile.mockResolvedValue(yamlConfig);
+      
+      const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
+      
+      const config = configManager.getConfig();
+      // Saved values should be preserved
+      expect(config.user.username).toBe('saveduser');
+      expect(config.user.email).toBe('saved@example.com');
+      // Defaults should be applied for missing values
+      expect(config.sync.enabled).toBe(false); // default value
+      expect(config.collection.auto_submit).toBe(false); // default value
     });
   });
 });
