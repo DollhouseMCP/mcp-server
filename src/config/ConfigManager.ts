@@ -98,6 +98,14 @@ export interface DisplayConfig {
   show_progress: boolean;
 }
 
+export interface WizardConfig {
+  completed: boolean;      // Wizard was successfully completed
+  dismissed: boolean;      // User chose "Don't show again"
+  completedAt?: string;    // ISO timestamp when completed
+  version?: string;        // Wizard version for future updates
+  skippedSections?: string[]; // Track which sections were skipped
+}
+
 export interface DollhouseConfig {
   version: string;
   user: UserConfig;
@@ -106,6 +114,7 @@ export interface DollhouseConfig {
   collection: CollectionConfig;
   elements: ElementsConfig;
   display: DisplayConfig;
+  wizard: WizardConfig;
 }
 
 export interface ConfigUpdateResult {
@@ -259,6 +268,10 @@ export class ConfigManager {
         },
         verbose_logging: false,
         show_progress: true
+      },
+      wizard: {
+        completed: false,
+        dismissed: false
       }
     };
   }
@@ -768,6 +781,12 @@ export class ConfigManager {
     };
     result.display.verbose_logging = result.display.verbose_logging ?? defaults.display.verbose_logging;
     result.display.show_progress = result.display.show_progress ?? defaults.display.show_progress;
+    
+    // Wizard section
+    result.wizard = {
+      ...defaults.wizard,
+      ...result.wizard
+    };
     
     return result as DollhouseConfig;
   }
