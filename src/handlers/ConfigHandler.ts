@@ -88,18 +88,20 @@ export class ConfigHandler {
         content: [{
           type: "text",
           text: `${indicator}⚙️ **Configuration Setting**\n\n` +
-                `**${options.setting}**: ${JSON.stringify(value, null, 2)}`
+                `**${options.setting}**: ${this.formatValue(value)}`
         }]
       };
     }
     
-    // Get all settings
+    // Get all settings - make them user-friendly
     const config = this.configManager.getConfig();
+    const friendlyConfig = this.makeFriendlyConfig(config);
+    
     return {
       content: [{
         type: "text",
         text: `${indicator}⚙️ **DollhouseMCP Configuration**\n\n` +
-              `\`\`\`yaml\n${yaml.dump(config, { lineWidth: -1 })}\`\`\``
+              `\`\`\`yaml\n${yaml.dump(friendlyConfig, { lineWidth: -1 })}\`\`\``
       }]
     };
   }
@@ -231,5 +233,97 @@ export class ConfigHandler {
               `Run \`dollhouse_config action: "get"\` to see current settings.`
       }]
     };
+  }
+  
+  /**
+   * Format a value for user-friendly display
+   * Replaces null/undefined with helpful messages
+   */
+  private formatValue(value: any): string {
+    if (value === null || value === undefined) {
+      return "(not set)";
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      return "(empty)";
+    }
+    return JSON.stringify(value, null, 2);
+  }
+  
+  /**
+   * Make configuration display user-friendly for non-technical users
+   * Replaces null values with helpful explanations
+   */
+  private makeFriendlyConfig(config: any): any {
+    const friendly = JSON.parse(JSON.stringify(config)); // Deep clone
+    
+    // User settings
+    if (friendly.user) {
+      if (friendly.user.username === null) {
+        friendly.user.username = "(not set - anonymous mode active)";
+      }
+      if (friendly.user.email === null) {
+        friendly.user.email = "(optional - not set)";
+      }
+      if (friendly.user.display_name === null) {
+        friendly.user.display_name = "(not set - will use username)";
+      }
+    }
+    
+    // GitHub settings
+    if (friendly.github) {
+      if (friendly.github.username === null) {
+        friendly.github.username = "(not connected to GitHub)";
+      }
+      if (friendly.github.portfolio_repo === null) {
+        friendly.github.portfolio_repo = "(no portfolio repository configured)";
+      }
+      if (friendly.github.oauth_client_id === null) {
+        friendly.github.oauth_client_id = "(OAuth not configured)";
+      }
+      if (friendly.github.auth_token === null) {
+        friendly.github.auth_token = "(not authenticated)";
+      }
+    }
+    
+    // Sync settings
+    if (friendly.sync) {
+      if (friendly.sync.last_sync === null) {
+        friendly.sync.last_sync = "(never synced)";
+      }
+      if (friendly.sync.remote_url === null) {
+        friendly.sync.remote_url = "(no remote repository)";
+      }
+    }
+    
+    // Display settings
+    if (friendly.display) {
+      // These are typically booleans, but handle nulls just in case
+      if (friendly.display.show_persona_indicator === null) {
+        friendly.display.show_persona_indicator = true; // Default value
+      }
+    }
+    
+    // Collection settings
+    if (friendly.collection) {
+      if (friendly.collection.auto_submit === null) {
+        friendly.collection.auto_submit = false; // Default value
+      }
+      if (friendly.collection.last_cache_update === null) {
+        friendly.collection.last_cache_update = "(cache not initialized)";
+      }
+    }
+    
+    // Wizard settings - show friendly status
+    if (friendly.wizard) {
+      if (friendly.wizard.completed === false && friendly.wizard.dismissed === false) {
+        friendly.wizard._status = "⏳ Ready to run (not completed)";
+      } else if (friendly.wizard.completed === true) {
+        friendly.wizard._status = "✅ Completed";
+      } else if (friendly.wizard.dismissed === true) {
+        friendly.wizard._status = "⏭️ Dismissed";
+      }
+    }
+    
+    return friendly;
   }
 }

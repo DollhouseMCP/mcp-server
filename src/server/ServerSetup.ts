@@ -142,8 +142,18 @@ export class ServerSetup {
         const response = await handler(normalizedArgs);
         
         // Wrap response with wizard check on first interaction
+        // CRITICAL FIX: Add error boundary to prevent wizard errors from crashing tool requests
         if (this.wizardCheck) {
-          return await this.wizardCheck.wrapResponse(response);
+          try {
+            return await this.wizardCheck.wrapResponse(response);
+          } catch (wizardError) {
+            logger.warn('Failed to wrap response with wizard check', { 
+              error: wizardError,
+              tool: name 
+            });
+            // Fall back to original response if wizard fails
+            return response;
+          }
         }
         
         return response;
