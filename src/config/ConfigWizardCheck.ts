@@ -4,6 +4,7 @@
  */
 
 import { ConfigManager } from './ConfigManager.js';
+import { ConfigWizardDisplay } from './ConfigWizardDisplay.js';
 import { logger } from '../utils/logger.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -13,10 +14,14 @@ export class ConfigWizardCheck {
   private hasCheckedWizard: boolean = false;
   private configManager: ConfigManager;
   private currentVersion: string;
+  private displayStrategy: string;
 
   constructor() {
     this.configManager = ConfigManager.getInstance();
     this.currentVersion = this.getCurrentVersion();
+    // Allow configuration of display strategy via environment variable
+    // Options: codeblock, instructions, system, blockquote, combined
+    this.displayStrategy = process.env.DOLLHOUSE_WIZARD_DISPLAY || 'codeblock';
   }
   
   /**
@@ -164,10 +169,32 @@ You can always ask "What's new in DollhouseMCP?" later to see this again.`;
       return response;
     }
 
+    // Use display strategy to encourage verbatim display
+    let formattedWizard: string;
+    
+    switch (this.displayStrategy) {
+      case 'instructions':
+        formattedWizard = ConfigWizardDisplay.withDisplayInstructions(wizardPrompt);
+        break;
+      case 'system':
+        formattedWizard = ConfigWizardDisplay.asSystemNotice(wizardPrompt);
+        break;
+      case 'blockquote':
+        formattedWizard = ConfigWizardDisplay.asBlockquote(wizardPrompt);
+        break;
+      case 'combined':
+        formattedWizard = ConfigWizardDisplay.combined(wizardPrompt);
+        break;
+      case 'codeblock':
+      default:
+        formattedWizard = ConfigWizardDisplay.asCodeBlock(wizardPrompt, 'text');
+        break;
+    }
+    
     // Always create new response objects to avoid mutation
     const wizardContent = {
       type: "text",
-      text: wizardPrompt
+      text: formattedWizard
     };
 
     const separator = {
