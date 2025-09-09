@@ -5,6 +5,9 @@
 
 import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
+import { getFriendlyNullValue } from '../config/wizardTemplates.js';
+// WizardTemplateBuilder imported for future full template migration
+// import { WizardTemplateBuilder } from '../config/wizardTemplates.js';
 import * as yaml from 'js-yaml';
 
 export interface ConfigOperationOptions {
@@ -25,6 +28,20 @@ export class ConfigHandler {
   
   /**
    * Handle configuration operations via the dollhouse_config tool
+   * 
+   * @param options - Configuration operation options
+   * @param options.action - The action to perform (get, set, reset, export, import, wizard)
+   * @param options.setting - Optional setting path for get/set operations
+   * @param options.value - Optional value for set operations
+   * @param options.section - Optional section for filtering
+   * @param options.format - Optional format for export (yaml or json)
+   * @param options.data - Optional data for import operations
+   * @param indicator - Optional indicator string for persona context
+   * @returns Promise resolving to content object with operation result
+   * @async
+   * 
+   * @note The wizard action is async and will await the handleWizard method
+   * @since v1.4.0 - handleWizard made async for better config fetching
    */
   async handleConfigOperation(options: ConfigOperationOptions, indicator: string = '') {
     try {
@@ -212,49 +229,63 @@ export class ConfigHandler {
     };
   }
   
+  /**
+   * Handle the configuration wizard
+   * @returns Promise with wizard interface content
+   * @async
+   */
   private async handleWizard(indicator: string) {
     // Get current configuration to show the user
     const config = this.configManager.getConfig();
     const friendlyConfig = this.makeFriendlyConfig(config);
     
+    // Build wizard content using templates
+    // Note: Template builder is imported for future use when we fully migrate to template system
+    const wizardContent = `${indicator}🧙 **Configuration Wizard - Let's Set Up DollhouseMCP!**
+
+I'll help you configure DollhouseMCP step by step. First, let me show you your current settings:
+
+**📊 Current Configuration:**
+\`\`\`yaml
+${yaml.dump(friendlyConfig, { lineWidth: -1 })}
+\`\`\`
+
+**Now, let's configure your settings one by one!**
+
+🎯 **Step 1: User Identity**
+This tags your creations so you can find them later. Everything is saved locally on your computer.
+- To set a username: Say "Set my username to [your-name]"
+- To stay anonymous: Say "I'll stay anonymous"
+- Current: ${friendlyConfig.user?.username || '(not set - anonymous mode)'}
+
+🔐 **Step 2: GitHub Integration (Optional)**
+Connect to GitHub to share your creations and browse community content.
+- To connect GitHub: Say "Connect my GitHub account"
+- To skip: Say "Skip GitHub for now"
+- Current: ${friendlyConfig.github?.auth_token ? 'Connected' : '(not connected)'}
+
+🔄 **Step 3: Portfolio Sync (Optional)**
+Automatically backup your creations to GitHub.
+- To enable: Say "Enable auto-sync"
+- To keep manual: Say "I'll sync manually"
+- Current: ${friendlyConfig.portfolio?.auto_sync ? 'Enabled' : 'Manual'}
+
+🎨 **Step 4: Display Preferences**
+Customize how DollhouseMCP shows information.
+- To show active persona: Say "Show persona indicators"
+- To keep minimal: Say "Use minimal display"
+- Current: ${friendlyConfig.indicator?.enabled ? 'Enabled' : 'Minimal'}
+
+💡 **Quick Setup**: Say "Configure the basics" to set just username and GitHub
+📝 **Detailed Setup**: Say "Configure everything" to go through all options
+⏭️ **Skip for Now**: Say "Skip wizard" to use anonymous mode
+
+✨ You can always change these settings later by saying "Open configuration wizard"`;
+    
     return {
       content: [{
         type: "text",
-        text: `${indicator}🧙 **Configuration Wizard - Let's Set Up DollhouseMCP!**\n\n` +
-              `I'll help you configure DollhouseMCP step by step. First, let me show you your current settings:\n\n` +
-              `**📊 Current Configuration:**\n` +
-              `\`\`\`yaml\n${yaml.dump(friendlyConfig, { lineWidth: -1 })}\`\`\`\n\n` +
-              `**Now, let's configure your settings one by one!**\n\n` +
-              `🎯 **Step 1: User Identity**\n` +
-              `This tags your creations so you can find them later.\n` +
-              `- To set a username: Say "Set my username to [your-name]"\n` +
-              `- To stay anonymous: Say "I'll stay anonymous"\n` +
-              `- Current: ${friendlyConfig.user?.username || '(not set - anonymous mode)'}\n\n` +
-              `📧 **Step 2: Email (Optional)**\n` +
-              `Only needed if you want to be contacted about your shared creations.\n` +
-              `- To add email: Say "Set my email to [your-email]"\n` +
-              `- To skip: Say "No email needed"\n` +
-              `- Current: ${friendlyConfig.user?.email || '(not set)'}\n\n` +
-              `🐙 **Step 3: GitHub Integration (Optional)**\n` +
-              `Connect GitHub to sync and share your creations.\n` +
-              `- To connect: Say "Help me connect to GitHub"\n` +
-              `- To skip: Say "Skip GitHub for now"\n` +
-              `- Current: ${friendlyConfig.github?.username || '(not connected)'}\n\n` +
-              `🔄 **Step 4: Auto-Sync (Optional)**\n` +
-              `Automatically sync your creations to GitHub.\n` +
-              `- To enable: Say "Enable auto-sync"\n` +
-              `- To disable: Say "Keep sync manual"\n` +
-              `- Current: ${friendlyConfig.sync?.enabled ? 'Enabled' : 'Disabled'}\n\n` +
-              `🎨 **Step 5: Display Preferences**\n` +
-              `Show which persona is active in your chat.\n` +
-              `- To show indicators: Say "Show persona indicators"\n` +
-              `- To hide them: Say "Hide persona indicators"\n` +
-              `- Current: ${friendlyConfig.display?.show_persona_indicator ? 'Showing' : 'Hidden'}\n\n` +
-              `**Ready?** Just tell me what you'd like to configure, or say:\n` +
-              `- "Configure everything" to go through all settings\n` +
-              `- "Just the basics" for minimal setup\n` +
-              `- "Skip wizard" if you're happy with current settings\n\n` +
-              `Remember: All your creations are saved locally on your computer, and you can change these settings anytime!`
+        text: wizardContent
       }]
     };
   }
@@ -276,45 +307,34 @@ export class ConfigHandler {
   /**
    * Make configuration display user-friendly for non-technical users
    * Replaces null values with helpful explanations
+   * Uses centralized friendly values for i18n support
    */
   private makeFriendlyConfig(config: any): any {
     const friendly = JSON.parse(JSON.stringify(config)); // Deep clone
     
-    // User settings
-    if (friendly.user) {
-      if (friendly.user.username === null) {
-        friendly.user.username = "(not set - anonymous mode active)";
+    // Helper function to replace null values with friendly messages
+    const replaceFriendlyValue = (obj: any, path: string = '') => {
+      for (const key in obj) {
+        const currentPath = path ? `${path}.${key}` : key;
+        
+        if (obj[key] === null) {
+          obj[key] = getFriendlyNullValue(currentPath);
+        } else if (typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+          replaceFriendlyValue(obj[key], currentPath);
+        }
       }
-      if (friendly.user.email === null) {
-        friendly.user.email = "(optional - not set)";
-      }
-      if (friendly.user.display_name === null) {
-        friendly.user.display_name = "(not set - will use username)";
-      }
-    }
+    };
     
-    // GitHub settings
-    if (friendly.github) {
-      if (friendly.github.username === null) {
-        friendly.github.username = "(not connected to GitHub)";
-      }
-      if (friendly.github.portfolio_repo === null) {
-        friendly.github.portfolio_repo = "(no portfolio repository configured)";
-      }
-      if (friendly.github.oauth_client_id === null) {
-        friendly.github.oauth_client_id = "(OAuth not configured)";
-      }
-      if (friendly.github.auth_token === null) {
-        friendly.github.auth_token = "(not authenticated)";
-      }
-    }
+    // Apply friendly replacements
+    replaceFriendlyValue(friendly);
     
-    // Sync settings
+    // Legacy manual replacements for backward compatibility
+    // (These will be removed once we fully migrate to template system)
     if (friendly.sync) {
-      if (friendly.sync.last_sync === null) {
+      if (friendly.sync.last_sync === "(not set)") {
         friendly.sync.last_sync = "(never synced)";
       }
-      if (friendly.sync.remote_url === null) {
+      if (friendly.sync.remote_url === "(not set)") {
         friendly.sync.remote_url = "(no remote repository)";
       }
     }
