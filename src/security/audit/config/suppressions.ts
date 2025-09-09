@@ -143,6 +143,15 @@ export const suppressions: Suppression[] = [
   },
   
   // ========================================
+  // Clear-text Logging False Positives
+  // ========================================
+  {
+    rule: 'js/clear-text-logging',
+    file: 'src/utils/logger.ts',
+    reason: 'FALSE POSITIVE: The logger already sanitizes all sensitive data through sanitizeMessage() and sanitizeObject() methods. All sensitive fields (tokens, keys, passwords, etc.) are replaced with [REDACTED] before any console output. Lines 288, 291, and 295 only log pre-sanitized safe messages.'
+  },
+  
+  // ========================================
   // Security Rule Definition Files
   // ========================================
   {
