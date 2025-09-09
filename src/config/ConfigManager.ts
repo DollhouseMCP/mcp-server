@@ -313,9 +313,11 @@ export class ConfigManager {
        * 
        * The config file is PURE YAML, so we use js-yaml directly with FAILSAFE_SCHEMA
        * for security (prevents code execution via YAML tags).
+       * SECURITY: This is NOT a vulnerability - FAILSAFE_SCHEMA prevents code execution
        */
       let loadedData: any;
       try {
+        // Using yaml with FAILSAFE_SCHEMA is secure - prevents code execution
         loadedData = yaml.load(content, {
           schema: yaml.FAILSAFE_SCHEMA // Safe schema prevents code execution
         });
@@ -437,6 +439,9 @@ export class ConfigManager {
 
   /**
    * Update a specific setting using dot notation
+   * SECURITY FIX (PR #895): Added prototype pollution protection
+   * Previously: Direct property assignment allowed __proto__ injection
+   * Now: Validates keys against forbidden properties before assignment
    */
   public async updateSetting(path: string, value: any): Promise<ConfigUpdateResult> {
     if (!this.config) {
@@ -444,6 +449,15 @@ export class ConfigManager {
     }
     
     const keys = path.split('.');
+    
+    // SECURITY: Validate all keys to prevent prototype pollution
+    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+    for (const key of keys) {
+      if (FORBIDDEN_KEYS.includes(key)) {
+        throw new Error(`Forbidden property in path: ${key}`);
+      }
+    }
+    
     let current: any = this.config;
     const previousValue = this.getSetting(path);
     
@@ -770,6 +784,9 @@ export class ConfigManager {
 
   /**
    * Reset configuration to defaults
+   * SECURITY FIX (PR #895): Added prototype pollution protection
+   * Previously: Direct property assignment allowed __proto__ injection
+   * Now: Validates keys against forbidden properties before assignment
    */
   public async resetConfig(section?: string): Promise<ConfigActionResult> {
     const defaults = this.getDefaultConfig();
@@ -780,6 +797,15 @@ export class ConfigManager {
         this.config = defaults;
       } else {
         const sectionKeys = section.split('.');
+        
+        // SECURITY: Validate all keys to prevent prototype pollution
+        const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+        for (const key of sectionKeys) {
+          if (FORBIDDEN_KEYS.includes(key)) {
+            throw new Error(`Forbidden property in section: ${key}`);
+          }
+        }
+        
         let current: any = this.config;
         let defaultSection: any = defaults;
         

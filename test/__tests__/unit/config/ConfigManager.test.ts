@@ -752,4 +752,62 @@ user:
       expect(config.collection.auto_submit).toBe(false); // default value
     });
   });
+
+  describe('Prototype Pollution Protection', () => {
+    it('should reject __proto__ in updateSetting path', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      await expect(
+        configManager.updateSetting('__proto__.polluted', 'evil')
+      ).rejects.toThrow('Forbidden property in path: __proto__');
+    });
+
+    it('should reject constructor in updateSetting path', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      await expect(
+        configManager.updateSetting('user.constructor.polluted', 'evil')
+      ).rejects.toThrow('Forbidden property in path: constructor');
+    });
+
+    it('should reject prototype in updateSetting path', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      await expect(
+        configManager.updateSetting('sync.prototype.polluted', 'evil')
+      ).rejects.toThrow('Forbidden property in path: prototype');
+    });
+
+    it('should reject __proto__ in resetConfig section', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      await expect(
+        configManager.resetConfig('__proto__')
+      ).rejects.toThrow('Forbidden property in section: __proto__');
+    });
+
+    it('should reject constructor in resetConfig section', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      await expect(
+        configManager.resetConfig('user.constructor')
+      ).rejects.toThrow('Forbidden property in section: constructor');
+    });
+
+    it('should allow valid paths in updateSetting', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      const result = await configManager.updateSetting('user.username', 'testuser');
+      expect(result.success).toBe(true);
+      expect(result.newValue).toBe('testuser');
+    });
+
+    it('should allow valid sections in resetConfig', async () => {
+      const configManager = ConfigManager.getInstance();
+      
+      const result = await configManager.resetConfig('user');
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('reset to defaults');
+    });
+  });
 });
