@@ -105,12 +105,14 @@ describe('GitHubPortfolioIndexer', () => {
       (indexer as any).cache = null;
       (indexer as any).lastFetch = new Date(Date.now() - 20 * 60 * 1000); // 20 minutes ago
       
-      // Mock GitHub API responses
+      // Mock GitHub API responses in correct order
       mockFetchFromGitHub
-        .mockResolvedValueOnce({ login: 'testuser' }) // 1. user info call
-        .mockRejectedValueOnce(new Error('GraphQL implementation not yet complete')) // 2. GraphQL call fails  
-        .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // 3. repo info
-        .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // 4. latest commit
+        .mockResolvedValueOnce({ login: 'testuser' }) // 1. /user - get username
+        .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // 2. /repos/testuser/dollhouse-portfolio - check repo exists
+        .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // 3. /repos/testuser/dollhouse-portfolio/commits/HEAD
+        .mockRejectedValueOnce(new Error('GraphQL implementation not yet complete')) // 4. GraphQL call fails (when fetching content)
+        .mockResolvedValueOnce({ html_url: 'https://github.com/testuser/dollhouse-portfolio' }) // 5. repo info for REST fallback
+        .mockResolvedValueOnce({ sha: 'abc123', commit: { committer: { date: new Date().toISOString() } } }) // 6. another commit call
         .mockResolvedValue([]); // remaining calls for directory contents
       
       // Mock portfolio repo manager
@@ -165,12 +167,11 @@ describe('GitHubPortfolioIndexer', () => {
       }];
 
       mockFetchFromGitHub
-        .mockResolvedValueOnce(mockUserInfo) // 1. user info
-        .mockRejectedValueOnce(new Error('GraphQL implementation not yet complete')) // 2. GraphQL call fails
-        .mockResolvedValueOnce(mockRepoInfo) // 3. repo info
-        .mockResolvedValueOnce(mockCommit) // 4. latest commit
-        .mockResolvedValueOnce(mockPersonas) // 5. personas directory
-        .mockResolvedValue([]); // remaining directories empty
+        .mockResolvedValueOnce(mockUserInfo) // 1. /user - get username
+        .mockResolvedValueOnce(mockRepoInfo) // 2. /repos/testuser/dollhouse-portfolio - check repo exists
+        .mockResolvedValueOnce(mockCommit) // 3. /repos/testuser/dollhouse-portfolio/commits/HEAD
+        .mockResolvedValueOnce(mockPersonas) // 4. /repos/testuser/dollhouse-portfolio/contents/personas
+        .mockResolvedValue([]); // remaining directories empty (skills, templates, agents, memories, ensembles)
 
       const result = await indexer.getIndex();
 
@@ -306,8 +307,15 @@ invalid yaml here
 
       mockFetchFromGitHub.mockImplementation((url) => {
         try {
+          // Handle both full URLs and paths
+          let urlToCheck = url;
+          if (url.startsWith('/')) {
+            // Convert path to full URL for consistency
+            urlToCheck = `https://api.github.com${url}`;
+          }
+          
           // Parse URL safely to validate hostname and pathname
-          const parsedUrl = new URL(url);
+          const parsedUrl = new URL(urlToCheck);
           
           // Validate allowed GitHub domains
           const allowedHosts = [
@@ -320,9 +328,11 @@ invalid yaml here
           }
           
           // Mock different types of API calls based on URL patterns
-          if (url === 'https://api.github.com/user') {
+          if (url === '/user' || urlToCheck === 'https://api.github.com/user') {
             return Promise.resolve({ login: 'testuser' });
-          } else if (url === 'https://api.github.com/graphql') {
+          } else if (url === '/repos/testuser/dollhouse-portfolio') {
+            return Promise.resolve({ html_url: 'https://github.com/testuser/dollhouse-portfolio' });
+          } else if (urlToCheck === 'https://api.github.com/graphql') {
             return Promise.reject(new Error('GraphQL implementation not yet complete'));
           } else if (parsedUrl.hostname === 'api.github.com' && 
                      parsedUrl.pathname.includes('/repos/') && 
