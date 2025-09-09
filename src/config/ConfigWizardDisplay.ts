@@ -95,6 +95,32 @@ ${message}
     
     return result;
   }
+  
+  /**
+   * Strategy 9: Use HTML pre tag
+   * Some LLMs respect HTML formatting
+   */
+  static asHtmlPre(message: string): string {
+    return `<pre style="white-space: pre-wrap; font-family: system-ui;">
+${message}
+</pre>`;
+  }
+  
+  /**
+   * Strategy 10: JSON structured format
+   * Return as structured JSON that might be handled specially
+   */
+  static asJsonMessage(message: string): string {
+    const json = {
+      type: "system_message",
+      priority: "high",
+      display: "verbatim",
+      preserve_formatting: true,
+      content: message
+    };
+    
+    return '```json\n' + JSON.stringify(json, null, 2) + '\n```';
+  }
 
   /**
    * Strategy 8: Split into structured sections
