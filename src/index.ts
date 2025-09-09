@@ -3246,7 +3246,7 @@ export class DollhouseMCPServer implements IToolHandler {
   async configureOAuth(client_id?: string) {
     try {
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
       
       // If no client_id provided, show current configuration status
       if (!client_id) {
@@ -4496,7 +4496,7 @@ Placeholders for custom format:
   async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
     try {
       const configManager = ConfigManager.getInstance();
-      await configManager.loadConfig();
+      await configManager.initialize();
 
       let statusText = `${this.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
 
@@ -4898,6 +4898,24 @@ Placeholders for custom format:
         }]
       };
     }
+  }
+
+  /**
+   * Handle configuration operations - delegates to ConfigHandler
+   */
+  async handleConfigOperation(options: any) {
+    const { ConfigHandler } = await import('./handlers/ConfigHandler.js');
+    const handler = new ConfigHandler();
+    return handler.handleConfigOperation(options, this.getPersonaIndicator());
+  }
+
+  /**
+   * Handle sync operations - delegates to SyncHandler
+   */
+  async handleSyncOperation(options: any) {
+    const { SyncHandler } = await import('./handlers/SyncHandlerV2.js');
+    const handler = new SyncHandler();
+    return handler.handleSyncOperation(options, this.getPersonaIndicator());
   }
 
   /**

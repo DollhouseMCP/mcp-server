@@ -67,10 +67,11 @@ When label "status: in-progress" is added → Move to "In Progress"
 
 ## Workflow Integration
 
-The project automation workflow (`.github/workflows/project-automation.yml`) will:
-- Auto-add new issues to the project
-- Update status based on issue/PR events
-- Apply labels based on workflow
+Note: The project automation workflow has been removed from this repository as it was misplaced. 
+For element submission automation, see the collection repository's workflow at:
+`.github/workflows/project-integration.yml`
+
+Manual project management can be done through GitHub's built-in project automation rules.
 
 ## Project Views
 

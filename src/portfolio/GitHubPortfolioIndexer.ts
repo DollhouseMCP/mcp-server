@@ -10,7 +10,6 @@
  * - Performance optimized for 1000+ portfolio elements
  */
 
-import { GitHubClient } from '../collection/GitHubClient.js';
 import { PortfolioRepoManager } from './PortfolioRepoManager.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { ElementType } from './types.js';
@@ -65,7 +64,6 @@ export class GitHubPortfolioIndexer {
   private actionTimestamp: Date | null = null;
   private readonly actionGracePeriod = 2 * 60 * 1000; // 2 minutes after action
   
-  private githubClient: GitHubClient;
   private portfolioRepoManager: PortfolioRepoManager;
   private apiCache: APICache;
   private rateLimitTracker: Map<string, number[]>;
@@ -73,7 +71,6 @@ export class GitHubPortfolioIndexer {
   private constructor() {
     this.apiCache = new APICache(); // Uses default settings
     this.rateLimitTracker = new Map();
-    this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
     this.portfolioRepoManager = new PortfolioRepoManager();
     
     logger.debug('GitHubPortfolioIndexer created');
@@ -324,7 +321,9 @@ export class GitHubPortfolioIndexer {
     
     const variables = { owner: username, name: repository };
     
-    const response = await this.githubClient.fetchFromGitHub('https://api.github.com/graphql', true);
+    // GraphQL endpoint not yet implemented with PortfolioRepoManager
+    // For now, just throw to fall back to REST
+    throw new Error('GraphQL not yet implemented for portfolio operations');
     
     // Note: This is a simplified GraphQL implementation
     // In a real implementation, you would send POST request with query and variables
@@ -338,12 +337,12 @@ export class GitHubPortfolioIndexer {
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
     
     // Get repository info and latest commit
-    const repoInfo = await this.githubClient.fetchFromGitHub(
-      `https://api.github.com/repos/${normalizedUsername}/${repository}`
+    const repoInfo = await this.portfolioRepoManager.githubRequest(
+      `/repos/${normalizedUsername}/${repository}`
     );
     
-    const latestCommit = await this.githubClient.fetchFromGitHub(
-      `https://api.github.com/repos/${normalizedUsername}/${repository}/commits/HEAD`
+    const latestCommit = await this.portfolioRepoManager.githubRequest(
+      `/repos/${normalizedUsername}/${repository}/commits/HEAD`
     );
     
     // Initialize index
@@ -362,14 +361,24 @@ export class GitHubPortfolioIndexer {
     }
     
     // Fetch content for each element type
+    logger.info(`Fetching content for all element types from GitHub portfolio...`);
+    
     for (const elementType of Object.values(ElementType)) {
       try {
+        logger.debug(`Fetching ${elementType} from GitHub...`);
         const entries = await this.fetchElementTypeContent(normalizedUsername, repository, elementType);
         index.elements.set(elementType, entries);
         index.totalElements += entries.length;
+        
+        if (entries.length > 0) {
+          logger.info(`✅ Found ${entries.length} ${elementType} in GitHub portfolio`);
+        } else {
+          logger.debug(`📁 No ${elementType} found (directory may not exist yet)`);
+        }
       } catch (error) {
-        logger.warn(`Failed to fetch ${elementType} from GitHub portfolio`, {
-          error: error instanceof Error ? error.message : String(error)
+        logger.warn(`❌ Failed to fetch ${elementType} from GitHub portfolio`, {
+          error: error instanceof Error ? error.message : String(error),
+          elementType
         });
         // Continue with other element types
       }
@@ -387,9 +396,9 @@ export class GitHubPortfolioIndexer {
     elementType: ElementType
   ): Promise<GitHubIndexEntry[]> {
     try {
-      // Get directory listing
-      const contents = await this.githubClient.fetchFromGitHub(
-        `https://api.github.com/repos/${username}/${repository}/contents/${elementType}`
+      // Get directory listing using PortfolioRepoManager
+      const contents = await this.portfolioRepoManager.githubRequest(
+        `/repos/${username}/${repository}/contents/${elementType}`
       );
       
       if (!Array.isArray(contents)) {
@@ -423,10 +432,22 @@ export class GitHubPortfolioIndexer {
       return entries;
       
     } catch (error) {
-      // Directory might not exist
-      if (error instanceof Error && error.message.includes('404')) {
-        return [];
+      // Directory might not exist - check for 404 errors
+      // PortfolioRepoManager will throw standard GitHub API errors
+      if (error instanceof Error) {
+        // Check for 404 Not Found errors from GitHub API
+        if (error.message.includes('404') || 
+            error.message.includes('Not Found')) {
+          logger.debug(`Directory ${elementType} not found in GitHub repository (this is normal if not yet created)`);
+          return [];
+        }
+        
+        // Log the actual error for debugging
+        logger.debug(`Error fetching ${elementType}: ${error.message}`);
       }
+      
+      // Re-throw other errors
+      logger.warn(`Unexpected error fetching ${elementType}:`, error);
       throw error;
     }
   }
@@ -459,7 +480,9 @@ export class GitHubPortfolioIndexer {
       // This is expensive, so only do it for small files or when specifically needed
       if (fileInfo.size && fileInfo.size < 10000) { // Only for files < 10KB
         try {
-          const content = await this.githubClient.fetchFromGitHub(fileInfo.download_url);
+          // For download URLs, we need to fetch directly, not through API
+          const response = await fetch(fileInfo.download_url);
+          const content = await response.text();
           const metadata = this.parseMetadataFromContent(content);
           
           if (metadata.name) entry.name = metadata.name;
@@ -523,7 +546,7 @@ export class GitHubPortfolioIndexer {
    */
   private async getGitHubUsername(): Promise<string> {
     try {
-      const userInfo = await this.githubClient.fetchFromGitHub('https://api.github.com/user', true);
+      const userInfo = await this.portfolioRepoManager.githubRequest('/user');
       return userInfo.login;
     } catch (error) {
       throw new Error('Failed to get GitHub username. Please ensure you are authenticated with GitHub.');

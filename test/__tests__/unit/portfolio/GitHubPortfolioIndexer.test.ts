@@ -17,7 +17,8 @@ jest.unstable_mockModule('../../../../src/collection/GitHubClient.js', () => ({
 
 jest.unstable_mockModule('../../../../src/portfolio/PortfolioRepoManager.js', () => ({
   PortfolioRepoManager: jest.fn().mockImplementation(() => ({
-    checkPortfolioExists: mockCheckPortfolioExists
+    checkPortfolioExists: mockCheckPortfolioExists,
+    githubRequest: mockFetchFromGitHub
   }))
 }));
 
