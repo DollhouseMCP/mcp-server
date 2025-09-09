@@ -77,8 +77,9 @@ export class PortfolioRepoManager {
 
   /**
    * Make authenticated GitHub API request
+   * Made public to support GitHubPortfolioIndexer operations
    */
-  private async githubRequest(
+  public async githubRequest(
     path: string,
     method: string = 'GET',
     body?: any

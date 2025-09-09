@@ -1,5 +1,31 @@
 /**
- * Secure YAML Parser for DollhouseMCP
+ * Secure YAML Parser for DollhouseMCP - For Markdown Files with YAML Frontmatter
+ * 
+ * IMPORTANT: This parser is specifically designed for Markdown files with YAML frontmatter
+ * (the format used by personas, skills, templates, and other elements).
+ * 
+ * USE THIS FOR:
+ * - Persona files (e.g., creative-writer.md)
+ * - Skill files (e.g., code-review.md)
+ * - Template files (e.g., meeting-notes.md)
+ * - Any Markdown file with YAML frontmatter between --- markers
+ * 
+ * DO NOT USE THIS FOR:
+ * - Pure YAML configuration files (use js-yaml directly with FAILSAFE_SCHEMA)
+ * - JSON files
+ * - Plain text files without frontmatter
+ * 
+ * FILE FORMAT EXPECTED:
+ * ```
+ * ---
+ * name: Element Name
+ * description: Element description
+ * version: 1.0.0
+ * ---
+ * 
+ * # Markdown content here
+ * The actual content/instructions go here...
+ * ```
  * 
  * Provides safe YAML parsing that prevents deserialization attacks
  * by using a restricted schema and pre-validation.
@@ -78,7 +104,25 @@ export class SecureYamlParser {
   };
 
   /**
-   * Securely parse content with YAML frontmatter
+   * Parse a Markdown file with YAML frontmatter (Securely)
+   * 
+   * @param input - The full content of a Markdown file with YAML frontmatter
+   * @param options - Parsing options for security and validation
+   * @returns ParsedContent with separated YAML data and Markdown content
+   * 
+   * @example
+   * ```typescript
+   * // For a persona file:
+   * const personaFile = `---
+   * name: Creative Writer
+   * description: A creative writing assistant
+   * ---
+   * You are a creative writer...`;
+   * 
+   * const result = SecureYamlParser.parse(personaFile);
+   * // result.data = { name: 'Creative Writer', description: '...' }
+   * // result.content = 'You are a creative writer...'
+   * ```
    */
   static parse(input: string, options: SecureParseOptions = {}): ParsedContent {
     const opts = { ...this.DEFAULT_OPTIONS, ...options };
