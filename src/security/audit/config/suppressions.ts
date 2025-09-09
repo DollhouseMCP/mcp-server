@@ -288,6 +288,16 @@ export const suppressions: Suppression[] = [
     file: 'test-sync-operations.js',
     reason: 'Test utility file for development testing. Does not process production user input.'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/test-sync-operations.js',
+    reason: 'Test utility file for development testing. Does not process production user input.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-*.js',
+    reason: 'Test utility files in root directory for development testing. Do not process production user input.'
+  },
   
   // ========================================
   // Audit Logging False Positives
