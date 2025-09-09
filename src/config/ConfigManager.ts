@@ -102,7 +102,8 @@ export interface WizardConfig {
   completed: boolean;      // Wizard was successfully completed
   dismissed: boolean;      // User chose "Don't show again"
   completedAt?: string;    // ISO timestamp when completed
-  version?: string;        // Wizard version for future updates
+  version?: string;        // Wizard version for future updates (deprecated - use lastSeenVersion)
+  lastSeenVersion?: string; // Last version where user saw the wizard
   skippedSections?: string[]; // Track which sections were skipped
 }
 

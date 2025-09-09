@@ -5,13 +5,34 @@
 
 import { ConfigManager } from './ConfigManager.js';
 import { logger } from '../utils/logger.js';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 export class ConfigWizardCheck {
   private hasCheckedWizard: boolean = false;
   private configManager: ConfigManager;
+  private currentVersion: string;
 
   constructor() {
     this.configManager = ConfigManager.getInstance();
+    this.currentVersion = this.getCurrentVersion();
+  }
+  
+  /**
+   * Get the current version from package.json
+   */
+  private getCurrentVersion(): string {
+    try {
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = dirname(__filename);
+      const packagePath = join(__dirname, '..', '..', 'package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'));
+      return packageJson.version;
+    } catch (error) {
+      logger.warn('Could not read package.json version', { error });
+      return '0.0.0';
+    }
   }
 
   /**
@@ -31,18 +52,45 @@ export class ConfigWizardCheck {
       await this.configManager.initialize();
       const config = this.configManager.getConfig();
       
-      // Check if wizard has been completed or dismissed
-      if (config.wizard?.completed || config.wizard?.dismissed) {
-        return null;
+      // Check if this is a first-time user
+      if (!config.wizard?.completed && !config.wizard?.dismissed) {
+        // First time user - show welcome wizard
+        return this.getWizardPrompt();
       }
       
-      // Wizard should run - return a prompt for the LLM
-      return this.getWizardPrompt();
+      // Check if we should show update wizard for existing users
+      if (config.wizard?.completed && this.shouldShowUpdateWizard(config.wizard?.lastSeenVersion)) {
+        // Update the last seen version
+        await this.configManager.updateSetting('wizard.lastSeenVersion', this.currentVersion);
+        return this.getUpdateWizardPrompt();
+      }
+      
+      return null;
       
     } catch (error) {
       logger.error('Error checking config wizard status', { error });
       return null;
     }
+  }
+  
+  /**
+   * Determine if we should show the update wizard based on version changes
+   * This logic can be updated with each release to trigger when needed
+   */
+  private shouldShowUpdateWizard(lastSeenVersion?: string): boolean {
+    // If no last seen version, they've never seen an update wizard
+    if (!lastSeenVersion) {
+      return false; // Don't show update to very old users who haven't seen versioning yet
+    }
+    
+    // DEPLOYMENT NOTE: Update this logic when you want to trigger the wizard
+    // Examples:
+    // - For emergency notifications: return true;
+    // - For major features: return this.currentVersion >= '1.8.0' && lastSeenVersion < '1.8.0';
+    // - For breaking changes: return this.currentVersion.startsWith('2.') && lastSeenVersion.startsWith('1.');
+    
+    // Currently: Don't trigger update wizard (can be changed in any release)
+    return false;
   }
 
   /**
@@ -79,6 +127,30 @@ Just say:
 **What's a username for?** It simply tags your creations (like "created by: you") so you can find them easily. Staying anonymous means your creations are tagged with a fun random ID instead (like "created by: clever-fox"). Either way, all your work is saved locally on your computer!
 
 Don't worry - this only takes a minute, and you can change any settings later! 🌟`;
+  }
+  
+  /**
+   * Get the update wizard prompt for returning users
+   * This can be customized for each release that needs to notify users
+   */
+  private getUpdateWizardPrompt(): string {
+    // This template can be customized for each release
+    return `🎉 **DollhouseMCP Has New Features!**
+
+Welcome back! We've added some exciting new capabilities since you last used DollhouseMCP.
+
+**What's New:**
+- Enhanced configuration options
+- Improved user experience
+- Better performance
+
+Would you like me to show you what's new, or would you prefer to explore on your own?
+
+Just say:
+- "Show me what's new" → I'll guide you through the updates
+- "Skip for now" → Continue with your work
+
+You can always ask "What's new in DollhouseMCP?" later to see this again.`;
   }
 
   /**
@@ -143,6 +215,7 @@ Don't worry - this only takes a minute, and you can change any settings later! �
   async markWizardCompleted(): Promise<void> {
     await this.configManager.updateSetting('wizard.completed', true);
     await this.configManager.updateSetting('wizard.completedAt', new Date().toISOString());
+    await this.configManager.updateSetting('wizard.lastSeenVersion', this.currentVersion);
   }
 
   /**
