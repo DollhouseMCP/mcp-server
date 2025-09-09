@@ -145,7 +145,7 @@ export class ServerSetup {
         // CRITICAL FIX: Add error boundary to prevent wizard errors from crashing tool requests
         if (this.wizardCheck) {
           try {
-            return await this.wizardCheck.wrapResponse(response);
+            return await this.wizardCheck.wrapResponse(response, name);
           } catch (wizardError) {
             logger.warn('Failed to wrap response with wizard check', { 
               error: wizardError,

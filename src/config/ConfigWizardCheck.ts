@@ -161,8 +161,17 @@ You can always ask "What's new in DollhouseMCP?" later to see this again.`;
   /**
    * Wrap tool responses to check for wizard on first interaction
    * CRITICAL FIX: Create new response objects to avoid mutations
+   * 
+   * @param response - The tool response to potentially wrap
+   * @param toolName - The name of the tool being called
    */
-  async wrapResponse(response: any): Promise<any> {
+  async wrapResponse(response: any, toolName?: string): Promise<any> {
+    // Skip wizard for certain tools that shouldn't trigger it
+    const skipTools = ['get_build_info', 'get_active_elements', 'list_elements'];
+    if (toolName && skipTools.includes(toolName)) {
+      return response;
+    }
+    
     const wizardPrompt = await this.checkIfWizardNeeded();
     
     if (!wizardPrompt) {
