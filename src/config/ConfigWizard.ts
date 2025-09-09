@@ -24,7 +24,7 @@ interface WizardChoice {
 
 export class ConfigWizard {
   private configManager: ConfigManager;
-  private rl: readline.Interface;
+  private rl: readline.Interface | null;
   private isInteractive: boolean;
 
   constructor(configManager: ConfigManager) {
@@ -41,8 +41,8 @@ export class ConfigWizard {
         terminal: true
       });
     } else {
-      // Create a dummy interface for non-interactive mode
-      this.rl = {} as readline.Interface;
+      // No interface in non-interactive mode
+      this.rl = null;
     }
   }
 
@@ -130,11 +130,29 @@ export class ConfigWizard {
       }
 
     } catch (error) {
-      if (error instanceof Error && error.message.includes('canceled')) {
-        console.log(chalk.yellow('\n⚠️  Wizard canceled. You can run it again later.\n'));
+      if (error instanceof Error) {
+        if (error.message.includes('canceled')) {
+          console.log(chalk.yellow('\n⚠️  Wizard canceled. You can run it again later.\n'));
+        } else if (error.message.includes('EACCES') || error.message.includes('permission')) {
+          logger.error('Permission denied while saving configuration', { error });
+          console.log(chalk.red('\n❌ Permission denied: Unable to save configuration.'));
+          console.log(chalk.yellow('   Please check file permissions for ~/.dollhouse/config.yml\n'));
+        } else if (error.message.includes('ENOSPC')) {
+          logger.error('No space left on device', { error });
+          console.log(chalk.red('\n❌ Disk full: Unable to save configuration.'));
+          console.log(chalk.yellow('   Please free up some disk space and try again.\n'));
+        } else if (error.message.includes('readline')) {
+          logger.error('Terminal input error', { error });
+          console.log(chalk.red('\n❌ Terminal error: Unable to read input.'));
+          console.log(chalk.yellow('   Please ensure you\'re running in an interactive terminal.\n'));
+        } else {
+          logger.error('Unexpected error in configuration wizard', { error });
+          console.log(chalk.red('\n❌ An unexpected error occurred.'));
+          console.log(chalk.gray(`   Error: ${error.message}\n`));
+        }
       } else {
-        logger.error('Error in configuration wizard', { error });
-        console.log(chalk.red('\n❌ An error occurred. Please try again later.\n'));
+        logger.error('Unknown error in configuration wizard', { error });
+        console.log(chalk.red('\n❌ An unknown error occurred. Please try again later.\n'));
       }
     }
   }
@@ -157,10 +175,19 @@ export class ConfigWizard {
       await this.configManager.updateSetting('user.username', username);
     }
 
-    // Email
-    console.log(chalk.white('\nEmail (optional, for notifications):'));
+    // Email with validation
+    console.log(chalk.white('\nEmail (for Git commits and GitHub attribution):'));
+    console.log(chalk.gray('  Used for: Git author info, GitHub commits, and element attribution'));
     console.log(chalk.gray(`  Current: ${config.user.email || 'not set'}`));
-    const email = await this.prompt('  > ', config.user.email || '');
+    console.log(chalk.gray('  Recommended: Your GitHub email address'));
+    let email = await this.prompt('  > ', config.user.email || '');
+    
+    // Validate email if provided
+    while (email && !this.isValidEmail(email)) {
+      console.log(chalk.yellow('  ⚠️  Invalid email format. Please enter a valid email or leave empty to skip.'));
+      email = await this.prompt('  > ', '');
+    }
+    
     if (email) {
       await this.configManager.updateSetting('user.email', email);
     }
@@ -373,7 +400,7 @@ export class ConfigWizard {
    */
   private prompt(question: string, defaultValue: string = ''): Promise<string> {
     return new Promise((resolve) => {
-      if (!this.isInteractive) {
+      if (!this.isInteractive || !this.rl) {
         resolve(defaultValue);
         return;
       }
@@ -391,6 +418,15 @@ export class ConfigWizard {
     const hint = defaultYes ? '[Y/n]' : '[y/N]';
     const answer = await this.prompt(`${question} ${hint}: `, defaultYes ? 'y' : 'n');
     return answer.toLowerCase().startsWith('y');
+  }
+
+  /**
+   * Helper: Validate email format
+   */
+  private isValidEmail(email: string): boolean {
+    // Basic email regex - not perfect but good enough for wizard validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
   }
 
   /**
