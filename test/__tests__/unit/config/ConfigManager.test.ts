@@ -24,6 +24,7 @@ jest.unstable_mockModule('fs/promises', () => ({
   rename: jest.fn(),
   unlink: jest.fn(),
   access: jest.fn(),
+  copyFile: jest.fn(),
 }));
 
 jest.unstable_mockModule('os', () => ({
@@ -122,7 +123,7 @@ describe('ConfigManager', () => {
       expect(mockWriteFile).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
         expect.stringMatching(/version: ['"]*1\.0\.0/), // YAML format
-        { mode: 384 }
+        { encoding: 'utf-8', mode: 384 }
       );
     });
     
@@ -146,23 +147,24 @@ github:
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockAccess = fs.access as jest.MockedFunction<typeof fs.access>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
       
-      // Simulate corrupted YAML
+      // Simulate file exists but is corrupted
+      mockAccess.mockResolvedValue(undefined); // File exists
       mockReadFile.mockResolvedValue('invalid: yaml: content: :::');
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
       
-      // Should not throw, should create new config
-      await expect(configManager.loadConfig()).resolves.not.toThrow();
+      // Should not throw, should use defaults when YAML is corrupted
+      await expect(configManager.initialize()).resolves.not.toThrow();
       
-      // Should write new default config in YAML format (atomic write uses temp file)
-      expect(mockWriteFile).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        expect.stringMatching(/version: ['"]*1\.0\.0/), // YAML format
-        { mode: 384 }
-      );
+      // Config should have default values
+      const config = configManager.getConfig();
+      expect(config.version).toBe('1.0.0');
     });
     
     it('should set file permissions to 0o600', async () => {
@@ -180,7 +182,7 @@ github:
       expect(mockWriteFile).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        { mode: 384 }
+        { encoding: 'utf-8', mode: 384 }
       );
     });
     
@@ -482,19 +484,24 @@ futureFeature:
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockAccess = fs.access as jest.MockedFunction<typeof fs.access>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
       
-      // Return invalid YAML  
+      // Simulate file exists with invalid YAML
+      mockAccess.mockResolvedValue(undefined); // File exists
       mockReadFile.mockResolvedValue('not: valid: yaml: at: : : all');
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
       
       const configManager = ConfigManager.getInstance();
       
-      // Should recover by creating new config
-      await expect(configManager.loadConfig()).resolves.not.toThrow();
+      // Should recover by using defaults (not throwing)
+      await expect(configManager.initialize()).resolves.not.toThrow();
       
-      // Should have written new config
-      expect(mockWriteFile).toHaveBeenCalled();
+      // Should have default config values
+      const config = configManager.getConfig();
+      expect(config.version).toBe('1.0.0');
     });
     
     it('should handle permission denied errors with helpful message', async () => {

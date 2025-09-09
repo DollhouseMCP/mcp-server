@@ -243,8 +243,8 @@ export class ConfigManager {
     // This ensures we pick up any manual edits or saved settings
     
     try {
-      // Ensure config directory exists
-      await fs.mkdir(this.configDir, { recursive: true });
+      // Ensure config directory exists with proper permissions (0o700 = owner only)
+      await fs.mkdir(this.configDir, { recursive: true, mode: 0o700 });
       
       // Load or create config
       if (await this.configExists()) {
@@ -525,9 +525,9 @@ export class ConfigManager {
         // Using default schema (not FAILSAFE) for dump to preserve types like booleans
       });
       
-      // Write atomically
+      // Write atomically with proper permissions (0o600 = owner read/write only)
       const tempPath = `${this.configPath}.tmp`;
-      await fs.writeFile(tempPath, yamlContent, 'utf-8');
+      await fs.writeFile(tempPath, yamlContent, { encoding: 'utf-8', mode: 0o600 });
       await fs.rename(tempPath, this.configPath);
       
       logger.debug('Configuration saved successfully');
@@ -791,7 +791,7 @@ export class ConfigManager {
         sortKeys: false
       });
       
-      await fs.writeFile(filePath, yamlContent, 'utf-8');
+      await fs.writeFile(filePath, yamlContent, { encoding: 'utf-8', mode: 0o600 });
       
       return {
         success: true,
