@@ -47,7 +47,7 @@ export class ConfigHandler {
           return this.handleImport(options, indicator);
         
         case 'wizard':
-          return this.handleWizard(indicator);
+          return await this.handleWizard(indicator);
         
         default:
           return {
@@ -212,25 +212,49 @@ export class ConfigHandler {
     };
   }
   
-  private handleWizard(indicator: string) {
-    // Interactive configuration wizard
+  private async handleWizard(indicator: string) {
+    // Get current configuration to show the user
+    const config = this.configManager.getConfig();
+    const friendlyConfig = this.makeFriendlyConfig(config);
+    
     return {
       content: [{
         type: "text",
-        text: `${indicator}🧙 **Configuration Wizard**\n\n` +
-              `The configuration wizard helps you set up DollhouseMCP.\n\n` +
-              `**Key Settings to Configure:**\n\n` +
-              `1. **User Identity**\n` +
-              `   \`dollhouse_config action: "set", setting: "user.username", value: "your-username"\`\n\n` +
-              `2. **GitHub Portfolio**\n` +
-              `   \`dollhouse_config action: "set", setting: "github.portfolio.repository_name", value: "dollhouse-portfolio"\`\n\n` +
-              `3. **Sync Settings**\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.enabled", value: true\`\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.bulk.upload_enabled", value: true\`\n\n` +
-              `4. **Privacy Settings**\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.privacy.scan_for_secrets", value: true\`\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.privacy.respect_local_only", value: true\`\n\n` +
-              `Run \`dollhouse_config action: "get"\` to see current settings.`
+        text: `${indicator}🧙 **Configuration Wizard - Let's Set Up DollhouseMCP!**\n\n` +
+              `I'll help you configure DollhouseMCP step by step. First, let me show you your current settings:\n\n` +
+              `**📊 Current Configuration:**\n` +
+              `\`\`\`yaml\n${yaml.dump(friendlyConfig, { lineWidth: -1 })}\`\`\`\n\n` +
+              `**Now, let's configure your settings one by one!**\n\n` +
+              `🎯 **Step 1: User Identity**\n` +
+              `This tags your creations so you can find them later.\n` +
+              `- To set a username: Say "Set my username to [your-name]"\n` +
+              `- To stay anonymous: Say "I'll stay anonymous"\n` +
+              `- Current: ${friendlyConfig.user?.username || '(not set - anonymous mode)'}\n\n` +
+              `📧 **Step 2: Email (Optional)**\n` +
+              `Only needed if you want to be contacted about your shared creations.\n` +
+              `- To add email: Say "Set my email to [your-email]"\n` +
+              `- To skip: Say "No email needed"\n` +
+              `- Current: ${friendlyConfig.user?.email || '(not set)'}\n\n` +
+              `🐙 **Step 3: GitHub Integration (Optional)**\n` +
+              `Connect GitHub to sync and share your creations.\n` +
+              `- To connect: Say "Help me connect to GitHub"\n` +
+              `- To skip: Say "Skip GitHub for now"\n` +
+              `- Current: ${friendlyConfig.github?.username || '(not connected)'}\n\n` +
+              `🔄 **Step 4: Auto-Sync (Optional)**\n` +
+              `Automatically sync your creations to GitHub.\n` +
+              `- To enable: Say "Enable auto-sync"\n` +
+              `- To disable: Say "Keep sync manual"\n` +
+              `- Current: ${friendlyConfig.sync?.enabled ? 'Enabled' : 'Disabled'}\n\n` +
+              `🎨 **Step 5: Display Preferences**\n` +
+              `Show which persona is active in your chat.\n` +
+              `- To show indicators: Say "Show persona indicators"\n` +
+              `- To hide them: Say "Hide persona indicators"\n` +
+              `- Current: ${friendlyConfig.display?.show_persona_indicator ? 'Showing' : 'Hidden'}\n\n` +
+              `**Ready?** Just tell me what you'd like to configure, or say:\n` +
+              `- "Configure everything" to go through all settings\n` +
+              `- "Just the basics" for minimal setup\n` +
+              `- "Skip wizard" if you're happy with current settings\n\n` +
+              `Remember: All your creations are saved locally on your computer, and you can change these settings anytime!`
       }]
     };
   }
