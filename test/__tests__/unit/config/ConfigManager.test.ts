@@ -45,9 +45,9 @@ describe('ConfigManager', () => {
     // Clear all mocks
     jest.clearAllMocks();
     
-    // Reset singleton instance for testing
-    (ConfigManager as any).instance = null;
-    (ConfigManager as any).instanceLock = false;
+    // Reset singleton instance for testing using the new test-only method
+    // This ensures clean state between tests and prevents test pollution
+    ConfigManager.resetForTesting();
     
     // Mock os.homedir
     (os.homedir as jest.Mock).mockReturnValue(mockHomedir);
@@ -619,7 +619,7 @@ github:
       expect(config.github.portfolio.repository_url).toBe('https://github.com/mickdarling/dollhouse-portfolio');
     });
     
-    it.skip('should persist config values between ConfigManager instances', async () => {
+    it('should persist config values between ConfigManager instances', async () => {
       const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
       const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
       const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
@@ -647,13 +647,14 @@ github:
       expect(config.user.email).toBe('test@example.com');
       expect(config.sync.enabled).toBe(true);
       
-      // Reset singleton for test
-      (ConfigManager as any).instance = null;
-      (ConfigManager as any).instanceLock = false;
+      // Reset singleton for test using the new test-only method
+      ConfigManager.resetForTesting();
       
       // Second instance loads saved config - simulate that the file now exists with saved values
       // Note: In a real scenario, the file would contain what was saved by the first instance
       // For this test, we're simulating that persistence by providing the expected saved state
+      mockAccess.mockReset();
+      mockReadFile.mockReset();
       mockAccess.mockResolvedValue(undefined); // File now exists
       mockReadFile.mockResolvedValue(`version: '1.0.0'
 user:
@@ -778,16 +779,40 @@ user:
       ).rejects.toThrow('Forbidden property in path: prototype');
     });
 
-    it.skip('should reject __proto__ in resetConfig section', async () => {
+    it('should reject __proto__ in resetConfig section', async () => {
+      const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockAccess = fs.access as jest.MockedFunction<typeof fs.access>;
+      const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
+      
+      // Setup mocks for initialize
+      mockAccess.mockRejectedValue({ code: 'ENOENT' });
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
+      
       const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
       
       await expect(
         configManager.resetConfig('__proto__')
       ).rejects.toThrow('Forbidden property in section: __proto__');
     });
 
-    it.skip('should reject constructor in resetConfig section', async () => {
+    it('should reject constructor in resetConfig section', async () => {
+      const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+      const mockAccess = fs.access as jest.MockedFunction<typeof fs.access>;
+      const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+      const mockRename = fs.rename as jest.MockedFunction<typeof fs.rename>;
+      
+      // Setup mocks for initialize
+      mockAccess.mockRejectedValue({ code: 'ENOENT' });
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRename.mockResolvedValue(undefined);
+      
       const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
       
       await expect(
         configManager.resetConfig('user.constructor')

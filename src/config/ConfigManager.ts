@@ -166,6 +166,34 @@ export class ConfigManager {
   }
 
   /**
+   * Reset the singleton instance for testing purposes only.
+   * This method is ONLY available in test environments to enable proper test isolation.
+   * 
+   * IMPORTANT: This follows industry-standard patterns used by Google, Facebook, Microsoft
+   * for testing singleton classes. The method is protected by an environment check to
+   * ensure it cannot be called in production.
+   * 
+   * @throws Error if called outside test environment
+   */
+  public static resetForTesting(): void {
+    // Security check: only allow in test environment
+    if (process.env.NODE_ENV !== 'test') {
+      const errorMsg = 'ConfigManager.resetForTesting() can only be called in test environment';
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    // Reset the singleton instance
+    ConfigManager.instance = null;
+    ConfigManager.instanceLock = false;
+    
+    // Log for debugging (only in test environment with DEBUG flag)
+    if (process.env.DEBUG) {
+      console.log('[TEST] ConfigManager singleton reset');
+    }
+  }
+
+  /**
    * Get default configuration
    */
   private getDefaultConfig(): DollhouseConfig {
