@@ -636,60 +636,80 @@ export class ConfigManager {
 
   /**
    * Merge partial config with defaults
+   * 
+   * IMPORTANT: This function preserves unknown fields for forward compatibility.
+   * If a future version adds new config fields, older versions won't lose them.
    */
   private mergeWithDefaults(partial: Partial<DollhouseConfig>): DollhouseConfig {
     const defaults = this.getDefaultConfig();
     
-    return {
-      version: partial.version || defaults.version,
-      user: {
-        username: partial.user?.username || defaults.user.username,
-        email: partial.user?.email || defaults.user.email,
-        display_name: partial.user?.display_name || defaults.user.display_name
-      },
-      github: {
-        portfolio: {
-          ...defaults.github.portfolio,
-          ...(partial.github?.portfolio || {})
-        },
-        auth: {
-          ...defaults.github.auth,
-          ...(partial.github?.auth || {})
-        }
-      },
-      sync: {
-        enabled: partial.sync?.enabled ?? defaults.sync.enabled,
-        individual: {
-          ...defaults.sync.individual,
-          ...(partial.sync?.individual || {})
-        },
-        bulk: {
-          ...defaults.sync.bulk,
-          ...(partial.sync?.bulk || {})
-        },
-        privacy: {
-          ...defaults.sync.privacy,
-          ...(partial.sync?.privacy || {}),
-          excluded_patterns: partial.sync?.privacy?.excluded_patterns || defaults.sync.privacy.excluded_patterns
-        }
-      },
-      collection: {
-        ...defaults.collection,
-        ...partial.collection
-      },
-      elements: {
-        auto_activate: partial.elements?.auto_activate || defaults.elements.auto_activate,
-        default_element_dir: partial.elements?.default_element_dir || defaults.elements.default_element_dir
-      },
-      display: {
-        persona_indicators: {
-          ...defaults.display.persona_indicators,
-          ...(partial.display?.persona_indicators || {})
-        },
-        verbose_logging: partial.display?.verbose_logging ?? defaults.display.verbose_logging,
-        show_progress: partial.display?.show_progress ?? defaults.display.show_progress
-      }
+    // Start with a deep clone of partial to preserve all unknown fields
+    const result: any = JSON.parse(JSON.stringify(partial));
+    
+    // Ensure all required fields exist with defaults
+    result.version = result.version || defaults.version;
+    
+    // User section - preserve unknown fields while ensuring required fields
+    result.user = {
+      ...result.user,
+      username: result.user?.username ?? defaults.user.username,
+      email: result.user?.email ?? defaults.user.email,
+      display_name: result.user?.display_name ?? defaults.user.display_name
     };
+    
+    // GitHub section - deep merge preserving unknown fields
+    if (!result.github) result.github = {};
+    result.github.portfolio = {
+      ...defaults.github.portfolio,
+      ...result.github.portfolio
+    };
+    result.github.auth = {
+      ...defaults.github.auth,
+      ...result.github.auth
+    };
+    
+    // Sync section - preserve unknown fields at all levels
+    if (!result.sync) result.sync = {};
+    result.sync.enabled = result.sync.enabled ?? defaults.sync.enabled;
+    result.sync.individual = {
+      ...defaults.sync.individual,
+      ...result.sync.individual
+    };
+    result.sync.bulk = {
+      ...defaults.sync.bulk,
+      ...result.sync.bulk
+    };
+    result.sync.privacy = {
+      ...defaults.sync.privacy,
+      ...result.sync.privacy,
+      // Special handling for arrays - use provided or default
+      excluded_patterns: result.sync.privacy?.excluded_patterns || defaults.sync.privacy.excluded_patterns
+    };
+    
+    // Collection section
+    result.collection = {
+      ...defaults.collection,
+      ...result.collection
+    };
+    
+    // Elements section
+    if (!result.elements) result.elements = {};
+    result.elements = {
+      ...result.elements,
+      auto_activate: result.elements.auto_activate || defaults.elements.auto_activate,
+      default_element_dir: result.elements.default_element_dir || defaults.elements.default_element_dir
+    };
+    
+    // Display section
+    if (!result.display) result.display = {};
+    result.display.persona_indicators = {
+      ...defaults.display.persona_indicators,
+      ...result.display.persona_indicators
+    };
+    result.display.verbose_logging = result.display.verbose_logging ?? defaults.display.verbose_logging;
+    result.display.show_progress = result.display.show_progress ?? defaults.display.show_progress;
+    
+    return result as DollhouseConfig;
   }
 
   /**
