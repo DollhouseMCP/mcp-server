@@ -7,15 +7,26 @@
  * - Non-interactive environment handling
  */
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { ConfigManager } from '../../../../src/config/ConfigManager.js';
 import { ConfigWizard } from '../../../../src/config/ConfigWizard.js';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
 
 describe('ConfigWizard', () => {
   let configManager: ConfigManager;
   let wizard: ConfigWizard;
+  let testDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Create a temporary test directory
+    testDir = path.join(os.tmpdir(), `dollhouse-test-${Date.now()}`);
+    await fs.mkdir(testDir, { recursive: true });
+    
+    // Set test config directory
+    process.env.TEST_CONFIG_DIR = testDir;
+    
     // Reset singleton for clean tests
     ConfigManager.resetForTesting();
     
@@ -28,9 +39,21 @@ describe('ConfigWizard', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     wizard.close();
     jest.restoreAllMocks();
+    
+    // Clean up test directory
+    if (testDir) {
+      try {
+        await fs.rm(testDir, { recursive: true, force: true });
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+    }
+    
+    // Clean up environment variable
+    delete process.env.TEST_CONFIG_DIR;
   });
 
   describe('shouldRunWizard', () => {

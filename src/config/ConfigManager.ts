@@ -140,8 +140,12 @@ export class ConfigManager {
   private config: DollhouseConfig | null = null;
 
   private constructor() {
-    // Initialize paths
-    this.configDir = path.join(os.homedir(), '.dollhouse');
+    // Initialize paths - use test directory if in test environment
+    if (process.env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
+      this.configDir = process.env.TEST_CONFIG_DIR;
+    } else {
+      this.configDir = path.join(os.homedir(), '.dollhouse');
+    }
     this.configPath = path.join(this.configDir, 'config.yml');
     this.backupPath = path.join(this.configDir, 'config.yml.backup');
   }
@@ -704,6 +708,12 @@ export class ConfigManager {
           this.config.github.auth.client_id = fixNull(this.config.github.auth.client_id) || undefined;
         }
       }
+    }
+    
+    // Fix wizard settings
+    if (this.config.wizard) {
+      this.config.wizard.completed = fixBoolean(this.config.wizard.completed);
+      this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
     }
   }
 
