@@ -567,10 +567,16 @@ export class ConfigManager {
   }
 
   /**
-   * Fix incorrect types in config (e.g., string booleans)
+   * Fix incorrect types in config (e.g., string booleans, string "null")
    */
   private fixConfigTypes(): void {
     if (!this.config) return;
+    
+    // Helper to convert string "null" to actual null
+    const fixNull = (value: any): any => {
+      if (value === 'null' || value === 'NULL') return null;
+      return value;
+    };
     
     // Helper to convert string booleans to actual booleans
     const fixBoolean = (value: any): any => {
@@ -581,6 +587,13 @@ export class ConfigManager {
       }
       return value;
     };
+    
+    // Fix user fields - handle string "null" values
+    if (this.config.user) {
+      this.config.user.username = fixNull(this.config.user.username);
+      this.config.user.email = fixNull(this.config.user.email);
+      this.config.user.display_name = fixNull(this.config.user.display_name);
+    }
     
     // Fix sync settings
     if (this.config.sync) {
@@ -626,10 +639,15 @@ export class ConfigManager {
     // Fix github settings
     if (this.config.github) {
       if (this.config.github.portfolio) {
+        this.config.github.portfolio.repository_url = fixNull(this.config.github.portfolio.repository_url);
         this.config.github.portfolio.auto_create = fixBoolean(this.config.github.portfolio.auto_create);
       }
       if (this.config.github.auth) {
         this.config.github.auth.use_oauth = fixBoolean(this.config.github.auth.use_oauth);
+        // Fix client_id if it's a string "null"
+        if (this.config.github.auth.client_id) {
+          this.config.github.auth.client_id = fixNull(this.config.github.auth.client_id) || undefined;
+        }
       }
     }
   }
