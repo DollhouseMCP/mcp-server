@@ -136,6 +136,11 @@ export const suppressions: Suppression[] = [
     file: 'src/tools/portfolio/submitToPortfolioTool.ts',
     reason: 'False positive - Uses SecureYamlParser.parse() which is the secure implementation designed to prevent YAML vulnerabilities'
   },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/config/ConfigManager.ts',
+    reason: 'INTENTIONAL: Uses js-yaml with FAILSAFE_SCHEMA for pure YAML config files. This prevents code execution and is the appropriate security measure for config files that are NOT markdown with frontmatter. Regression test ensures we do not use SecureYamlParser here which would reset config values.'
+  },
   
   // ========================================
   // Security Rule Definition Files
@@ -268,6 +273,21 @@ export const suppressions: Suppression[] = [
     file: 'src/services/BuildInfoService.ts',
     reason: 'BuildInfoService only processes system information (package.json, git commands, Docker runtime) - the MCP tool takes no parameters and no user input flows through this service'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/handlers/SyncHandlerV2.ts',
+    reason: 'SyncHandlerV2 receives already-normalized input from the MCP request layer. All user input is normalized in ServerSetup before reaching handlers.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/handlers/ConfigHandler.ts',
+    reason: 'ConfigHandler receives already-normalized input from the MCP request layer. All user input is normalized in ServerSetup before reaching handlers.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-sync-operations.js',
+    reason: 'Test utility file for development testing. Does not process production user input.'
+  },
   
   // ========================================
   // Audit Logging False Positives
@@ -356,6 +376,21 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-006',
     file: 'scripts/**/*',
     reason: 'Build scripts do not perform runtime security operations'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/portfolio/PortfolioSyncManager.ts',
+    reason: 'Portfolio sync operations are file management tasks, not security operations. Security validation happens at the MCP request layer.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/handlers/SyncHandlerV2.ts',
+    reason: 'Sync handler delegates to PortfolioSyncManager which handles its own logging. Security validation happens at the MCP request layer.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/handlers/ConfigHandler.ts',
+    reason: 'Config handler operations are configuration management, not security operations. ConfigManager handles its own logging.'
   },
   
   // ========================================
@@ -613,7 +648,6 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
   const relativePath = getRelativePath(normalizedPath);
   
   // Check cache first
-  const cacheKey = `${ruleId}::${relativePath}`;
   const cached = cache.get(ruleId, relativePath);
   if (cached !== undefined) return cached;
   
