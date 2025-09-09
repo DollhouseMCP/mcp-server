@@ -46,6 +46,8 @@ import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
+import { ConfigWizard } from './config/ConfigWizard.js';
+import { ConfigWizardCheck } from './config/ConfigWizardCheck.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -94,6 +96,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private skillManager: SkillManager;
   private templateManager: TemplateManager;
   private agentManager: AgentManager;
+  private wizardCheck: ConfigWizardCheck;
 
   constructor() {
     this.server = new Server(
@@ -108,6 +111,9 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
+    // Initialize wizard check
+    this.wizardCheck = new ConfigWizardCheck();
+    
     // Initialize portfolio system
     this.portfolioManager = PortfolioManager.getInstance();
     this.migrationManager = new MigrationManager(this.portfolioManager);
@@ -154,7 +160,7 @@ export class DollhouseMCPServer implements IToolHandler {
     
     // Initialize server setup
     this.serverSetup = new ServerSetup();
-    this.serverSetup.setupServer(this.server, this);
+    this.serverSetup.setupServer(this.server, this, this.wizardCheck);
     
     // FIX #610: Portfolio initialization moved to run() method to prevent race condition
     // Previously: this.initializePortfolio().then() ran async in constructor
