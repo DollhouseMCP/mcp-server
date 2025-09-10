@@ -40,6 +40,9 @@ describe('TemplateRenderer - Unicode Security', () => {
         'Content: {{value}}'
       );
       
+      // Mock the render method to return interpolated content
+      mockTemplate.render = jest.fn<() => Promise<string>>().mockResolvedValue('Content: data');
+      
       // Only return template for normalized name
       mockTemplateManager.find.mockImplementation(async (predicate) => {
         // The predicate should be checking for normalized name
@@ -57,6 +60,7 @@ describe('TemplateRenderer - Unicode Security', () => {
       // Should normalize and find the template
       expect(result.success).toBe(true);
       expect(result.content).toBe('Content: data');
+      expect(mockTemplate.render).toHaveBeenCalledWith({ value: 'data' });
     });
     
     it('should handle zero-width characters in template names', async () => {
@@ -64,6 +68,9 @@ describe('TemplateRenderer - Unicode Security', () => {
         { name: 'template', description: 'Test' },
         'Content'
       );
+      
+      // Mock the render method
+      mockTemplate.render = jest.fn<() => Promise<string>>().mockResolvedValue('Content');
       
       mockTemplateManager.find.mockImplementation(async (predicate) => {
         const testTemplate = { metadata: { name: 'template' } };
@@ -84,12 +91,16 @@ describe('TemplateRenderer - Unicode Security', () => {
     
     it('should handle direction override attacks', async () => {
       const mockTemplate = new Template(
-        { name: 'secure', description: 'Test' },
+        { name: 'eruces', description: 'Test' },  // The normalized name after stripping RLO
         'Secure content'
       );
       
+      // Mock the render method
+      mockTemplate.render = jest.fn<() => Promise<string>>().mockResolvedValue('Secure content');
+      
       mockTemplateManager.find.mockImplementation(async (predicate) => {
-        const testTemplate = { metadata: { name: 'secure' } };
+        // After normalization, '\u202Eeruces' becomes 'eruces'
+        const testTemplate = { metadata: { name: 'eruces' } };
         if (predicate(testTemplate as any)) {
           return mockTemplate;
         }
@@ -100,7 +111,7 @@ describe('TemplateRenderer - Unicode Security', () => {
       const rtlName = '\u202Eeruces'; // RLO character followed by reversed text
       const result = await renderer.render(rtlName, {});
       
-      // Should normalize and handle safely
+      // Should normalize (strip RLO) and find the 'eruces' template
       expect(result.success).toBe(true);
       expect(result.content).toBe('Secure content');
     });
@@ -111,10 +122,16 @@ describe('TemplateRenderer - Unicode Security', () => {
         'First: {{data}}'
       );
       
+      // Mock render method for template1
+      template1.render = jest.fn<() => Promise<string>>().mockResolvedValue('First: A');
+      
       const template2 = new Template(
         { name: 'second', description: 'Second' },
         'Second: {{data}}'
       );
+      
+      // Mock render method for template2
+      template2.render = jest.fn<() => Promise<string>>().mockResolvedValue('Second: B');
       
       let callCount = 0;
       mockTemplateManager.find.mockImplementation(async (predicate) => {
@@ -172,6 +189,9 @@ describe('TemplateRenderer - Unicode Security', () => {
         { name: 'admin', description: 'Admin template' },
         'Admin access: {{level}}'
       );
+      
+      // Mock the render method
+      mockTemplate.render = jest.fn<() => Promise<string>>().mockResolvedValue('Admin access: restricted');
       
       mockTemplateManager.find.mockImplementation(async (predicate) => {
         const testTemplate = { metadata: { name: 'admin' } };
