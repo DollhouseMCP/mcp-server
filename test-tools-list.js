@@ -2,11 +2,21 @@
 
 import { spawn } from 'child_process';
 
+/**
+ * Basic Unicode normalization for test scripts
+ * Prevents Unicode-based security issues in test data
+ */
+function normalizeUnicode(str) {
+  if (typeof str !== 'string') return str;
+  // Normalize to NFC (Canonical Decomposition, followed by Canonical Composition)
+  return str.normalize('NFC');
+}
+
 const docker = spawn('docker', [
   'run',
   '--rm',
   '-i', 
-  'claude-mcp-test-env:latest',
+  'claude-mcp-test-env:1.0.0',
   'node',
   '/app/dollhousemcp/dist/index.js'
 ]);
@@ -14,7 +24,8 @@ const docker = spawn('docker', [
 let responseBuffer = '';
 
 docker.stdout.on('data', (data) => {
-  responseBuffer += data.toString();
+  // Normalize Unicode to prevent security issues
+  responseBuffer += normalizeUnicode(data.toString());
   const lines = responseBuffer.split('\n');
   responseBuffer = lines.pop() || '';
   

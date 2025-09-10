@@ -7,6 +7,16 @@
 
 import { spawn } from 'child_process';
 
+/**
+ * Basic Unicode normalization for test scripts
+ * Prevents Unicode-based security issues in test data
+ */
+function normalizeUnicode(str) {
+  if (typeof str !== 'string') return str;
+  // Normalize to NFC (Canonical Decomposition, followed by Canonical Composition)
+  return str.normalize('NFC');
+}
+
 // Test messages to send to MCP server
 const testMessages = [
   // 1. Initialize connection
@@ -91,9 +101,21 @@ const docker = spawn('docker', [
 let responseBuffer = '';
 let testIndex = 0;
 let initComplete = false;
+const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer size to prevent memory leak
+let retryCount = 0;
+const MAX_RETRY_COUNT = 3;
 
 docker.stdout.on('data', (data) => {
-  responseBuffer += data.toString();
+  // Normalize Unicode to prevent security issues
+  responseBuffer += normalizeUnicode(data.toString());
+  
+  // Prevent unbounded buffer growth
+  if (responseBuffer.length > MAX_BUFFER_SIZE) {
+    console.error('❌ Response buffer exceeded maximum size, clearing buffer');
+    responseBuffer = '';
+    retryCount = 0;
+    return;
+  }
   
   // Try to parse complete JSON-RPC messages
   const lines = responseBuffer.split('\n');
@@ -104,9 +126,16 @@ docker.stdout.on('data', (data) => {
       try {
         const response = JSON.parse(line);
         handleResponse(response);
+        retryCount = 0; // Reset retry count on successful parse
       } catch (e) {
-        // Not valid JSON, might be partial message
-        responseBuffer = line + '\n' + responseBuffer;
+        // Not valid JSON, might be partial message - only retry a few times
+        if (retryCount < MAX_RETRY_COUNT) {
+          responseBuffer = line + '\n' + responseBuffer;
+          retryCount++;
+        } else {
+          console.error('⚠️  Failed to parse after retries, skipping line:', line.substring(0, 100));
+          retryCount = 0;
+        }
       }
     }
   }

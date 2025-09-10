@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   mcp-test:
-    image: claude-mcp-test-env:latest
+    image: claude-mcp-test-env:1.0.0
     container_name: dollhouse-mcp-test
     build:
       context: .
@@ -25,6 +25,15 @@ services:
     tty: true
     networks:
       - mcp-test-network
+    # Resource limits to prevent resource exhaustion
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
   # Optional: Test database for future features
   # test-db:
