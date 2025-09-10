@@ -67,7 +67,7 @@ export interface IToolHandler {
   portfolioStatus(username?: string): Promise<any>;
   initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}): Promise<any>;
   portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): Promise<any>;
-  syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}): Promise<any>;
+  syncPortfolio(options: {direction: string; mode?: string; force: boolean; dryRun: boolean; confirmDeletions?: boolean}): Promise<any>;
   searchPortfolio(options: {query: string; elementType?: string; fuzzyMatch?: boolean; maxResults?: number; includeKeywords?: boolean; includeTags?: boolean; includeTriggers?: boolean; includeDescriptions?: boolean}): Promise<any>;
   searchAll(options: {query: string; sources?: string[]; elementType?: string; page?: number; pageSize?: number; sortBy?: string}): Promise<any>;
   

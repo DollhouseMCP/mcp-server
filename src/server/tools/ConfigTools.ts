@@ -65,7 +65,7 @@ export function getConfigTools(server: IToolHandler): Array<{ tool: ToolDefiniti
     {
       tool: {
         name: "configure_collection_submission",
-        description: "Configure automatic collection submission settings. When enabled, the submit_content tool will automatically create a submission issue in the DollhouseMCP collection repository after uploading to your portfolio.",
+        description: "Configure automatic collection submission settings. When enabled, the submit_collection_content tool will automatically create a submission issue in the DollhouseMCP collection repository after uploading to your portfolio.",
         inputSchema: {
           type: "object",
           properties: {

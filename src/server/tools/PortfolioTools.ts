@@ -25,8 +25,10 @@ interface PortfolioConfigArgs {
 
 interface SyncPortfolioArgs {
   direction?: 'push' | 'pull' | 'both';
+  mode?: 'additive' | 'mirror' | 'backup';
   force?: boolean;
   dry_run?: boolean;
+  confirm_deletions?: boolean;
 }
 
 interface SearchPortfolioArgs {
@@ -135,7 +137,7 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
     {
       tool: {
         name: "sync_portfolio",
-        description: "Sync ALL elements in your local portfolio with your GitHub repository. WARNING: This uploads EVERY element from your local portfolio to GitHub. Use 'submit_content' instead if you want to upload only specific elements. This bulk operation is useful for backing up your entire portfolio but may include private elements you don't want public.",
+        description: "Sync ALL elements in your local portfolio with your GitHub repository. By default uses 'additive' mode which only adds new items and never deletes (safest). Use 'mirror' mode for exact sync (with deletion confirmations). Use 'backup' mode to treat GitHub as backup source. ALWAYS run with dry_run:true first to preview changes. For individual elements, use 'portfolio_element_manager' instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -144,21 +146,32 @@ export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefin
               enum: ["push", "pull", "both"],
               description: "Sync direction: 'push' (upload to GitHub), 'pull' (download from GitHub), or 'both' (bidirectional sync). Defaults to 'push'.",
             },
+            mode: {
+              type: "string",
+              enum: ["additive", "mirror", "backup"],
+              description: "Sync mode: 'additive' (default, only adds new items, never deletes), 'mirror' (makes exact match, requires confirmation for deletions), 'backup' (GitHub as backup, only pulls missing items locally). Defaults to 'additive' for safety.",
+            },
             force: {
               type: "boolean",
-              description: "Whether to force sync even if there are conflicts. Use with caution as this may overwrite changes.",
+              description: "Whether to force sync even if there are conflicts. Use with caution as this may overwrite changes. In 'mirror' mode, this skips deletion confirmations.",
             },
             dry_run: {
               type: "boolean",
-              description: "Show what would be synced without actually performing the sync.",
+              description: "Show what would be synced without actually performing the sync. RECOMMENDED to run with dry_run:true first to preview changes.",
+            },
+            confirm_deletions: {
+              type: "boolean",
+              description: "In 'mirror' mode, require explicit confirmation for each deletion. Defaults to true unless force:true is set.",
             },
           },
         },
       },
       handler: (args: SyncPortfolioArgs) => server.syncPortfolio({
         direction: args?.direction || 'push',
+        mode: args?.mode || 'additive',
         force: args?.force || false,
-        dryRun: args?.dry_run || false
+        dryRun: args?.dry_run || false,
+        confirmDeletions: args?.confirm_deletions !== false // Default true unless explicitly false
       })
     },
     {
