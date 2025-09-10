@@ -17,6 +17,14 @@ function normalizeUnicode(str) {
   return str.normalize('NFC');
 }
 
+/**
+ * Get current timestamp for debugging
+ */
+function getTimestamp() {
+  const now = new Date();
+  return `[${now.toISOString()}]`;
+}
+
 // Test messages to send to MCP server
 const testMessages = [
   // 1. Initialize connection
@@ -85,7 +93,7 @@ const testMessages = [
   }
 ];
 
-console.log('🧪 Testing MCP Server in Docker Container');
+console.log(`${getTimestamp()} 🧪 Testing MCP Server in Docker Container`);
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
 // Run Docker container with MCP server
@@ -111,7 +119,7 @@ docker.stdout.on('data', (data) => {
   
   // Prevent unbounded buffer growth
   if (responseBuffer.length > MAX_BUFFER_SIZE) {
-    console.error('❌ Response buffer exceeded maximum size, clearing buffer');
+    console.error(`${getTimestamp()} ❌ Response buffer exceeded maximum size, clearing buffer`);
     responseBuffer = '';
     retryCount = 0;
     return;
@@ -133,7 +141,7 @@ docker.stdout.on('data', (data) => {
           responseBuffer = line + '\n' + responseBuffer;
           retryCount++;
         } else {
-          console.error('⚠️  Failed to parse after retries, skipping line:', line.substring(0, 100));
+          console.error(`${getTimestamp()} ⚠️  Failed to parse after retries, skipping line:`, line.substring(0, 100));
           retryCount = 0;
         }
       }
@@ -142,19 +150,19 @@ docker.stdout.on('data', (data) => {
 });
 
 docker.stderr.on('data', (data) => {
-  console.error('❌ Server Error:', data.toString());
+  console.error(`${getTimestamp()} ❌ Server Error:`, data.toString());
 });
 
 docker.on('close', (code) => {
-  console.log(`\n✅ Test completed with code: ${code}`);
+  console.log(`\n${getTimestamp()} ✅ Test completed with code: ${code}`);
   process.exit(code);
 });
 
 function handleResponse(response) {
-  console.log(`📥 Response ${response.id}:`, JSON.stringify(response, null, 2).substring(0, 500));
+  console.log(`${getTimestamp()} 📥 Response ${response.id}:`, JSON.stringify(response, null, 2).substring(0, 500));
   
   if (response.id === 1 && response.result) {
-    console.log('✅ Server initialized successfully\n');
+    console.log(`${getTimestamp()} ✅ Server initialized successfully\n`);
     initComplete = true;
     sendNextTest();
   } else if (response.id === 2 && response.result) {
@@ -170,9 +178,9 @@ function handleResponse(response) {
       t.name === 'submit_content'
     );
     
-    console.log(`✅ Found ${tools.length} tools`);
-    console.log(`✅ New tool names present: ${hasNewTools}`);
-    console.log(`✅ Old tool names removed: ${!hasOldTools}\n`);
+    console.log(`${getTimestamp()} ✅ Found ${tools.length} tools`);
+    console.log(`${getTimestamp()} ✅ New tool names present: ${hasNewTools}`);
+    console.log(`${getTimestamp()} ✅ Old tool names removed: ${!hasOldTools}\n`);
     
     sendNextTest();
   } else if (response.result || response.error) {
@@ -183,11 +191,11 @@ function handleResponse(response) {
 function sendNextTest() {
   if (testIndex < testMessages.length) {
     const message = testMessages[testIndex];
-    console.log(`\n📤 Test ${testIndex + 1}: ${message.method} ${message.params?.name || ''}`);
+    console.log(`\n${getTimestamp()} 📤 Test ${testIndex + 1}: ${message.method} ${message.params?.name || ''}`);
     docker.stdin.write(JSON.stringify(message) + '\n');
     testIndex++;
   } else {
-    console.log('\n✅ All tests sent. Closing connection...');
+    console.log(`\n${getTimestamp()} ✅ All tests sent. Closing connection...`);
     setTimeout(() => {
       docker.kill();
     }, 1000);
@@ -195,7 +203,7 @@ function sendNextTest() {
 }
 
 // Start by sending initialization
-console.log('📤 Sending initialization...');
+console.log(`${getTimestamp()} 📤 Sending initialization...`);
 docker.stdin.write(JSON.stringify(testMessages[0]) + '\n');
 testIndex = 1;
 

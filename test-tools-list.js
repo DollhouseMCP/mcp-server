@@ -12,6 +12,14 @@ function normalizeUnicode(str) {
   return str.normalize('NFC');
 }
 
+/**
+ * Get current timestamp for debugging
+ */
+function getTimestamp() {
+  const now = new Date();
+  return `[${now.toISOString()}]`;
+}
+
 const docker = spawn('docker', [
   'run',
   '--rm',
@@ -34,7 +42,7 @@ docker.stdout.on('data', (data) => {
       try {
         const response = JSON.parse(line);
         if (response.id === 2 && response.result?.tools) {
-          console.log('\n📋 Available MCP Tools:\n');
+          console.log(`\n${getTimestamp()} 📋 Available MCP Tools:\n`);
           const tools = response.result.tools;
           
           // Group tools by category

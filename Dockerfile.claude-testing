@@ -33,8 +33,8 @@ RUN npm run build
 
 # Install Claude Code CLI globally
 # Official package name: @anthropic-ai/claude-code
-# Using specific version for reproducibility
-RUN npm install -g @anthropic-ai/claude-code@1.15.0
+# Using specific version for reproducibility (latest as of Sep 2025)
+RUN npm install -g @anthropic-ai/claude-code@1.0.110
 
 # Verify Claude Code installation
 RUN claude --version || echo "Claude Code installed but requires API key for version check"
