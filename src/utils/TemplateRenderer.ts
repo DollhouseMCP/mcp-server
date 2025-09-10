@@ -13,6 +13,7 @@
 import { Template } from '../elements/templates/Template.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface RenderResult {
   success: boolean;
@@ -32,10 +33,15 @@ export class TemplateRenderer {
    * Render a template with comprehensive validation and performance tracking
    * 
    * VALIDATION CHAIN:
-   * 1. Template exists in manager
-   * 2. Template is proper Template instance
-   * 3. Template has render() method
-   * 4. render() returns a string
+   * 1. Unicode normalization of template name
+   * 2. Template exists in manager
+   * 3. Template is proper Template instance
+   * 4. Template has render() method
+   * 5. render() returns a string
+   * 
+   * SECURITY:
+   * - Unicode normalization prevents homograph attacks
+   * - Variables are normalized by Template.render() internally
    * 
    * PERFORMANCE TRACKING:
    * - Lookup time (finding template)
@@ -46,21 +52,24 @@ export class TemplateRenderer {
     const startTime = performance.now();
     
     try {
+      // SECURITY: Normalize template name to prevent Unicode attacks
+      const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
+      
       // STEP 1: Find template with performance tracking
       const lookupStart = performance.now();
-      const template = await this.templateManager.find(t => t.metadata.name === name);
+      const template = await this.templateManager.find(t => t.metadata.name === normalizedName);
       const lookupTime = performance.now() - lookupStart;
       
-      logger.debug(`Template lookup for '${name}' completed in ${lookupTime.toFixed(2)}ms`);
+      logger.debug(`Template lookup for '${normalizedName}' completed in ${lookupTime.toFixed(2)}ms`);
       
       // VALIDATION 1: Template exists
       if (!template) {
         const totalTime = performance.now() - startTime;
-        logger.warn(`Template '${name}' not found after ${lookupTime.toFixed(2)}ms lookup`);
+        logger.warn(`Template '${normalizedName}' not found after ${lookupTime.toFixed(2)}ms lookup`);
         
         return {
           success: false,
-          error: `Template '${name}' not found`,
+          error: `Template '${normalizedName}' not found`,
           performance: { lookupTime, renderTime: 0, totalTime }
         };
       }
@@ -69,13 +78,13 @@ export class TemplateRenderer {
       if (!(template instanceof Template)) {
         const totalTime = performance.now() - startTime;
         logger.error(
-          `Template '${name}' is not a Template instance. ` +
+          `Template '${normalizedName}' is not a Template instance. ` +
           `Type: ${typeof template}, Constructor: ${(template as any)?.constructor?.name}`
         );
         
         return {
           success: false,
-          error: `Template '${name}' is not a valid Template instance`,
+          error: `Template '${normalizedName}' is not a valid Template instance`,
           performance: { lookupTime, renderTime: 0, totalTime }
         };
       }
@@ -84,18 +93,19 @@ export class TemplateRenderer {
       // This is redundant after instanceof check but provides belt-and-suspenders safety
       if (typeof template.render !== 'function') {
         const totalTime = performance.now() - startTime;
-        logger.error(`Template '${name}' lacks render method despite being Template instance`);
+        logger.error(`Template '${normalizedName}' lacks render method despite being Template instance`);
         
         return {
           success: false,
-          error: `Template '${name}' lacks render method`,
+          error: `Template '${normalizedName}' lacks render method`,
           performance: { lookupTime, renderTime: 0, totalTime }
         };
       }
       
       // STEP 2: Render template with performance tracking
+      // Note: Template.render() internally handles Unicode normalization for variables
       logger.debug(
-        `Starting render for template '${name}': ` +
+        `Starting render for template '${normalizedName}': ` +
         `variables=${JSON.stringify(Object.keys(variables))}, template.id=${template.id}`
       );
       
@@ -106,7 +116,7 @@ export class TemplateRenderer {
       // VALIDATION 4: Verify render() returned a string
       if (typeof rendered !== 'string') {
         const totalTime = performance.now() - startTime;
-        logger.error(`Template '${name}' render() returned non-string: ${typeof rendered}`);
+        logger.error(`Template '${normalizedName}' render() returned non-string: ${typeof rendered}`);
         
         return {
           success: false,
@@ -118,7 +128,7 @@ export class TemplateRenderer {
       // SUCCESS: Log performance metrics
       const totalTime = performance.now() - startTime;
       logger.info(
-        `Template '${name}' rendered successfully: ` +
+        `Template '${normalizedName}' rendered successfully: ` +
         `lookup=${lookupTime.toFixed(2)}ms, ` +
         `render=${renderTime.toFixed(2)}ms, ` +
         `total=${totalTime.toFixed(2)}ms, ` +
@@ -135,6 +145,7 @@ export class TemplateRenderer {
       const totalTime = performance.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       
+      // Use original name in error message for clarity
       logger.error(`Failed to render template '${name}' after ${totalTime.toFixed(2)}ms:`, error);
       
       return {
@@ -147,6 +158,7 @@ export class TemplateRenderer {
 
   /**
    * Batch render multiple templates (useful for testing)
+   * SECURITY: Each template name is normalized individually
    */
   async renderBatch(
     templates: Array<{ name: string; variables: Record<string, any> }>
@@ -154,6 +166,7 @@ export class TemplateRenderer {
     const results = new Map<string, RenderResult>();
     
     for (const { name, variables } of templates) {
+      // Each render call handles its own Unicode normalization
       results.set(name, await this.render(name, variables));
     }
     
@@ -162,10 +175,14 @@ export class TemplateRenderer {
 
   /**
    * Validate that a template can be rendered without actually rendering it
+   * SECURITY: Template name is normalized to prevent Unicode attacks
    */
   async validate(name: string): Promise<{ valid: boolean; reason?: string }> {
     try {
-      const template = await this.templateManager.find(t => t.metadata.name === name);
+      // SECURITY: Normalize template name
+      const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
+      
+      const template = await this.templateManager.find(t => t.metadata.name === normalizedName);
       
       if (!template) {
         return { valid: false, reason: 'Template not found' };
