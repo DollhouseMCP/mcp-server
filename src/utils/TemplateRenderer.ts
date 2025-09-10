@@ -74,30 +74,20 @@ export class TemplateRenderer {
         };
       }
       
-      // VALIDATION 2: Verify template is proper Template instance
-      if (!(template instanceof Template)) {
+      // VALIDATION 2: Verify template is proper Template instance with render method
+      if (!(template instanceof Template) || typeof template.render !== 'function') {
         const totalTime = performance.now() - startTime;
+        const isInstance = template instanceof Template;
+        const hasRender = typeof (template as any)?.render === 'function';
+        
         logger.error(
-          `Template '${normalizedName}' is not a Template instance. ` +
-          `Type: ${typeof template}, Constructor: ${(template as any)?.constructor?.name}`
+          `Template '${normalizedName}' validation failed. ` +
+          `Is Template instance: ${isInstance}, Has render method: ${hasRender}`
         );
         
         return {
           success: false,
           error: `Template '${normalizedName}' is not a valid Template instance`,
-          performance: { lookupTime, renderTime: 0, totalTime }
-        };
-      }
-      
-      // VALIDATION 3: Verify render method exists
-      // This is redundant after instanceof check but provides belt-and-suspenders safety
-      if (typeof template.render !== 'function') {
-        const totalTime = performance.now() - startTime;
-        logger.error(`Template '${normalizedName}' lacks render method despite being Template instance`);
-        
-        return {
-          success: false,
-          error: `Template '${normalizedName}' lacks render method`,
           performance: { lookupTime, renderTime: 0, totalTime }
         };
       }
@@ -113,7 +103,7 @@ export class TemplateRenderer {
       const rendered = await template.render(variables);
       const renderTime = performance.now() - renderStart;
       
-      // VALIDATION 4: Verify render() returned a string
+      // VALIDATION 3: Verify render() returned a string
       if (typeof rendered !== 'string') {
         const totalTime = performance.now() - startTime;
         logger.error(`Template '${normalizedName}' render() returned non-string: ${typeof rendered}`);
