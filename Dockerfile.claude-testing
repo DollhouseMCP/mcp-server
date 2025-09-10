@@ -3,7 +3,8 @@
 # This creates a complete testing environment with both tools integrated
 
 # Use Node.js 20 slim for smaller image size
-FROM node:20-slim
+# Pinned to specific version for reproducible builds
+FROM node:20.18.1-slim
 
 # Install system dependencies required for building native modules and Claude Code
 RUN apt-get update && apt-get install -y \
@@ -32,7 +33,8 @@ RUN npm run build
 
 # Install Claude Code CLI globally
 # Official package name: @anthropic-ai/claude-code
-RUN npm install -g @anthropic-ai/claude-code@latest
+# Using specific version for reproducibility (latest as of Sep 2025)
+RUN npm install -g @anthropic-ai/claude-code@1.0.110
 
 # Verify Claude Code installation
 RUN claude --version || echo "Claude Code installed but requires API key for version check"
