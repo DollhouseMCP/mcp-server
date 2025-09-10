@@ -47,15 +47,15 @@ export function getConfigToolsV2(server: IToolHandler): Array<{ tool: ToolDefini
     },
     {
       tool: {
-        name: "sync_portfolio",
-        description: "Sync elements between local portfolio and GitHub repository. USE THIS TO DOWNLOAD PERSONAS FROM GITHUB! When a user asks to 'download X persona' or 'get X from my portfolio', use operation:'download' with the element name. The system has FUZZY MATCHING - it will automatically find 'Verbose-Victorian-Scholar' even if you type 'verbose victorian scholar' or 'victorian scholar'. After downloading, use reload_elements then activate_element.",
+        name: "portfolio_element_manager",
+        description: "Manage individual elements between your local portfolio and GitHub repository. USE THIS TO DOWNLOAD/UPLOAD INDIVIDUAL PERSONAS, SKILLS, OR OTHER ELEMENTS! When a user asks to 'download X persona from my GitHub' or 'upload Y skill to GitHub', use this tool. Operations: 'download' (GitHub→local), 'upload' (local→GitHub), 'list-remote' (see what's on GitHub), 'compare' (diff local vs GitHub). FUZZY MATCHING enabled - 'verbose victorian scholar' will find 'Verbose-Victorian-Scholar'. After downloading, use reload_elements then activate_element.",
         inputSchema: {
           type: "object",
           properties: {
             operation: {
               type: "string",
-              enum: ["list-remote", "download", "upload", "compare", "bulk-download", "bulk-upload"],
-              description: "The sync operation to perform. Use 'list-remote' to see what's available, 'download' to get a specific element (MOST COMMON FOR GETTING PERSONAS), 'upload' to send to GitHub"
+              enum: ["list-remote", "download", "upload", "compare"],
+              description: "The operation to perform. 'download' = get from GitHub to local, 'upload' = send from local to GitHub, 'list-remote' = see what's on GitHub, 'compare' = see differences"
             },
             element_name: {
               type: "string",

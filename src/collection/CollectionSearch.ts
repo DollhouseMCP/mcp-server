@@ -276,7 +276,7 @@ export class CollectionSearch {
       textParts.push(
         `   ${icon} **${item.name.replace('.md', '')}**\n`,
         `      📂 Path: ${item.path}\n`,
-        `      📥 Install: \`install_content "${item.path}"\`\n`,
+        `      📥 Install: \`install_collection_content "${item.path}"\`\n`,
         `      👁️ Details: \`get_collection_content "${item.path}"\`\n\n`
       );
     });
@@ -538,7 +538,7 @@ export class CollectionSearch {
         `      📝 ${item.description}\n`,
         `      🏷️ Tags: ${item.tags.join(', ')}\n`,
         `      📂 Path: ${item.path}\n`,
-        `      📥 Install: \`install_content "${item.path}"\`\n`,
+        `      📥 Install: \`install_collection_content "${item.path}"\`\n`,
         `      👁️ Details: \`get_collection_content "${item.path}"\`\n\n`
       );
     });

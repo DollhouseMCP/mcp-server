@@ -1,3 +1,4 @@
+# Claude MCP Test Environment
 # Dockerfile for running Claude Code with DollhouseMCP in the same container
 # This creates a complete testing environment with both tools integrated
 

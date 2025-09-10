@@ -2340,7 +2340,7 @@ export class DollhouseMCPServer implements IToolHandler {
       errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
       errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
       errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations\n`;
-      errorMessage += `3. 🎯 **Specify type**: Try \`submit_content "${contentIdentifier}" --type=personas\`\n`;
+      errorMessage += `3. 🎯 **Specify type**: Try \`submit_collection_content "${contentIdentifier}" --type=personas\`\n`;
       errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually\n\n`;
       errorMessage += `📝 **Tip**: The system searches both filenames and display names with fuzzy matching.`;
       
@@ -3588,7 +3588,7 @@ ${sanitizedInstructions}
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
               `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
-              `📤 **Share it:** \`submit_content "${sanitizedName}"\`\n` +
+              `📤 **Share it:** \`submit_collection_content "${sanitizedName}"\`\n` +
               `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
           },
         ],
@@ -4118,7 +4118,7 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
     
     const message = `**Collection Submission Configuration**\n\n` +
       `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
-      `When auto-submit is enabled, the \`submit_content\` tool will:\n` +
+      `When auto-submit is enabled, the \`submit_collection_content\` tool will:\n` +
       `1. Upload content to your GitHub portfolio\n` +
       `2. Automatically create a submission issue in DollhouseMCP/collection\n\n` +
       `To change this setting, use:\n` +
@@ -4566,7 +4566,7 @@ Placeholders for custom format:
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
       const portfolioManager = new PortfolioRepoManager();
       
-      // CRITICAL FIX: Set GitHub token like submit_content does
+      // CRITICAL FIX: Set GitHub token like submit_collection_content does
       // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
       const { TokenManager } = await import('./security/tokenManager.js');
       const token = await TokenManager.getGitHubTokenAsync();
@@ -4821,7 +4821,7 @@ Placeholders for custom format:
           
           // General tips
           syncText += `  • Check element file formats and metadata\n`;
-          syncText += `  • Try syncing individual elements with \`submit_content\`\n`;
+          syncText += `  • Try syncing individual elements with \`portfolio_element_manager\` (upload operation)\n`;
           syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
           
           // Add error code legend if we found any
@@ -4849,7 +4849,7 @@ Placeholders for custom format:
         if (syncCount > 0) {
           syncText += `🚀 **Next Steps**:\n`;
           syncText += `  • View your portfolio: https://github.com/${username}/dollhouse-portfolio\n`;
-          syncText += `  • Share individual elements using \`submit_content <name>\`\n`;
+          syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
           syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
         }
         
@@ -5018,7 +5018,7 @@ Placeholders for custom format:
         text += `💡 **Next steps:**\n`;
         text += `• Use get_element_details to see full content\n`;
         text += `• Use activate_element to activate elements\n`;
-        text += `• Use submit_content to share with the community`;
+        text += `• Use submit_collection_content to share with the community`;
       }
 
       return {
@@ -5168,7 +5168,7 @@ Placeholders for custom format:
         
         text += `💡 **Next steps:**\n`;
         text += `• Use get_element_details to see full content\n`;
-        text += `• Use install_content for collection items\n`;
+        text += `• Use install_collection_content for collection items\n`;
         text += `• Use activate_element for local elements\n`;
         text += `• Check for duplicates before submitting new content`;
       }

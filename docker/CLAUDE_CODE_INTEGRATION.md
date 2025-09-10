@@ -1,4 +1,4 @@
-# Claude Code + DollhouseMCP Docker Integration
+# Claude MCP Test Environment - Docker Integration
 
 ## Overview
 This document provides the complete configuration and setup for running Claude Code and DollhouseMCP together in a Docker container. This creates an isolated testing environment where both tools run together with Claude Code using DollhouseMCP as its MCP server.
@@ -7,7 +7,7 @@ This document provides the complete configuration and setup for running Claude C
 
 ```bash
 # 1. Build the container
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
+docker build -f Dockerfile.claude-testing -t claude-mcp-test-env .
 
 # 2. Set your API key
 export ANTHROPIC_API_KEY="sk-ant-api03-..."
@@ -15,7 +15,7 @@ export ANTHROPIC_API_KEY="sk-ant-api03-..."
 # 3. Run Claude Code with DollhouseMCP
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -78,14 +78,14 @@ Successfully detected and accessible:
 
 ### Build
 ```bash
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
+docker build -f Dockerfile.claude-testing -t claude-mcp-test-env .
 ```
 
 ### Run Interactive Session
 ```bash
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -93,7 +93,7 @@ docker run -it --rm \
 ```bash
 echo "Your prompt here" | docker run -i --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -119,7 +119,7 @@ docker run --rm claude-dollhouse-test test-mcp
 ```bash
 echo "List all available MCP tools" | docker run -i --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -186,7 +186,7 @@ Note: Some tools may be disabled or in experimental status depending on the vers
 ```bash
 echo "Use mcp__dollhousemcp__list_elements to list personas" | docker run -i --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -196,7 +196,7 @@ Expected: Claude will request permission to use the tool (security feature)
 ```bash
 echo "Use mcp__dollhousemcp__get_build_info to show version" | docker run -i --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -207,7 +207,7 @@ echo "Use mcp__dollhousemcp__get_build_info to show version" | docker run -i --r
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   -v $(pwd):/app/dollhousemcp \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
@@ -216,7 +216,7 @@ docker run -it --rm \
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   -v ~/.dollhouse/portfolio:/app/portfolio \
-  claude-dollhouse-test \
+  claude-mcp-test-env \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 

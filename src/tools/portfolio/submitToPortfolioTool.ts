@@ -245,7 +245,7 @@ export class SubmitToPortfolioTool {
         if ((originalName || safeName).includes('.')) {
           message += `   • "${(originalName || safeName).replace(/\./g, '')}" (no dots)\n`;
         }
-        message += `3. 🎯 Specify element type: \`submit_content "${originalName || safeName}" --type=personas\`\n`;
+        message += `3. 🎯 Specify element type: \`submit_collection_content "${originalName || safeName}" --type=personas\`\n`;
         message += `4. 📁 Check if file exists in portfolio directories\n\n`;
         message += `📝 **Tip**: The system searches filenames AND metadata names with fuzzy matching.`;
         
@@ -1797,7 +1797,7 @@ ${elementContent}
 - [ ] No duplicate of existing collection content
 
 ---
-*This submission was created automatically via the DollhouseMCP submit_content tool (v1.6.9-beta1-collection-fix).*`;
+*This submission was created automatically via the DollhouseMCP submit_collection_content tool (v1.6.9-beta1-collection-fix).*`;
 
       // Determine labels based on element type
       const labels = [

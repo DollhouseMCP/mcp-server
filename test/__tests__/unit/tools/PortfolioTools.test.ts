@@ -651,8 +651,10 @@ describe('PortfolioTools', () => {
       it('should call syncPortfolio with all provided options', async () => {
         const options = {
           direction: 'both' as const,
+          mode: 'mirror' as const,
           force: true,
-          dry_run: true
+          dry_run: true,
+          confirm_deletions: false
         };
 
         mockServer.syncPortfolio.mockResolvedValue({
@@ -663,8 +665,10 @@ describe('PortfolioTools', () => {
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'both',
+          mode: 'mirror',
           force: true,
-          dryRun: true
+          dryRun: true,
+          confirmDeletions: false
         });
       });
 
@@ -677,8 +681,10 @@ describe('PortfolioTools', () => {
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'push', // default
+          mode: 'additive', // default
           force: false, // default
-          dryRun: false // default
+          dryRun: false, // default
+          confirmDeletions: true // default
         });
       });
 
@@ -693,8 +699,10 @@ describe('PortfolioTools', () => {
           await syncPortfolioTool.handler({ direction });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction,
+            mode: 'additive',
             force: false,
-            dryRun: false
+            dryRun: false,
+            confirmDeletions: true
           });
         }
       });
@@ -715,8 +723,10 @@ describe('PortfolioTools', () => {
           await syncPortfolioTool.handler(combo);
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: 'push',
+            mode: 'additive',
             force: combo.force,
-            dryRun: combo.dry_run
+            dryRun: combo.dry_run,
+            confirmDeletions: true // Always true unless explicitly set
           });
         }
       });
@@ -740,8 +750,10 @@ describe('PortfolioTools', () => {
           await syncPortfolioTool.handler({ direction: direction as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: (direction as any) || 'push', // falls back to default if falsy
+            mode: 'additive',
             force: false,
-            dryRun: false
+            dryRun: false,
+            confirmDeletions: true
           });
         }
       });
@@ -761,15 +773,19 @@ describe('PortfolioTools', () => {
           await syncPortfolioTool.handler({ force: value as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: 'push',
+            mode: 'additive',
             force: (value as any) || false, // coerced to boolean
-            dryRun: false
+            dryRun: false,
+            confirmDeletions: true // Always true unless explicitly set
           });
 
           await syncPortfolioTool.handler({ dry_run: value as any });
           expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
             direction: 'push',
+            mode: 'additive',
             force: false,
-            dryRun: (value as any) || false // coerced to boolean
+            dryRun: (value as any) || false, // coerced to boolean
+            confirmDeletions: true
           });
         }
       });
@@ -783,8 +799,10 @@ describe('PortfolioTools', () => {
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'push',
+          mode: 'additive',
           force: false,
-          dryRun: false
+          dryRun: false,
+          confirmDeletions: true
         });
       });
     });
@@ -817,8 +835,10 @@ describe('PortfolioTools', () => {
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'push',
+          mode: 'additive',
           force: true,
-          dryRun: true
+          dryRun: true,
+          confirmDeletions: true // Default value
         });
       });
 
@@ -827,8 +847,10 @@ describe('PortfolioTools', () => {
 
         expect(mockServer.syncPortfolio).toHaveBeenCalledWith({
           direction: 'push', // fallback to default
+          mode: 'additive',
           force: false,
-          dryRun: false
+          dryRun: false,
+          confirmDeletions: true
         });
       });
     });

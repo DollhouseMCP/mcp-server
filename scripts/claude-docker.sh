@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Claude Docker - Run Claude Code with DollhouseMCP in Docker
+# Claude MCP Test Environment - Run Claude Code with DollhouseMCP in Docker
 # This script provides an easy interface for testing with auto-approved permissions
 
 set -e
@@ -12,7 +12,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Configuration
-IMAGE_NAME="claude-dollhouse-test"
+IMAGE_NAME="claude-mcp-test-env"
 MCP_CONFIG="/home/claude/.config/claude-code/config.json"
 
 # Check if API key is set

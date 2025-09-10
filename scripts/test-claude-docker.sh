@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script for Claude Code + DollhouseMCP Docker container
+# Claude MCP Test Environment - Test script for Claude Code + DollhouseMCP Docker container
 # This script builds and tests the integrated environment
 
 set -e
@@ -23,7 +23,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-IMAGE_NAME="claude-dollhouse-test"
+IMAGE_NAME="claude-mcp-test-env"
 DOCKERFILE="Dockerfile.claude-testing"
 DOCKERIGNORE=".dockerignore.claude-testing"
 
