@@ -19,9 +19,9 @@ WORKDIR /app
 # Copy package files first for better layer caching
 COPY package*.json /app/dollhousemcp/
 
-# Install DollhouseMCP dependencies
+# Install DollhouseMCP dependencies (including dev deps for building)
 WORKDIR /app/dollhousemcp
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy the rest of DollhouseMCP source
 COPY . /app/dollhousemcp/

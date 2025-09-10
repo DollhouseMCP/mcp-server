@@ -45,24 +45,36 @@ This document describes how to create a Docker container that runs both Claude C
 docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
 ```
 
-### Step 2: Run Claude Code with DollhouseMCP
+### Step 2: Set Your API Key
 ```bash
-# Export your API key
+# Export your API key (get one from https://console.anthropic.com/)
 export ANTHROPIC_API_KEY="sk-ant-api03-..."
+```
 
-# Run Claude Code in the container
+### Step 3: Run Claude Code with DollhouseMCP
+```bash
+# IMPORTANT: Must use --mcp-config flag to load MCP servers
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  claude-dollhouse-test claude
+  claude-dollhouse-test \
+  claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
-### Step 3: Test MCP Integration
-Once inside Claude Code, test that DollhouseMCP is working:
+### Step 4: Verify MCP Integration
+Test that DollhouseMCP is working:
+```bash
+# List all available MCP tools (should show 29 tools)
+echo "List all MCP tools" | docker run -i --rm \
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  claude-dollhouse-test \
+  claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
-> What MCP tools are available?
-> List all personas
-> Activate the Creative Writer persona
-```
+
+Expected output should include tools like:
+- `mcp__dollhousemcp__list_elements`
+- `mcp__dollhousemcp__activate_element`
+- `mcp__dollhousemcp__create_element`
+- And 26 more...
 
 ## Complete Dockerfile
 
