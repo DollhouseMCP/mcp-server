@@ -128,7 +128,7 @@ describe('Docker Security Hardening', () => {
     
     skipInCI('should build the Docker image successfully', () => {
       try {
-        execSync('docker build -t dollhousemcp:test -f docker/Dockerfile .', {
+        execSync('docker build -t claude-mcp-test-env:test -f docker/Dockerfile .', {
           stdio: 'pipe',
           encoding: 'utf-8'
         });
@@ -140,7 +140,7 @@ describe('Docker Security Hardening', () => {
     skipInCI('should not include development tools in production image', () => {
       try {
         const output = execSync(
-          'docker run --rm dollhousemcp:test which curl || echo "not found"',
+          'docker run --rm claude-mcp-test-env:test which curl || echo "not found"',
           { encoding: 'utf-8' }
         );
         expect(output.trim()).toBe('not found');
@@ -153,7 +153,7 @@ describe('Docker Security Hardening', () => {
     skipInCI('should run as non-root user', () => {
       try {
         const output = execSync(
-          'docker run --rm dollhousemcp:test id -u',
+          'docker run --rm claude-mcp-test-env:test id -u',
           { encoding: 'utf-8' }
         );
         expect(output.trim()).toBe('1001');

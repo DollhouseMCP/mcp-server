@@ -2,7 +2,7 @@
  * Portfolio Index Manager - Maps element names to file paths
  * 
  * Solves critical issues:
- * 1. submit_content can't find elements by metadata name (e.g., "Safe Roundtrip Tester" -> "safe-roundtrip-tester.md")
+ * 1. submit_collection_content can't find elements by metadata name (e.g., "Safe Roundtrip Tester" -> "safe-roundtrip-tester.md")
  * 2. search_collection doesn't search local portfolio content
  * 
  * Features:
