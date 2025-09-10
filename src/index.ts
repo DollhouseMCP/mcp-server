@@ -1273,12 +1273,10 @@ export class DollhouseMCPServer implements IToolHandler {
         };
       }
       
-      // Simple template rendering - replace variables in content
-      let rendered = template.content;
-      for (const [key, value] of Object.entries(variables)) {
-        const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
-        rendered = rendered.replace(regex, String(value));
-      }
+      // Use the Template class's proper render method (fixes Issue #914)
+      // This replaces the broken regex loop that wasn't substituting variables
+      const rendered = await template.render(variables);
+      
       return {
         content: [{
           type: "text",
