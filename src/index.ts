@@ -3641,12 +3641,26 @@ ${sanitizedInstructions}
     }
 
     // Find the persona
+    // First try exact match (with or without .md extension)
     let persona = this.personas.get(personaIdentifier);
     
+    if (!persona && !personaIdentifier.endsWith('.md')) {
+      // Try adding .md extension
+      persona = this.personas.get(`${personaIdentifier}.md`);
+    }
+    
     if (!persona) {
-      // Search by name
+      // Search by name (case-insensitive)
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+    
+    if (!persona) {
+      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
+      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
     }
 
@@ -3840,12 +3854,26 @@ ${sanitizedInstructions}
     }
 
     // Find the persona
+    // First try exact match (with or without .md extension)
     let persona = this.personas.get(personaIdentifier);
     
+    if (!persona && !personaIdentifier.endsWith('.md')) {
+      // Try adding .md extension
+      persona = this.personas.get(`${personaIdentifier}.md`);
+    }
+    
     if (!persona) {
-      // Search by name
+      // Search by name (case-insensitive)
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+    
+    if (!persona) {
+      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
+      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
     }
 
