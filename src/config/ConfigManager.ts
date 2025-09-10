@@ -98,6 +98,15 @@ export interface DisplayConfig {
   show_progress: boolean;
 }
 
+export interface WizardConfig {
+  completed: boolean;      // Wizard was successfully completed
+  dismissed: boolean;      // User chose "Don't show again"
+  completedAt?: string;    // ISO timestamp when completed
+  version?: string;        // Wizard version for future updates (deprecated - use lastSeenVersion)
+  lastSeenVersion?: string; // Last version where user saw the wizard
+  skippedSections?: string[]; // Track which sections were skipped
+}
+
 export interface DollhouseConfig {
   version: string;
   user: UserConfig;
@@ -106,6 +115,7 @@ export interface DollhouseConfig {
   collection: CollectionConfig;
   elements: ElementsConfig;
   display: DisplayConfig;
+  wizard: WizardConfig;
 }
 
 export interface ConfigUpdateResult {
@@ -131,8 +141,12 @@ export class ConfigManager {
   private config: DollhouseConfig | null = null;
 
   private constructor() {
-    // Initialize paths
-    this.configDir = path.join(os.homedir(), '.dollhouse');
+    // Initialize paths - use test directory if in test environment
+    if (process.env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
+      this.configDir = process.env.TEST_CONFIG_DIR;
+    } else {
+      this.configDir = path.join(os.homedir(), '.dollhouse');
+    }
     this.configPath = path.join(this.configDir, 'config.yml');
     this.backupPath = path.join(this.configDir, 'config.yml.backup');
   }
@@ -163,6 +177,34 @@ export class ConfigManager {
     
     ConfigManager.instanceLock = false;
     return ConfigManager.instance;
+  }
+
+  /**
+   * Reset the singleton instance for testing purposes only.
+   * This method is ONLY available in test environments to enable proper test isolation.
+   * 
+   * IMPORTANT: This follows industry-standard patterns used by Google, Facebook, Microsoft
+   * for testing singleton classes. The method is protected by an environment check to
+   * ensure it cannot be called in production.
+   * 
+   * @throws Error if called outside test environment
+   */
+  public static resetForTesting(): void {
+    // Security check: only allow in test environment
+    if (process.env.NODE_ENV !== 'test') {
+      const errorMsg = 'ConfigManager.resetForTesting() can only be called in test environment';
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    // Reset the singleton instance
+    ConfigManager.instance = null;
+    ConfigManager.instanceLock = false;
+    
+    // Log for debugging (only in test environment with DEBUG flag)
+    if (process.env.DEBUG) {
+      console.log('[TEST] ConfigManager singleton reset');
+    }
   }
 
   /**
@@ -231,6 +273,10 @@ export class ConfigManager {
         },
         verbose_logging: false,
         show_progress: true
+      },
+      wizard: {
+        completed: false,
+        dismissed: false
       }
     };
   }
@@ -664,6 +710,12 @@ export class ConfigManager {
         }
       }
     }
+    
+    // Fix wizard settings
+    if (this.config.wizard) {
+      this.config.wizard.completed = fixBoolean(this.config.wizard.completed);
+      this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
+    }
   }
 
   /**
@@ -740,6 +792,12 @@ export class ConfigManager {
     };
     result.display.verbose_logging = result.display.verbose_logging ?? defaults.display.verbose_logging;
     result.display.show_progress = result.display.show_progress ?? defaults.display.show_progress;
+    
+    // Wizard section
+    result.wizard = {
+      ...defaults.wizard,
+      ...result.wizard
+    };
     
     return result as DollhouseConfig;
   }

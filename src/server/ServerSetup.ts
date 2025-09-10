@@ -19,10 +19,12 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ToolDiscoveryCache } from '../utils/ToolCache.js';
+import { ConfigWizardCheck } from '../config/ConfigWizardCheck.js';
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
   private toolCache: ToolDiscoveryCache;
+  private wizardCheck?: ConfigWizardCheck;
   
   constructor() {
     this.toolRegistry = new ToolRegistry();
@@ -32,7 +34,8 @@ export class ServerSetup {
   /**
    * Initialize the server with all tools and handlers
    */
-  setupServer(server: Server, instance: IToolHandler): void {
+  setupServer(server: Server, instance: IToolHandler, wizardCheck?: ConfigWizardCheck): void {
+    this.wizardCheck = wizardCheck;
     // Register all tools
     this.registerTools(instance);
     
@@ -136,7 +139,24 @@ export class ServerSetup {
         // Normalize Unicode in all string arguments to prevent security bypasses
         const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
         
-        return await handler(normalizedArgs);
+        const response = await handler(normalizedArgs);
+        
+        // Wrap response with wizard check on first interaction
+        // CRITICAL FIX: Add error boundary to prevent wizard errors from crashing tool requests
+        if (this.wizardCheck) {
+          try {
+            return await this.wizardCheck.wrapResponse(response);
+          } catch (wizardError) {
+            logger.warn('Failed to wrap response with wizard check', { 
+              error: wizardError,
+              tool: name 
+            });
+            // Fall back to original response if wizard fails
+            return response;
+          }
+        }
+        
+        return response;
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
