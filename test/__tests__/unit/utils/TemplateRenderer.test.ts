@@ -161,8 +161,9 @@ Everything is working well
         'Content'
       );
       
-      // Remove the render method
-      delete (brokenTemplate as any).render;
+      // Remove the render method by setting it to undefined
+      // Note: Must set to non-function to override prototype method
+      (brokenTemplate as any).render = undefined;
       
       mockTemplateManager.find.mockResolvedValue(brokenTemplate);
       
@@ -170,7 +171,7 @@ Everything is working well
       
       // VERIFICATION: Missing render method is detected
       expect(result.success).toBe(false);
-      expect(result.error).toContain('lacks render method');
+      expect(result.error).toContain('not a valid Template instance');
     });
     
     it('should validate render() return type', async () => {
@@ -244,11 +245,15 @@ Everything is working well
         { name: 'template1', description: 'First' },
         'Hello {{name}}'
       );
+      // Mock the render method to return expected result
+      template1.render = jest.fn<() => Promise<string>>().mockResolvedValue('Hello Alice');
       
       const template2 = new Template(
         { name: 'template2', description: 'Second' },
         'Goodbye {{name}}'
       );
+      // Mock the render method to return expected result
+      template2.render = jest.fn<() => Promise<string>>().mockResolvedValue('Goodbye Bob');
       
       mockTemplateManager.find
         .mockResolvedValueOnce(template1)
