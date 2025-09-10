@@ -164,12 +164,20 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Tests complete!"' > /usr/local/bin/test-dollhouse && \
 chmod +x /usr/local/bin/test-dollhouse
 
+# Create a non-root user for security
+RUN useradd -m -s /bin/bash claude && \
+    chown -R claude:claude /app && \
+    mkdir -p /home/claude/.config/claude-code && \
+    cp /root/.config/claude-code/config.json /home/claude/.config/claude-code/ && \
+    chown -R claude:claude /home/claude
+
 # Health check to verify DollhouseMCP can start
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD timeout 1 node /app/dollhousemcp/dist/index.js || exit 0
 
-# Use non-root user for security (optional, comment out for debugging)
-# USER node
+# Switch to non-root user
+USER claude
+WORKDIR /home/claude
 
 # Set the entrypoint
 ENTRYPOINT ["/entrypoint.sh"]
