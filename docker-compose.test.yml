@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  mcp-test:
+    image: claude-mcp-test-env:latest
+    container_name: dollhouse-mcp-test
+    build:
+      context: .
+      dockerfile: Dockerfile.claude-testing
+    env_file:
+      - docker/test-environment.env
+    environment:
+      # Override with your test GitHub token
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      # Or use OAuth
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+    volumes:
+      # Isolated test directories
+      - test-portfolio:/app/test-portfolio
+      - test-cache:/app/test-cache
+      - test-logs:/app/test-logs
+      # Mount test data
+      - ./test/fixtures:/app/test-data:ro
+    stdin_open: true
+    tty: true
+    networks:
+      - mcp-test-network
+
+  # Optional: Test database for future features
+  # test-db:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: dollhouse_test
+  #     POSTGRES_USER: test_user
+  #     POSTGRES_PASSWORD: test_password
+  #   volumes:
+  #     - test-db-data:/var/lib/postgresql/data
+  #   networks:
+  #     - mcp-test-network
+
+volumes:
+  test-portfolio:
+    driver: local
+  test-cache:
+    driver: local
+  test-logs:
+    driver: local
+  # test-db-data:
+  #   driver: local
+
+networks:
+  mcp-test-network:
+    driver: bridge
