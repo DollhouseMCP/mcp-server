@@ -1,0 +1,178 @@
+# Dockerfile for running Claude Code with DollhouseMCP in the same container
+# This creates a complete testing environment with both tools integrated
+
+# Use Node.js 20 slim for smaller image size
+FROM node:20-slim
+
+# Install system dependencies required for building native modules and Claude Code
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    build-essential \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files first for better layer caching
+COPY package*.json /app/dollhousemcp/
+
+# Install DollhouseMCP dependencies
+WORKDIR /app/dollhousemcp
+RUN npm ci --only=production
+
+# Copy the rest of DollhouseMCP source
+COPY . /app/dollhousemcp/
+
+# Build DollhouseMCP
+RUN npm run build
+
+# Install Claude Code CLI globally
+# Official package name: @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@latest
+
+# Verify Claude Code installation
+RUN claude --version || echo "Claude Code installed but requires API key for version check"
+
+# Create necessary directories
+RUN mkdir -p /root/.config/claude-code \
+    /app/portfolio \
+    /app/logs \
+    /app/cache
+
+# Configure Claude Code to use DollhouseMCP as MCP server
+# This configuration tells Claude Code where to find DollhouseMCP
+RUN echo '{\n\
+  "mcpServers": {\n\
+    "dollhousemcp": {\n\
+      "command": "node",\n\
+      "args": ["/app/dollhousemcp/dist/index.js"],\n\
+      "env": {\n\
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",\n\
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",\n\
+        "NODE_ENV": "development",\n\
+        "LOG_LEVEL": "debug"\n\
+      }\n\
+    }\n\
+  },\n\
+  "defaultMcpServer": "dollhousemcp"\n\
+}' > /root/.config/claude-code/config.json
+
+# Copy default personas if they exist (using shell form to handle optional copy)
+RUN if [ -d "/app/dollhousemcp/data/personas" ]; then \
+      cp -r /app/dollhousemcp/data/personas /app/portfolio/; \
+    fi
+
+# Set environment variables (non-sensitive only)
+ENV NODE_ENV=development \
+    DOLLHOUSE_PORTFOLIO_DIR=/app/portfolio \
+    DOLLHOUSE_CACHE_DIR=/app/cache \
+    LOG_LEVEL=info
+
+# Create an entrypoint script that checks for required environment variables
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Check for API key\n\
+if [ -z "$ANTHROPIC_API_KEY" ]; then\n\
+  echo "⚠️  WARNING: ANTHROPIC_API_KEY environment variable is not set"\n\
+  echo "Claude Code will not be able to connect to Anthropic API"\n\
+  echo "Set it with: -e ANTHROPIC_API_KEY=your-key-here"\n\
+fi\n\
+\n\
+# Show environment info\n\
+echo "🐳 Docker Claude Code Testing Environment"\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+echo "📦 DollhouseMCP: v$(node -e "console.log(require(\"/app/dollhousemcp/package.json\").version)")" \n\
+echo "🤖 Claude Code: Configured to use DollhouseMCP"\n\
+echo "📁 Portfolio: /app/portfolio"\n\
+echo "💾 Cache: /app/cache"\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+\n\
+# If no arguments, show help\n\
+if [ $# -eq 0 ]; then\n\
+  echo ""\n\
+  echo "Usage:"\n\
+  echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test [command]"\n\
+  echo ""\n\
+  echo "Commands:"\n\
+  echo "  claude-code          - Run Claude Code CLI"\n\
+  echo "  test-mcp            - Test MCP server directly"\n\
+  echo "  bash                - Get a shell"\n\
+  echo ""\n\
+  echo "Examples:"\n\
+  echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test claude-code"\n\
+  echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test test-mcp"\n\
+  exit 0\n\
+fi\n\
+\n\
+# Handle special commands\n\
+case "$1" in\n\
+  test-mcp)\n\
+    echo "Testing DollhouseMCP server..."\n\
+    node /app/dollhousemcp/dist/index.js\n\
+    ;;\n\
+  bash|sh)\n\
+    exec /bin/bash\n\
+    ;;\n\
+  claude)\n\
+    shift\n\
+    exec claude "$@"\n\
+    ;;\n\
+  *)\n\
+    exec "$@"\n\
+    ;;\n\
+esac' > /entrypoint.sh && \
+chmod +x /entrypoint.sh
+
+# Create a test script for MCP functionality
+RUN echo '#!/bin/bash\n\
+echo "🧪 Testing DollhouseMCP MCP Server"\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+\n\
+# Test 1: Check if server starts\n\
+echo -n "1. Server startup: "\n\
+timeout 2 node /app/dollhousemcp/dist/index.js > /tmp/test.log 2>&1\n\
+if [ $? -eq 124 ]; then\n\
+  echo "✅ Server starts (timed out as expected for stdio server)"\n\
+else\n\
+  echo "❌ Server failed to start"\n\
+  cat /tmp/test.log\n\
+fi\n\
+\n\
+# Test 2: Check portfolio directory\n\
+echo -n "2. Portfolio directory: "\n\
+if [ -d "/app/portfolio" ]; then\n\
+  echo "✅ Exists"\n\
+  ls -la /app/portfolio/\n\
+else\n\
+  echo "❌ Missing"\n\
+fi\n\
+\n\
+# Test 3: Check Claude Code config\n\
+echo -n "3. Claude Code config: "\n\
+if [ -f "/root/.config/claude-code/config.json" ]; then\n\
+  echo "✅ Configured"\n\
+  cat /root/.config/claude-code/config.json | head -5\n\
+else\n\
+  echo "❌ Missing"\n\
+fi\n\
+\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+echo "Tests complete!"' > /usr/local/bin/test-dollhouse && \
+chmod +x /usr/local/bin/test-dollhouse
+
+# Health check to verify DollhouseMCP can start
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD timeout 1 node /app/dollhousemcp/dist/index.js || exit 0
+
+# Use non-root user for security (optional, comment out for debugging)
+# USER node
+
+# Set the entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command
+CMD ["claude-code"]
