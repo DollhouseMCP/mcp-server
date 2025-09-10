@@ -4539,7 +4539,13 @@ Placeholders for custom format:
   /**
    * Sync portfolio with GitHub
    */
-  async syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}) {
+  async syncPortfolio(options: {
+    direction: string; 
+    mode?: string;
+    force: boolean; 
+    dryRun: boolean;
+    confirmDeletions?: boolean;
+  }) {
     try {
       // Check authentication
       const authStatus = await this.githubAuthManager.getAuthStatus();
