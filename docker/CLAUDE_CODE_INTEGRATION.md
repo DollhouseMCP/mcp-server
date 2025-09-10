@@ -123,7 +123,64 @@ echo "List all available MCP tools" | docker run -i --rm \
   claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
 
-Expected: Should list 29 DollhouseMCP tools with `mcp__dollhousemcp__` prefix
+Expected: Should list the following DollhouseMCP tools with `mcp__dollhousemcp__` prefix:
+
+### Complete List of MCP Tools (43 total)
+
+#### Element Management (13 tools)
+1. `list_elements` - List all available elements of a specific type
+2. `activate_element` - Activate a specific element by name
+3. `get_active_elements` - Get information about currently active elements
+4. `deactivate_element` - Deactivate a specific element
+5. `get_element_details` - Get detailed information about a specific element
+6. `reload_elements` - Reload elements of a specific type from filesystem
+7. `render_template` - Render a template element with provided variables
+8. `execute_agent` - Execute an agent element with a specific goal
+9. `create_element` - Create a new element of any type
+10. `edit_element` - Edit an existing element of any type
+11. `validate_element` - Validate an element for correctness and best practices
+12. `delete_element` - Delete an element and optionally its associated data files
+13. `import_persona` - Import a persona from a file path or JSON string
+
+#### Collection & Marketplace (7 tools)
+14. `browse_collection` - Browse content from the DollhouseMCP collection
+15. `search_collection` - Search for content in the collection by keywords
+16. `search_collection_enhanced` - Enhanced search with pagination and filtering
+17. `get_collection_content` - Get detailed information about collection content
+18. `install_content` - Install elements from the collection to local portfolio
+19. `submit_content` - Upload element to GitHub portfolio and optionally submit to collection
+20. `get_collection_cache_health` - Get health status and statistics for collection cache
+
+#### Portfolio Management (6 tools)
+21. `portfolio_status` - Check the status of your GitHub portfolio repository
+22. `init_portfolio` - Initialize a new GitHub portfolio repository
+23. `portfolio_config` - Configure portfolio settings (auto-sync, visibility, etc.)
+24. `sync_portfolio` - Sync ALL elements between local and GitHub portfolio
+25. `search_portfolio` - Search your local portfolio by content, metadata, keywords
+26. `search_all` - Search across all sources (local, GitHub, collection)
+
+#### User & Authentication (8 tools)
+27. `set_user_identity` - Set your username for persona attribution
+28. `get_user_identity` - Get current user identity information
+29. `clear_user_identity` - Clear user identity and return to anonymous mode
+30. `setup_github_auth` - Set up GitHub authentication using device flow
+31. `check_github_auth` - Check current GitHub authentication status
+32. `clear_github_auth` - Remove GitHub authentication and disconnect
+33. `configure_oauth` - Configure GitHub OAuth client ID for authentication
+34. `oauth_helper_status` - Get diagnostic information about OAuth helper process
+
+#### Configuration (6 tools)
+35. `configure_indicator` - Configure how active persona indicators are displayed
+36. `get_indicator_config` - Get current persona indicator configuration
+37. `configure_collection_submission` - Configure automatic collection submission settings
+38. `get_collection_submission_config` - Get current collection submission configuration
+39. `dollhouse_config` - Unified configuration management (experimental)
+40. `sync_portfolio` - Sync portfolio with remote repository (duplicate of #24)
+
+#### System Information (1 tool)
+41. `get_build_info` - Get comprehensive build and runtime information about the server
+
+Note: Some tools may be disabled or in experimental status depending on the version
 
 ### Test 2: Use MCP Tool
 ```bash
