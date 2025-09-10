@@ -42,6 +42,7 @@ import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
 import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
+import { TemplateRenderer } from './utils/TemplateRenderer.js';
 import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
@@ -95,6 +96,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private migrationManager: MigrationManager;
   private skillManager: SkillManager;
   private templateManager: TemplateManager;
+  private templateRenderer: TemplateRenderer;
   private agentManager: AgentManager;
   private wizardCheck: ConfigWizardCheck;
 
@@ -127,6 +129,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize element managers
     this.skillManager = new SkillManager();
     this.templateManager = new TemplateManager();
+    this.templateRenderer = new TemplateRenderer(this.templateManager);
     this.agentManager = new AgentManager(this.portfolioManager.getBaseDir());
     
     // Log resolved path for debugging
@@ -1268,48 +1271,21 @@ export class DollhouseMCPServer implements IToolHandler {
   
   // Element-specific methods
   async renderTemplate(name: string, variables: Record<string, any>) {
-    try {
-      const template = await this.templateManager.find(t => t.metadata.name === name);
-      if (!template) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Template '${name}' not found`
-          }]
-        };
-      }
-      
-      // Use the Template class's proper render method (fixes Issue #914)
-      // This replaces the broken regex loop that wasn't substituting variables
-      
-      // DEFENSIVE CHECK: Verify template is a proper Template instance with render method
-      if (!template || typeof template.render !== 'function') {
-        logger.error(`Template '${name}' does not have a render method. Type: ${typeof template}, Constructor: ${template?.constructor?.name}`);
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Template '${name}' is not properly initialized or lacks render method`
-          }]
-        };
-      }
-      
-      // Add debug logging to understand template type at runtime
-      logger.debug(`Rendering template '${name}': type=${typeof template}, hasRender=${typeof template.render}, constructor=${template.constructor?.name}`);
-      
-      const rendered = await template.render(variables);
-      
+    // Use the new TemplateRenderer utility for cleaner code and better validation
+    const result = await this.templateRenderer.render(name, variables);
+    
+    if (result.success && result.content) {
       return {
         content: [{
           type: "text",
-          text: `📄 Rendered template '${name}':\n\n${rendered}`
+          text: `📄 Rendered template '${name}':\n\n${result.content}`
         }]
       };
-    } catch (error) {
-      logger.error(`Failed to render template '${name}':`, error);
+    } else {
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to render template: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ ${result.error || 'Failed to render template'}`
         }]
       };
     }
