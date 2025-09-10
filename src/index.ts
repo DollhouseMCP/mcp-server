@@ -1281,6 +1281,21 @@ export class DollhouseMCPServer implements IToolHandler {
       
       // Use the Template class's proper render method (fixes Issue #914)
       // This replaces the broken regex loop that wasn't substituting variables
+      
+      // DEFENSIVE CHECK: Verify template is a proper Template instance with render method
+      if (!template || typeof template.render !== 'function') {
+        logger.error(`Template '${name}' does not have a render method. Type: ${typeof template}, Constructor: ${template?.constructor?.name}`);
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Template '${name}' is not properly initialized or lacks render method`
+          }]
+        };
+      }
+      
+      // Add debug logging to understand template type at runtime
+      logger.debug(`Rendering template '${name}': type=${typeof template}, hasRender=${typeof template.render}, constructor=${template.constructor?.name}`);
+      
       const rendered = await template.render(variables);
       
       return {
