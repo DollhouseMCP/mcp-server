@@ -1,0 +1,86 @@
+# .dockerignore for Claude Code testing container
+# This reduces build context size and speeds up builds
+
+# Git files
+.git
+.gitignore
+.github
+
+# Node modules (will be installed fresh in container)
+node_modules
+**/node_modules
+
+# Build outputs (will be built fresh in container)
+dist
+build
+*.tsbuildinfo
+
+# Test files (not needed in container)
+coverage
+.nyc_output
+test
+**/__tests__
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+
+# Development files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation (except the one we need)
+docs/*
+!docs/testing/DOCKER_CLAUDE_CODE_TESTING.md
+README.md
+CONTRIBUTING.md
+LICENSE
+
+# Logs and temp files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs
+*.tmp
+temp
+
+# Environment files (security)
+.env
+.env.*
+!.env.example
+
+# Docker files (except the ones we're using)
+Dockerfile
+docker-compose*.yml
+!Dockerfile.claude-testing
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Archives and backups
+*.tar
+*.tar.gz
+*.zip
+*.bak
+backup
+
+# Local development
+.dollhouse
+portfolio
+cache
+
+# Session notes and development docs
+docs/development/SESSION_NOTES_*.md
+docs/archive
+
+# Other test files
+test_*.js
+test_*.mjs
+*.test.json
