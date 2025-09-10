@@ -5,6 +5,16 @@
 
 set -e
 
+# Set up cleanup trap to restore dockerignore if script is interrupted
+trap 'cleanup_dockerignore' EXIT INT TERM
+
+# Cleanup function for dockerignore
+cleanup_dockerignore() {
+    if [ -f .dockerignore.backup ]; then
+        mv .dockerignore.backup .dockerignore 2>/dev/null || true
+    fi
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -44,23 +54,11 @@ build_image() {
     # Build with progress
     if docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" . --progress=plain; then
         echo -e "${GREEN}✅ Image built successfully${NC}"
-        
-        # Restore original dockerignore
-        if [ -f .dockerignore.backup ]; then
-            mv .dockerignore.backup .dockerignore
-        else
-            rm -f .dockerignore
-        fi
+        # Cleanup handled by trap
         return 0
     else
         echo -e "${RED}❌ Build failed${NC}"
-        
-        # Restore original dockerignore
-        if [ -f .dockerignore.backup ]; then
-            mv .dockerignore.backup .dockerignore
-        else
-            rm -f .dockerignore
-        fi
+        # Cleanup handled by trap
         return 1
     fi
 }

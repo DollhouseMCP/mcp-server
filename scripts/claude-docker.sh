@@ -100,6 +100,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate prompt input if provided
+if [ -n "$PROMPT" ]; then
+    # Check prompt length (max 1000 characters for safety)
+    if [ ${#PROMPT} -gt 1000 ]; then
+        echo -e "${RED}❌ Error: Prompt too long (max 1000 characters)${NC}"
+        echo "Your prompt is ${#PROMPT} characters"
+        exit 1
+    fi
+    
+    # Warn if prompt contains potentially dangerous characters
+    if echo "$PROMPT" | grep -q '[;&|<>$`]'; then
+        echo -e "${YELLOW}⚠️  Warning: Prompt contains special characters that may be escaped${NC}"
+        # Note: We don't block these, just warn, as they might be legitimate
+    fi
+fi
+
 # Build if requested
 if [ "$BUILD" = true ]; then
     echo -e "${YELLOW}🔨 Building Docker image...${NC}"
@@ -107,23 +123,29 @@ if [ "$BUILD" = true ]; then
     echo -e "${GREEN}✅ Build complete${NC}"
 fi
 
-# Construct base command
-BASE_CMD="docker run --rm -e ANTHROPIC_API_KEY=\"\$ANTHROPIC_API_KEY\""
+# Build command arguments array (safer than eval)
+DOCKER_ARGS=()
+DOCKER_ARGS+=("run" "--rm")
+DOCKER_ARGS+=("-e" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 
 # Add interactive flags if needed
 if [ "$INTERACTIVE" = true ]; then
-    BASE_CMD="$BASE_CMD -it"
+    DOCKER_ARGS+=("-it")
 else
-    BASE_CMD="$BASE_CMD -i"
+    DOCKER_ARGS+=("-i")
 fi
 
-# Add the image and claude command
-BASE_CMD="$BASE_CMD $IMAGE_NAME claude --model $MODEL --mcp-config $MCP_CONFIG"
+# Add image name
+DOCKER_ARGS+=("$IMAGE_NAME")
+
+# Add claude command and arguments
+CLAUDE_ARGS=()
+CLAUDE_ARGS+=("claude" "--model" "$MODEL" "--mcp-config" "$MCP_CONFIG")
 
 # Add permission handling based on mode
 case "$PERMISSION_MODE" in
     "allow")
-        BASE_CMD="$BASE_CMD --allowedTools \"$ALLOWED_TOOLS\""
+        CLAUDE_ARGS+=("--allowedTools" "$ALLOWED_TOOLS")
         if [ "$ALLOWED_TOOLS" = "mcp__dollhousemcp__*" ]; then
             echo -e "${GREEN}✅ Pre-approving all DollhouseMCP tools (safe)${NC}"
         else
@@ -131,7 +153,7 @@ case "$PERMISSION_MODE" in
         fi
         ;;
     "dangerous")
-        BASE_CMD="$BASE_CMD --dangerously-skip-permissions"
+        CLAUDE_ARGS+=("--dangerously-skip-permissions")
         echo -e "${YELLOW}⚠️  Running with ALL permissions bypassed (use with caution)${NC}"
         ;;
     *)
@@ -139,13 +161,13 @@ case "$PERMISSION_MODE" in
         ;;
 esac
 
-# Execute based on mode
+# Execute based on mode (without eval)
 if [ "$INTERACTIVE" = true ]; then
     echo -e "${GREEN}🚀 Starting interactive Claude Code session...${NC}"
-    eval "$BASE_CMD"
+    docker "${DOCKER_ARGS[@]}" "${CLAUDE_ARGS[@]}"
 elif [ -n "$PROMPT" ]; then
     echo -e "${GREEN}📝 Sending prompt: $PROMPT${NC}"
-    echo "$PROMPT" | eval "$BASE_CMD"
+    echo "$PROMPT" | docker "${DOCKER_ARGS[@]}" "${CLAUDE_ARGS[@]}"
 else
     echo -e "${RED}❌ No prompt provided and not in interactive mode${NC}"
     echo "Use -i for interactive or provide a prompt"
