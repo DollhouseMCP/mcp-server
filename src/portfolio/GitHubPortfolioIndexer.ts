@@ -18,6 +18,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { APICache } from '../cache/APICache.js';
+import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 
 export interface GitHubIndexEntry {
   path: string;
@@ -71,7 +72,7 @@ export class GitHubPortfolioIndexer {
   private constructor() {
     this.apiCache = new APICache(); // Uses default settings
     this.rateLimitTracker = new Map();
-    this.portfolioRepoManager = new PortfolioRepoManager();
+    this.portfolioRepoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
     
     logger.debug('GitHubPortfolioIndexer created');
   }
@@ -209,7 +210,7 @@ export class GitHubPortfolioIndexer {
     try {
       // Get GitHub username from token
       const username = await this.getGitHubUsername();
-      const repository = 'dollhouse-portfolio';
+      const repository = this.portfolioRepoManager.getRepositoryName();
       
       // Check if portfolio repository exists
       const repoExists = await this.portfolioRepoManager.checkPortfolioExists(username);
@@ -597,7 +598,7 @@ export class GitHubPortfolioIndexer {
   private createEmptyIndex(username?: string, repository?: string): GitHubPortfolioIndex {
     const index: GitHubPortfolioIndex = {
       username: username || 'unknown',
-      repository: repository || 'dollhouse-portfolio',
+      repository: repository || this.portfolioRepoManager.getRepositoryName(),
       lastUpdated: new Date(),
       elements: new Map(),
       totalElements: 0,

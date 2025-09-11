@@ -16,6 +16,7 @@ import { PortfolioSyncComparer, SyncMode, SyncAction } from '../sync/PortfolioSy
 import { PortfolioDownloader } from '../sync/PortfolioDownloader.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -43,7 +44,7 @@ export class PortfolioPullHandler {
   private downloader: PortfolioDownloader;
 
   constructor() {
-    this.portfolioRepoManager = new PortfolioRepoManager();
+    this.portfolioRepoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
     this.githubIndexer = GitHubPortfolioIndexer.getInstance();
     this.portfolioManager = PortfolioManager.getInstance();
     this.indexManager = PortfolioIndexManager.getInstance();

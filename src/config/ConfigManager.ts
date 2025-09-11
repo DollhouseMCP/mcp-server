@@ -221,7 +221,7 @@ export class ConfigManager {
       github: {
         portfolio: {
           repository_url: null,
-          repository_name: 'dollhouse-portfolio',
+          repository_name: process.env.TEST_GITHUB_REPO || 'dollhouse-portfolio',
           default_branch: 'main',
           auto_create: true
         },

@@ -18,6 +18,7 @@ import { ConfigManager, DollhouseConfig } from '../config/ConfigManager.js';
 import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioRepoManager } from './PortfolioRepoManager.js';
 import { GitHubPortfolioIndexer, GitHubIndexEntry } from './GitHubPortfolioIndexer.js';
+import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -99,7 +100,7 @@ export class PortfolioSyncManager {
   constructor() {
     this.configManager = ConfigManager.getInstance();
     this.portfolioManager = PortfolioManager.getInstance();
-    this.repoManager = new PortfolioRepoManager();
+    this.repoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
     this.indexer = GitHubPortfolioIndexer.getInstance();
   }
   
