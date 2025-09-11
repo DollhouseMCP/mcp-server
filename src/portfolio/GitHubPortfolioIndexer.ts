@@ -337,6 +337,22 @@ export class GitHubPortfolioIndexer {
   private async fetchWithREST(username: string, repository: string): Promise<GitHubPortfolioIndex> {
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
     
+    // CRITICAL FIX: Ensure token is properly set for bulk sync operations
+    // The GitHubPortfolioIndexer needs its own token to make API calls
+    const token = await TokenManager.getGitHubTokenAsync();
+    if (!token) {
+      throw new Error('GitHub token required for portfolio indexing');
+    }
+    
+    // Set token on the PortfolioRepoManager instance
+    this.portfolioRepoManager.setToken(token);
+    
+    logger.debug('[BULK_SYNC_FIX] Token set on GitHubPortfolioIndexer PortfolioRepoManager', {
+      tokenPrefix: token.substring(0, 10) + '...',
+      username: normalizedUsername,
+      repository
+    });
+    
     // Get repository info and latest commit
     const repoInfo = await this.portfolioRepoManager.githubRequest(
       `/repos/${normalizedUsername}/${repository}`
