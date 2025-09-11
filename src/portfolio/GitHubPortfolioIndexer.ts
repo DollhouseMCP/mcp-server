@@ -480,7 +480,9 @@ export class GitHubPortfolioIndexer {
   ): Promise<GitHubIndexEntry | null> {
     try {
       // Parse metadata from filename or fetch content if needed
-      const name = fileInfo.name.replace('.md', '').replace(/-/g, ' ');
+      // FIX: Keep original filename format to match local file expectations
+      // Previously: .replace(/-/g, ' ') converted hyphens to spaces causing sync mismatch
+      const name = fileInfo.name.replace('.md', '');
       
       const entry: GitHubIndexEntry = {
         path: fileInfo.path,
