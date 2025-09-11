@@ -291,9 +291,9 @@ export class PortfolioRepoManager {
     // Validate element before saving
     this.validateElement(element);
 
-    // MEDIUM FIX: Normalize username from element metadata (DMCP-SEC-004)
-    const rawUsername = element.metadata.author || 'anonymous';
-    const username = UnicodeValidator.normalize(rawUsername).normalizedContent;
+    // CRITICAL FIX: Use authenticated user's username, NOT element author (Issue #913)
+    // The portfolio belongs to the authenticated user, not the element's author
+    const username = await this.getUsername();
     logger.info(`User consented to save element ${element.id} to portfolio`);
     
     // LOW FIX: Add security audit logging for element save (DMCP-SEC-006)
