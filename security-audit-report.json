@@ -1,0 +1,15 @@
+{
+  "timestamp": "2025-09-11T16:17:18.020Z",
+  "summary": {
+    "total": 0,
+    "bySeverity": {
+      "info": 0,
+      "low": 0,
+      "medium": 0,
+      "high": 0,
+      "critical": 0
+    },
+    "byCategory": {}
+  },
+  "findings": []
+}

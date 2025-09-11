@@ -309,12 +309,12 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'OWASP-A03-002',
-    file: 'test-element-lifecycle.js',
+    file: '**/test-element-lifecycle.js',
     reason: 'FALSE POSITIVE: spawn with array arguments is safe (no shell invocation). GitHub token passed as array element, not concatenated into command string.'
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'test-element-lifecycle.js',
+    file: '**/test-element-lifecycle.js',
     reason: 'FALSE POSITIVE: Test harness with no user input mechanisms. All data is hardcoded test scenarios or environment variables.'
   },
   
@@ -676,6 +676,15 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
   const normalizedPath = normalizePath(filePath);
   const relativePath = getRelativePath(normalizedPath);
   
+  // Debug logging for CI investigation
+  if (filePath.includes('test-element-lifecycle')) {
+    console.log(`[SUPPRESSION DEBUG] Checking suppression for test-element-lifecycle.js`);
+    console.log(`  Rule: ${ruleId}`);
+    console.log(`  Original path: ${filePath}`);
+    console.log(`  Normalized path: ${normalizedPath}`);
+    console.log(`  Relative path: ${relativePath}`);
+  }
+  
   // Check cache first
   const cached = cache.get(ruleId, relativePath);
   if (cached !== undefined) return cached;
@@ -703,7 +712,18 @@ export function shouldSuppress(ruleId: string, filePath?: string): boolean {
     if (suppression.file.includes('*')) {
       try {
         const regex = globToRegex(suppression.file);
-        if (regex.test(relativePath) || regex.test(normalizedPath)) {
+        const matchesRelative = regex.test(relativePath);
+        const matchesNormalized = regex.test(normalizedPath);
+        
+        // Debug logging for CI
+        if (filePath?.includes('test-element-lifecycle')) {
+          console.log(`  Pattern: ${suppression.file}`);
+          console.log(`  Regex: ${regex}`);
+          console.log(`  Matches relative (${relativePath}): ${matchesRelative}`);
+          console.log(`  Matches normalized (${normalizedPath}): ${matchesNormalized}`);
+        }
+        
+        if (matchesRelative || matchesNormalized) {
           cache.set(ruleId, relativePath, true);
           return true;
         }
