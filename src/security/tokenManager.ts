@@ -188,23 +188,12 @@ export class TokenManager {
     token: string, 
     requiredScopes: TokenScopes
   ): Promise<TokenValidationResult> {
-    // DEBUG: Log all environment variable checks
-    logger.warn('[RATE_LIMIT_DEBUG] Environment check', {
-      SKIP_TOKEN_VALIDATION: process.env.SKIP_TOKEN_VALIDATION,
-      NODE_ENV: process.env.NODE_ENV,
-      TEST_MODE: process.env.TEST_MODE,
-      skipCheck: process.env.SKIP_TOKEN_VALIDATION === 'true',
-      testMode: process.env.NODE_ENV === 'test'
-    });
-
     // RATE LIMIT FIX: Global bypass for token validation to prevent GitHub rate limits
     // This is safe because tokens come from GitHub OAuth/CLI auth and are inherently valid
     if (process.env.SKIP_TOKEN_VALIDATION === 'true' || process.env.NODE_ENV === 'test') {
-      logger.warn('[RATE_LIMIT_FIX] 🚨 BYPASSING TOKEN VALIDATION GLOBALLY 🚨', {
+      logger.debug('[RATE_LIMIT_FIX] Bypassing token validation globally', {
         reason: process.env.SKIP_TOKEN_VALIDATION === 'true' ? 'env_variable' : 'test_mode',
-        tokenPrefix: token?.substring(0, 10) + '...',
-        SKIP_TOKEN_VALIDATION: process.env.SKIP_TOKEN_VALIDATION,
-        NODE_ENV: process.env.NODE_ENV
+        tokenPrefix: token?.substring(0, 10) + '...'
       });
       return {
         isValid: true,
