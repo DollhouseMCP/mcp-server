@@ -644,10 +644,18 @@ export class DollhouseMCPServer implements IToolHandler {
     let persona = this.personas.get(personaIdentifier);
     
     if (!persona) {
-      // Search by name
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
-      );
+      // Search by name with slugify normalization (fixes Debug Detective's identified issue)
+      const searchNameSlug = slugify(personaIdentifier);
+      const searchNameLower = personaIdentifier.toLowerCase();
+      
+      persona = Array.from(this.personas.values()).find(p => {
+        const personaNameLower = p.metadata.name?.toLowerCase();
+        const personaNameSlug = slugify(p.metadata.name || '');
+        
+        // Try both exact match and slug match for flexibility
+        return personaNameLower === searchNameLower || 
+               personaNameSlug === searchNameSlug;
+      });
     }
 
     if (!persona) {

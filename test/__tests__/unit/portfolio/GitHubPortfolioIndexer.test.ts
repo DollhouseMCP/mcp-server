@@ -18,7 +18,8 @@ jest.unstable_mockModule('../../../../src/collection/GitHubClient.js', () => ({
 jest.unstable_mockModule('../../../../src/portfolio/PortfolioRepoManager.js', () => ({
   PortfolioRepoManager: jest.fn().mockImplementation(() => ({
     checkPortfolioExists: mockCheckPortfolioExists,
-    githubRequest: mockFetchFromGitHub
+    githubRequest: mockFetchFromGitHub,
+    getRepositoryName: jest.fn().mockReturnValue('dollhouse-portfolio')
   }))
 }));
 
@@ -182,7 +183,7 @@ describe('GitHubPortfolioIndexer', () => {
       
       const personas = result.elements.get(ElementType.PERSONA);
       expect(personas).toHaveLength(1);
-      expect(personas![0].name).toBe('test persona');
+      expect(personas![0].name).toBe('test-persona');
       expect(personas![0].path).toBe('personas/test-persona.md');
     });
 
