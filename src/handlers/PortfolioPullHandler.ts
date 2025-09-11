@@ -355,7 +355,8 @@ export class PortfolioPullHandler {
    */
   private async deleteLocalElement(action: SyncAction): Promise<void> {
     const elementDir = this.portfolioManager.getElementDir(action.type);
-    const fileName = `${action.name}.md`;
+    // Use the original filename from the path to preserve extension
+    const fileName = path.basename(action.path) || `${action.name}.md`;
     const filePath = path.join(elementDir, fileName);
     
     // SECURITY: Log deletion attempt for audit trail
