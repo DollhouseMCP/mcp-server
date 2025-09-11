@@ -3,6 +3,12 @@
 /**
  * Comprehensive element lifecycle test for Docker MCP environment
  * Tests: Browse -> Install -> Modify -> Submit -> Delete -> Sync -> Verify
+ * 
+ * Security Note: This test file contains no user input mechanisms.
+ * All data is hardcoded or from environment variables.
+ * 
+ * @security-disable DMCP-SEC-004 - No user input to normalize
+ * @security-info Test harness with hardcoded test data only
  */
 
 import { spawn } from 'child_process';
@@ -169,6 +175,8 @@ if (!ghToken) {
 console.log(`${getTimestamp()} ✅ GitHub token detected`);
 
 // Start Docker container
+// @security-disable OWASP-A03-002 - spawn with array arguments is safe (no shell invocation)
+// The GitHub token is passed as a single array element, not concatenated into a command string
 const docker = spawn('docker', [
   'run',
   '--rm',
