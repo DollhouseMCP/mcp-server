@@ -316,7 +316,7 @@ const docker = spawn('docker', [
   '-e', `TEST_GITHUB_REPO=dollhouse-test-portfolio`,
   'claude-mcp-test-env:1.0.0',
   'node',
-  '/app/dollhousemcp/dist/index.js'
+  '/app/dist/index.js'
 ]);
 
 let responseBuffer = '';

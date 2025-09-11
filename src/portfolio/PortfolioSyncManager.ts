@@ -540,6 +540,16 @@ export class PortfolioSyncManager {
       // Use PortfolioRepoManager to upload
       this.repoManager.setToken(token);
       
+      // DEBUG: Log upload attempt
+      logger.debug('[BULK_SYNC_DEBUG] Upload element attempt', {
+        elementName,
+        elementType,
+        hasToken: !!token,
+        tokenPrefix: token ? token.substring(0, 10) + '...' : 'none',
+        adapterHasMetadata: !!(adapter && adapter.metadata),
+        timestamp: new Date().toISOString()
+      });
+      
       try {
         const url = await this.repoManager.saveElement(adapter, true); // consent is true since we've already checked
         
