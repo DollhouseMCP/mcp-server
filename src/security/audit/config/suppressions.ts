@@ -307,6 +307,16 @@ export const suppressions: Suppression[] = [
     file: 'test-*.js',
     reason: 'Test utility files in root directory for development testing. Do not process production user input.'
   },
+  {
+    rule: 'OWASP-A03-002',
+    file: 'test-element-lifecycle.js',
+    reason: 'FALSE POSITIVE: spawn with array arguments is safe (no shell invocation). GitHub token passed as array element, not concatenated into command string.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-element-lifecycle.js',
+    reason: 'FALSE POSITIVE: Test harness with no user input mechanisms. All data is hardcoded test scenarios or environment variables.'
+  },
   
   // ========================================
   // Audit Logging False Positives
