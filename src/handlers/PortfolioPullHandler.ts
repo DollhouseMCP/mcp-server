@@ -263,27 +263,53 @@ export class PortfolioPullHandler {
       skipped: syncActions.toSkip.length
     };
     
-    // Process additions
-    for (const action of syncActions.toAdd) {
-      try {
-        progressMessages.push(`📥 Downloading: ${action.type}/${action.name}`);
-        await this.downloadAndSaveElement(action, username, repository);
-        results.added++;
-      } catch (error) {
-        logger.error(`Failed to add ${action.type}/${action.name}`, { error });
-        progressMessages.push(`❌ Failed to add: ${action.type}/${action.name}`);
+    // PERFORMANCE: Process downloads in parallel batches for improved speed
+    const BATCH_SIZE = 5; // Process 5 downloads at a time to avoid rate limiting
+    
+    // Helper function to process a batch of actions
+    const processBatch = async (actions: SyncAction[], operation: string) => {
+      const results = await Promise.allSettled(
+        actions.map(async (action) => {
+          progressMessages.push(`${operation}: ${action.type}/${action.name}`);
+          await this.downloadAndSaveElement(action, username, repository);
+          return action;
+        })
+      );
+      
+      return results.map((result, index) => ({
+        action: actions[index],
+        success: result.status === 'fulfilled',
+        error: result.status === 'rejected' ? result.reason : null
+      }));
+    };
+    
+    // Process additions in batches
+    for (let i = 0; i < syncActions.toAdd.length; i += BATCH_SIZE) {
+      const batch = syncActions.toAdd.slice(i, i + BATCH_SIZE);
+      const batchResults = await processBatch(batch, '📥 Downloading');
+      
+      for (const result of batchResults) {
+        if (result.success) {
+          results.added++;
+        } else {
+          logger.error(`Failed to add ${result.action.type}/${result.action.name}`, { error: result.error });
+          progressMessages.push(`❌ Failed to add: ${result.action.type}/${result.action.name}`);
+        }
       }
     }
     
-    // Process updates
-    for (const action of syncActions.toUpdate) {
-      try {
-        progressMessages.push(`🔄 Updating: ${action.type}/${action.name}`);
-        await this.downloadAndSaveElement(action, username, repository);
-        results.updated++;
-      } catch (error) {
-        logger.error(`Failed to update ${action.type}/${action.name}`, { error });
-        progressMessages.push(`❌ Failed to update: ${action.type}/${action.name}`);
+    // Process updates in batches
+    for (let i = 0; i < syncActions.toUpdate.length; i += BATCH_SIZE) {
+      const batch = syncActions.toUpdate.slice(i, i + BATCH_SIZE);
+      const batchResults = await processBatch(batch, '🔄 Updating');
+      
+      for (const result of batchResults) {
+        if (result.success) {
+          results.updated++;
+        } else {
+          logger.error(`Failed to update ${result.action.type}/${result.action.name}`, { error: result.error });
+          progressMessages.push(`❌ Failed to update: ${result.action.type}/${result.action.name}`);
+        }
       }
     }
     
@@ -297,6 +323,12 @@ export class PortfolioPullHandler {
         logger.error(`Failed to delete ${action.type}/${action.name}`, { error });
         progressMessages.push(`❌ Failed to delete: ${action.type}/${action.name}`);
       }
+    }
+    
+    // PERFORMANCE: Batch rebuild index after all operations complete
+    if (results.added > 0 || results.updated > 0 || results.deleted > 0) {
+      progressMessages.push('🔄 Rebuilding index...');
+      await this.indexManager.rebuildIndex();
     }
     
     return results;
@@ -345,8 +377,7 @@ export class PortfolioPullHandler {
       details: `Saved element to: ${action.type}/${fileName}`
     });
     
-    // Update the index
-    await this.indexManager.rebuildIndex();
+    // PERFORMANCE: Skip individual index rebuild - will batch rebuild after all operations
   }
 
   /**
@@ -369,7 +400,7 @@ export class PortfolioPullHandler {
     
     try {
       await fs.unlink(filePath);
-      await this.indexManager.rebuildIndex();
+      // PERFORMANCE: Skip individual index rebuild - will batch rebuild after all operations
       
       // SECURITY: Log successful deletion
       SecurityMonitor.logSecurityEvent({
