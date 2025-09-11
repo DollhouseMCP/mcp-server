@@ -4,6 +4,47 @@
  * Comprehensive element lifecycle test for Docker MCP environment
  * Tests: Browse -> Install -> Modify -> Submit -> Delete -> Sync -> Verify
  * 
+ * USAGE:
+ *   Basic:
+ *     GITHUB_TEST_TOKEN=ghp_xxx ./test-element-lifecycle.js
+ *   
+ *   With options:
+ *     GITHUB_TEST_TOKEN=ghp_xxx VERBOSE=true CONTINUE_ON_ERROR=true ./test-element-lifecycle.js
+ *   
+ *   Skip phases (comma-separated phase numbers):
+ *     GITHUB_TEST_TOKEN=ghp_xxx SKIP_PHASES=7,8 ./test-element-lifecycle.js
+ * 
+ * ENVIRONMENT VARIABLES:
+ *   Required:
+ *     GITHUB_TEST_TOKEN     - GitHub personal access token with repo scope
+ *   
+ *   Optional:
+ *     VERBOSE              - Set to 'true' for detailed output
+ *     CONTINUE_ON_ERROR    - Set to 'true' to continue past failures
+ *     SKIP_PHASES          - Comma-separated list of phase numbers to skip (e.g., "7,8")
+ *     TEST_GITHUB_REPO     - Custom test repository name (default: dollhouse-test-portfolio)
+ * 
+ * FEATURES:
+ *   - Automatic retry with exponential backoff for rate limits
+ *   - Configurable phase skipping for debugging
+ *   - Detailed timing information for each phase
+ *   - Summary report at completion
+ *   - Transient error detection and retry
+ * 
+ * TEST PHASES:
+ *   1. Initialize - Protocol handshake
+ *   2. Check GitHub Auth - Verify authentication
+ *   3. Browse Collection - List available elements
+ *   4. Install Debug Detective - Install test element
+ *   5. List Local Elements - Verify installation
+ *   6. Edit Debug Detective - Modify element
+ *   7. Initialize GitHub Portfolio - Create/verify portfolio repo
+ *   8. Push to GitHub Portfolio - Sync elements to GitHub
+ *   9. Delete Local Copy - Remove local element
+ *   10. Verify Deletion - Confirm removal
+ *   11. Sync from GitHub (Pull) - Restore from GitHub
+ *   12. Verify Restoration - Confirm restoration with modifications
+ * 
  * Security Note: This test file contains no user input mechanisms.
  * All data is hardcoded or from environment variables.
  * 
@@ -191,6 +232,15 @@ const testPhases = [
   }
 ];
 
+// Configuration options
+const CONFIG = {
+  maxRetries: 3,
+  baseDelay: 5000, // 5 seconds base delay for rate limits
+  verbose: process.env.VERBOSE === 'true',
+  skipPhases: process.env.SKIP_PHASES ? process.env.SKIP_PHASES.split(',').map(p => parseInt(p)) : [],
+  continueOnError: process.env.CONTINUE_ON_ERROR === 'true'
+};
+
 console.log(`${getTimestamp()} 🧪 Starting Element Lifecycle Test`);
 console.log('━'.repeat(60));
 
@@ -204,6 +254,15 @@ if (!ghToken) {
 }
 
 console.log(`${getTimestamp()} ✅ GitHub token detected`);
+
+// Configuration display
+if (CONFIG.verbose) {
+  console.log(`${getTimestamp()} 📋 Configuration:`);
+  console.log(`${getTimestamp()}    Max retries: ${CONFIG.maxRetries}`);
+  console.log(`${getTimestamp()}    Base delay: ${CONFIG.baseDelay}ms`);
+  console.log(`${getTimestamp()}    Skip phases: ${CONFIG.skipPhases.length ? CONFIG.skipPhases.join(', ') : 'none'}`);
+  console.log(`${getTimestamp()}    Continue on error: ${CONFIG.continueOnError}`);
+}
 
 // Start Docker container
 // @security-disable OWASP-A03-002 - spawn with array arguments is safe (no shell invocation)
@@ -224,6 +283,8 @@ const docker = spawn('docker', [
 let responseBuffer = '';
 let currentPhase = 0;
 let testResults = {};
+let retryCount = {};
+let phaseStartTime = {};
 
 docker.stdout.on('data', (data) => {
   responseBuffer += data.toString();
@@ -236,7 +297,10 @@ docker.stdout.on('data', (data) => {
         const response = JSON.parse(line);
         handleResponse(response);
       } catch (e) {
-        // Not JSON, skip
+        // Not JSON, might be debug output
+        if (CONFIG.verbose) {
+          console.log(`${getTimestamp()} 📝 Debug:`, line);
+        }
       }
     }
   }
@@ -246,19 +310,63 @@ docker.stderr.on('data', (data) => {
   console.error(`${getTimestamp()} ❌ Error:`, data.toString());
 });
 
-function handleResponse(response) {
+function isRateLimitError(response) {
+  if (!response.error) return false;
+  const errorMsg = response.error.message || '';
+  return errorMsg.toLowerCase().includes('rate limit') || 
+         errorMsg.toLowerCase().includes('too many requests') ||
+         errorMsg.includes('429');
+}
+
+function shouldRetry(response, phaseName) {
+  // Check if it's a rate limit error
+  if (isRateLimitError(response)) return true;
+  
+  // Check for other transient errors
+  const errorMsg = response.error?.message || '';
+  const transientErrors = [
+    'timeout',
+    'network',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'temporary'
+  ];
+  
+  return transientErrors.some(err => errorMsg.toLowerCase().includes(err));
+}
+
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function handleResponse(response) {
   const phase = testPhases[currentPhase - 1];
   if (!phase) return;
   
-  console.log(`${getTimestamp()} 📥 ${phase.name} Response:`, 
-    JSON.stringify(response, null, 2).substring(0, 500));
+  // Verbose logging
+  if (CONFIG.verbose) {
+    console.log(`${getTimestamp()} 📥 ${phase.name} Full Response:`, 
+      JSON.stringify(response, null, 2));
+  } else {
+    console.log(`${getTimestamp()} 📥 ${phase.name} Response:`, 
+      JSON.stringify(response, null, 2).substring(0, 500));
+  }
   
   // Store results for analysis
   testResults[phase.name] = response;
   
+  // Calculate elapsed time
+  const elapsed = phaseStartTime[phase.name] ? 
+    Date.now() - phaseStartTime[phase.name] : 0;
+  if (elapsed > 0) {
+    console.log(`${getTimestamp()} ⏱️  Phase took ${(elapsed / 1000).toFixed(2)}s`);
+  }
+  
   // Check for success and move to next phase
   if (response.result || response.id === 1) {
     console.log(`${getTimestamp()} ✅ ${phase.name} completed\n`);
+    retryCount[phase.name] = 0; // Reset retry count on success
     
     // Special checks
     if (phase.name === "Edit Debug Detective" && response.result) {
@@ -266,8 +374,10 @@ function handleResponse(response) {
     }
     if (phase.name === "Push to GitHub Portfolio" && response.result) {
       const content = response.result.content?.[0]?.text || '';
-      if (content.includes("pushed")) {
+      if (content.includes("pushed") || content.includes("synced")) {
         console.log(`${getTimestamp()} ℹ️  Elements pushed to GitHub portfolio`);
+      } else if (content.includes("failed") || content.includes("error")) {
+        console.log(`${getTimestamp()} ⚠️  Some elements may have failed to sync`);
       }
     }
     if (phase.name === "Verify Restoration" && response.result) {
@@ -279,22 +389,78 @@ function handleResponse(response) {
     
     sendNextPhase();
   } else if (response.error) {
-    console.error(`${getTimestamp()} ❌ ${phase.name} failed:`, response.error);
-    sendNextPhase(); // Continue anyway for testing
+    const phaseName = phase.name;
+    retryCount[phaseName] = (retryCount[phaseName] || 0) + 1;
+    
+    // Check if we should retry
+    if (shouldRetry(response, phaseName) && retryCount[phaseName] <= CONFIG.maxRetries) {
+      const delay = CONFIG.baseDelay * Math.pow(2, retryCount[phaseName] - 1); // Exponential backoff
+      console.log(`${getTimestamp()} ⚠️  ${phaseName} failed (attempt ${retryCount[phaseName]}/${CONFIG.maxRetries})`);
+      console.log(`${getTimestamp()} 🔄 Retrying in ${delay / 1000}s...`);
+      console.log(`${getTimestamp()} 📝 Error was: ${response.error.message}`);
+      
+      setTimeout(() => {
+        console.log(`${getTimestamp()} 🔄 Retrying ${phaseName}...`);
+        currentPhase--; // Step back to retry the same phase
+        sendNextPhase();
+      }, delay);
+    } else {
+      console.error(`${getTimestamp()} ❌ ${phaseName} failed after ${retryCount[phaseName]} attempts:`, response.error);
+      
+      if (CONFIG.continueOnError) {
+        console.log(`${getTimestamp()} ⏭️  Continuing despite error (CONTINUE_ON_ERROR=true)`);
+        sendNextPhase();
+      } else {
+        console.log(`${getTimestamp()} 🛑 Stopping test due to error`);
+        console.log(`${getTimestamp()} 💡 Tip: Set CONTINUE_ON_ERROR=true to continue past errors`);
+        setTimeout(() => {
+          docker.kill();
+          process.exit(1);
+        }, 1000);
+      }
+    }
   }
 }
 
 function sendNextPhase() {
   if (currentPhase < testPhases.length) {
     const phase = testPhases[currentPhase];
+    
+    // Check if we should skip this phase
+    if (CONFIG.skipPhases.includes(currentPhase + 1)) {
+      console.log(`\n${getTimestamp()} ⏭️  Skipping Phase ${currentPhase + 1}: ${phase.name}`);
+      currentPhase++;
+      sendNextPhase();
+      return;
+    }
+    
     console.log(`\n${getTimestamp()} 📤 Phase ${currentPhase + 1}: ${phase.name}`);
+    phaseStartTime[phase.name] = Date.now();
     docker.stdin.write(JSON.stringify(phase.request) + '\n');
     currentPhase++;
   } else {
     console.log(`\n${getTimestamp()} ✅ All test phases completed`);
+    
+    // Print summary
+    console.log(`\n${getTimestamp()} 📊 Test Summary:`);
+    let successCount = 0;
+    let failureCount = 0;
+    
+    for (const [phaseName, result] of Object.entries(testResults)) {
+      if (result.result || result.id === 1) {
+        console.log(`${getTimestamp()}    ✅ ${phaseName}`);
+        successCount++;
+      } else if (result.error) {
+        console.log(`${getTimestamp()}    ❌ ${phaseName}: ${result.error.message}`);
+        failureCount++;
+      }
+    }
+    
+    console.log(`${getTimestamp()} 📈 Success rate: ${successCount}/${successCount + failureCount} (${Math.round(successCount / (successCount + failureCount) * 100)}%)`);
+    
     setTimeout(() => {
       docker.kill();
-      process.exit(0);
+      process.exit(failureCount > 0 && !CONFIG.continueOnError ? 1 : 0);
     }, 1000);
   }
 }
