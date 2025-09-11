@@ -609,4 +609,63 @@ These elements can be imported into your DollhouseMCP installation.
     // Fallback to basic markdown format
     return `# ${element.metadata.name}\n\n${element.metadata.description || ''}`;
   }
+
+  /**
+   * Get the authenticated user's username
+   */
+  private async getUsername(): Promise<string> {
+    const response = await this.githubRequest('/user');
+    if (!response || !response.login) {
+      throw new Error('Failed to get GitHub username');
+    }
+    return response.login;
+  }
+
+  /**
+   * Get file content from GitHub repository
+   * Used for pull operations to download elements
+   */
+  async getFileContent(path: string, username?: string, repository?: string): Promise<string> {
+    try {
+      // Use provided username/repository or defaults
+      const repoUser = username || await this.getUsername();
+      const repoName = repository || PortfolioRepoManager.PORTFOLIO_REPO_NAME;
+      
+      logger.info('Fetching file content from GitHub', { 
+        path, 
+        username: repoUser, 
+        repository: repoName 
+      });
+
+      const response = await this.githubRequest(
+        `/repos/${repoUser}/${repoName}/contents/${path}`
+      );
+
+      if (!response || !response.content) {
+        throw new Error(`No content found at path: ${path}`);
+      }
+
+      // Decode base64 content
+      const decodedContent = Buffer.from(response.content, 'base64').toString('utf-8');
+      
+      return decodedContent;
+      
+    } catch (error) {
+      logger.error('Failed to get file content from GitHub', { 
+        error, 
+        path 
+      });
+      
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          throw new Error(`File not found at path: ${path}`);
+        }
+        if (error.message.includes('401') || error.message.includes('403')) {
+          throw new Error(`Authentication failed. Please check your GitHub token.`);
+        }
+      }
+      
+      throw error;
+    }
+  }
 }
