@@ -14,6 +14,8 @@ import { ElementType } from '../portfolio/types.js';
 import { logger } from '../utils/logger.js';
 import { PortfolioSyncComparer, SyncMode, SyncAction } from '../sync/PortfolioSyncComparer.js';
 import { PortfolioDownloader } from '../sync/PortfolioDownloader.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -144,10 +146,17 @@ export class PortfolioPullHandler {
 
   /**
    * Validate and normalize sync mode
+   * SECURITY FIX: Added Unicode normalization to prevent homograph attacks
    */
   private validateSyncMode(mode?: string): SyncMode {
     const validModes: SyncMode[] = ['additive', 'mirror', 'backup'];
-    const syncMode = (mode || 'additive').toLowerCase() as SyncMode;
+    
+    // SECURITY FIX: Normalize Unicode to prevent homograph attacks
+    const normalizedMode = mode ? 
+      UnicodeValidator.normalize(mode).normalizedContent : 
+      'additive';
+    
+    const syncMode = normalizedMode.toLowerCase() as SyncMode;
     
     if (!validModes.includes(syncMode)) {
       throw new Error(`Invalid sync mode: ${mode}. Valid modes are: ${validModes.join(', ')}`);
@@ -295,6 +304,7 @@ export class PortfolioPullHandler {
 
   /**
    * Download element from GitHub and save locally
+   * SECURITY: Added audit logging for GitHub operations
    */
   private async downloadAndSaveElement(
     action: SyncAction,
@@ -303,6 +313,14 @@ export class PortfolioPullHandler {
   ): Promise<void> {
     // Set up the repo manager with the correct context
     this.portfolioRepoManager.setToken(await this.getGitHubToken());
+    
+    // SECURITY: Log the download operation for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_FETCH_SUCCESS',
+      severity: 'LOW',
+      source: 'PortfolioPullHandler.downloadAndSaveElement',
+      details: `Downloading element: ${action.type}/${action.name} from ${username}/${repository}`
+    });
     
     // Download the element content
     const elementData = await this.downloader.downloadFromGitHub(
@@ -319,21 +337,46 @@ export class PortfolioPullHandler {
     
     await fs.writeFile(filePath, elementData.content, 'utf-8');
     
+    // SECURITY: Log successful save for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_CREATED',
+      severity: 'LOW',
+      source: 'PortfolioPullHandler.downloadAndSaveElement',
+      details: `Saved element to: ${action.type}/${fileName}`
+    });
+    
     // Update the index
     await this.indexManager.rebuildIndex();
   }
 
   /**
    * Delete local element
+   * SECURITY: Added audit logging for deletion operations
    */
   private async deleteLocalElement(action: SyncAction): Promise<void> {
     const elementDir = this.portfolioManager.getElementDir(action.type);
     const fileName = `${action.name}.md`;
     const filePath = path.join(elementDir, fileName);
     
+    // SECURITY: Log deletion attempt for audit trail
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'MEDIUM',
+      source: 'PortfolioPullHandler.deleteLocalElement',
+      details: `Attempting to delete: ${action.type}/${fileName}`
+    });
+    
     try {
       await fs.unlink(filePath);
       await this.indexManager.rebuildIndex();
+      
+      // SECURITY: Log successful deletion
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_DELETED',
+        severity: 'MEDIUM',
+        source: 'PortfolioPullHandler.deleteLocalElement',
+        details: `Successfully deleted: ${action.type}/${fileName}`
+      });
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
         throw error;
