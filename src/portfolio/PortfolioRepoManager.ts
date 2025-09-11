@@ -28,7 +28,6 @@ export class PortfolioRepoManager {
   private static readonly GITHUB_API_BASE = 'https://api.github.com';
   
   private token: string | null = null;
-  private tokenPreValidated: boolean = false; // Track if token was set externally and pre-validated
   private repositoryName: string;
 
   constructor(repositoryName?: string) {
@@ -49,11 +48,9 @@ export class PortfolioRepoManager {
   /**
    * Set the GitHub token for API calls
    * Used when token is already available from TokenManager
-   * RATE LIMIT FIX: Marks token as pre-validated to skip redundant validation
    */
   public setToken(token: string): void {
     this.token = token;
-    this.tokenPreValidated = true; // Token was provided by caller, assume it's already validated
   }
 
   /**
@@ -64,31 +61,29 @@ export class PortfolioRepoManager {
   private async getTokenAndValidate(): Promise<string> {
     if (!this.token) {
       this.token = await TokenManager.getGitHubTokenAsync();
-      this.tokenPreValidated = false; // Token from TokenManager needs validation
       if (!this.token) {
         throw new Error('GitHub authentication required. Please use setup_github_auth first.');
       }
+      
+      // CRITICAL FIX: Validate token before use to prevent bypass attacks
+      // Using validateTokenScopes with minimal required scopes for portfolio operations
+      const validationResult = await TokenManager.validateTokenScopes(this.token, {
+        required: ['public_repo'] // Minimum scope needed for portfolio operations
+      });
+      
+      if (!validationResult.isValid) {
+        this.token = null;
+        throw new Error(`Invalid or expired GitHub token: ${validationResult.error || 'Please re-authenticate.'}`);
+      }
+      
+      // LOW FIX: Add audit logging for security operations (DMCP-SEC-006)
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_VALIDATION_SUCCESS',
+        severity: 'LOW',
+        source: 'PortfolioRepoManager.getToken',
+        details: 'GitHub token validated successfully for portfolio operations'
+      });
     }
-    
-    // RATE LIMIT FIX: Skip all token validation to prevent GitHub rate limiting
-    // The token is already validated when obtained from GitHub OAuth or CLI auth
-    // Validating 25+ times during bulk sync causes rate limit errors (Issues #930, #913, #926)
-    
-    // Mock successful validation to satisfy downstream code expectations
-    const validationResult = { 
-      isValid: true, 
-      scopes: ['public_repo'],
-      error: null 
-    };
-    
-    // Mark as validated to maintain consistency with existing flag logic
-    this.tokenPreValidated = true;
-    
-    logger.debug('[RATE_LIMIT_FIX] Bypassing token validation - token from authenticated source', {
-      tokenPrefix: this.token?.substring(0, 10) + '...',
-      source: this.tokenPreValidated ? 'external' : 'TokenManager'
-    });
-    
     return this.token;
   }
 
@@ -104,16 +99,6 @@ export class PortfolioRepoManager {
     const token = await this.getTokenAndValidate();
     const url = `${PortfolioRepoManager.GITHUB_API_BASE}${path}`;
     
-    // COMPREHENSIVE DEBUG LOGGING: Track GitHub API requests
-    logger.debug('[BULK_SYNC_DEBUG] GitHub API Request Initiated', {
-      url: url,
-      method,
-      hasToken: !!token,
-      tokenPrefix: token ? token.substring(0, 10) + '...' : 'none',
-      bodyKeys: body ? Object.keys(body) : null,
-      timestamp: new Date().toISOString()
-    });
-    
     const options: RequestInit = {
       method,
       headers: {
@@ -126,22 +111,9 @@ export class PortfolioRepoManager {
 
     if (body) {
       options.body = JSON.stringify(body);
-      logger.debug('[BULK_SYNC_DEBUG] Request body prepared', {
-        bodySize: options.body.length,
-        bodyPreview: options.body.substring(0, 200)
-      });
     }
 
     const response = await fetch(url, options);
-    
-    // COMPREHENSIVE DEBUG LOGGING: Track GitHub API responses
-    logger.debug('[BULK_SYNC_DEBUG] GitHub API Response Received', {
-      status: response?.status || 'NO_RESPONSE',
-      statusText: response?.statusText || 'NO_STATUS_TEXT',
-      hasResponse: !!response,
-      headers: response ? Object.fromEntries(response.headers.entries()) : null,
-      timestamp: new Date().toISOString()
-    });
     
     // Check if response exists before accessing properties
     if (!response) {
@@ -152,22 +124,10 @@ export class PortfolioRepoManager {
     }
     
     if (response.status === 404) {
-      logger.debug('[BULK_SYNC_DEBUG] GitHub API returned 404 - resource not found', {
-        url: url,
-        method
-      });
       return null; // Not found is often expected
     }
 
     const data = await response.json();
-    
-    // COMPREHENSIVE DEBUG LOGGING: Track response data
-    logger.debug('[BULK_SYNC_DEBUG] GitHub API Response Data Parsed', {
-      hasData: !!data,
-      dataKeys: data ? Object.keys(data) : null,
-      dataSize: data ? JSON.stringify(data).length : 0,
-      timestamp: new Date().toISOString()
-    });
 
     if (!response.ok) {
       // Create error with status code attached for better classification
@@ -206,15 +166,6 @@ export class PortfolioRepoManager {
       error.code = errorCode;
       throw error;
     }
-
-    // COMPREHENSIVE DEBUG LOGGING: Successful response
-    logger.debug('[BULK_SYNC_DEBUG] GitHub API Request Successful', {
-      url: url,
-      method,
-      hasData: !!data,
-      dataIsNull: data === null,
-      timestamp: new Date().toISOString()
-    });
 
     return data;
   }

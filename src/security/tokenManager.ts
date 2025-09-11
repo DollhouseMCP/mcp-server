@@ -55,9 +55,6 @@ export class TokenManager {
   private static readonly SALT_LENGTH = 32;
   private static readonly ITERATIONS = 100000;
 
-  // INVESTIGATION: Global validation call counter
-  private static validationCallCount = 0;
-  
   // Rate limiter for token validation operations - prevents brute force attacks
   private static tokenValidationLimiter: RateLimiter | null = null;
 
@@ -191,36 +188,6 @@ export class TokenManager {
     token: string, 
     requiredScopes: TokenScopes
   ): Promise<TokenValidationResult> {
-    // INVESTIGATION: Increment and log call count
-    this.validationCallCount++;
-    console.error(`🔬 [INVESTIGATION] TokenManager.validateTokenScopes() called #${this.validationCallCount}`);
-    console.error(`🔬 [ENV_CHECK] SKIP_TOKEN_VALIDATION: "${process.env.SKIP_TOKEN_VALIDATION}"`);
-    console.error(`🔬 [ENV_CHECK] NODE_ENV: "${process.env.NODE_ENV}"`);
-    console.error(`🔬 [ENV_CHECK] TEST_MODE: "${process.env.TEST_MODE}"`);
-    console.error(`🔬 [PROCESS] PID: ${process.pid}`);
-    console.error(`🔬 [PROCESS] Command: ${process.argv.join(' ')}`);
-    console.error(`🔬 [CALLER] Stack: ${new Error().stack?.split('\n')[2]?.trim()}`);
-
-    // RATE LIMIT FIX: Global bypass for token validation to prevent GitHub rate limits
-    // This is safe because tokens come from GitHub OAuth/CLI auth and are inherently valid
-    if (process.env.SKIP_TOKEN_VALIDATION === 'true' || process.env.NODE_ENV === 'test') {
-      console.error(`🚨 [BYPASS_ACTIVE] Token validation bypassed!`);
-      logger.debug('[RATE_LIMIT_FIX] Bypassing token validation globally', {
-        reason: process.env.SKIP_TOKEN_VALIDATION === 'true' ? 'env_variable' : 'test_mode',
-        tokenPrefix: token?.substring(0, 10) + '...'
-      });
-      return {
-        isValid: true,
-        scopes: requiredScopes.required || ['repo'],
-        rateLimit: { 
-          remaining: 5000, 
-          resetTime: new Date(Date.now() + 60 * 60 * 1000) 
-        }
-      };
-    } else {
-      console.error(`❌ [BYPASS_INACTIVE] Environment check failed - validation will proceed`);
-    }
-
     // Validate token format before consuming rate limit
     if (!this.validateTokenFormat(token)) {
       return {
