@@ -53,10 +53,47 @@
  */
 
 import { spawn } from 'child_process';
+import { writeFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
 
 // Timestamp function
 function getTimestamp() {
   return `[${new Date().toISOString()}]`;
+}
+
+// Results file setup
+const resultsDir = join(process.cwd(), 'test-results');
+if (!existsSync(resultsDir)) {
+  mkdirSync(resultsDir, { recursive: true });
+}
+const resultsFile = join(resultsDir, `test-element-lifecycle-${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+
+// Initialize results file
+writeFileSync(resultsFile, `# Test Element Lifecycle Results
+
+**Date**: ${new Date().toISOString()}
+**Test Script**: test-element-lifecycle.js
+**Repository**: ${process.env.TEST_GITHUB_REPO || 'dollhouse-test-portfolio'}
+
+## Configuration
+- Max Retries: ${process.env.MAX_RETRIES || 3}
+- Base Delay: ${process.env.BASE_DELAY || 5000}ms
+- Verbose: ${process.env.VERBOSE || 'false'}
+- Continue on Error: ${process.env.CONTINUE_ON_ERROR || 'false'}
+- Skip Phases: ${process.env.SKIP_PHASES || 'none'}
+
+## Test Execution Log
+
+`);
+
+// Helper to write to both console and file
+function logResult(message, isError = false) {
+  if (isError) {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
+  appendFileSync(resultsFile, message + '\n');
 }
 
 // Test phases
@@ -241,27 +278,29 @@ const CONFIG = {
   continueOnError: process.env.CONTINUE_ON_ERROR === 'true'
 };
 
-console.log(`${getTimestamp()} 🧪 Starting Element Lifecycle Test`);
-console.log('━'.repeat(60));
+logResult(`${getTimestamp()} 🧪 Starting Element Lifecycle Test`);
+logResult('━'.repeat(60));
+logResult(`Results will be saved to: ${resultsFile}`);
+logResult('');
 
 // Check for GitHub token (using GITHUB_TEST_TOKEN for testing)
 const ghToken = process.env.GITHUB_TEST_TOKEN || process.env.TEST_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
 if (!ghToken) {
-  console.error(`${getTimestamp()} ❌ GITHUB_TEST_TOKEN environment variable not set`);
-  console.error(`${getTimestamp()} ℹ️  Set it with: export GITHUB_TEST_TOKEN=your-personal-access-token`);
-  console.error(`${getTimestamp()} ℹ️  Or use: GITHUB_TEST_TOKEN=ghp_xxx node test-element-lifecycle.js`);
+  logResult(`${getTimestamp()} ❌ GITHUB_TEST_TOKEN environment variable not set`, true);
+  logResult(`${getTimestamp()} ℹ️  Set it with: export GITHUB_TEST_TOKEN=your-personal-access-token`, true);
+  logResult(`${getTimestamp()} ℹ️  Or use: GITHUB_TEST_TOKEN=ghp_xxx node test-element-lifecycle.js`, true);
   process.exit(1);
 }
 
-console.log(`${getTimestamp()} ✅ GitHub token detected`);
+logResult(`${getTimestamp()} ✅ GitHub token detected`);
 
 // Configuration display
 if (CONFIG.verbose) {
-  console.log(`${getTimestamp()} 📋 Configuration:`);
-  console.log(`${getTimestamp()}    Max retries: ${CONFIG.maxRetries}`);
-  console.log(`${getTimestamp()}    Base delay: ${CONFIG.baseDelay}ms`);
-  console.log(`${getTimestamp()}    Skip phases: ${CONFIG.skipPhases.length ? CONFIG.skipPhases.join(', ') : 'none'}`);
-  console.log(`${getTimestamp()}    Continue on error: ${CONFIG.continueOnError}`);
+  logResult(`${getTimestamp()} 📋 Configuration:`);
+  logResult(`${getTimestamp()}    Max retries: ${CONFIG.maxRetries}`);
+  logResult(`${getTimestamp()}    Base delay: ${CONFIG.baseDelay}ms`);
+  logResult(`${getTimestamp()}    Skip phases: ${CONFIG.skipPhases.length ? CONFIG.skipPhases.join(', ') : 'none'}`);
+  logResult(`${getTimestamp()}    Continue on error: ${CONFIG.continueOnError}`);
 }
 
 // Start Docker container
@@ -285,6 +324,7 @@ let currentPhase = 0;
 let testResults = {};
 let retryCount = {};
 let phaseStartTime = {};
+const testStartTime = Date.now();
 
 docker.stdout.on('data', (data) => {
   responseBuffer += data.toString();
@@ -365,25 +405,25 @@ async function handleResponse(response) {
   
   // Check for success and move to next phase
   if (response.result || response.id === 1) {
-    console.log(`${getTimestamp()} ✅ ${phase.name} completed\n`);
+    logResult(`${getTimestamp()} ✅ ${phase.name} completed\n`);
     retryCount[phase.name] = 0; // Reset retry count on success
     
     // Special checks
     if (phase.name === "Edit Debug Detective" && response.result) {
-      console.log(`${getTimestamp()} ℹ️  Modification confirmed`);
+      logResult(`${getTimestamp()} ℹ️  Modification confirmed`);
     }
     if (phase.name === "Push to GitHub Portfolio" && response.result) {
       const content = response.result.content?.[0]?.text || '';
       if (content.includes("pushed") || content.includes("synced")) {
-        console.log(`${getTimestamp()} ℹ️  Elements pushed to GitHub portfolio`);
+        logResult(`${getTimestamp()} ℹ️  Elements pushed to GitHub portfolio`);
       } else if (content.includes("failed") || content.includes("error")) {
-        console.log(`${getTimestamp()} ⚠️  Some elements may have failed to sync`);
+        logResult(`${getTimestamp()} ⚠️  Some elements may have failed to sync`);
       }
     }
     if (phase.name === "Verify Restoration" && response.result) {
       const content = response.result.content?.[0]?.text || '';
       if (content.includes("MODIFIED:")) {
-        console.log(`${getTimestamp()} ✅✅ MODIFICATION PERSISTED THROUGH GITHUB!`);
+        logResult(`${getTimestamp()} ✅✅ MODIFICATION PERSISTED THROUGH GITHUB!`);
       }
     }
     
@@ -439,24 +479,58 @@ function sendNextPhase() {
     docker.stdin.write(JSON.stringify(phase.request) + '\n');
     currentPhase++;
   } else {
-    console.log(`\n${getTimestamp()} ✅ All test phases completed`);
+    logResult(`\n${getTimestamp()} ✅ All test phases completed`);
     
     // Print summary
-    console.log(`\n${getTimestamp()} 📊 Test Summary:`);
+    logResult(`\n${getTimestamp()} 📊 Test Summary:`);
     let successCount = 0;
     let failureCount = 0;
+    let skippedCount = CONFIG.skipPhases.length;
+    
+    // Add summary section to results file
+    appendFileSync(resultsFile, '\n## Test Results Summary\n\n');
+    appendFileSync(resultsFile, '| Phase | Status | Details |\n');
+    appendFileSync(resultsFile, '|-------|--------|----------|\n');
     
     for (const [phaseName, result] of Object.entries(testResults)) {
       if (result.result || result.id === 1) {
-        console.log(`${getTimestamp()}    ✅ ${phaseName}`);
+        logResult(`${getTimestamp()}    ✅ ${phaseName}`);
+        appendFileSync(resultsFile, `| ${phaseName} | ✅ Success | Completed successfully |\n`);
         successCount++;
       } else if (result.error) {
-        console.log(`${getTimestamp()}    ❌ ${phaseName}: ${result.error.message}`);
+        logResult(`${getTimestamp()}    ❌ ${phaseName}: ${result.error.message}`);
+        appendFileSync(resultsFile, `| ${phaseName} | ❌ Failed | ${result.error.message} |\n`);
         failureCount++;
       }
     }
     
-    console.log(`${getTimestamp()} 📈 Success rate: ${successCount}/${successCount + failureCount} (${Math.round(successCount / (successCount + failureCount) * 100)}%)`);
+    // Add skipped phases to report
+    if (CONFIG.skipPhases.length > 0) {
+      appendFileSync(resultsFile, `\n### Skipped Phases\n`);
+      CONFIG.skipPhases.forEach(phase => {
+        appendFileSync(resultsFile, `- Phase ${phase}: ${testPhases[phase - 1]?.name || 'Unknown'}\n`);
+      });
+    }
+    
+    const totalPhases = successCount + failureCount + skippedCount;
+    const successRate = Math.round(successCount / (successCount + failureCount) * 100);
+    
+    logResult(`${getTimestamp()} 📈 Success rate: ${successCount}/${successCount + failureCount} (${successRate}%)`);
+    if (skippedCount > 0) {
+      logResult(`${getTimestamp()} ⏭️  Skipped: ${skippedCount} phases`);
+    }
+    
+    // Add final statistics to results file
+    appendFileSync(resultsFile, `\n## Final Statistics\n\n`);
+    appendFileSync(resultsFile, `- **Total Phases**: ${totalPhases}\n`);
+    appendFileSync(resultsFile, `- **Successful**: ${successCount}\n`);
+    appendFileSync(resultsFile, `- **Failed**: ${failureCount}\n`);
+    appendFileSync(resultsFile, `- **Skipped**: ${skippedCount}\n`);
+    appendFileSync(resultsFile, `- **Success Rate**: ${successRate}%\n`);
+    appendFileSync(resultsFile, `- **Test Duration**: ${((Date.now() - testStartTime) / 1000).toFixed(2)}s\n`);
+    appendFileSync(resultsFile, `\n---\n*Test completed at ${new Date().toISOString()}*\n`);
+    
+    logResult(`\n📄 Results saved to: ${resultsFile}`);
     
     setTimeout(() => {
       docker.kill();
