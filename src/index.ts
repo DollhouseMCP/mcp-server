@@ -4897,13 +4897,10 @@ Placeholders for custom format:
         };
       }
 
-      if (options.direction === 'pull') {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⚠️ Pull sync is coming soon. Currently only push sync is supported.`
-          }]
-        };
+      if (options.direction === 'pull' || options.direction === 'both') {
+        const { PortfolioPullHandler } = await import('./handlers/PortfolioPullHandler.js');
+        const handler = new PortfolioPullHandler();
+        return handler.executePull(options, this.getPersonaIndicator());
       }
 
       return {

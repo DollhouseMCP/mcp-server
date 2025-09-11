@@ -121,7 +121,7 @@ const testPhases = [
     }
   },
   {
-    name: "Sync from GitHub",
+    name: "Sync from GitHub (Pull)",
     request: {
       jsonrpc: "2.0",
       method: "tools/call",
@@ -129,6 +129,7 @@ const testPhases = [
         name: "sync_portfolio",
         arguments: {
           direction: "pull",
+          mode: "additive",
           force: false,
           dryRun: false
         }
