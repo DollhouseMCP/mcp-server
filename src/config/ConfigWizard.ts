@@ -13,6 +13,7 @@ import * as readline from 'readline';
 import { ConfigManager } from './ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import chalk from 'chalk';
+import { getPortfolioRepositoryName } from './portfolioConfig.js';
 
 const WIZARD_VERSION = '1.0.0';
 
@@ -359,7 +360,8 @@ export class ConfigWizard {
     }
 
     // GitHub
-    if (config.github.portfolio.repository_name !== 'dollhouse-portfolio') {
+    const defaultRepoName = getPortfolioRepositoryName();
+    if (config.github.portfolio.repository_name !== defaultRepoName) {
       console.log(chalk.green('✓') + ` GitHub: ${config.github.portfolio.repository_name}`);
     }
 

@@ -11,6 +11,7 @@
 import { createHash } from 'crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
+import { getPortfolioRepositoryName } from '../../config/portfolioConfig.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
@@ -97,7 +98,7 @@ export class SubmitToPortfolioTool {
     // Previously: constructor(apiCache: any)
     // Now: constructor(apiCache: APICache) with proper import
     this.authManager = new GitHubAuthManager(apiCache);
-    this.portfolioManager = new PortfolioRepoManager();
+    this.portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
   }
 
   /**
@@ -1262,7 +1263,7 @@ export class SubmitToPortfolioTool {
     localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
     // DUPLICATE DETECTION: Check if content already exists in portfolio
-    const repoFullName = `${authStatus.username}/dollhouse-portfolio`;
+    const repoFullName = `${authStatus.username}/${this.portfolioManager.getRepositoryName()}`;
     const filePath = `${elementType}/${safeName}.md`;
     
     // Prepare the full content that would be saved

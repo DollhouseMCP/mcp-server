@@ -34,6 +34,18 @@ const testPhases = [
     }
   },
   {
+    name: "Check GitHub Auth",
+    request: {
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        name: "check_github_auth",
+        arguments: {}
+      },
+      id: 2
+    }
+  },
+  {
     name: "Browse Collection",
     request: {
       jsonrpc: "2.0",
@@ -42,7 +54,7 @@ const testPhases = [
         name: "browse_collection",
         arguments: { section: "library", type: "personas" }
       },
-      id: 2
+      id: 3
     }
   },
   {
@@ -54,7 +66,7 @@ const testPhases = [
         name: "install_collection_content",
         arguments: { path: "library/personas/debug-detective.md" }
       },
-      id: 3
+      id: 4
     }
   },
   {
@@ -66,7 +78,7 @@ const testPhases = [
         name: "list_elements",
         arguments: { type: "personas" }
       },
-      id: 4
+      id: 5
     }
   },
   {
@@ -83,19 +95,38 @@ const testPhases = [
           value: "MODIFIED: Enhanced debugging expert with integration test modifications"
         }
       },
-      id: 5
+      id: 6
     }
   },
   {
-    name: "Submit to GitHub Portfolio",
+    name: "Initialize GitHub Portfolio",
     request: {
       jsonrpc: "2.0",
       method: "tools/call",
       params: {
-        name: "submit_collection_content",
-        arguments: { content: "debug-detective" }
+        name: "init_portfolio",
+        arguments: {
+          repository_name: "dollhouse-test-portfolio",
+          private: false,
+          description: "Test portfolio for DollhouseMCP integration testing"
+        }
       },
-      id: 6
+      id: 7
+    }
+  },
+  {
+    name: "Push to GitHub Portfolio",
+    request: {
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        name: "sync_portfolio",
+        arguments: {
+          direction: "push",
+          dryRun: false
+        }
+      },
+      id: 8
     }
   },
   {
@@ -111,7 +142,7 @@ const testPhases = [
           deleteData: true
         }
       },
-      id: 7
+      id: 9
     }
   },
   {
@@ -123,7 +154,7 @@ const testPhases = [
         name: "list_elements",
         arguments: { type: "personas" }
       },
-      id: 8
+      id: 10
     }
   },
   {
@@ -140,7 +171,7 @@ const testPhases = [
           dryRun: false
         }
       },
-      id: 9
+      id: 11
     }
   },
   {
@@ -155,7 +186,7 @@ const testPhases = [
           type: "personas"
         }
       },
-      id: 10
+      id: 12
     }
   }
 ];
@@ -232,6 +263,12 @@ function handleResponse(response) {
     // Special checks
     if (phase.name === "Edit Debug Detective" && response.result) {
       console.log(`${getTimestamp()} ℹ️  Modification confirmed`);
+    }
+    if (phase.name === "Push to GitHub Portfolio" && response.result) {
+      const content = response.result.content?.[0]?.text || '';
+      if (content.includes("pushed")) {
+        console.log(`${getTimestamp()} ℹ️  Elements pushed to GitHub portfolio`);
+      }
     }
     if (phase.name === "Verify Restoration" && response.result) {
       const content = response.result.content?.[0]?.text || '';

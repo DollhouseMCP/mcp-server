@@ -4380,14 +4380,15 @@ Placeholders for custom format:
 
       // Check if portfolio exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       const portfolioExists = await portfolioManager.checkPortfolioExists(targetUsername);
 
       let statusText = `${this.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
 
       if (portfolioExists) {
-        statusText += `✅ **Repository**: dollhouse-portfolio exists\n`;
-        statusText += `🔗 **URL**: https://github.com/${targetUsername}/dollhouse-portfolio\n\n`;
+        statusText += `✅ **Repository**: ${portfolioManager.getRepositoryName()} exists\n`;
+        statusText += `🔗 **URL**: https://github.com/${targetUsername}/${portfolioManager.getRepositoryName()}\n\n`;
         
         // Get local elements count
         const localPortfolioManager = PortfolioManager.getInstance();
@@ -4474,14 +4475,15 @@ Placeholders for custom format:
 
       // Check if portfolio already exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       const portfolioExists = await portfolioManager.checkPortfolioExists(username);
 
       if (portfolioExists) {
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/dollhouse-portfolio\n\nUse portfolio_status to see details or sync_portfolio to update it.`
+            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\nUse portfolio_status to see details or sync_portfolio to update it.`
           }]
         };
       }
@@ -4493,7 +4495,7 @@ Placeholders for custom format:
         content: [{
           type: "text",
           text: `${this.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
-                `✅ **Repository**: https://github.com/${username}/dollhouse-portfolio\n` +
+                `✅ **Repository**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n` +
                 `📁 **Structure**: Organized folders for all element types\n` +
                 `📝 **README**: Usage instructions included\n` +
                 `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
@@ -4544,7 +4546,8 @@ Placeholders for custom format:
       // Show current configuration
       statusText += `\n📋 **Current Settings**:\n`;
       statusText += `  • Auto-submit: Disabled (Coming soon)\n`;
-      statusText += `  • Repository name: dollhouse-portfolio (default)\n`;
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      statusText += `  • Repository name: ${getPortfolioRepositoryName()}\n`;
       statusText += `  • Default visibility: public\n`;
 
       return {
@@ -4598,7 +4601,8 @@ Placeholders for custom format:
 
       // Check if portfolio exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       
       // CRITICAL FIX: Set GitHub token like submit_collection_content does
       // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
@@ -4623,7 +4627,7 @@ Placeholders for custom format:
             text: `${this.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
                   `🏠 **Quick Setup**:\n` +
                   `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
-                  `2. This creates: https://github.com/[username]/dollhouse-portfolio\n\n` +
+                  `2. This creates: https://github.com/[username]/${portfolioManager.getRepositoryName()}\n\n` +
                   `📝 **What you'll get**:\n` +
                   `• Public repository to showcase your AI elements\n` +
                   `• Organized structure for personas, skills, templates, and agents\n` +
@@ -4668,7 +4672,7 @@ Placeholders for custom format:
           dryRunText += `\n`;
         }
         
-        dryRunText += `🎯 **Target**: https://github.com/${username}/dollhouse-portfolio\n`;
+        dryRunText += `🎯 **Target**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
         dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
 
         return {
@@ -4806,7 +4810,7 @@ Placeholders for custom format:
         
         syncText += `${summaryIcon} **Sync Complete!**\n`;
         syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
-        syncText += `🏠 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        syncText += `🏠 **Portfolio**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\n`;
         
         // Include failed elements information with actionable suggestions
         if (failedElements.length > 0) {
@@ -4882,7 +4886,7 @@ Placeholders for custom format:
         // UX IMPROVEMENT: Add next steps and helpful links
         if (syncCount > 0) {
           syncText += `🚀 **Next Steps**:\n`;
-          syncText += `  • View your portfolio: https://github.com/${username}/dollhouse-portfolio\n`;
+          syncText += `  • View your portfolio: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
           syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
           syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
         }

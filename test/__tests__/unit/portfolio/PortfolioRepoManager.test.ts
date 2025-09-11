@@ -21,9 +21,12 @@ global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 describe('PortfolioRepoManager', () => {
   let manager: PortfolioRepoManager;
   let mockFetch: jest.MockedFunction<typeof fetch>;
+  const originalTestRepo = process.env.TEST_GITHUB_REPO;
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Clear test repo env var for clean test state
+    delete process.env.TEST_GITHUB_REPO;
     
     // Mock TokenManager
     const { TokenManager } = await import('../../../../src/security/tokenManager.js');
@@ -48,6 +51,61 @@ describe('PortfolioRepoManager', () => {
     mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
     
     manager = new PortfolioRepoManager();
+  });
+
+  afterEach(() => {
+    // Restore original env var after each test
+    if (originalTestRepo !== undefined) {
+      process.env.TEST_GITHUB_REPO = originalTestRepo;
+    } else {
+      delete process.env.TEST_GITHUB_REPO;
+    }
+  });
+
+  describe('repository name configuration', () => {
+    it('should use provided repository name parameter', () => {
+      const customManager = new PortfolioRepoManager('custom-portfolio');
+      expect(customManager.getRepositoryName()).toBe('custom-portfolio');
+    });
+
+    it('should fall back to TEST_GITHUB_REPO when no parameter provided', () => {
+      process.env.TEST_GITHUB_REPO = 'env-portfolio';
+      const envManager = new PortfolioRepoManager();
+      expect(envManager.getRepositoryName()).toBe('env-portfolio');
+    });
+
+    it('should fall back to default when no parameter and no env var', () => {
+      delete process.env.TEST_GITHUB_REPO;
+      const defaultManager = new PortfolioRepoManager();
+      expect(defaultManager.getRepositoryName()).toBe('dollhouse-portfolio');
+    });
+
+    it('should prioritize constructor parameter over env var', () => {
+      process.env.TEST_GITHUB_REPO = 'env-portfolio';
+      const paramManager = new PortfolioRepoManager('param-portfolio');
+      expect(paramManager.getRepositoryName()).toBe('param-portfolio');
+    });
+
+    it('should use configured repository name in API calls', async () => {
+      const customManager = new PortfolioRepoManager('my-custom-repo');
+      const username = 'testuser';
+      
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          name: 'my-custom-repo',
+          owner: { login: username }
+        })
+      } as Response);
+
+      await customManager.checkPortfolioExists(username);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `https://api.github.com/repos/${username}/my-custom-repo`,
+        expect.any(Object)
+      );
+    });
   });
 
   describe('checkPortfolioExists', () => {

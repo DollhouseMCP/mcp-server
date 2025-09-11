@@ -109,7 +109,7 @@ export const friendlyNullValues: Record<string, string> = {
   'portfolio.sync_status.last_sync': '(never synced)',
   'portfolio.sync_status.last_push': '(never pushed)',
   'portfolio.sync_status.last_pull': '(never pulled)',
-  'portfolio.repository_name': '(using default: dollhouse-portfolio)',
+  'portfolio.repository_name': `(using default: ${process.env.TEST_GITHUB_REPO || 'dollhouse-portfolio'})`,
   
   // Collection submission
   'collection_submission.auto_submit': '(disabled)',
