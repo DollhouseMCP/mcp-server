@@ -15,6 +15,7 @@ env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
   TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+  TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 
 jobs:
   extended-compatibility:

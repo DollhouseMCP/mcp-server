@@ -90,6 +90,16 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
       const urlString = url.toString();
       console.log(`\n🌐 API Call: ${options?.method || 'GET'} ${urlString}`);
       
+      // Mock get authenticated user (needed after Issue #913 fix)
+      if (urlString.includes('/user')) {
+        console.log('  ↳ Getting authenticated user...');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ login: 'testuser' })
+        } as Response;
+      }
+      
       // Check if file exists (should be 404 for new file)
       if (urlString.includes('/contents/') && !options?.method) {
         console.log('  ↳ Checking if test-ziggy.md already exists...');
@@ -211,6 +221,15 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
       const urlString = url.toString();
       const callDesc = `${options?.method || 'GET'} ${urlString}`;
       apiCalls.push(callDesc);
+      
+      // Mock get authenticated user (needed after Issue #913 fix)
+      if (urlString.includes('/user')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ login: 'testuser' })
+        } as Response;
+      }
       
       if (options?.method === 'PUT') {
         const body = JSON.parse(options?.body as string || '{}');

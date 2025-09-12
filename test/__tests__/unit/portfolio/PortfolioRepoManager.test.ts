@@ -265,14 +265,21 @@ describe('PortfolioRepoManager', () => {
       const expectedPath = 'personas/test-element.md';
       const commitUrl = 'https://github.com/testuser/dollhouse-portfolio/commit/abc123';
       
-      // First call: check if file exists (404 - doesn't exist)
+      // First call: get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
+      
+      // Second call: check if file exists (404 - doesn't exist)
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
         json: async () => ({ message: 'Not Found' })
       } as Response);
       
-      // Second call: create file
+      // Third call: create file
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 201,
@@ -320,6 +327,13 @@ describe('PortfolioRepoManager', () => {
         }
       };
       const consent = true;
+
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
 
       // Mock file doesn't exist
       mockFetch.mockResolvedValueOnce({
