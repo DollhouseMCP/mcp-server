@@ -28,13 +28,14 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
  * This helps maintain consistency while accepting flexible input formats
  * 
  * @param version - The version string to normalize
- * @returns Normalized version string in X.Y.Z format
+ * @returns Normalized version string in X.Y.Z format with leading zeros removed
  * 
  * @example
  * normalizeVersion("1")        // "1.0.0"
  * normalizeVersion("1.2")      // "1.2.0"
  * normalizeVersion("1.2.3")    // "1.2.3"
  * normalizeVersion("1.0-beta") // "1.0.0-beta"
+ * normalizeVersion("01.02.03") // "1.2.3" (strips leading zeros)
  */
 export function normalizeVersion(version: string): string {
   // Extract base version and any prerelease/build metadata
@@ -46,7 +47,13 @@ export function normalizeVersion(version: string): string {
   }
   
   const [, major, minor = '0', patch = '0', suffix = ''] = match;
-  return `${major}.${minor}.${patch}${suffix}`;
+  
+  // Strip leading zeros but preserve "0" as valid
+  const normalizedMajor = parseInt(major, 10).toString();
+  const normalizedMinor = parseInt(minor, 10).toString();
+  const normalizedPatch = parseInt(patch, 10).toString();
+  
+  return `${normalizedMajor}.${normalizedMinor}.${normalizedPatch}${suffix}`;
 }
 
 export abstract class BaseElement implements IElement {
@@ -156,12 +163,13 @@ export abstract class BaseElement implements IElement {
     // FIX for Issue #935: Allow flexible version formats like "1.0", "1.1", "2.0.0"
     // Previously: Strict semver regex requiring X.Y.Z format caused skills activation failures
     // Now: Accept common version patterns that LLMs and humans naturally use
+    // Note: Leading zeros are allowed (e.g., "01.02.03") but will be normalized to "1.2.3"
     // Security: No injection risk as version is just metadata, not executed
     const flexibleVersionRegex = /^\d+(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/;
     if (!flexibleVersionRegex.test(this.version)) {
       errors.push({ 
         field: 'version', 
-        message: 'Version must start with numbers in format: MAJOR[.MINOR][.PATCH][-PRERELEASE][+BUILD]. Valid examples: "1", "1.0", "1.0.0", "2.1", "1.0.0-beta", "1.0.0-alpha.1", "1.0.0+build123". The major version is required, minor and patch are optional.',
+        message: 'Version must start with numbers in format: MAJOR[.MINOR][.PATCH][-PRERELEASE][+BUILD]. Valid examples: "1", "1.0", "1.0.0", "2.1", "1.0.0-beta", "1.0.0-alpha.1", "1.0.0+build123". The major version is required, minor and patch are optional. Note: Leading zeros (e.g., "01.02") are accepted but will be normalized to "1.2".',
         code: 'INVALID_VERSION_FORMAT'
       });
     }

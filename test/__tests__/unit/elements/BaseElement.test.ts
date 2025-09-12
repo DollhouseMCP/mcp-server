@@ -42,6 +42,19 @@ describe('normalizeVersion', () => {
     expect(normalizeVersion('')).toBe('');
     expect(normalizeVersion('abc')).toBe('abc');
   });
+  
+  it('should strip leading zeros from version numbers', () => {
+    expect(normalizeVersion('01')).toBe('1.0.0');
+    expect(normalizeVersion('01.02')).toBe('1.2.0');
+    expect(normalizeVersion('01.02.03')).toBe('1.2.3');
+    expect(normalizeVersion('001.002.003')).toBe('1.2.3');
+    expect(normalizeVersion('0.0.1')).toBe('0.0.1');  // "0" is valid
+    expect(normalizeVersion('00.00.01')).toBe('0.0.1');
+    expect(normalizeVersion('1.01.0')).toBe('1.1.0');
+    expect(normalizeVersion('1.0.01')).toBe('1.0.1');
+    expect(normalizeVersion('01.02-beta')).toBe('1.2.0-beta');
+    expect(normalizeVersion('01.02.03+build')).toBe('1.2.3+build');
+  });
 });
 
 describe('BaseElement', () => {
