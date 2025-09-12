@@ -36,6 +36,13 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       const mockFetch = jest.fn<typeof fetch>();
       (global as any).fetch = mockFetch as any;
 
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
+
       // Mock checking if file exists (returns null for new file)
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -86,6 +93,13 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       const mockFetch = jest.fn<typeof fetch>();
       (global as any).fetch = mockFetch as any;
 
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
+
       // Mock checking if file exists
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -134,6 +148,13 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       const mockFetch = jest.fn<typeof fetch>();
       (global as any).fetch = mockFetch as any;
 
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
+
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -179,6 +200,13 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       
       const mockFetch = jest.fn<typeof fetch>();
       (global as any).fetch = mockFetch as any;
+
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -231,6 +259,15 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : (url as Request).url;
         apiCalls.push(`${options?.method || 'GET'} ${urlString}`);
         
+        // Mock get authenticated user (needed after Issue #913 fix)
+        if (urlString.includes('/user')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ login: 'testuser' })
+          } as Response;
+        }
+        
         if (options?.method === 'PUT') {
           return {
             ok: true,
@@ -275,7 +312,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       // Verify we didn't scan for other elements (no bulk sync behavior)
       // In bulk sync, we'd see multiple GET requests for different element types
       const getRequests = apiCalls.filter(call => call.startsWith('GET'));
-      expect(getRequests.length).toBeLessThanOrEqual(1); // Only checking if file exists
+      expect(getRequests.length).toBeLessThanOrEqual(2); // One for /user, one for checking if file exists
     });
 
     it('simulates real user flow: upload Ziggy persona to personal GitHub portfolio', async () => {
@@ -295,6 +332,17 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       const uploadedElements: string[] = [];
       
       mockFetch.mockImplementation(async (url: RequestInfo | URL, options?: RequestInit) => {
+        const urlString = typeof url === 'string' ? url : url instanceof URL ? url.toString() : (url as Request).url;
+        
+        // Mock get authenticated user (needed after Issue #913 fix)
+        if (urlString.includes('/user')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ login: 'testuser' })
+          } as Response;
+        }
+        
         if (options?.method === 'PUT') {
           const body = JSON.parse(options.body as string);
           const content = atob(body.content);
@@ -389,7 +437,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
 
       await expect(portfolioManager.saveElement(testElement, true))
         .rejects
-        .toThrow('[PORTFOLIO_SYNC_001]');
+        .toThrow('GitHub authentication failed');
     });
 
     it('should return PORTFOLIO_SYNC_006 for rate limit errors', async () => {
@@ -397,6 +445,13 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
       
       const mockFetch = jest.fn<typeof fetch>();
       (global as any).fetch = mockFetch as any;
+
+      // Mock get authenticated user (needed after Issue #913 fix)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ login: 'testuser' })
+      } as Response);
 
       mockFetch.mockResolvedValueOnce({
         ok: false,
