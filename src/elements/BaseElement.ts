@@ -126,12 +126,16 @@ export abstract class BaseElement implements IElement {
       });
     }
     
-    // Validate version format (semver)
-    const semverRegex = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/;
-    if (!semverRegex.test(this.version)) {
+    // Validate version format - more flexible to support LLM-generated content
+    // FIX for Issue #935: Allow flexible version formats like "1.0", "1.1", "2.0.0"
+    // Previously: Strict semver regex requiring X.Y.Z format caused skills activation failures
+    // Now: Accept common version patterns that LLMs and humans naturally use
+    // Security: No injection risk as version is just metadata, not executed
+    const flexibleVersionRegex = /^\d+(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/;
+    if (!flexibleVersionRegex.test(this.version)) {
       errors.push({ 
         field: 'version', 
-        message: 'Version must follow semantic versioning (e.g., 1.0.0)',
+        message: 'Version must start with numbers in format: MAJOR[.MINOR][.PATCH][-PRERELEASE][+BUILD]. Valid examples: "1", "1.0", "1.0.0", "2.1", "1.0.0-beta", "1.0.0-alpha.1", "1.0.0+build123". The major version is required, minor and patch are optional.',
         code: 'INVALID_VERSION_FORMAT'
       });
     }
