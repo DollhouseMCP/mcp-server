@@ -131,12 +131,17 @@ export class PortfolioRepoManager {
     if (!response.ok) {
       // Try to parse error details if response is JSON
       let data: any = {};
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
+      // HTTP headers are case-insensitive, check both cases for robustness
+      const contentType = response.headers.get('content-type') || response.headers.get('Content-Type');
+      if (contentType && contentType.toLowerCase().includes('application/json')) {
         try {
           data = await response.json();
-        } catch {
-          // If JSON parsing fails, data remains empty object
+        } catch (jsonError) {
+          // JSON parsing failed for error response - continue with empty data
+          // This can happen if GitHub returns malformed JSON or content-type mismatch
+          if (process.env.DEBUG) {
+            console.debug('Failed to parse JSON error response:', jsonError);
+          }
         }
       }
 
