@@ -842,6 +842,95 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
+### v1.8.1 - September 15, 2025
+
+**CI Reliability Improvements**: Fixed persistent test failures across platforms
+
+#### 🔧 Bug Fixes
+- **GitHub API 409 Conflicts**: Enhanced retry mechanism with jitter for parallel CI jobs
+- **Windows Performance Tests**: Platform-specific timing thresholds for CI environments
+- **Test Stability**: Resolved flaky tests in Extended Node Compatibility workflow
+
+---
+
+### v1.8.0 - September 15, 2025
+
+**Major Portfolio System Enhancements**: Full GitHub portfolio synchronization
+
+#### ✨ New Features
+- **Portfolio Sync**: Complete bidirectional sync with GitHub portfolios
+- **Pull Functionality**: Download elements from GitHub portfolios (3 sync modes)
+- **Configurable Repos**: Portfolio repository names now configurable
+- **Configuration Wizard**: Now manual-only (removed auto-trigger for better UX)
+
+#### 🔧 Improvements
+- **Tool Clarity**: Renamed conflicting tools for better user experience
+- **Rate Limiting**: Fixed redundant token validation causing API limits
+- **GitHub Integration**: Comprehensive repository management
+
+---
+
+### v1.7.4 - September 12, 2025
+
+**Hotfix Release**: Critical build and registration fixes
+
+#### 🔧 Bug Fixes
+- **Build Infrastructure**: Fixed missing TypeScript files in dist
+- **Tool Registration**: Resolved MCP tool availability issues
+- **Skill System**: Fixed skill registration and activation
+- **Test Framework**: Restored test infrastructure functionality
+
+---
+
+### v1.7.3 - September 9, 2025
+
+**Security & Configuration Release**: Prototype pollution protection and config management
+
+#### 🛡️ Security
+- **Prototype Pollution Protection**: Comprehensive validation against injection attacks
+- **YAML Security**: Maintained FAILSAFE_SCHEMA with security documentation
+- **Security Audit**: Achieved 0 security findings across all severity levels
+
+#### ✨ Improvements
+- **Configuration Management**: Complete overhaul with atomic operations
+- **Test Coverage**: Comprehensive security and configuration tests
+- **Input Normalization**: All inputs normalized at MCP request layer
+
+---
+
+### v1.7.2 - September 7, 2025
+
+**Security Patch Release**: Critical logging vulnerability fixes
+
+#### 🛡️ Security Fixes
+- **Clear-text Logging Prevention**: Comprehensive sanitization of sensitive data
+- **OAuth Token Protection**: Prevents exposure of tokens in console output
+- **API Key Sanitization**: Masks all credentials before logging
+
+---
+
+### v1.7.1 - September 3, 2025
+
+**Maintenance Release**: Documentation and compatibility improvements
+
+#### 🔧 Improvements
+- **Documentation**: Updated for better clarity and accuracy
+- **Compatibility**: Enhanced cross-platform support
+- **Bug Fixes**: Various minor fixes and optimizations
+
+---
+
+### v1.7.0 - August 30, 2025
+
+**Major Feature Release**: Enhanced portfolio and collection systems
+
+#### ✨ New Features
+- **Portfolio Management**: Improved local portfolio organization
+- **Collection Integration**: Better integration with community collection
+- **Security Enhancements**: Critical security fixes from code review
+
+---
+
 ### v1.6.11 - August 28, 2025
 
 **Test Reliability & Collection Fixes**: Improved test suite stability and fixed collection system
