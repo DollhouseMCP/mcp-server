@@ -422,18 +422,36 @@ describe('PortfolioRepoManager', () => {
       expect(exists).toBe(false); // Should handle error gracefully
     });
 
-    // TODO: Fix Headers constructor issue in CI environment (Issue tracked)
-    // This test fails in CI because Headers constructor is undefined, but passes locally
-    it.skip('should provide helpful error messages for common failures', async () => {
+    it('should provide helpful error messages for common failures', async () => {
       // Arrange
       const username = 'testuser';
       const consent = true;
 
       // Mock fetch to simulate permission error when creating repo
+      // FIX: Use plain object instead of Headers constructor to ensure CI compatibility
+      // Headers constructor is undefined in GitHub Actions but available locally
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 403,
-        headers: new Headers({ 'content-type': 'application/json' }),
+        statusText: 'Forbidden',
+        redirected: false,
+        type: 'basic',
+        url: 'https://api.github.com/user/repos',
+        headers: {
+          get: (name: string) => name === 'content-type' ? 'application/json' : null,
+          has: (name: string) => name === 'content-type',
+          forEach: () => {},
+          keys: () => [][Symbol.iterator](),
+          values: () => [][Symbol.iterator](),
+          entries: () => [][Symbol.iterator]()
+        },
+        clone: () => Promise.resolve({} as Response),
+        body: null,
+        bodyUsed: false,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        blob: () => Promise.resolve(new Blob()),
+        formData: () => Promise.resolve(new FormData()),
+        text: () => Promise.resolve('{"message":"Repository creation failed: insufficient permissions"}'),
         json: async () => ({
           message: 'Repository creation failed: insufficient permissions'
         })
