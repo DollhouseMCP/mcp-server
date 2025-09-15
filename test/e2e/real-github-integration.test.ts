@@ -82,7 +82,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const uploadResult = await retryIfRetryable(
         async () => await portfolioManager.saveElement(ziggyPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );
@@ -158,7 +158,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const result = await retryIfRetryable(
         async () => await portfolioManager.saveElement(testPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );
@@ -252,7 +252,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const result = await retryIfRetryable(
         async () => await portfolioManager.saveElement(testPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );
@@ -292,7 +292,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const result = await retryIfRetryable(
         async () => await portfolioManager.saveElement(publicPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );
@@ -346,7 +346,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const result = await retryIfRetryable(
         async () => await portfolioManager.saveElement(testPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );
@@ -406,7 +406,7 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       const uploadUrl = await retryIfRetryable(
         async () => await portfolioManager.saveElement(ziggyPersona, true),
         {
-          maxAttempts: 3,
+          maxAttempts: 5,  // Increased from 3 to handle aggressive CI concurrency
           onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
         }
       );

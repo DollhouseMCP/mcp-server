@@ -42,9 +42,11 @@ export async function retryWithBackoff<T>(
         throw lastError;
       }
 
-      // Calculate next delay with exponential backoff
-      const currentDelay = Math.min(delayMs, maxDelayMs);
-      
+      // Calculate next delay with exponential backoff and jitter
+      // Add 20% jitter to help prevent thundering herd in CI
+      const jitterFactor = 0.8 + Math.random() * 0.4; // 80% to 120% of delay
+      const currentDelay = Math.min(Math.floor(delayMs * jitterFactor), maxDelayMs);
+
       if (onRetry) {
         onRetry(attempt, lastError, currentDelay);
       }
