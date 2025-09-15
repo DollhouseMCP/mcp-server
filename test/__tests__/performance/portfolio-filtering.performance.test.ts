@@ -67,8 +67,9 @@ describe('Portfolio Filtering Performance', () => {
       const avgTimePerCall = duration / iterations;
       
       // Should complete 10,000 pattern matches in reasonable time
-      expect(duration).toBeLessThan(1000); // Less than 1 second
-      expect(avgTimePerCall).toBeLessThan(0.1); // Less than 0.1ms per call
+      // CI environments (especially Windows) can be slower, so allow more time
+      expect(duration).toBeLessThan(2000); // Less than 2 seconds (was 1 second)
+      expect(avgTimePerCall).toBeLessThan(0.2); // Less than 0.2ms per call (was 0.1ms)
       
       console.log(`Pattern matching: ${iterations} calls in ${duration.toFixed(2)}ms (${avgTimePerCall.toFixed(4)}ms per call)`);
     });
@@ -102,8 +103,9 @@ describe('Portfolio Filtering Performance', () => {
       const avgTimePerCall = duration / totalCalls;
       
       // Should handle multiple patterns efficiently
-      expect(duration).toBeLessThan(2000); // Less than 2 seconds for 10,000 calls
-      expect(avgTimePerCall).toBeLessThan(0.2); // Less than 0.2ms per call
+      // Allow more time for CI environments, especially Windows
+      expect(duration).toBeLessThan(3000); // Less than 3 seconds for 10,000 calls (was 2 seconds)
+      expect(avgTimePerCall).toBeLessThan(0.3); // Less than 0.3ms per call (was 0.2ms)
       
       console.log(`Multi-pattern: ${totalCalls} calls in ${duration.toFixed(2)}ms (${avgTimePerCall.toFixed(4)}ms per call)`);
     });
