@@ -1,5 +1,123 @@
 # Changelog
 
+## [1.8.1] - 2025-09-15
+
+### Fixed
+- **Extended Node Compatibility**: Fixed Headers constructor undefined in CI environment
+  - Replaced Headers constructor with plain object mock to ensure cross-platform compatibility
+  - Previously failing test "should provide helpful error messages for common failures" now passes consistently
+  - Improves CI reliability for Extended Node Compatibility workflow
+- **Documentation**: Updated website URL to reflect live status (removed "(planned)" designation)
+  - Website https://dollhousemcp.com is now live and accessible
+  - Updated README chunks and regenerated documentation files
+
+### Improved
+- **CI Reliability**: Enhanced test infrastructure for better cross-platform compatibility
+- **Test Mocking**: Improved mock strategies to work in both local and CI environments
+
+## [1.8.0] - 2025-09-15
+
+### 🚨 Breaking Changes
+- **Configuration Wizard Auto-Trigger Removed**: The configuration wizard no longer appears automatically on first MCP interaction
+  - Different LLMs handled auto-insertion unpredictably, causing UX inconsistencies
+  - Migration: Wizard still available manually via `config` tool with `action: 'wizard'`
+
+### Added
+
+#### Major Portfolio System Enhancements
+- **Configurable Repository Names**: Portfolio repository names now configurable via `TEST_GITHUB_REPO` environment variable
+- **Full Portfolio Sync Functionality**: Complete bidirectional sync with GitHub portfolios
+  - `sync_portfolio pull` functionality for downloading elements from GitHub
+  - Three sync modes: additive (default), mirror, backup
+  - Dry-run mode with change preview
+  - Progress reporting and conflict resolution
+- **Portfolio Pull Handler**: New modular architecture for GitHub portfolio synchronization
+  - PortfolioPullHandler for orchestrating pull operations
+  - PortfolioSyncComparer for intelligent comparison logic
+  - PortfolioDownloader with Unicode normalization and batch processing
+- **Enhanced Tool Clarity**: Renamed conflicting tools for better user experience
+  - `install_content` → `install_collection_content` (install FROM collection)
+  - `submit_content` → `submit_collection_content` (submit TO collection)
+  - Maintained `sync_portfolio` for bulk operations
+
+#### GitHub Integration Improvements
+- **Portfolio Repository Management**: Comprehensive GitHub repository management
+  - Automated repository creation and initialization
+  - Smart conflict detection and resolution
+  - Authenticated username resolution for portfolio operations
+- **Rate Limiting Fixes**: Resolved bulk operation failures
+  - Fixed redundant token validation causing GitHub API rate limits
+  - Added tokenPreValidated flag to prevent validation on every API call
+  - Improved bulk sync success rate from 0% to functional operation
+- **Filename Transformation Fix**: Fixed critical portfolio sync issue
+  - Resolved mismatch between GitHub filenames and local processing
+  - Portfolio pull operations now correctly find and restore files
+  - Eliminated "No elements found in GitHub portfolio" errors
+
+#### Test Infrastructure & Environment
+- **Isolated Test Environment**: Dedicated test infrastructure with real GitHub integration
+  - Created dollhouse-test-portfolio repository for safe testing
+  - Docker Compose configuration for test environment
+  - Configurable test parameters via environment variables
+- **Enhanced Test Coverage**: Comprehensive unit tests for portfolio functionality
+  - PortfolioSyncComparer.test.ts (11 test suites, 15 tests)
+  - PortfolioDownloader.test.ts (5 test suites, 15 tests)
+  - Performance tests for large portfolios (1000+ elements)
+
+### Fixed
+
+#### Critical Portfolio Sync Issues
+- **Issue #930**: Portfolio sync pull failures resolved
+  - Fixed filename transformation mismatch preventing file restoration
+  - GitHub operations now use consistent filename format
+- **Issue #913**: Portfolio upload failures with null response errors
+  - Fixed IElement object incomplete method implementations
+  - Now uses PortfolioElementAdapter pattern for reliable uploads
+- **Issue #926**: Rate limiting issues in bulk operations
+  - Eliminated redundant token validation calls
+  - Batch processing with proper rate limiting
+
+#### GitHub Authentication & API
+- **JSON Parsing Error**: Fixed `Unexpected token 'U', "Unauthorized" is not valid JSON` error
+  - Added proper response status checking before JSON parsing
+  - Improved error messages for authentication failures
+- **User Authentication**: Fixed portfolio operations using incorrect usernames
+  - Now uses authenticated user's username instead of element author
+  - Prevents 404 errors in portfolio sync operations
+- **Token Management**: Enhanced GitHub token handling and validation
+
+#### Template System
+- **Issue #914**: Template variable interpolation completely broken
+  - Refactored template rendering to dedicated TemplateRenderer utility class
+  - Fixed variable substitution and validation
+  - Added comprehensive error handling and logging
+
+### Performance
+- **Portfolio Sync Optimization**: Significant performance improvements
+  - Batch index rebuilds (4x faster for large portfolios)
+  - Parallel downloads with rate limiting (up to 5x faster)
+  - Single index rebuild after all operations complete
+- **Test Coverage**: Maintained 97%+ test coverage across all changes
+- **CI Reliability**: Enhanced workflow consistency and eliminated flaky tests
+
+### Dependencies
+- **@modelcontextprotocol/sdk**: Updated to v1.18.0 (latest MCP protocol features)
+- **zod**: Updated to v4.1.8 (schema validation improvements)
+- **jsdom**: Updated to v27.0.0 (DOM testing environment enhancements)
+- **@types/node**: Updated to v24.4.0 (latest Node.js type definitions)
+
+### Security
+- **Input Validation**: Enhanced Unicode normalization to prevent homograph attacks
+- **Security Audit Logging**: Added comprehensive logging for portfolio operations
+- **Authentication**: Improved GitHub authentication flow reliability
+- **YAML Parsing Security**: Enhanced validation to prevent code injection
+
+### Developer Experience
+- **Tool Organization**: Organized 41 MCP tools into 6 logical categories
+- **Configuration Wizard**: Interactive setup for new installations
+- **Debug Infrastructure**: Enhanced logging and error tracking
+- **Documentation**: Comprehensive session notes and troubleshooting guides
+
 ## [1.7.3] - 2025-09-09
 
 ### Security
