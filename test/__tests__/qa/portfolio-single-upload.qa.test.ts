@@ -47,6 +47,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
+        headers: new Headers(),
         json: async () => null
       } as Response);
 
@@ -78,7 +79,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -104,6 +105,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
+        headers: new Headers(),
         json: async () => null
       } as Response);
 
@@ -131,7 +133,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -158,6 +160,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
+        headers: new Headers(),
         json: async () => null
       } as Response);
 
@@ -185,7 +188,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -211,6 +214,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
+        headers: new Headers(),
         json: async () => null
       } as Response);
 
@@ -235,7 +239,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -283,7 +287,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
             })
           } as Response;
         }
-        return { ok: false, status: 404, json: async () => null } as Response;
+        return { ok: false, status: 404, headers: new Headers(), json: async () => null } as Response;
       });
 
       const ziggyElement = {
@@ -297,7 +301,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => '# Ziggy\nYou are Ziggy from Quantum Leap.',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -362,7 +366,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
             })
           } as Response;
         }
-        return { ok: false, status: 404, json: async () => null } as Response;
+        return { ok: false, status: 404, headers: new Headers(), json: async () => null } as Response;
       });
 
       // User action: Upload ONLY Ziggy
@@ -384,7 +388,7 @@ description: A matter-of-fact, snarky AI assistant persona based on Quantum Leap
 # Ziggy - Quantum Leap Supercomputer Persona
 
 You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -415,6 +419,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401,
+        headers: new Headers({ 'content-type': 'application/json' }),
         json: async () => ({
           message: 'Bad credentials'
         })
@@ -431,7 +436,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
@@ -456,6 +461,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 404,
+        headers: new Headers(),
         json: async () => null
       } as Response);
 
@@ -463,6 +469,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 403,
+        headers: new Headers({ 'content-type': 'application/json' }),
         json: async () => ({
           message: 'API rate limit exceeded'
         })
@@ -479,7 +486,7 @@ You are Ziggy, a sophisticated hybrid supercomputer with a massive ego.`,
         },
         validate: () => ({ valid: true, errors: [] }),
         serialize: () => 'test content',
-        deserialize: (data: string) => {},
+        deserialize: (_data: string) => {},
         getStatus: () => 'inactive' as any
       };
 
