@@ -79,7 +79,13 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       
       // Step 2: Upload to GitHub via PortfolioRepoManager
       console.log('  2️⃣ Uploading to GitHub...');
-      const uploadResult = await portfolioManager.saveElement(ziggyPersona, true);
+      const uploadResult = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(ziggyPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
       
       expect(uploadResult).toBeTruthy();
       expect(uploadResult).toContain('github.com');
@@ -147,9 +153,15 @@ describe('Real GitHub Portfolio Integration Tests', () => {
         prefix: testEnv.personaPrefix,
         name: `${testEnv.personaPrefix}null-commit-test-${Date.now()}`
       });
-      
+
       console.log('  1️⃣ Uploading test persona...');
-      const result = await portfolioManager.saveElement(testPersona, true);
+      const result = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(testPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
       
       // Even with potential null commit, should return a valid URL
       expect(result).toBeTruthy();
@@ -237,7 +249,13 @@ describe('Real GitHub Portfolio Integration Tests', () => {
         prefix: testEnv.personaPrefix,
         name: `${testEnv.personaPrefix}rate-limit-test-${Date.now()}`
       });
-      const result = await portfolioManager.saveElement(testPersona, true);
+      const result = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(testPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
       
       expect(result).toBeTruthy();
       console.log('     ✅ Rate limit handling verified');
@@ -270,8 +288,14 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       // Upload only the public one
       const publicPersona = personas[0];
       console.log('  2️⃣ Uploading ONLY the public persona...');
-      
-      const result = await portfolioManager.saveElement(publicPersona, true);
+
+      const result = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(publicPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
       expect(result).toBeTruthy();
       
       // Use the actual generateFileName method for consistency
@@ -319,8 +343,14 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       });
       
       console.log('  1️⃣ Uploading test persona...');
-      const result = await portfolioManager.saveElement(testPersona, true);
-      
+      const result = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(testPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
+
       // Verify URL format
       expect(result).toMatch(/https:\/\/github\.com\/.+/);
       expect(result).not.toContain('undefined');
@@ -373,7 +403,13 @@ describe('Real GitHub Portfolio Integration Tests', () => {
       // Step 3: System uploads to GitHub
       console.log('\n  3️⃣ System uploading to GitHub...');
       const startTime = Date.now();
-      const uploadUrl = await portfolioManager.saveElement(ziggyPersona, true);
+      const uploadUrl = await retryIfRetryable(
+        async () => await portfolioManager.saveElement(ziggyPersona, true),
+        {
+          maxAttempts: 3,
+          onRetry: (attempt, error) => console.log(`     ↻ Retry ${attempt} due to: ${error.message}`)
+        }
+      );
       const uploadTime = Date.now() - startTime;
       
       expect(uploadUrl).toBeTruthy();

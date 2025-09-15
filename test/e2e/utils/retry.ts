@@ -80,6 +80,10 @@ export function isRetryableError(error: any): boolean {
     if (status === 429 || status === 502 || status === 503 || status === 504) {
       return true;
     }
+    // GitHub specific: 409 Conflict can happen in parallel CI runs when SHA changes
+    if (status === 409 && error.message?.includes('is at')) {
+      return true;
+    }
     // GitHub specific: 422 can sometimes be transient
     if (status === 422 && error.message?.includes('is at')) {
       return true;
