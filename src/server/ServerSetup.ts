@@ -19,12 +19,12 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ToolDiscoveryCache } from '../utils/ToolCache.js';
-import { ConfigWizardCheck } from '../config/ConfigWizardCheck.js';
+// ConfigWizardCheck import removed - auto-trigger disabled for v1.8.0
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
   private toolCache: ToolDiscoveryCache;
-  private wizardCheck?: ConfigWizardCheck;
+  // wizardCheck removed - auto-trigger disabled for v1.8.0
   
   constructor() {
     this.toolRegistry = new ToolRegistry();
@@ -34,8 +34,8 @@ export class ServerSetup {
   /**
    * Initialize the server with all tools and handlers
    */
-  setupServer(server: Server, instance: IToolHandler, wizardCheck?: ConfigWizardCheck): void {
-    this.wizardCheck = wizardCheck;
+  setupServer(server: Server, instance: IToolHandler): void {
+    // wizardCheck parameter removed - auto-trigger disabled for v1.8.0
     // Register all tools
     this.registerTools(instance);
     
@@ -140,20 +140,8 @@ export class ServerSetup {
         
         const response = await handler(normalizedArgs);
         
-        // Wrap response with wizard check on first interaction
-        // CRITICAL FIX: Add error boundary to prevent wizard errors from crashing tool requests
-        if (this.wizardCheck) {
-          try {
-            return await this.wizardCheck.wrapResponse(response);
-          } catch (wizardError) {
-            logger.warn('Failed to wrap response with wizard check', { 
-              error: wizardError,
-              tool: name 
-            });
-            // Fall back to original response if wizard fails
-            return response;
-          }
-        }
+        // Wizard auto-trigger removed for v1.8.0
+        // Manual wizard still available via config tool with action: 'wizard'
         
         return response;
       } catch (error) {
