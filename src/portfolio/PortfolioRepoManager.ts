@@ -127,13 +127,28 @@ export class PortfolioRepoManager {
       return null; // Not found is often expected
     }
 
-    const data = await response.json();
-
+    // Check if response is ok BEFORE trying to parse JSON
     if (!response.ok) {
+      // Try to parse error details if response is JSON
+      let data: any = {};
+      // HTTP headers are case-insensitive, check both cases for robustness
+      const contentType = response.headers.get('content-type') || response.headers.get('Content-Type');
+      if (contentType && contentType.toLowerCase().includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          // JSON parsing failed for error response - continue with empty data
+          // This can happen if GitHub returns malformed JSON or content-type mismatch
+          if (process.env.DEBUG) {
+            console.debug('Failed to parse JSON error response:', jsonError);
+          }
+        }
+      }
+
       // Create error with status code attached for better classification
       let errorMessage = data.message || `GitHub API error: ${response.status}`;
       let errorCode = 'PORTFOLIO_SYNC_005'; // Default
-      
+
       switch (response.status) {
         case 401:
           errorMessage = 'GitHub authentication failed. Please check your token.';
@@ -160,12 +175,15 @@ export class PortfolioRepoManager {
         default:
           errorMessage = `GitHub API error (${response.status}): ${data.message || 'Unknown error'}`;
       }
-      
+
       const error: any = new Error(errorMessage);
       error.status = response.status;
       error.code = errorCode;
       throw error;
     }
+
+    // Parse JSON only after we know response is ok
+    const data = await response.json();
 
     return data;
   }
