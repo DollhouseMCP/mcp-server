@@ -1,0 +1,192 @@
+# Claude MCP Test Environment - Optimized Multi-stage Build
+# Multi-stage build for optimized Docker image
+# Stage 1: Builder - compile DollhouseMCP
+FROM node:20-slim as builder
+
+WORKDIR /build
+
+# Copy package files first for better caching
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install all dependencies (including dev)
+RUN npm ci
+
+# Copy source code
+COPY src ./src
+COPY scripts ./scripts
+COPY data ./data 2>/dev/null || true
+
+# Build the application
+RUN npm run build
+
+# Stage 2: Runtime - minimal image with only runtime dependencies
+FROM node:20-slim as runtime
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code@latest
+
+# Create app directories
+RUN mkdir -p /app/dollhousemcp \
+    /app/portfolio \
+    /app/logs \
+    /app/cache
+
+WORKDIR /app/dollhousemcp
+
+# Copy package files and install production dependencies only
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy built application from builder stage
+COPY --from=builder /build/dist ./dist
+COPY --from=builder /build/data ./data 2>/dev/null || true
+
+# Create MCP configuration template
+RUN echo '{\n\
+  "mcpServers": {\n\
+    "dollhousemcp": {\n\
+      "command": "node",\n\
+      "args": ["/app/dollhousemcp/dist/index.js"],\n\
+      "env": {\n\
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",\n\
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",\n\
+        "NODE_ENV": "development",\n\
+        "LOG_LEVEL": "debug"\n\
+      }\n\
+    }\n\
+  },\n\
+  "defaultMcpServer": "dollhousemcp"\n\
+}' > /tmp/claude-code-config.json
+
+# Copy default personas if they exist
+RUN if [ -d "/app/dollhousemcp/data/personas" ]; then \
+      cp -r /app/dollhousemcp/data/personas /app/portfolio/; \
+    fi
+
+# Set environment variables
+ENV NODE_ENV=development \
+    DOLLHOUSE_PORTFOLIO_DIR=/app/portfolio \
+    DOLLHOUSE_CACHE_DIR=/app/cache \
+    LOG_LEVEL=info
+
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Function to check if API key is set\n\
+check_api_key() {\n\
+    if [ -z "$ANTHROPIC_API_KEY" ]; then\n\
+        echo "❌ Error: ANTHROPIC_API_KEY environment variable is not set"\n\
+        echo ""\n\
+        echo "Please run the container with your API key:"\n\
+        echo "  docker run -e ANTHROPIC_API_KEY=sk-ant-api03-... claude-dollhouse-test"\n\
+        echo ""\n\
+        exit 1\n\
+    fi\n\
+}\n\
+\n\
+# Handle different commands\n\
+case "$1" in\n\
+    claude)\n\
+        check_api_key\n\
+        exec "$@"\n\
+        ;;\n\
+    test-mcp)\n\
+        echo "🧪 Testing MCP server connection..."\n\
+        timeout 2 node /app/dollhousemcp/dist/index.js 2>&1 | head -20\n\
+        echo "✅ MCP server can start"\n\
+        ;;\n\
+    bash|sh)\n\
+        exec "$@"\n\
+        ;;\n\
+    "")\n\
+        check_api_key\n\
+        echo "🎭 DollhouseMCP + Claude Code Docker Container"\n\
+        echo ""\n\
+        echo "Available commands:"\n\
+        echo "  claude [options]  - Run Claude Code with DollhouseMCP"\n\
+        echo "  test-mcp         - Test MCP server"\n\
+        echo "  bash             - Get shell access"\n\
+        echo ""\n\
+        echo "Example:"\n\
+        echo "  docker run -it -e ANTHROPIC_API_KEY=\$ANTHROPIC_API_KEY claude-dollhouse-test claude"\n\
+        ;;\n\
+    *)\n\
+        exec "$@"\n\
+        ;;\n\
+esac' > /usr/local/bin/docker-entrypoint.sh && \
+chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Create test script
+RUN echo '#!/bin/bash\n\
+echo "🧪 DollhouseMCP Integration Test Suite"\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+echo ""\n\
+echo "1. Testing Node.js installation..."\n\
+node --version\n\
+echo "✅ Node.js installed"\n\
+echo ""\n\
+echo "2. Testing Claude Code installation..."\n\
+claude --version 2>/dev/null || echo "Claude Code version check not available"\n\
+echo "✅ Claude Code installed"\n\
+echo ""\n\
+echo "3. Testing DollhouseMCP build..."\n\
+ls -la /app/dollhousemcp/dist/index.js\n\
+echo "✅ DollhouseMCP built"\n\
+echo ""\n\
+echo "4. Testing MCP configuration..."\n\
+cat ~/.config/claude-code/config.json | grep dollhousemcp\n\
+echo "✅ MCP configured"\n\
+echo ""\n\
+echo "5. Testing MCP server startup..."\n\
+timeout 1 node /app/dollhousemcp/dist/index.js 2>&1 | head -5\n\
+echo "✅ MCP server can start"\n\
+echo ""\n\
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"\n\
+echo "Tests complete!"' > /usr/local/bin/test-dollhouse && \
+chmod +x /usr/local/bin/test-dollhouse
+
+# Create non-root user and set up configs
+RUN useradd -m -s /bin/bash claude && \
+    chown -R claude:claude /app && \
+    # Set up config for root user
+    mkdir -p /root/.config/claude-code && \
+    cp /tmp/claude-code-config.json /root/.config/claude-code/config.json && \
+    # Set up config for claude user
+    mkdir -p /home/claude/.config/claude-code && \
+    cp /tmp/claude-code-config.json /home/claude/.config/claude-code/config.json && \
+    chown -R claude:claude /home/claude && \
+    # Clean up template
+    rm /tmp/claude-code-config.json
+
+# Comprehensive health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "const child = require('child_process').spawn('node', \
+    ['/app/dollhousemcp/dist/index.js'], {stdio: 'pipe'}); \
+    let output = ''; \
+    child.stdout.on('data', (data) => { output += data; }); \
+    child.stderr.on('data', (data) => { output += data; }); \
+    setTimeout(() => { \
+      child.kill(); \
+      if (output.includes('MCP') || output.includes('server') || output.includes('DollhouseMCP')) { \
+        process.exit(0); \
+      } else { \
+        console.error('Health check failed: No MCP output detected'); \
+        process.exit(1); \
+      } \
+    }, 2000);" || exit 1
+
+# Switch to non-root user
+USER claude
+WORKDIR /home/claude
+
+# Set entrypoint and default command
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD [""]

@@ -12,17 +12,19 @@ import { getCollectionTools } from './tools/CollectionTools.js';
 // import { getConfigTools } from './tools/ConfigTools.js'; // DEPRECATED - replaced by dollhouse_config
 import { getConfigToolsV2 } from './tools/ConfigToolsV2.js';
 import { getAuthTools } from './tools/AuthTools.js';
-// import { getPortfolioTools } from './tools/PortfolioTools.js'; // DEPRECATED - replaced by sync_portfolio
+import { getPortfolioTools } from './tools/PortfolioTools.js';
 import { getBuildInfoTools } from './tools/BuildInfoTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ToolDiscoveryCache } from '../utils/ToolCache.js';
+// ConfigWizardCheck import removed - auto-trigger disabled for v1.8.0
 
 export class ServerSetup {
   private toolRegistry: ToolRegistry;
   private toolCache: ToolDiscoveryCache;
+  // wizardCheck removed - auto-trigger disabled for v1.8.0
   
   constructor() {
     this.toolRegistry = new ToolRegistry();
@@ -33,6 +35,7 @@ export class ServerSetup {
    * Initialize the server with all tools and handlers
    */
   setupServer(server: Server, instance: IToolHandler): void {
+    // wizardCheck parameter removed - auto-trigger disabled for v1.8.0
     // Register all tools
     this.registerTools(instance);
     
@@ -61,9 +64,8 @@ export class ServerSetup {
     // Register auth tools
     this.toolRegistry.registerMany(getAuthTools(instance));
     
-    // DEPRECATED: Old portfolio tools - replaced by sync_portfolio
-    // Comment out to remove from tool list, but keep for reference during transition
-    // this.toolRegistry.registerMany(getPortfolioTools(instance));
+    // Portfolio tools (including sync_portfolio with new safety features)
+    this.toolRegistry.registerMany(getPortfolioTools(instance));
     
     // DEPRECATED: Old config tools - replaced by dollhouse_config
     // Comment out to remove from tool list, but keep for reference during transition
@@ -136,7 +138,12 @@ export class ServerSetup {
         // Normalize Unicode in all string arguments to prevent security bypasses
         const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
         
-        return await handler(normalizedArgs);
+        const response = await handler(normalizedArgs);
+        
+        // Wizard auto-trigger removed for v1.8.0
+        // Manual wizard still available via config tool with action: 'wizard'
+        
+        return response;
       } catch (error) {
         if (error instanceof McpError) {
           throw error;

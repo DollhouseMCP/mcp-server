@@ -42,10 +42,12 @@ import { MigrationManager } from './portfolio/MigrationManager.js';
 import { SkillManager } from './elements/skills/index.js';
 import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
+import { TemplateRenderer } from './utils/TemplateRenderer.js';
 import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { ConfigManager } from './config/ConfigManager.js';
+// ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -93,7 +95,9 @@ export class DollhouseMCPServer implements IToolHandler {
   private migrationManager: MigrationManager;
   private skillManager: SkillManager;
   private templateManager: TemplateManager;
+  private templateRenderer: TemplateRenderer;
   private agentManager: AgentManager;
+  // ConfigWizardCheck removed - not included in hotfix
 
   constructor() {
     this.server = new Server(
@@ -108,6 +112,8 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
+    // ConfigWizardCheck initialization removed - not included in hotfix
+    
     // Initialize portfolio system
     this.portfolioManager = PortfolioManager.getInstance();
     this.migrationManager = new MigrationManager(this.portfolioManager);
@@ -121,6 +127,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize element managers
     this.skillManager = new SkillManager();
     this.templateManager = new TemplateManager();
+    this.templateRenderer = new TemplateRenderer(this.templateManager);
     this.agentManager = new AgentManager(this.portfolioManager.getBaseDir());
     
     // Log resolved path for debugging
@@ -637,10 +644,18 @@ export class DollhouseMCPServer implements IToolHandler {
     let persona = this.personas.get(personaIdentifier);
     
     if (!persona) {
-      // Search by name
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
-      );
+      // Search by name with slugify normalization (fixes Debug Detective's identified issue)
+      const searchNameSlug = slugify(personaIdentifier);
+      const searchNameLower = personaIdentifier.toLowerCase();
+      
+      persona = Array.from(this.personas.values()).find(p => {
+        const personaNameLower = p.metadata.name?.toLowerCase();
+        const personaNameSlug = slugify(p.metadata.name || '');
+        
+        // Try both exact match and slug match for flexibility
+        return personaNameLower === searchNameLower || 
+               personaNameSlug === searchNameSlug;
+      });
     }
 
     if (!persona) {
@@ -1262,35 +1277,21 @@ export class DollhouseMCPServer implements IToolHandler {
   
   // Element-specific methods
   async renderTemplate(name: string, variables: Record<string, any>) {
-    try {
-      const template = await this.templateManager.find(t => t.metadata.name === name);
-      if (!template) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Template '${name}' not found`
-          }]
-        };
-      }
-      
-      // Simple template rendering - replace variables in content
-      let rendered = template.content;
-      for (const [key, value] of Object.entries(variables)) {
-        const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
-        rendered = rendered.replace(regex, String(value));
-      }
+    // Use the new TemplateRenderer utility for cleaner code and better validation
+    const result = await this.templateRenderer.render(name, variables);
+    
+    if (result.success && result.content) {
       return {
         content: [{
           type: "text",
-          text: `📄 Rendered template '${name}':\n\n${rendered}`
+          text: `📄 Rendered template '${name}':\n\n${result.content}`
         }]
       };
-    } catch (error) {
-      logger.error(`Failed to render template '${name}':`, error);
+    } else {
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to render template: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ ${result.error || 'Failed to render template'}`
         }]
       };
     }
@@ -2347,7 +2348,7 @@ export class DollhouseMCPServer implements IToolHandler {
       errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
       errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
       errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations\n`;
-      errorMessage += `3. 🎯 **Specify type**: Try \`submit_content "${contentIdentifier}" --type=personas\`\n`;
+      errorMessage += `3. 🎯 **Specify type**: Try \`submit_collection_content "${contentIdentifier}" --type=personas\`\n`;
       errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually\n\n`;
       errorMessage += `📝 **Tip**: The system searches both filenames and display names with fuzzy matching.`;
       
@@ -3595,7 +3596,7 @@ ${sanitizedInstructions}
               `📄 Saved as: ${filename}\n` +
               `📊 Total personas: ${this.personas.size}\n\n` +
               `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
-              `📤 **Share it:** \`submit_content "${sanitizedName}"\`\n` +
+              `📤 **Share it:** \`submit_collection_content "${sanitizedName}"\`\n` +
               `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
           },
         ],
@@ -3648,12 +3649,26 @@ ${sanitizedInstructions}
     }
 
     // Find the persona
+    // First try exact match (with or without .md extension)
     let persona = this.personas.get(personaIdentifier);
     
+    if (!persona && !personaIdentifier.endsWith('.md')) {
+      // Try adding .md extension
+      persona = this.personas.get(`${personaIdentifier}.md`);
+    }
+    
     if (!persona) {
-      // Search by name
+      // Search by name (case-insensitive)
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+    
+    if (!persona) {
+      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
+      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
     }
 
@@ -3847,12 +3862,26 @@ ${sanitizedInstructions}
     }
 
     // Find the persona
+    // First try exact match (with or without .md extension)
     let persona = this.personas.get(personaIdentifier);
     
+    if (!persona && !personaIdentifier.endsWith('.md')) {
+      // Try adding .md extension
+      persona = this.personas.get(`${personaIdentifier}.md`);
+    }
+    
     if (!persona) {
-      // Search by name
+      // Search by name (case-insensitive)
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
+      );
+    }
+    
+    if (!persona) {
+      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
+      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      persona = Array.from(this.personas.values()).find(p => 
+        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
     }
 
@@ -4125,7 +4154,7 @@ Note: Configuration is temporary for this session. To make permanent, set enviro
     
     const message = `**Collection Submission Configuration**\n\n` +
       `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
-      `When auto-submit is enabled, the \`submit_content\` tool will:\n` +
+      `When auto-submit is enabled, the \`submit_collection_content\` tool will:\n` +
       `1. Upload content to your GitHub portfolio\n` +
       `2. Automatically create a submission issue in DollhouseMCP/collection\n\n` +
       `To change this setting, use:\n` +
@@ -4359,14 +4388,15 @@ Placeholders for custom format:
 
       // Check if portfolio exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       const portfolioExists = await portfolioManager.checkPortfolioExists(targetUsername);
 
       let statusText = `${this.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
 
       if (portfolioExists) {
-        statusText += `✅ **Repository**: dollhouse-portfolio exists\n`;
-        statusText += `🔗 **URL**: https://github.com/${targetUsername}/dollhouse-portfolio\n\n`;
+        statusText += `✅ **Repository**: ${portfolioManager.getRepositoryName()} exists\n`;
+        statusText += `🔗 **URL**: https://github.com/${targetUsername}/${portfolioManager.getRepositoryName()}\n\n`;
         
         // Get local elements count
         const localPortfolioManager = PortfolioManager.getInstance();
@@ -4453,14 +4483,15 @@ Placeholders for custom format:
 
       // Check if portfolio already exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       const portfolioExists = await portfolioManager.checkPortfolioExists(username);
 
       if (portfolioExists) {
         return {
           content: [{
             type: "text",
-            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/dollhouse-portfolio\n\nUse portfolio_status to see details or sync_portfolio to update it.`
+            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\nUse portfolio_status to see details or sync_portfolio to update it.`
           }]
         };
       }
@@ -4472,7 +4503,7 @@ Placeholders for custom format:
         content: [{
           type: "text",
           text: `${this.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
-                `✅ **Repository**: https://github.com/${username}/dollhouse-portfolio\n` +
+                `✅ **Repository**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n` +
                 `📁 **Structure**: Organized folders for all element types\n` +
                 `📝 **README**: Usage instructions included\n` +
                 `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
@@ -4523,7 +4554,8 @@ Placeholders for custom format:
       // Show current configuration
       statusText += `\n📋 **Current Settings**:\n`;
       statusText += `  • Auto-submit: Disabled (Coming soon)\n`;
-      statusText += `  • Repository name: dollhouse-portfolio (default)\n`;
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      statusText += `  • Repository name: ${getPortfolioRepositoryName()}\n`;
       statusText += `  • Default visibility: public\n`;
 
       return {
@@ -4546,7 +4578,13 @@ Placeholders for custom format:
   /**
    * Sync portfolio with GitHub
    */
-  async syncPortfolio(options: {direction: string; force: boolean; dryRun: boolean}) {
+  async syncPortfolio(options: {
+    direction: string; 
+    mode?: string;
+    force: boolean; 
+    dryRun: boolean;
+    confirmDeletions?: boolean;
+  }) {
     try {
       // Check authentication
       const authStatus = await this.githubAuthManager.getAuthStatus();
@@ -4571,9 +4609,10 @@ Placeholders for custom format:
 
       // Check if portfolio exists
       const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const portfolioManager = new PortfolioRepoManager();
+      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
+      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
       
-      // CRITICAL FIX: Set GitHub token like submit_content does
+      // CRITICAL FIX: Set GitHub token like submit_collection_content does
       // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
       const { TokenManager } = await import('./security/tokenManager.js');
       const token = await TokenManager.getGitHubTokenAsync();
@@ -4596,7 +4635,7 @@ Placeholders for custom format:
             text: `${this.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
                   `🏠 **Quick Setup**:\n` +
                   `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
-                  `2. This creates: https://github.com/[username]/dollhouse-portfolio\n\n` +
+                  `2. This creates: https://github.com/[username]/${portfolioManager.getRepositoryName()}\n\n` +
                   `📝 **What you'll get**:\n` +
                   `• Public repository to showcase your AI elements\n` +
                   `• Organized structure for personas, skills, templates, and agents\n` +
@@ -4641,7 +4680,7 @@ Placeholders for custom format:
           dryRunText += `\n`;
         }
         
-        dryRunText += `🎯 **Target**: https://github.com/${username}/dollhouse-portfolio\n`;
+        dryRunText += `🎯 **Target**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
         dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
 
         return {
@@ -4779,7 +4818,7 @@ Placeholders for custom format:
         
         syncText += `${summaryIcon} **Sync Complete!**\n`;
         syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
-        syncText += `🏠 **Portfolio**: https://github.com/${username}/dollhouse-portfolio\n\n`;
+        syncText += `🏠 **Portfolio**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\n`;
         
         // Include failed elements information with actionable suggestions
         if (failedElements.length > 0) {
@@ -4828,7 +4867,7 @@ Placeholders for custom format:
           
           // General tips
           syncText += `  • Check element file formats and metadata\n`;
-          syncText += `  • Try syncing individual elements with \`submit_content\`\n`;
+          syncText += `  • Try syncing individual elements with \`portfolio_element_manager\` (upload operation)\n`;
           syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
           
           // Add error code legend if we found any
@@ -4855,8 +4894,8 @@ Placeholders for custom format:
         // UX IMPROVEMENT: Add next steps and helpful links
         if (syncCount > 0) {
           syncText += `🚀 **Next Steps**:\n`;
-          syncText += `  • View your portfolio: https://github.com/${username}/dollhouse-portfolio\n`;
-          syncText += `  • Share individual elements using \`submit_content <name>\`\n`;
+          syncText += `  • View your portfolio: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
+          syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
           syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
         }
         
@@ -4870,13 +4909,10 @@ Placeholders for custom format:
         };
       }
 
-      if (options.direction === 'pull') {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⚠️ Pull sync is coming soon. Currently only push sync is supported.`
-          }]
-        };
+      if (options.direction === 'pull' || options.direction === 'both') {
+        const { PortfolioPullHandler } = await import('./handlers/PortfolioPullHandler.js');
+        const handler = new PortfolioPullHandler();
+        return handler.executePull(options, this.getPersonaIndicator());
       }
 
       return {
@@ -5025,7 +5061,7 @@ Placeholders for custom format:
         text += `💡 **Next steps:**\n`;
         text += `• Use get_element_details to see full content\n`;
         text += `• Use activate_element to activate elements\n`;
-        text += `• Use submit_content to share with the community`;
+        text += `• Use submit_collection_content to share with the community`;
       }
 
       return {
@@ -5175,7 +5211,7 @@ Placeholders for custom format:
         
         text += `💡 **Next steps:**\n`;
         text += `• Use get_element_details to see full content\n`;
-        text += `• Use install_content for collection items\n`;
+        text += `• Use install_collection_content for collection items\n`;
         text += `• Use activate_element for local elements\n`;
         text += `• Check for duplicates before submitting new content`;
       }

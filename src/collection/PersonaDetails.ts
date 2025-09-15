@@ -83,7 +83,7 @@ export class PersonaDetails {
     
     textParts.push(
       `**📥 Installation:**\n`,
-      `Use: \`install_content "${path}"\`\n\n`,
+      `Use: \`install_collection_content "${path}"\`\n\n`,
       `**📄 Full Content:**\n\`\`\`\n${content}\n\`\`\``
     );
     

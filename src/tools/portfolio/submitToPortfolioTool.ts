@@ -11,6 +11,7 @@
 import { createHash } from 'crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
+import { getPortfolioRepositoryName } from '../../config/portfolioConfig.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
@@ -97,7 +98,7 @@ export class SubmitToPortfolioTool {
     // Previously: constructor(apiCache: any)
     // Now: constructor(apiCache: APICache) with proper import
     this.authManager = new GitHubAuthManager(apiCache);
-    this.portfolioManager = new PortfolioRepoManager();
+    this.portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
   }
 
   /**
@@ -245,7 +246,7 @@ export class SubmitToPortfolioTool {
         if ((originalName || safeName).includes('.')) {
           message += `   • "${(originalName || safeName).replace(/\./g, '')}" (no dots)\n`;
         }
-        message += `3. 🎯 Specify element type: \`submit_content "${originalName || safeName}" --type=personas\`\n`;
+        message += `3. 🎯 Specify element type: \`submit_collection_content "${originalName || safeName}" --type=personas\`\n`;
         message += `4. 📁 Check if file exists in portfolio directories\n\n`;
         message += `📝 **Tip**: The system searches filenames AND metadata names with fuzzy matching.`;
         
@@ -1262,7 +1263,7 @@ export class SubmitToPortfolioTool {
     localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
     // DUPLICATE DETECTION: Check if content already exists in portfolio
-    const repoFullName = `${authStatus.username}/dollhouse-portfolio`;
+    const repoFullName = `${authStatus.username}/${this.portfolioManager.getRepositoryName()}`;
     const filePath = `${elementType}/${safeName}.md`;
     
     // Prepare the full content that would be saved
@@ -1797,7 +1798,7 @@ ${elementContent}
 - [ ] No duplicate of existing collection content
 
 ---
-*This submission was created automatically via the DollhouseMCP submit_content tool (v1.6.9-beta1-collection-fix).*`;
+*This submission was created automatically via the DollhouseMCP submit_collection_content tool (v1.6.9-beta1-collection-fix).*`;
 
       // Determine labels based on element type
       const labels = [

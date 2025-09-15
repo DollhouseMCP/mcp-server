@@ -23,14 +23,26 @@ export interface PortfolioRepoOptions {
 }
 
 export class PortfolioRepoManager {
-  private static readonly PORTFOLIO_REPO_NAME = 'dollhouse-portfolio';
+  private static readonly DEFAULT_PORTFOLIO_REPO_NAME = 'dollhouse-portfolio';
   private static readonly DEFAULT_DESCRIPTION = 'My DollhouseMCP element portfolio';
   private static readonly GITHUB_API_BASE = 'https://api.github.com';
   
   private token: string | null = null;
+  private repositoryName: string;
 
-  constructor() {
+  constructor(repositoryName?: string) {
     // Token will be retrieved when needed
+    // Support custom repository names or use default
+    this.repositoryName = repositoryName || 
+                         process.env.TEST_GITHUB_REPO || 
+                         PortfolioRepoManager.DEFAULT_PORTFOLIO_REPO_NAME;
+  }
+
+  /**
+   * Get the configured repository name
+   */
+  public getRepositoryName(): string {
+    return this.repositoryName;
   }
 
   /**
@@ -115,13 +127,28 @@ export class PortfolioRepoManager {
       return null; // Not found is often expected
     }
 
-    const data = await response.json();
-
+    // Check if response is ok BEFORE trying to parse JSON
     if (!response.ok) {
+      // Try to parse error details if response is JSON
+      let data: any = {};
+      // HTTP headers are case-insensitive, check both cases for robustness
+      const contentType = response.headers.get('content-type') || response.headers.get('Content-Type');
+      if (contentType && contentType.toLowerCase().includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          // JSON parsing failed for error response - continue with empty data
+          // This can happen if GitHub returns malformed JSON or content-type mismatch
+          if (process.env.DEBUG) {
+            console.debug('Failed to parse JSON error response:', jsonError);
+          }
+        }
+      }
+
       // Create error with status code attached for better classification
       let errorMessage = data.message || `GitHub API error: ${response.status}`;
       let errorCode = 'PORTFOLIO_SYNC_005'; // Default
-      
+
       switch (response.status) {
         case 401:
           errorMessage = 'GitHub authentication failed. Please check your token.';
@@ -148,12 +175,15 @@ export class PortfolioRepoManager {
         default:
           errorMessage = `GitHub API error (${response.status}): ${data.message || 'Unknown error'}`;
       }
-      
+
       const error: any = new Error(errorMessage);
       error.status = response.status;
       error.code = errorCode;
       throw error;
     }
+
+    // Parse JSON only after we know response is ok
+    const data = await response.json();
 
     return data;
   }
@@ -168,7 +198,7 @@ export class PortfolioRepoManager {
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
     try {
       const repo = await this.githubRequest(
-        `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+        `/repos/${normalizedUsername}/${this.repositoryName}`
       );
       return repo !== null;
     } catch (error) {
@@ -210,7 +240,7 @@ export class PortfolioRepoManager {
 
     // Check if portfolio already exists
     const existingRepo = await this.githubRequest(
-      `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+      `/repos/${normalizedUsername}/${this.repositoryName}`
     );
     
     if (existingRepo && existingRepo.html_url) {
@@ -224,7 +254,7 @@ export class PortfolioRepoManager {
         '/user/repos',
         'POST',
         {
-          name: PortfolioRepoManager.PORTFOLIO_REPO_NAME,
+          name: this.repositoryName,
           description: PortfolioRepoManager.DEFAULT_DESCRIPTION,
           private: false,
           auto_init: true
@@ -243,7 +273,7 @@ export class PortfolioRepoManager {
         // Re-check for the existing repository and return its URL
         try {
           const existingRepo = await this.githubRequest(
-            `/repos/${normalizedUsername}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}`
+            `/repos/${normalizedUsername}/${this.repositoryName}`
           );
           if (existingRepo && existingRepo.html_url) {
             return existingRepo.html_url;
@@ -279,9 +309,9 @@ export class PortfolioRepoManager {
     // Validate element before saving
     this.validateElement(element);
 
-    // MEDIUM FIX: Normalize username from element metadata (DMCP-SEC-004)
-    const rawUsername = element.metadata.author || 'anonymous';
-    const username = UnicodeValidator.normalize(rawUsername).normalizedContent;
+    // CRITICAL FIX: Use authenticated user's username, NOT element author (Issue #913)
+    // The portfolio belongs to the authenticated user, not the element's author
+    const username = await this.getUsername();
     logger.info(`User consented to save element ${element.id} to portfolio`);
     
     // LOW FIX: Add security audit logging for element save (DMCP-SEC-006)
@@ -316,7 +346,7 @@ export class PortfolioRepoManager {
       let existingFile = null;
       try {
         existingFile = await this.githubRequest(
-          `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`
+          `/repos/${username}/${this.repositoryName}/contents/${filePath}`
         );
       } catch (checkError: any) {
         // IMPORTANT: Authentication and rate limit errors must be re-thrown!
@@ -352,7 +382,7 @@ export class PortfolioRepoManager {
           
           // Return the existing file URL instead of creating duplicate commit
           const existingUrl = existingFile.html_url || 
-            `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/blob/main/${filePath}`;
+            `https://github.com/${username}/${this.repositoryName}/blob/main/${filePath}`;
           
           return existingUrl;
         }
@@ -375,7 +405,7 @@ export class PortfolioRepoManager {
       }
       
       const result = await this.githubRequest(
-        `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${filePath}`,
+        `/repos/${username}/${this.repositoryName}/contents/${filePath}`,
         'PUT',
         requestBody
       );
@@ -404,7 +434,7 @@ export class PortfolioRepoManager {
       }
       // Path 3: Generate URL from response data
       else if (result.content?.path) {
-        commitUrl = `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/blob/main/${result.content.path}`;
+        commitUrl = `https://github.com/${username}/${this.repositoryName}/blob/main/${result.content.path}`;
       }
       // Path 4: Fallback to repository URL (guaranteed to be set)
       else {
@@ -414,7 +444,7 @@ export class PortfolioRepoManager {
           hasCommit: !!result.commit,
           hasContent: !!result.content
         });
-        commitUrl = `https://github.com/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/tree/main/${element.type}`;
+        commitUrl = `https://github.com/${username}/${this.repositoryName}/tree/main/${element.type}`;
       }
 
       logger.debug('Successfully saved element to GitHub portfolio', {
@@ -528,7 +558,7 @@ These elements can be imported into your DollhouseMCP installation.
 `;
 
     await this.githubRequest(
-      `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/README.md`,
+      `/repos/${username}/${this.repositoryName}/contents/README.md`,
       'PUT',
       {
         message: 'Initialize portfolio structure',
@@ -541,7 +571,7 @@ These elements can be imported into your DollhouseMCP installation.
     
     for (const dir of directories) {
       await this.githubRequest(
-        `/repos/${username}/${PortfolioRepoManager.PORTFOLIO_REPO_NAME}/contents/${dir}/.gitkeep`,
+        `/repos/${username}/${this.repositoryName}/contents/${dir}/.gitkeep`,
         'PUT',
         {
           message: `Create ${dir} directory`,
@@ -608,5 +638,64 @@ These elements can be imported into your DollhouseMCP installation.
     }
     // Fallback to basic markdown format
     return `# ${element.metadata.name}\n\n${element.metadata.description || ''}`;
+  }
+
+  /**
+   * Get the authenticated user's username
+   */
+  private async getUsername(): Promise<string> {
+    const response = await this.githubRequest('/user');
+    if (!response || !response.login) {
+      throw new Error('Failed to get GitHub username');
+    }
+    return response.login;
+  }
+
+  /**
+   * Get file content from GitHub repository
+   * Used for pull operations to download elements
+   */
+  async getFileContent(path: string, username?: string, repository?: string): Promise<string> {
+    try {
+      // Use provided username/repository or defaults
+      const repoUser = username || await this.getUsername();
+      const repoName = repository || this.repositoryName;
+      
+      logger.info('Fetching file content from GitHub', { 
+        path, 
+        username: repoUser, 
+        repository: repoName 
+      });
+
+      const response = await this.githubRequest(
+        `/repos/${repoUser}/${repoName}/contents/${path}`
+      );
+
+      if (!response || !response.content) {
+        throw new Error(`No content found at path: ${path}`);
+      }
+
+      // Decode base64 content
+      const decodedContent = Buffer.from(response.content, 'base64').toString('utf-8');
+      
+      return decodedContent;
+      
+    } catch (error) {
+      logger.error('Failed to get file content from GitHub', { 
+        error, 
+        path 
+      });
+      
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          throw new Error(`File not found at path: ${path}`);
+        }
+        if (error.message.includes('401') || error.message.includes('403')) {
+          throw new Error(`Authentication failed. Please check your GitHub token.`);
+        }
+      }
+      
+      throw error;
+    }
   }
 }

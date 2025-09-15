@@ -18,12 +18,14 @@ import { ConfigManager, DollhouseConfig } from '../config/ConfigManager.js';
 import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioRepoManager } from './PortfolioRepoManager.js';
 import { GitHubPortfolioIndexer, GitHubIndexEntry } from './GitHubPortfolioIndexer.js';
+import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ElementType } from './types.js';
 import { IElement, ElementStatus } from '../types/elements/IElement.js';
+import { PortfolioElementAdapter } from '../tools/portfolio/PortfolioElementAdapter.js';
 
 export interface SyncOperation {
   operation: 'download' | 'upload' | 'compare' | 'list-remote';
@@ -98,7 +100,7 @@ export class PortfolioSyncManager {
   constructor() {
     this.configManager = ConfigManager.getInstance();
     this.portfolioManager = PortfolioManager.getInstance();
-    this.repoManager = new PortfolioRepoManager();
+    this.repoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
     this.indexer = GitHubPortfolioIndexer.getInstance();
   }
   
@@ -516,31 +518,40 @@ export class PortfolioSyncManager {
         };
       }
       
-      // Create an IElement object for the PortfolioRepoManager
-      const element: IElement = {
-        id: `${elementType}_${elementName}_${Date.now()}`,
+      // Create a PortfolioElement for the adapter (fixes Issue #913)
+      // Using PortfolioElementAdapter instead of incomplete IElement implementation
+      const portfolioElement = {
         type: elementType,
-        version: parsed.data?.version || '1.0.0',
         metadata: {
           name: elementName,
           description: parsed.data?.description || '',
           author: parsed.data?.author || 'unknown',
           created: parsed.data?.created || new Date().toISOString(),
-          modified: new Date().toISOString(),
-          tags: parsed.data?.tags || [],
-          custom: parsed.data
+          updated: new Date().toISOString(),
+          version: parsed.data?.version || '1.0.0',
+          tags: parsed.data?.tags || []
         },
-        validate: () => ({ valid: true, errors: [], warnings: [] }),
-        serialize: () => content,
-        deserialize: () => {},
-        getStatus: () => ElementStatus.ACTIVE
+        content: content
       };
+      
+      // Use PortfolioElementAdapter to properly implement IElement interface
+      const adapter = new PortfolioElementAdapter(portfolioElement);
       
       // Use PortfolioRepoManager to upload
       this.repoManager.setToken(token);
       
+      // DEBUG: Log upload attempt
+      logger.debug('[BULK_SYNC_DEBUG] Upload element attempt', {
+        elementName,
+        elementType,
+        hasToken: !!token,
+        tokenPrefix: token ? token.substring(0, 10) + '...' : 'none',
+        adapterHasMetadata: !!(adapter && adapter.metadata),
+        timestamp: new Date().toISOString()
+      });
+      
       try {
-        const url = await this.repoManager.saveElement(element, true); // consent is true since we've already checked
+        const url = await this.repoManager.saveElement(adapter, true); // consent is true since we've already checked
         
         logger.info('Element uploaded to GitHub', {
           element: elementName,

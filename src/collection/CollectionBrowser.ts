@@ -406,7 +406,7 @@ export class CollectionBrowser {
         const displayName = item.name.replace('.md', '');
         textParts.push(
           `   ▫️ **${displayName}**\n`,
-          `      📥 Install: \`install_content "${fullPath}"\`\n`,
+          `      📥 Install: \`install_collection_content "${fullPath}"\`\n`,
           `      👁️ Details: \`get_collection_content "${fullPath}"\`\n\n`
         );
       });

@@ -5,6 +5,9 @@
 
 import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
+import { getFriendlyNullValue } from '../config/wizardTemplates.js';
+// WizardTemplateBuilder imported for future full template migration
+// import { WizardTemplateBuilder } from '../config/wizardTemplates.js';
 import * as yaml from 'js-yaml';
 
 export interface ConfigOperationOptions {
@@ -25,6 +28,20 @@ export class ConfigHandler {
   
   /**
    * Handle configuration operations via the dollhouse_config tool
+   * 
+   * @param options - Configuration operation options
+   * @param options.action - The action to perform (get, set, reset, export, import, wizard)
+   * @param options.setting - Optional setting path for get/set operations
+   * @param options.value - Optional value for set operations
+   * @param options.section - Optional section for filtering
+   * @param options.format - Optional format for export (yaml or json)
+   * @param options.data - Optional data for import operations
+   * @param indicator - Optional indicator string for persona context
+   * @returns Promise resolving to content object with operation result
+   * @async
+   * 
+   * @note The wizard action is async and will await the handleWizard method
+   * @since v1.4.0 - handleWizard made async for better config fetching
    */
   async handleConfigOperation(options: ConfigOperationOptions, indicator: string = '') {
     try {
@@ -47,7 +64,7 @@ export class ConfigHandler {
           return this.handleImport(options, indicator);
         
         case 'wizard':
-          return this.handleWizard(indicator);
+          return await this.handleWizard(indicator);
         
         default:
           return {
@@ -88,18 +105,20 @@ export class ConfigHandler {
         content: [{
           type: "text",
           text: `${indicator}⚙️ **Configuration Setting**\n\n` +
-                `**${options.setting}**: ${JSON.stringify(value, null, 2)}`
+                `**${options.setting}**: ${this.formatValue(value)}`
         }]
       };
     }
     
-    // Get all settings
+    // Get all settings - make them user-friendly
     const config = this.configManager.getConfig();
+    const friendlyConfig = this.makeFriendlyConfig(config);
+    
     return {
       content: [{
         type: "text",
         text: `${indicator}⚙️ **DollhouseMCP Configuration**\n\n` +
-              `\`\`\`yaml\n${yaml.dump(config, { lineWidth: -1 })}\`\`\``
+              `\`\`\`yaml\n${yaml.dump(friendlyConfig, { lineWidth: -1 })}\`\`\``
       }]
     };
   }
@@ -210,26 +229,145 @@ export class ConfigHandler {
     };
   }
   
-  private handleWizard(indicator: string) {
-    // Interactive configuration wizard
+  /**
+   * Handle the configuration wizard
+   * @returns Promise with wizard interface content
+   * @async
+   */
+  private async handleWizard(indicator: string) {
+    // Get current configuration to show the user
+    const config = this.configManager.getConfig();
+    const friendlyConfig = this.makeFriendlyConfig(config);
+    
+    // Build wizard content using templates
+    // Note: Template builder is imported for future use when we fully migrate to template system
+    const wizardContent = `${indicator}🧙 **Configuration Wizard - Let's Set Up DollhouseMCP!**
+
+I'll help you configure DollhouseMCP step by step. First, let me show you your current settings:
+
+**📊 Current Configuration:**
+\`\`\`yaml
+${yaml.dump(friendlyConfig, { lineWidth: -1 })}
+\`\`\`
+
+**Now, let's configure your settings one by one!**
+
+🎯 **Step 1: User Identity**
+This tags your creations so you can find them later. Everything is saved locally on your computer.
+- To set a username: Say "Set my username to [your-name]"
+- To stay anonymous: Say "I'll stay anonymous"
+- Current: ${friendlyConfig.user?.username || '(not set - anonymous mode)'}
+
+🔐 **Step 2: GitHub Integration (Optional)**
+Connect to GitHub to share your creations and browse community content.
+- To connect GitHub: Say "Connect my GitHub account"
+- To skip: Say "Skip GitHub for now"
+- Current: ${friendlyConfig.github?.auth_token ? 'Connected' : '(not connected)'}
+
+🔄 **Step 3: Portfolio Sync (Optional)**
+Automatically backup your creations to GitHub.
+- To enable: Say "Enable auto-sync"
+- To keep manual: Say "I'll sync manually"
+- Current: ${friendlyConfig.portfolio?.auto_sync ? 'Enabled' : 'Manual'}
+
+🎨 **Step 4: Display Preferences**
+Customize how DollhouseMCP shows information.
+- To show active persona: Say "Show persona indicators"
+- To keep minimal: Say "Use minimal display"
+- Current: ${friendlyConfig.indicator?.enabled ? 'Enabled' : 'Minimal'}
+
+💡 **Quick Setup**: Say "Configure the basics" to set just username and GitHub
+📝 **Detailed Setup**: Say "Configure everything" to go through all options
+⏭️ **Skip for Now**: Say "Skip wizard" to use anonymous mode
+
+✨ You can always change these settings later by saying "Open configuration wizard"`;
+    
     return {
       content: [{
         type: "text",
-        text: `${indicator}🧙 **Configuration Wizard**\n\n` +
-              `The configuration wizard helps you set up DollhouseMCP.\n\n` +
-              `**Key Settings to Configure:**\n\n` +
-              `1. **User Identity**\n` +
-              `   \`dollhouse_config action: "set", setting: "user.username", value: "your-username"\`\n\n` +
-              `2. **GitHub Portfolio**\n` +
-              `   \`dollhouse_config action: "set", setting: "github.portfolio.repository_name", value: "dollhouse-portfolio"\`\n\n` +
-              `3. **Sync Settings**\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.enabled", value: true\`\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.bulk.upload_enabled", value: true\`\n\n` +
-              `4. **Privacy Settings**\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.privacy.scan_for_secrets", value: true\`\n` +
-              `   \`dollhouse_config action: "set", setting: "sync.privacy.respect_local_only", value: true\`\n\n` +
-              `Run \`dollhouse_config action: "get"\` to see current settings.`
+        text: wizardContent
       }]
     };
+  }
+  
+  /**
+   * Format a value for user-friendly display
+   * Replaces null/undefined with helpful messages
+   */
+  private formatValue(value: any): string {
+    if (value === null || value === undefined) {
+      return "(not set)";
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      return "(empty)";
+    }
+    return JSON.stringify(value, null, 2);
+  }
+  
+  /**
+   * Make configuration display user-friendly for non-technical users
+   * Replaces null values with helpful explanations
+   * Uses centralized friendly values for i18n support
+   */
+  private makeFriendlyConfig(config: any): any {
+    const friendly = JSON.parse(JSON.stringify(config)); // Deep clone
+    
+    // Helper function to replace null values with friendly messages
+    const replaceFriendlyValue = (obj: any, path: string = '') => {
+      for (const key in obj) {
+        const currentPath = path ? `${path}.${key}` : key;
+        
+        if (obj[key] === null) {
+          obj[key] = getFriendlyNullValue(currentPath);
+        } else if (typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+          replaceFriendlyValue(obj[key], currentPath);
+        }
+      }
+    };
+    
+    // Apply friendly replacements
+    replaceFriendlyValue(friendly);
+    
+    // Legacy manual replacements for backward compatibility
+    // (These will be removed once we fully migrate to template system)
+    if (friendly.sync) {
+      if (friendly.sync.last_sync === "(not set)") {
+        friendly.sync.last_sync = "(never synced)";
+      }
+      if (friendly.sync.remote_url === "(not set)") {
+        friendly.sync.remote_url = "(no remote repository)";
+      }
+    }
+    
+    // Display settings
+    if (friendly.display) {
+      // These are typically booleans, but handle nulls just in case
+      if (friendly.display.show_persona_indicator === null) {
+        friendly.display.show_persona_indicator = true; // Default value
+      }
+    }
+    
+    // Collection settings
+    if (friendly.collection) {
+      if (friendly.collection.auto_submit === null) {
+        friendly.collection.auto_submit = false; // Default value
+      }
+      if (friendly.collection.last_cache_update === null) {
+        friendly.collection.last_cache_update = "(cache not initialized)";
+      }
+    }
+    
+    // Wizard settings - show friendly status
+    if (friendly.wizard) {
+      if (friendly.wizard.completed === false && friendly.wizard.dismissed === false) {
+        friendly.wizard._status = "⏳ Ready to run (not completed)";
+      } else if (friendly.wizard.completed === true) {
+        friendly.wizard._status = "✅ Completed";
+      } else if (friendly.wizard.dismissed === true) {
+        friendly.wizard._status = "⏭️ Dismissed";
+      }
+    }
+    
+    return friendly;
   }
 }

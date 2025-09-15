@@ -112,8 +112,8 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     },
     {
       tool: {
-        name: "install_content",
-        description: "Install AI customization elements from the collection to your local portfolio. Use this when users ask to download/install any element type (personas, skills, templates, or agents). Examples: 'install the creative writer persona', 'get the code review skill', 'download the meeting notes template'.",
+        name: "install_collection_content",
+        description: "Install AI customization elements FROM the DollhouseMCP collection TO your local portfolio. Use this when users ask to download/install any element type (personas, skills, templates, or agents) from the collection. Examples: 'install the creative writer persona from the collection', 'get the code review skill from collection', 'download the meeting notes template from collection'.",
         inputSchema: {
           type: "object",
           properties: {
@@ -129,8 +129,8 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
     },
     {
       tool: {
-        name: "submit_content",
-        description: "Upload a single element (persona, skill, template, etc.) to your personal GitHub portfolio. After uploading to your portfolio, you'll have the option to also submit it to the community collection. Use this when users want to upload a specific element to their GitHub portfolio or share with the community. This handles all content types including personas (AI behavioral profiles).",
+        name: "submit_collection_content",
+        description: "Submit a single element TO the DollhouseMCP community collection (via your GitHub portfolio). This first uploads the element to your personal GitHub portfolio, then creates a submission issue for the community collection. Use this when users want to share their custom elements with the community. This handles all content types including personas (AI behavioral profiles).",
         inputSchema: {
           type: "object",
           properties: {
@@ -160,7 +160,7 @@ export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefi
   // PERFORMANCE FIX #548: Removed deprecated marketplace aliases
   // These duplicated existing collection tools and increased MCP overhead
   // Users should migrate to: browse_collection, search_collection, 
-  // get_collection_content, install_content, submit_content
+  // get_collection_content, install_collection_content, submit_collection_content
   
   return tools;
 }
