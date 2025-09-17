@@ -14,9 +14,10 @@
  */
 
 import { MemoryEntry } from './Memory.js';
-import { PrivacyLevel, MEMORY_CONSTANTS } from './constants.js';
+import { PrivacyLevel, MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export interface SearchIndexConfig {
   /**
@@ -172,7 +173,22 @@ class ContentIndex {
     // Normalize for security
     const normalized = UnicodeValidator.normalize(content);
     if (!normalized.isValid) {
-      logger.warn('Invalid Unicode in content for indexing');
+      logger.warn('Invalid Unicode in content for indexing', {
+        entryId: context?.entryId
+      });
+
+      // SECURITY FIX: Log security event for audit trail (DMCP-SEC-006)
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.MEMORY_UNICODE_VALIDATION_FAILED as any,
+        severity: 'LOW',
+        source: 'MemorySearchIndex.extractTerms',
+        details: `Invalid Unicode detected during term extraction${context?.entryId ? ` for entry ${context.entryId}` : ''}`,
+        metadata: {
+          entryId: context?.entryId,
+          issueCount: 0  // UnicodeValidationResult doesn't expose issues
+        }
+      });
+
       return new Set();
     }
 
@@ -385,6 +401,19 @@ export class MemorySearchIndex {
 
       // Calculate memory usage
       this.updateMemoryUsage();
+
+      // SECURITY FIX: Log security event for index build operation (DMCP-SEC-006)
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED as any,  // Using CREATED for index build
+        severity: 'LOW',
+        source: 'MemorySearchIndex.buildIndex',
+        details: `Memory search index built successfully with ${entries.size} entries`,
+        metadata: {
+          entryCount: entries.size,
+          tagCount: this.tagIndex.size,
+          memoryUsageBytes: this.memoryUsageBytes
+        }
+      });
 
       // Update stats
       const buildTime = Date.now() - startTime;
