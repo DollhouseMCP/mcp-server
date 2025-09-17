@@ -358,6 +358,16 @@ export const suppressions: Suppression[] = [
     reason: 'Test utility files in root directory for development testing. Do not process production user input.'
   },
   {
+    rule: 'DMCP-SEC-006',
+    file: 'test-*.js',
+    reason: 'Test utility files in root directory. Audit logging not required for development test scripts.'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: 'test-*.js',
+    reason: 'Test utility files using spawn with array arguments which is safe from injection.'
+  },
+  {
     rule: 'OWASP-A03-002',
     file: '**/test-element-lifecycle.js',
     reason: 'FALSE POSITIVE: spawn with array arguments is safe (no shell invocation). GitHub token passed as array element, not concatenated into command string.'
@@ -366,6 +376,36 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: '**/test-element-lifecycle.js',
     reason: 'FALSE POSITIVE: Test harness with no user input mechanisms. All data is hardcoded test scenarios or environment variables.'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: 'test-full-validation.js',
+    reason: 'FALSE POSITIVE: spawn with array arguments is safe. Docker command uses array args preventing shell injection. Line 372.'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/test-full-validation.js',
+    reason: 'FALSE POSITIVE: spawn with array arguments is safe. Docker command uses array args preventing shell injection.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-full-validation.js',
+    reason: 'Test validation script - not production code. No user input processing, only test scenarios.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/test-full-validation.js',
+    reason: 'Test validation script - not production code. No user input processing, only test scenarios.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'test-version-validation.js',
+    reason: 'Test utility script - not production code. Audit logging not required for test utilities.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/test-version-validation.js',
+    reason: 'Test utility script - not production code. Audit logging not required for test utilities.'
   },
   
   // ========================================
