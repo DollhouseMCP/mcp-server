@@ -90,7 +90,7 @@ export interface MemorySearchOptions {
 /**
  * Memory Element Implementation
  *
- * TODO: Memory Sharding Strategy (Issue #TBD)
+ * TODO: Memory Sharding Strategy (Issue #981)
  * ---------------------------------------------
  * Current: Single Map<id, entry> for all memories
  * Problem: Large memory sets (>10K entries) cause performance degradation
@@ -107,7 +107,7 @@ export interface MemorySearchOptions {
  * - Better corruption resistance (one shard failure doesn't affect others)
  * - Efficient incremental updates
  *
- * TODO: Content Integrity Verification (Issue #TBD)
+ * TODO: Content Integrity Verification (Issue #982)
  * --------------------------------------------------
  * Add SHA-256 hashes to detect:
  * - Accidental corruption from disk errors
@@ -119,7 +119,7 @@ export interface MemorySearchOptions {
  * - Verify on load, warn on mismatch
  * - Option to auto-restore from backup on corruption
  *
- * TODO: Memory Capacity Management (Issue #TBD)
+ * TODO: Memory Capacity Management (Issue #983)
  * ---------------------------------------------
  * Current: Synchronous retention enforcement on each add
  * Better: Background cleanup with smart triggers:
@@ -243,7 +243,7 @@ export class Memory extends BaseElement implements IElement {
    * Search memory entries
    * SECURITY: Respects privacy levels and sanitizes search queries
    *
-   * TODO: Implement indexed search for O(log n) performance (Issue #TBD)
+   * TODO: Implement indexed search for O(log n) performance (Issue #341)
    * Current implementation: O(n) linear scan
    *
    * Planned indexing strategy:
