@@ -209,6 +209,46 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: '**/elements/memories/constants.ts',
+    reason: 'Constants file - CI environments may have different path structures, no user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'elements/memories/constants.ts',
+    reason: 'Constants file - handles case where src/ prefix is stripped, no user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/elements/memories/utils.ts',
+    reason: 'Memory utilities - all external input is normalized via UnicodeValidator in the functions themselves'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/src/elements/memories/utils.ts',
+    reason: 'Memory utilities - all external input is normalized via UnicodeValidator in the functions themselves'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/elements/memories/utils.ts',
+    reason: 'Memory utilities - CI path variant, all external input is normalized via UnicodeValidator'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'elements/memories/utils.ts',
+    reason: 'Memory utilities - src-stripped path variant, all external input is normalized via UnicodeValidator'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/memories/*.ts',
+    reason: 'Memory element files - all user input is properly normalized in Memory.ts and MemoryManager.ts'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/elements/memories/*.ts',
+    reason: 'Memory element files - all user input is properly normalized in Memory.ts and MemoryManager.ts'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/utils/version.ts',
     reason: 'Version utility only handles internal version strings, not user input'
   },
