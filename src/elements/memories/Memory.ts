@@ -21,9 +21,9 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
+import { generateMemoryId } from './utils.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
-import * as path from 'path';
 
 // Initialize DOMPurify with JSDOM
 const window = new JSDOM('').window;
@@ -87,6 +87,47 @@ export interface MemorySearchOptions {
   privacyLevel?: PrivacyLevel;
 }
 
+/**
+ * Memory Element Implementation
+ *
+ * TODO: Memory Sharding Strategy (Issue #TBD)
+ * ---------------------------------------------
+ * Current: Single Map<id, entry> for all memories
+ * Problem: Large memory sets (>10K entries) cause performance degradation
+ *
+ * Planned Sharding Architecture:
+ * 1. Shard memories across multiple files based on hash(memoryId) % shardCount
+ * 2. Each shard file <256KB for optimal YAML parsing
+ * 3. Memory references stored separately from content (like git objects)
+ * 4. Large binary content (PDFs, images) stored as external references
+ *
+ * Benefits:
+ * - Parallel loading of memory shards
+ * - Reduced memory footprint (load only needed shards)
+ * - Better corruption resistance (one shard failure doesn't affect others)
+ * - Efficient incremental updates
+ *
+ * TODO: Content Integrity Verification (Issue #TBD)
+ * --------------------------------------------------
+ * Add SHA-256 hashes to detect:
+ * - Accidental corruption from disk errors
+ * - Intentional tampering with memory files
+ * - Version conflicts during concurrent access
+ *
+ * Implementation:
+ * - Store hash in memory metadata
+ * - Verify on load, warn on mismatch
+ * - Option to auto-restore from backup on corruption
+ *
+ * TODO: Memory Capacity Management (Issue #TBD)
+ * ---------------------------------------------
+ * Current: Synchronous retention enforcement on each add
+ * Better: Background cleanup with smart triggers:
+ * - Cleanup when 90% capacity reached
+ * - Batch deletions for efficiency
+ * - LRU eviction with access tracking
+ * - Preserve "pinned" memories regardless of age
+ */
 export class Memory extends BaseElement implements IElement {
   // Memory-specific properties
   private entries: Map<string, MemoryEntry> = new Map();
@@ -172,9 +213,9 @@ export class Memory extends BaseElement implements IElement {
     // SECURITY FIX: Validate and sanitize tags
     const sanitizedTags = tags ? this.sanitizeTags(tags) : [];
     
-    // Create memory entry
+    // Create memory entry with generated ID
     const entry: MemoryEntry = {
-      id: `mem_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: generateMemoryId(),
       timestamp: new Date(),
       content: sanitizedContent,
       tags: sanitizedTags,
@@ -201,6 +242,25 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Search memory entries
    * SECURITY: Respects privacy levels and sanitizes search queries
+   *
+   * TODO: Implement indexed search for O(log n) performance (Issue #TBD)
+   * Current implementation: O(n) linear scan
+   *
+   * Planned indexing strategy:
+   * - Tag index: Map<tag, Set<entryId>> for instant tag lookups
+   * - Content index: Full-text search structure (trie or inverted index)
+   * - Date index: B-tree for efficient range queries
+   * - Privacy index: Pre-sorted entries by privacy level
+   * - Composite indices: Combined indices for common query patterns
+   *
+   * Index-of-indexes pattern:
+   * - Master index file (meta.yaml) with pointers to shard indices
+   * - Each shard maintains its own local index
+   * - Periodic index compaction and optimization
+   *
+   * Expected performance improvement:
+   * - Current: ~100ms for 10,000 entries
+   * - With indexing: <5ms for same dataset
    */
   public async search(options: MemorySearchOptions = {}): Promise<MemoryEntry[]> {
     // SECURITY FIX: Sanitize search query (use regular sanitizeInput for queries)
