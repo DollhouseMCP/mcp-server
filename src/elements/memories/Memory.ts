@@ -23,6 +23,7 @@ import { sanitizeInput } from '../../security/InputValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
+import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 
@@ -252,7 +253,10 @@ export class Memory extends BaseElement implements IElement {
 
     // Check if we should build/rebuild the index
     if (!this.searchIndex.isIndexed && this.entries.size >= 100) {
-      this.searchIndex.buildIndex(this.entries);
+      // Build index asynchronously to avoid blocking
+      this.searchIndex.buildIndex(this.entries).catch(error => {
+        logger.error('Failed to build search index', error);
+      });
     }
 
     // Log memory addition

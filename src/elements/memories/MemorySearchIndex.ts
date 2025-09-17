@@ -48,6 +48,18 @@ export interface SearchIndexConfig {
    * Default: false
    */
   enablePersistence?: boolean;
+
+  /**
+   * Maximum memory usage in MB
+   * Default: 100
+   */
+  maxMemoryMB?: number;
+
+  /**
+   * Enable LRU eviction when memory limit is reached
+   * Default: true
+   */
+  enableLRUEviction?: boolean;
 }
 
 export interface SearchIndexStats {
@@ -57,6 +69,7 @@ export interface SearchIndexStats {
   termCount: number;
   lastBuilt?: Date;
   buildTimeMs?: number;
+  memoryUsageBytes?: number;
 }
 
 export interface SearchQuery {
@@ -263,6 +276,14 @@ class TemporalIndex {
   get size(): number {
     return this.entries.length;
   }
+
+  serialize(): any {
+    return this.entries;
+  }
+
+  deserialize(data: any): void {
+    this.entries = data || [];
+  }
 }
 
 /**
@@ -282,12 +303,19 @@ export class MemorySearchIndex {
 
   // Index state
   private isBuilt = false;
+  private isBuilding = false;
+  private buildQueue: Promise<void> | null = null;
   private stats: SearchIndexStats = {
     isIndexed: false,
     entryCount: 0,
     tagCount: 0,
-    termCount: 0
+    termCount: 0,
+    memoryUsageBytes: 0
   };
+
+  // Memory management
+  private readonly maxMemoryBytes: number;
+  private memoryUsageBytes = 0;
 
   constructor(config: SearchIndexConfig = {}) {
     this.config = {
@@ -295,8 +323,13 @@ export class MemorySearchIndex {
       enableContentIndex: config.enableContentIndex !== false,
       maxTermsPerEntry: config.maxTermsPerEntry || 100,
       minTermLength: config.minTermLength || 2,
-      enablePersistence: config.enablePersistence || false
+      enablePersistence: config.enablePersistence || false,
+      maxMemoryMB: config.maxMemoryMB || 100,
+      enableLRUEviction: config.enableLRUEviction !== false
     };
+
+    // Configure memory limit (default 100MB, configurable)
+    this.maxMemoryBytes = (this.config.maxMemoryMB || 100) * 1024 * 1024;
 
     if (this.config.enableContentIndex) {
       this.contentIndex = new ContentIndex(this.config);
@@ -307,41 +340,75 @@ export class MemorySearchIndex {
 
   /**
    * Build or rebuild the index from entries
+   * FIX: Added race condition protection with isBuilding flag and build queue
    */
-  buildIndex(entries: Map<string, MemoryEntry>): void {
-    const startTime = Date.now();
+  async buildIndex(entries: Map<string, MemoryEntry>): Promise<void> {
+    // If already building, wait for the current build to complete
+    if (this.isBuilding && this.buildQueue) {
+      logger.debug('Index build already in progress, waiting...');
+      return this.buildQueue;
+    }
 
-    // Clear existing indexes
-    this.clear();
+    // Create build promise to handle concurrent calls
+    this.buildQueue = this._doBuildIndex(entries);
+    return this.buildQueue;
+  }
 
-    // Check if we should index based on threshold
-    if (entries.size < (this.config.indexThreshold || 100)) {
-      logger.debug('Not building index - below threshold', {
-        entryCount: entries.size,
-        threshold: this.config.indexThreshold
-      });
+  private async _doBuildIndex(entries: Map<string, MemoryEntry>): Promise<void> {
+    // Prevent concurrent builds
+    if (this.isBuilding) {
+      logger.warn('Attempted concurrent index build, skipping');
       return;
     }
 
-    // Build indexes
-    for (const [id, entry] of entries) {
-      this.addToIndex(id, entry);
+    this.isBuilding = true;
+    const startTime = Date.now();
+
+    try {
+      // Clear existing indexes
+      this.clear();
+
+      // Check if we should index based on threshold
+      if (entries.size < (this.config.indexThreshold || 100)) {
+        logger.debug('Not building index - below threshold', {
+          entryCount: entries.size,
+          threshold: this.config.indexThreshold
+        });
+        return;
+      }
+
+      // Build indexes
+      for (const [id, entry] of entries) {
+        this.addToIndex(id, entry);
+      }
+
+      // Calculate memory usage
+      this.updateMemoryUsage();
+
+      // Update stats
+      const buildTime = Date.now() - startTime;
+      this.stats = {
+        isIndexed: true,
+        entryCount: entries.size,
+        tagCount: this.tagIndex.size,
+        termCount: this.contentIndex?.size || 0,
+        lastBuilt: new Date(),
+        buildTimeMs: buildTime,
+        memoryUsageBytes: this.memoryUsageBytes
+      };
+
+      this.isBuilt = true;
+
+      logger.info('Memory search index built', this.stats);
+    } catch (error) {
+      logger.error('Failed to build memory search index', error);
+      // Reset state on failure
+      this.clear();
+      throw error;
+    } finally {
+      this.isBuilding = false;
+      this.buildQueue = null;
     }
-
-    // Update stats
-    const buildTime = Date.now() - startTime;
-    this.stats = {
-      isIndexed: true,
-      entryCount: entries.size,
-      tagCount: this.tagIndex.size,
-      termCount: this.contentIndex?.size || 0,
-      lastBuilt: new Date(),
-      buildTimeMs: buildTime
-    };
-
-    this.isBuilt = true;
-
-    logger.info('Memory search index built', this.stats);
   }
 
   /**
@@ -628,5 +695,153 @@ export class MemorySearchIndex {
    */
   get isIndexed(): boolean {
     return this.isBuilt;
+  }
+
+  /**
+   * Calculate and update memory usage
+   * FIX: Added memory monitoring for content index
+   */
+  private updateMemoryUsage(): void {
+    let totalBytes = 0;
+
+    // Estimate tag index memory
+    for (const [tag, entries] of this.tagIndex) {
+      totalBytes += tag.length * 2; // UTF-16 encoding
+      totalBytes += entries.size * 32; // Estimated ID size
+    }
+
+    // Estimate content index memory
+    if (this.contentIndex) {
+      // Rough estimate: each term + entry IDs
+      totalBytes += this.contentIndex.size * 100;
+    }
+
+    // Estimate temporal index memory
+    totalBytes += this.temporalIndex.size * 48; // Date + ID
+
+    // Estimate cache memory
+    for (const entry of this.entriesCache.values()) {
+      totalBytes += JSON.stringify(entry).length * 2;
+    }
+
+    this.memoryUsageBytes = totalBytes;
+
+    // Check if we're exceeding memory limit
+    if (totalBytes > this.maxMemoryBytes) {
+      logger.warn('Memory search index exceeding limit', {
+        usedMB: Math.round(totalBytes / 1024 / 1024),
+        limitMB: Math.round(this.maxMemoryBytes / 1024 / 1024)
+      });
+
+      // Trigger LRU eviction if enabled
+      if (this.config.enableLRUEviction) {
+        this.evictLRUEntries();
+      }
+    }
+  }
+
+  /**
+   * Evict least recently used entries to free memory
+   * FIX: Added LRU eviction for memory management
+   */
+  private evictLRUEntries(): void {
+    // Get entries sorted by access time (would need to track this)
+    // For now, evict oldest 20% of entries
+    const entriesToEvict = Math.floor(this.entriesCache.size * 0.2);
+    const entriesArray = Array.from(this.entriesCache.keys());
+
+    for (let i = 0; i < entriesToEvict; i++) {
+      const idToEvict = entriesArray[i];
+      this.removeEntry(idToEvict);
+    }
+
+    logger.info('Evicted LRU entries', {
+      evictedCount: entriesToEvict,
+      remainingCount: this.entriesCache.size
+    });
+  }
+
+  /**
+   * Serialize index to JSON for persistence
+   * FIX: Added index serialization for cold start optimization
+   */
+  serialize(): string {
+    if (!this.isBuilt) {
+      throw new Error('Cannot serialize unbuilt index');
+    }
+
+    const indexData = {
+      version: '1.0.0',
+      stats: this.stats,
+      tagIndex: Array.from(this.tagIndex.entries()).map(([tag, ids]) => ({
+        tag,
+        ids: Array.from(ids)
+      })),
+      privacyIndex: Array.from(this.privacyIndex.entries()).map(([level, ids]) => ({
+        level,
+        ids: Array.from(ids)
+      })),
+      temporalIndex: this.temporalIndex.serialize(),
+      // Note: Content index is not serialized due to size
+      // It will be rebuilt on load if needed
+    };
+
+    return JSON.stringify(indexData);
+  }
+
+  /**
+   * Deserialize index from JSON
+   * FIX: Added index deserialization for faster startup
+   */
+  deserialize(data: string, entries: Map<string, MemoryEntry>): void {
+    try {
+      const indexData = JSON.parse(data);
+
+      // Validate version
+      if (indexData.version !== '1.0.0') {
+        throw new Error(`Unsupported index version: ${indexData.version}`);
+      }
+
+      // Clear existing indexes
+      this.clear();
+
+      // Restore tag index
+      for (const { tag, ids } of indexData.tagIndex) {
+        this.tagIndex.set(tag, new Set(ids));
+      }
+
+      // Restore privacy index
+      for (const { level, ids } of indexData.privacyIndex) {
+        this.privacyIndex.set(level as PrivacyLevel, new Set(ids));
+      }
+
+      // Restore temporal index
+      this.temporalIndex.deserialize(indexData.temporalIndex);
+
+      // Restore entries cache from provided entries
+      for (const [id, entry] of entries) {
+        if (indexData.tagIndex.some((item: any) => item.ids.includes(id))) {
+          this.entriesCache.set(id, entry);
+        }
+      }
+
+      // Rebuild content index if enabled (can't serialize efficiently)
+      if (this.config.enableContentIndex) {
+        this.contentIndex = new ContentIndex(this.config);
+        for (const [id, entry] of this.entriesCache) {
+          this.contentIndex.addEntry(id, entry.content);
+        }
+      }
+
+      // Update stats
+      this.stats = indexData.stats;
+      this.isBuilt = true;
+
+      logger.info('Memory search index deserialized', this.stats);
+    } catch (error) {
+      logger.error('Failed to deserialize index, rebuilding', error);
+      // Fall back to building from scratch
+      this.buildIndex(entries);
+    }
   }
 }

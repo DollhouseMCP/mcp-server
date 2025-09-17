@@ -1,47 +1,28 @@
 # Security Audit Report
 
-Generated: 2025-09-17T19:09:09.998Z
-Duration: 168ms
+Generated: 2025-09-17T20:07:13.879Z
+Duration: 17ms
 
 ## Summary
 
-- **Total Findings**: 3
-- **Files Scanned**: 132
+- **Total Findings**: 1
+- **Files Scanned**: 1
 
 ### Findings by Severity
 
-- 🔴 **Critical**: 1
+- 🔴 **Critical**: 0
 - 🟠 **High**: 0
-- 🟡 **Medium**: 1
+- 🟡 **Medium**: 0
 - 🟢 **Low**: 1
 - ℹ️ **Info**: 0
 
 ## Detailed Findings
 
-### CRITICAL (1)
-
-#### OWASP-A03-002: Command Injection: Potential command injection vulnerability
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-full-validation.js`
-- **Line**: 372
-- **Column**: 18
-- **Code**: `const docker = spawn('docker', [`
-- **Confidence**: low
-- **Remediation**: Validate and sanitize all user input before using in system commands
-
-### MEDIUM (1)
-
-#### DMCP-SEC-004: User input processed without Unicode normalization
-
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-full-validation.js`
-- **Confidence**: medium
-- **Remediation**: Use UnicodeValidator.normalize() on all user input
-
 ### LOW (1)
 
 #### DMCP-SEC-006: Security operation without audit logging
 
-- **File**: `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-version-validation.js`
+- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-Qladfu/auth-handler.js`
 - **Confidence**: medium
 - **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
 
