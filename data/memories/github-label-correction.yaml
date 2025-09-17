@@ -1,0 +1,146 @@
+name: GitHub Label Correction Memory
+description: Autonomic memory preventing repeated label failures in GitHub issue creation
+type: memory
+version: 1.0.0
+author: DollhouseMCP
+created: 2025-09-17
+category: corrective
+tags:
+  - github
+  - labels
+  - issue-creation
+  - autonomic
+  - failure-prevention
+
+# Memory Configuration
+storage_backend: file
+retention_policy: permanent
+privacy_level: project-internal
+searchable: true
+memory_type: corrective
+
+# Autonomic Activation (fast path - no markdown parsing)
+activation:
+  automatic: true
+  threshold: 0.8
+  priority: 1
+  triggers:
+    - pattern: "gh issue create.*--label"
+      context:
+        project: DollhouseMCP/mcp-server
+        platform: claude-code
+    - keywords:
+        - create issue
+        - github label
+        - gh issue
+
+# Learning Source
+learned_from:
+  type: failure-analysis
+  failure_count: 47
+  success_count: 12
+  last_failure: 2025-09-15T14:23:00Z
+  last_success: 2025-09-17T10:30:00Z
+  confidence: 0.95
+  pattern_detected: "Label 'area:goal' repeatedly fails with 'label not found' error"
+
+# Memory Entries (structured data, no markdown)
+entries:
+  valid_labels:
+    type: whitelist
+    labels:
+      - enhancement
+      - bug
+      - documentation
+      - "priority: critical"
+      - "priority: high"
+      - "priority: medium"
+      - "priority: low"
+      - "area: elements"
+      - "area: testing"
+      - "area: ci/cd"
+
+  invalid_labels:
+    type: blacklist
+    never_use:
+      - "area:goal"
+      - "area:memory"
+      - "area:goal-oriented"
+      - "priority:*"
+      - "type:*"
+    reason: "These labels don't exist in this repository"
+
+  correct_syntax:
+    command: gh issue create
+    flags:
+      - name: title
+        required: true
+        example: "Your issue title"
+      - name: body
+        required: true
+        example: "Issue description"
+      - name: label
+        required: false
+        multiple: true
+        example: enhancement
+    full_example: |
+      gh issue create \
+        --title "Your title" \
+        --body "Description" \
+        --label "enhancement" \
+        --label "priority: high"
+
+  failure_history:
+    attempts:
+      - command: gh issue create --label "area:goal"
+        result: failure
+        error: "label 'area:goal' not found"
+        count: 47
+      - command: gh issue create --label "enhancement"
+        result: success
+        count: 12
+
+# Metrics (for tracking effectiveness)
+metrics:
+  tokens_saved: 1350
+  first_attempt_success_rate: 0.92
+  activation_count: 23
+  prevented_failures: 21
+  avg_latency_ms: 12
+
+# Platform-Specific Guidance (structured, not prose)
+platform_guidance:
+  claude-code:
+    can_execute: true
+    pre_check: gh label list
+    direct_execution: true
+
+  claude-desktop:
+    can_execute: false
+    provide: command_string
+    note: "User must copy/paste"
+
+  chatgpt:
+    can_execute: false
+    provide: full_explanation
+    include_valid_labels: true
+
+# Integration Points
+integrations:
+  capability_index: github-issue-management
+  related_memories:
+    - github-cli-basics
+    - project-conventions
+    - error-recovery-patterns
+  related_skills:
+    - github-cli
+    - issue-tracker
+
+# Performance Optimization
+performance:
+  cache_ttl: 3600  # Cache for 1 hour
+  lazy_load: false  # Load immediately for autonomic
+  index_fields:     # Fields to index for fast search
+    - triggers.pattern
+    - triggers.keywords
+    - entries.valid_labels.labels

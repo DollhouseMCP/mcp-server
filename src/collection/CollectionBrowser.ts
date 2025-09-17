@@ -10,16 +10,17 @@ import { CollectionIndex, IndexEntry } from '../types/collection.js';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 
-// Content types supported by MCP server (Issue #144)
-// Hide: memories, ensembles from MCP queries
+// Content types supported by MCP server
+// Now includes memories (IP concerns resolved)
 // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
 // Also update validTypes array in src/index.ts
 // See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
 const MCP_SUPPORTED_TYPES = [
   ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
   ElementType.SKILL,      // skills - supported by ElementTools
-  ElementType.AGENT,      // agents - supported by ElementTools  
-  ElementType.TEMPLATE    // templates - supported by ElementTools
+  ElementType.AGENT,      // agents - supported by ElementTools
+  ElementType.TEMPLATE,   // templates - supported by ElementTools
+  ElementType.MEMORY      // memories - supported by ElementTools (restored)
 ];
 
 /**
