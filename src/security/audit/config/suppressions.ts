@@ -199,6 +199,16 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/elements/memories/constants.ts',
+    reason: 'Constants file - contains only type definitions and constants, no user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/src/elements/memories/constants.ts',
+    reason: 'Constants file - contains only type definitions and constants, no user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/utils/version.ts',
     reason: 'Version utility only handles internal version strings, not user input'
   },

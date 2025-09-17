@@ -2,23 +2,24 @@
   "suppressions": [
     {
       "rule": "DMCP-SEC-004",
-      "file": "src/elements/memories/constants.ts",
+      "file": "**/src/elements/memories/constants.ts",
       "reason": "False positive - This file only contains constants and type definitions, no user input processing"
     },
     {
       "rule": "DMCP-SEC-004",
-      "file": "test-full-validation.js",
+      "file": "**/test-full-validation.js",
       "reason": "Test file - Not production code"
     },
     {
       "rule": "OWASP-A03-002",
-      "file": "test-full-validation.js",
+      "file": "**/test-full-validation.js",
       "reason": "Test file - Docker spawn is for testing purposes only"
     },
     {
       "rule": "DMCP-SEC-006",
-      "file": "test-version-validation.js",
+      "file": "**/test-version-validation.js",
       "reason": "Test file - Audit logging not required in test utilities"
     }
-  ]
+  ],
+  "_comment": "Paths use glob patterns to match in both local and CI environments"
 }

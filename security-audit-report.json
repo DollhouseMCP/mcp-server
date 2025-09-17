@@ -1,15 +1,46 @@
 {
-  "timestamp": "2025-09-11T16:17:18.020Z",
+  "timestamp": "2025-09-16T19:27:47.645Z",
   "summary": {
-    "total": 0,
+    "total": 3,
     "bySeverity": {
       "info": 0,
-      "low": 0,
-      "medium": 0,
+      "low": 1,
+      "medium": 1,
       "high": 0,
-      "critical": 0
+      "critical": 1
     },
-    "byCategory": {}
+    "byCategory": {
+      "SEC": 2,
+      "A03": 1
+    }
   },
-  "findings": []
+  "findings": [
+    {
+      "ruleId": "DMCP-SEC-006",
+      "severity": "low",
+      "message": "Security operation without audit logging",
+      "remediation": "Add SecurityMonitor.logSecurityEvent() for audit trail",
+      "confidence": "medium",
+      "file": "/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-version-validation.js"
+    },
+    {
+      "ruleId": "OWASP-A03-002",
+      "severity": "critical",
+      "message": "Command Injection: Potential command injection vulnerability",
+      "file": "/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-full-validation.js",
+      "line": 372,
+      "column": 18,
+      "code": "const docker = spawn('docker', [",
+      "remediation": "Validate and sanitize all user input before using in system commands",
+      "confidence": "low"
+    },
+    {
+      "ruleId": "DMCP-SEC-004",
+      "severity": "medium",
+      "message": "User input processed without Unicode normalization",
+      "remediation": "Use UnicodeValidator.normalize() on all user input",
+      "confidence": "medium",
+      "file": "/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test-full-validation.js"
+    }
+  ]
 }
