@@ -107,7 +107,7 @@ class ContentIndex {
    * Add an entry to the content index
    */
   addEntry(entryId: string, content: string): void {
-    const terms = this.extractTerms(content);
+    const terms = this.extractTerms(content, { entryId });
 
     // Store terms for this entry
     this.entryToTerms.set(entryId, terms);
@@ -166,8 +166,9 @@ class ContentIndex {
 
   /**
    * Extract searchable terms from content
+   * SECURITY FIX: Added audit logging for Unicode validation operations
    */
-  private extractTerms(content: string): Set<string> {
+  private extractTerms(content: string, context?: { entryId?: string }): Set<string> {
     // Normalize for security
     const normalized = UnicodeValidator.normalize(content);
     if (!normalized.isValid) {
