@@ -27,7 +27,7 @@ describe('CollectionBrowser MCP Filtering', () => {
     { name: 'skills', type: 'dir', path: 'library/skills' },
     { name: 'agents', type: 'dir', path: 'library/agents' },
     { name: 'templates', type: 'dir', path: 'library/templates' },
-    { name: 'memories', type: 'dir', path: 'library/memories' }, // Should be filtered out
+    { name: 'memories', type: 'dir', path: 'library/memories' }, // Valid MCP type
     { name: 'ensembles', type: 'dir', path: 'library/ensembles' }, // Should be filtered out
     { name: 'invalid-type', type: 'dir', path: 'library/invalid-type' }, // Should be filtered out
     { name: 'readme.md', type: 'file', path: 'library/readme.md' } // Should be ignored (not a directory)
@@ -39,7 +39,7 @@ describe('CollectionBrowser MCP Filtering', () => {
     { name: 'skill1.md', path: 'library/skills/skill1.md', sha: 'sha3' },
     { name: 'agent1.md', path: 'library/agents/agent1.md', sha: 'sha4' },
     { name: 'template1.md', path: 'library/templates/template1.md', sha: 'sha5' },
-    { name: 'memory1.md', path: 'library/memories/memory1.md', sha: 'sha6' }, // Should be filtered out
+    { name: 'memory1.md', path: 'library/memories/memory1.md', sha: 'sha6' }, // Valid MCP type
     { name: 'ensemble1.md', path: 'library/ensembles/ensemble1.md', sha: 'sha7' }, // Should be filtered out
     { name: 'invalid1.md', path: 'library/invalid-type/invalid1.md', sha: 'sha8' } // Should be filtered out
   ];
@@ -70,16 +70,16 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       const result = await collectionBrowser.browseCollection('library');
 
-      expect(result.categories).toHaveLength(4); // Only personas, skills, agents, templates
-      
+      expect(result.categories).toHaveLength(5); // personas, skills, agents, templates, memories
+
       const categoryNames = result.categories.map((cat: any) => cat.name);
       expect(categoryNames).toContain('personas');
       expect(categoryNames).toContain('skills');
       expect(categoryNames).toContain('agents');
       expect(categoryNames).toContain('templates');
+      expect(categoryNames).toContain('memories');
       
-      // Should NOT contain filtered types
-      expect(categoryNames).not.toContain('memories');
+      // Should NOT contain unsupported types
       expect(categoryNames).not.toContain('ensembles');
       expect(categoryNames).not.toContain('invalid-type');
     });
@@ -95,12 +95,12 @@ describe('CollectionBrowser MCP Filtering', () => {
 
     it('should handle response with no valid content types', async () => {
       const invalidResponse = [
-        { name: 'memories', type: 'dir', path: 'library/memories' },
         { name: 'ensembles', type: 'dir', path: 'library/ensembles' },
         { name: 'invalid-type', type: 'dir', path: 'library/invalid-type' },
+        { name: 'tools', type: 'dir', path: 'library/tools' },
         { name: 'readme.md', type: 'file', path: 'library/readme.md' }
       ];
-      
+
       mockGitHubClient.fetchFromGitHub.mockResolvedValue(invalidResponse);
 
       const result = await collectionBrowser.browseCollection('library');
@@ -134,11 +134,11 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       const result = await collectionBrowser.browseCollection('library');
 
-      expect(result.categories).toHaveLength(2); // Only personas and skills
+      expect(result.categories).toHaveLength(3); // personas, skills, and memories
       const categoryNames = result.categories.map((cat: any) => cat.name);
       expect(categoryNames).toContain('personas');
       expect(categoryNames).toContain('skills');
-      expect(categoryNames).not.toContain('memories');
+      expect(categoryNames).toContain('memories');
     });
   });
 
@@ -155,16 +155,16 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       const result = await collectionBrowser.browseCollection('library');
 
-      expect(result.categories).toHaveLength(4); // Only supported types
-      
+      expect(result.categories).toHaveLength(5); // All supported types
+
       const categoryNames = result.categories.map((cat: any) => cat.name);
       expect(categoryNames).toContain('personas');
       expect(categoryNames).toContain('skills');
       expect(categoryNames).toContain('agents');
       expect(categoryNames).toContain('templates');
+      expect(categoryNames).toContain('memories');
       
-      // Should NOT contain filtered types
-      expect(categoryNames).not.toContain('memories');
+      // Should NOT contain unsupported types
       expect(categoryNames).not.toContain('ensembles');
       expect(categoryNames).not.toContain('invalid-type');
     });
@@ -207,16 +207,16 @@ describe('CollectionBrowser MCP Filtering', () => {
       
       const contentTypes = browser.getContentTypesFromItems(mockCacheItems);
 
-      expect(contentTypes).toHaveLength(4);
-      
+      expect(contentTypes).toHaveLength(5);
+
       const typeNames = contentTypes.map((type: any) => type.name);
       expect(typeNames).toContain('personas');
       expect(typeNames).toContain('skills');
       expect(typeNames).toContain('agents');
       expect(typeNames).toContain('templates');
-      
-      // Should NOT contain filtered types
-      expect(typeNames).not.toContain('memories');
+      expect(typeNames).toContain('memories');
+
+      // Should NOT contain unsupported types
       expect(typeNames).not.toContain('ensembles');
       expect(typeNames).not.toContain('invalid-type');
       
@@ -291,14 +291,14 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       const result = await collectionBrowser.browseCollection('library');
 
-      // Should only return MCP-supported types (not memories, ensembles)
-      expect(result.categories).toHaveLength(4);
+      // Should only return MCP-supported types (not ensembles)
+      expect(result.categories).toHaveLength(5);
       const categoryNames = result.categories.map((cat: any) => cat.name);
       expect(categoryNames).toContain(ElementType.PERSONA);
       expect(categoryNames).toContain(ElementType.SKILL);
       expect(categoryNames).toContain(ElementType.AGENT);
       expect(categoryNames).toContain(ElementType.TEMPLATE);
-      expect(categoryNames).not.toContain(ElementType.MEMORY);
+      expect(categoryNames).toContain(ElementType.MEMORY);
       expect(categoryNames).not.toContain(ElementType.ENSEMBLE);
     });
   });
