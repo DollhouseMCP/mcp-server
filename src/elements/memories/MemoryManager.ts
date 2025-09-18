@@ -24,11 +24,13 @@ import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
+import * as crypto from 'crypto';
 
 export class MemoryManager implements IElementManager<Memory> {
   private portfolioManager: PortfolioManager;
   private memoriesDir: string;
   private memoryCache: Map<string, Memory> = new Map();
+  private contentHashIndex: Map<string, string> = new Map();
   
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
@@ -42,8 +44,35 @@ export class MemoryManager implements IElementManager<Memory> {
    */
   async load(filePath: string): Promise<Memory> {
     try {
-      // Validate and resolve path
-      const fullPath = await this.validateAndResolvePath(filePath);
+      let fullPath: string | undefined;
+
+      // Check if it's a relative path (no date folder)
+      if (!filePath.includes(path.sep) || !filePath.match(/^\d{4}-\d{2}-\d{2}/)) {
+        // Search in date folders
+        const dateFolders = await this.getDateFolders();
+        let found = false;
+
+        for (const dateFolder of dateFolders) {
+          const testPath = path.join(this.memoriesDir, dateFolder, filePath);
+          if (await fs.access(testPath).then(() => true).catch(() => false)) {
+            fullPath = testPath;
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          // Fall back to root directory for backward compatibility during transition
+          fullPath = await this.validateAndResolvePath(filePath);
+        }
+      } else {
+        fullPath = await this.validateAndResolvePath(filePath);
+      }
+
+      // Ensure fullPath is defined
+      if (!fullPath) {
+        throw new Error(`Could not resolve path: ${filePath}`);
+      }
       
       // Check cache first
       const cached = this.memoryCache.get(fullPath);
@@ -105,21 +134,101 @@ export class MemoryManager implements IElementManager<Memory> {
       throw new Error(`Failed to load memory: ${error}`);
     }
   }
-  
+
+  /**
+   * Generate date-based path for memory storage
+   * Creates YYYY-MM-DD folder structure to prevent flat directory issues
+   * @param element Memory element to save
+   * @param fileName Optional custom filename
+   * @returns Full path to memory file
+   */
+  private async generateMemoryPath(element: Memory, fileName?: string): Promise<string> {
+    const date = new Date();
+    const dateFolder = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const datePath = path.join(this.memoriesDir, dateFolder);
+
+    // Ensure date folder exists
+    await fs.mkdir(datePath, { recursive: true });
+
+    // Generate filename
+    const baseName = fileName || `${element.metadata.name?.toLowerCase().replace(/\s+/g, '-') || 'memory'}.yaml`;
+    let finalName = baseName;
+    let version = 1;
+
+    // Handle collisions with version suffix
+    while (await fs.access(path.join(datePath, finalName)).then(() => true).catch(() => false)) {
+      version++;
+      finalName = baseName.replace('.yaml', `-v${version}.yaml`);
+    }
+
+    return path.join(datePath, finalName);
+  }
+
+  /**
+   * Calculate SHA-256 hash of memory content for deduplication
+   * Implements Issue #994 - Content-based deduplication
+   */
+  private calculateContentHash(element: Memory): string {
+    const content = JSON.stringify({
+      metadata: element.metadata,
+      entries: JSON.parse(element.serialize()).entries
+    });
+    return crypto.createHash('sha256').update(content).digest('hex');
+  }
+
+  /**
+   * Get all date folders in memories directory
+   * @returns Array of date folder names
+   */
+  private async getDateFolders(): Promise<string[]> {
+    try {
+      const entries = await fs.readdir(this.memoriesDir, { withFileTypes: true });
+      return entries
+        .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+        .map(entry => entry.name)
+        .sort()
+        .reverse(); // Most recent first
+    } catch (error) {
+      if ((error as any).code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
+  }
+
   /**
    * Save a memory to file
    * SECURITY FIX #1: Uses FileLockManager.atomicWriteFile() for atomic operations
    */
-  async save(element: Memory, filePath: string): Promise<void> {
+  async save(element: Memory, filePath?: string): Promise<void> {
     try {
       // Validate element
       const validation = element.validate();
       if (!validation.valid) {
         throw new Error(`Invalid memory: ${validation.errors?.map(e => e.message).join(', ')}`);
       }
-      
-      // Validate and resolve path
-      const fullPath = await this.validateAndResolvePath(filePath);
+
+      // Calculate content hash for deduplication
+      const contentHash = this.calculateContentHash(element);
+      const existingPath = this.contentHashIndex.get(contentHash);
+
+      if (existingPath) {
+        // Log duplicate detection
+        SecurityMonitor.logSecurityEvent({
+          type: 'MEMORY_DUPLICATE_DETECTED',
+          severity: 'LOW',
+          source: 'MemoryManager.save',
+          details: `Duplicate content detected. Existing: ${existingPath}`
+        });
+      }
+
+      // Generate date-based path if not provided
+      const fullPath = filePath
+        ? await this.validateAndResolvePath(filePath)
+        : await this.generateMemoryPath(element);
+
+      // Ensure parent directory exists (for date folders)
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
       
       // Get memory statistics
       const stats = element.getStats();
@@ -158,7 +267,10 @@ export class MemoryManager implements IElementManager<Memory> {
       
       // Update cache
       this.memoryCache.set(fullPath, element);
-      
+
+      // Update content hash index
+      this.contentHashIndex.set(contentHash, fullPath);
+
       // Log successful save
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
@@ -182,27 +294,54 @@ export class MemoryManager implements IElementManager<Memory> {
    * List all available memories
    */
   async list(): Promise<Memory[]> {
+    const memories: Memory[] = [];
+
     try {
-      const files = await fs.readdir(this.memoriesDir);
-      const memories: Memory[] = [];
-      
-      for (const file of files) {
-        if (file.endsWith('.md') || file.endsWith('.yaml') || file.endsWith('.yml')) {
+      // Get all date folders
+      const dateFolders = await this.getDateFolders();
+
+      // Also check root directory for any legacy files
+      const rootFiles = await fs.readdir(this.memoriesDir)
+        .then(files => files.filter(f => f.endsWith('.yaml')))
+        .catch(() => []);
+
+      // Process root files first (legacy)
+      for (const file of rootFiles) {
+        try {
+          const memory = await this.load(file);
+          memories.push(memory);
+        } catch (error) {
+          SecurityMonitor.logSecurityEvent({
+            type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
+            severity: 'LOW',
+            source: 'MemoryManager.list',
+            details: `Failed to load ${file}: ${error}`
+          });
+        }
+      }
+
+      // Process date folders
+      for (const dateFolder of dateFolders) {
+        const folderPath = path.join(this.memoriesDir, dateFolder);
+        const files = await fs.readdir(folderPath)
+          .then(files => files.filter(f => f.endsWith('.yaml')))
+          .catch(() => []);
+
+        for (const file of files) {
           try {
-            const memory = await this.load(file);
+            const memory = await this.load(path.join(dateFolder, file));
             memories.push(memory);
           } catch (error) {
-            // Log but continue with other files
             SecurityMonitor.logSecurityEvent({
               type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
               severity: 'LOW',
               source: 'MemoryManager.list',
-              details: `Failed to load ${file}: ${error}`
+              details: `Failed to load ${dateFolder}/${file}: ${error}`
             });
           }
         }
       }
-      
+
       return memories;
       
     } catch (error) {
