@@ -276,12 +276,6 @@ describeOrSkip('Real GitHub Portfolio Integration Tests', () => {
 
   describe('Bulk Sync Prevention', () => {
     it('should upload ONLY the specified element, not all personas', async () => {
-      // CI FIX: Skip this test in CI due to persistent 409 conflicts
-      // The test works locally but fails in CI due to concurrent runs modifying the same repo
-      if (process.env.CI === 'true') {
-        console.log('  ⏭️ Skipping in CI due to persistent 409 conflicts with concurrent runs');
-        return;
-      }
       // Skip if no GitHub token
       if (testEnv.skipTests) {
         console.log('⏭️  Skipping test - no GitHub token available');
