@@ -53,7 +53,39 @@ describe('MemoryManager', () => {
       // Ignore cleanup errors
     }
   });
-  
+
+  /**
+   * Helper utility for collision testing to reduce code duplication
+   * Tests that multiple memories with the same name get version suffixes
+   * @param memoryNames Array of memory names to test collisions with
+   * @param expectedFiles Expected file names after collision handling
+   */
+  async function testCollisionHandling(memoryNames: string[], expectedFiles: string[]): Promise<void> {
+    // Save memories with potentially colliding names
+    for (const name of memoryNames) {
+      const memory = new Memory({ name });
+      await manager.save(memory);
+    }
+
+    // Check that date folder structure was created
+    const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
+    const dateFolders = entries.filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
+    expect(dateFolders).toHaveLength(1);
+
+    // Check files in the date folder
+    const dateFolder = dateFolders[0].name;
+    const allFiles = await fs.readdir(path.join(memoriesDir, dateFolder));
+
+    // Filter out temporary files that may be created during atomic writes
+    const yamlFiles = allFiles.filter(f => f.endsWith('.yaml'));
+
+    // Verify expected files exist
+    expect(yamlFiles).toHaveLength(expectedFiles.length);
+    for (const expectedFile of expectedFiles) {
+      expect(yamlFiles.some(f => f === expectedFile)).toBe(true);
+    }
+  }
+
   describe('save and load', () => {
     it('should save and load a memory', async () => {
       const memory = new Memory({
@@ -424,26 +456,11 @@ data:
     });
 
     it('should handle collisions with version suffix', async () => {
-      const memory1 = new Memory({ name: 'Same Name' });
-      const memory2 = new Memory({ name: 'Same Name' });
-
-      await manager.save(memory1);
-      await manager.save(memory2);
-
-      const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
-      const dateFolders = entries.filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
-
-      expect(dateFolders).toHaveLength(1);
-      const dateFolder = dateFolders[0].name;
-      const allFiles = await fs.readdir(path.join(memoriesDir, dateFolder));
-
-      // Filter out temporary files that may be created during atomic writes
-      const yamlFiles = allFiles.filter(f => f.endsWith('.yaml'));
-
-      // Should have exactly 2 YAML files with version suffixes
-      expect(yamlFiles).toHaveLength(2);
-      expect(yamlFiles.some(f => f === 'same-name.yaml')).toBe(true);
-      expect(yamlFiles.some(f => f === 'same-name-v2.yaml')).toBe(true);
+      // CODE QUALITY: Use dedicated collision testing utility
+      await testCollisionHandling(
+        ['Same Name', 'Same Name'],
+        ['same-name.yaml', 'same-name-v2.yaml']
+      );
     });
 
     it('should find memories across date folders', async () => {

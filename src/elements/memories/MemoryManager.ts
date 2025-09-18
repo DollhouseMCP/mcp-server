@@ -31,6 +31,11 @@ export class MemoryManager implements IElementManager<Memory> {
   private memoriesDir: string;
   private memoryCache: Map<string, Memory> = new Map();
   private contentHashIndex: Map<string, string> = new Map();
+
+  // PERFORMANCE IMPROVEMENT: Cache for date folders to avoid directory scanning
+  // Invalidated when new folders are created
+  private dateFoldersCache: string[] | null = null;
+  private dateFoldersCacheTimestamp: number = 0;
   
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
@@ -41,6 +46,11 @@ export class MemoryManager implements IElementManager<Memory> {
    * Load a memory from file
    * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
    * to prevent race conditions and ensure atomic file operations
+   * @param filePath Path to the memory file to load
+   * @returns Promise resolving to the loaded Memory instance
+   * @throws {Error} When file cannot be found or path validation fails
+   * @throws {Error} When YAML parsing fails or content is malformed
+   * @throws {Error} When memory validation fails after loading
    */
   async load(filePath: string): Promise<Memory> {
     try {
@@ -150,6 +160,9 @@ export class MemoryManager implements IElementManager<Memory> {
     // Ensure date folder exists
     await fs.mkdir(datePath, { recursive: true });
 
+    // PERFORMANCE IMPROVEMENT: Invalidate date folders cache since we created a new folder
+    this.dateFoldersCache = null;
+
     // Generate filename
     const baseName = fileName || `${element.metadata.name?.toLowerCase().replace(/\s+/g, '-') || 'memory'}.yaml`;
     let finalName = baseName;
@@ -178,18 +191,38 @@ export class MemoryManager implements IElementManager<Memory> {
 
   /**
    * Get all date folders in memories directory
+   * PERFORMANCE IMPROVEMENT: Uses cache to avoid repeated directory scanning
+   * Cache is invalidated when new folders are created or after 60 seconds
    * @returns Array of date folder names
    */
   private async getDateFolders(): Promise<string[]> {
+    const now = Date.now();
+    const CACHE_TTL = 60000; // 60 seconds
+
+    // Return cached result if valid
+    if (this.dateFoldersCache !== null &&
+        (now - this.dateFoldersCacheTimestamp) < CACHE_TTL) {
+      return this.dateFoldersCache;
+    }
+
     try {
       const entries = await fs.readdir(this.memoriesDir, { withFileTypes: true });
-      return entries
+      const folders = entries
         .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
         .map(entry => entry.name)
         .sort()
         .reverse(); // Most recent first
+
+      // Cache the result
+      this.dateFoldersCache = folders;
+      this.dateFoldersCacheTimestamp = now;
+
+      return folders;
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
+        // Cache empty result
+        this.dateFoldersCache = [];
+        this.dateFoldersCacheTimestamp = now;
         return [];
       }
       throw error;
@@ -199,6 +232,12 @@ export class MemoryManager implements IElementManager<Memory> {
   /**
    * Save a memory to file
    * SECURITY FIX #1: Uses FileLockManager.atomicWriteFile() for atomic operations
+   * @param element Memory element to save
+   * @param filePath Optional custom file path, defaults to date-based path
+   * @returns Promise that resolves when save is complete
+   * @throws {Error} When memory validation fails before saving
+   * @throws {Error} When path validation fails or file system errors occur
+   * @throws {Error} When atomic write operation fails
    */
   async save(element: Memory, filePath?: string): Promise<void> {
     try {
@@ -425,6 +464,13 @@ export class MemoryManager implements IElementManager<Memory> {
   /**
    * Import a memory from JSON/YAML string
    * SECURITY: Full validation of imported content
+   * @param data JSON or YAML string containing memory data
+   * @param format Format of the input data ('json' or 'yaml')
+   * @returns Promise resolving to the imported Memory instance
+   * @throws {Error} When JSON/YAML parsing fails
+   * @throws {Error} When imported data is missing required fields
+   * @throws {Error} When YAML content exceeds maximum allowed size
+   * @throws {Error} When imported memory fails validation
    */
   async importElement(data: string, format: 'json' | 'yaml' = 'yaml'): Promise<Memory> {
     try {
@@ -574,6 +620,15 @@ export class MemoryManager implements IElementManager<Memory> {
   
   // Private helper methods
   
+  /**
+   * Validate and resolve a file path to prevent security issues
+   * @param filePath Path to validate and resolve
+   * @returns Promise resolving to the validated full path
+   * @throws {Error} When path contains traversal attempts (../)
+   * @throws {Error} When path is absolute or invalid
+   * @throws {Error} When file extension is not allowed (.md, .yaml, .yml)
+   * @throws {Error} When resolved path would be outside memories directory
+   */
   private async validateAndResolvePath(filePath: string): Promise<string> {
     // SECURITY FIX: Comprehensive path validation
     const normalized = path.normalize(filePath);
@@ -617,8 +672,8 @@ export class MemoryManager implements IElementManager<Memory> {
       author: parsed.metadata?.author,
       created: parsed.metadata?.created,
       modified: new Date().toISOString(),
-      tags: Array.isArray(parsed.metadata?.tags) ? 
-        parsed.metadata.tags.map((tag: string) => sanitizeInput(tag, 50)) : 
+      tags: Array.isArray(parsed.metadata?.tags) ?
+        parsed.metadata.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
       storageBackend: parsed.metadata?.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
       retentionDays: parsed.metadata?.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS,
