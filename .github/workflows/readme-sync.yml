@@ -242,8 +242,7 @@ jobs:
               --title "chore: Sync README updates from develop" \
               --body "$PR_BODY" \
               --label "documentation" \
-              --label "automated" \
-              --label "chore"
+              --label "automated"
           else
             echo "✅ PR #$EXISTING_PR already exists for README sync"
             
