@@ -46,6 +46,8 @@ import { TemplateRenderer } from './utils/TemplateRenderer.js';
 import { Template } from './elements/templates/Template.js';
 import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
+import { MemoryManager } from './elements/memories/MemoryManager.js';
+import { Memory } from './elements/memories/Memory.js';
 import { ConfigManager } from './config/ConfigManager.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
@@ -97,6 +99,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private templateManager: TemplateManager;
   private templateRenderer: TemplateRenderer;
   private agentManager: AgentManager;
+  private memoryManager: MemoryManager;
   // ConfigWizardCheck removed - not included in hotfix
 
   constructor() {
@@ -129,6 +132,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.templateManager = new TemplateManager();
     this.templateRenderer = new TemplateRenderer(this.templateManager);
     this.agentManager = new AgentManager(this.portfolioManager.getBaseDir());
+    this.memoryManager = new MemoryManager();
     
     // Log resolved path for debugging
     logger.info(`Personas directory resolved to: ${this.personasDir}`);
@@ -765,14 +769,14 @@ export class DollhouseMCPServer implements IToolHandler {
               }]
             };
           }
-          
+
           const agentList = agents.map(agent => {
             const specializations = (agent.metadata as any).specializations?.join(', ') || 'general';
             const status = agent.getStatus();
             const version = agent.version || agent.metadata.version || '1.0.0';
             return `🤖 ${agent.metadata.name} (v${version}) - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
           }).join('\n\n');
-          
+
           return {
             content: [{
               type: "text",
@@ -780,7 +784,33 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          const memories = await this.memoryManager.list();
+          if (memories.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: "No memories stored yet. Memories help me remember context about people, projects, and conversations. Would you like me to start creating memories to track important information?"
+              }]
+            };
+          }
+
+          const memoryList = memories.map(memory => {
+            const retentionDays = (memory.metadata as any).retentionDays || 'permanent';
+            const tags = (memory.metadata as any).tags?.join(', ') || 'none';
+            const version = memory.version || memory.metadata.version || '1.0.0';
+            return `🧠 ${memory.metadata.name} (v${version}) - ${memory.metadata.description}\n   Retention: ${retentionDays} days | Tags: ${tags}`;
+          }).join('\n\n');
+
+          return {
+            content: [{
+              type: "text",
+              text: `🧠 Available Memories:\n\n${memoryList}`
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -878,7 +908,34 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          // Use flexible finding to support both display name and filename
+          const allMemories = await this.memoryManager.list();
+          const memory = await this.findElementFlexibly(name, allMemories);
+          if (!memory) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory '${name}' not found`
+              }]
+            };
+          }
+
+          // Activate the memory
+          await memory.activate();
+
+          const retentionDays = (memory.metadata as any).retentionDays || 'permanent';
+          const tags = (memory.metadata as any).tags?.join(', ') || 'none';
+
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Memory '${name}' activated\nRetention: ${retentionDays} days\nTags: ${tags}\n\nThis memory is now available for context and will be used to enhance responses.`
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -963,7 +1020,34 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          const memories = await this.memoryManager.list();
+          const activeMemories = memories.filter(m => m.getStatus() === 'active');
+
+          if (activeMemories.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: "🧠 No active memories"
+              }]
+            };
+          }
+
+          const memoryList = activeMemories.map(m => {
+            const tags = (m.metadata as any).tags?.join(', ') || 'none';
+            const retentionDays = (m.metadata as any).retentionDays || 'permanent';
+            return `🧠 ${m.metadata.name} (Tags: ${tags}) - ${retentionDays} days retention`;
+          }).join('\n');
+
+          return {
+            content: [{
+              type: "text",
+              text: `Active memories:\n${memoryList}`
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -1044,7 +1128,29 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          // Use flexible finding to support both display name and filename
+          const allMemories = await this.memoryManager.list();
+          const memory = await this.findElementFlexibly(name, allMemories);
+          if (!memory) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory '${name}' not found`
+              }]
+            };
+          }
+
+          await memory.deactivate();
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Memory '${memory.metadata.name}' deactivated`
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -1194,7 +1300,42 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          // Use flexible finding to support both display name and filename
+          const allMemories = await this.memoryManager.list();
+          const memory = await this.findElementFlexibly(name, allMemories);
+          if (!memory) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory '${name}' not found`
+              }]
+            };
+          }
+
+          const details = [
+            `🧠 **${memory.metadata.name}**`,
+            `${memory.metadata.description}`,
+            ``,
+            `**Status**: ${memory.getStatus()}`,
+            `**Retention**: ${(memory.metadata as any).retentionDays || 'permanent'} days`,
+            `**Tags**: ${(memory.metadata as any).tags?.join(', ') || 'none'}`,
+            `**Storage Backend**: ${(memory.metadata as any).storageBackend || 'file'}`,
+            `**Privacy Level**: ${(memory.metadata as any).privacyLevel || 'private'}`,
+            ``,
+            `**Content**:`,
+            memory.content || 'No content stored'
+          ];
+
+          return {
+            content: [{
+              type: "text",
+              text: details.join('\n')
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -1255,7 +1396,18 @@ export class DollhouseMCPServer implements IToolHandler {
             }]
           };
         }
-        
+
+        case ElementType.MEMORY: {
+          // Memory manager doesn't have clearCache, just list
+          const memories = await this.memoryManager.list();
+          return {
+            content: [{
+              type: "text",
+              text: `🔄 Reloaded ${memories.length} memories from portfolio`
+            }]
+          };
+        }
+
         default:
           return {
             content: [{
@@ -1432,7 +1584,29 @@ export class DollhouseMCPServer implements IToolHandler {
               text: `✅ Created agent '${validatedName}' successfully`
             }]
           };
-          
+
+        case ElementType.MEMORY:
+          const memory = new Memory({
+            name: validatedName,
+            description: validatedDescription,
+            ...sanitizedMetadata
+          });
+
+          // Add content if provided
+          if (content) {
+            await memory.addEntry(content);
+          }
+
+          // Save the memory
+          await this.memoryManager.save(memory);
+
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Created memory '${validatedName}' successfully`
+            }]
+          };
+
         default:
           return {
             content: [{
@@ -1478,9 +1652,9 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Get the appropriate manager based on type with proper typing
-      let manager: ElementManagerBase<Skill | Template | Agent> | null = null;
-      let element: Skill | Template | Agent | undefined;
-      
+      let manager: ElementManagerBase<Skill | Template | Agent | any> | null = null;
+      let element: Skill | Template | Agent | any | undefined;
+
       switch (type as ElementType) {
         case ElementType.SKILL:
           manager = this.skillManager as ElementManagerBase<Skill>;
@@ -1493,6 +1667,10 @@ export class DollhouseMCPServer implements IToolHandler {
         case ElementType.AGENT:
           manager = this.agentManager as ElementManagerBase<Agent>;
           element = await this.agentManager.find((e: Agent) => e.metadata.name === name);
+          break;
+        case ElementType.MEMORY:
+          manager = this.memoryManager as ElementManagerBase<any>;
+          element = await this.memoryManager.find((e: any) => e.metadata.name === name);
           break;
         default:
           return {

@@ -260,33 +260,33 @@ describe('Generic Element Tools Integration', () => {
   describe('Element Type Support', () => {
     it('should report unsupported element types for creation', async () => {
       const args = {
-        name: 'test-memory',
-        type: 'memories', // Not in ElementType enum yet
-        description: 'Test memory element'
+        name: 'test-ensemble',
+        type: 'ensembles', // Ensembles not yet supported for creation
+        description: 'Test ensemble element'
       };
-      
+
       const result = await server.createElement(args);
-      
+
       expect(result.content[0].text).toContain('❌ Element type');
     });
-    
+
     it('should report unsupported element types for editing', async () => {
       const args = {
         name: 'test-ensemble',
-        type: 'ensembles', // Not in ElementType enum yet
+        type: 'ensembles', // Ensembles not yet supported for editing
         field: 'description',
         value: 'New value'
       };
-      
+
       const result = await server.editElement(args);
-      
+
       expect(result.content[0].text).toContain('❌ Element type');
     });
-    
+
     it('should report unsupported element types for validation', async () => {
       const args = {
-        name: 'test-memory',
-        type: 'memories', // Not in ElementType enum yet
+        name: 'test-ensemble',
+        type: 'ensembles', // Ensembles not yet supported for validation
         strict: false
       };
       
