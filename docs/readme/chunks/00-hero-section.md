@@ -65,6 +65,6 @@
 ```bash
 npm install @dollhousemcp/mcp-server
 ```
-See [Quick Start](#quick-start) for complete setup instructions.
+See [Quick Start](#-quick-start) for complete setup instructions.
 
 ---
