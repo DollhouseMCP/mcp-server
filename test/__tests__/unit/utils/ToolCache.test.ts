@@ -209,7 +209,8 @@ describe('ToolCache', () => {
       const isCI = process.env.CI === 'true';
       const isWindows = process.platform === 'win32';
       // Windows CI needs even more relaxed threshold due to slower filesystem operations
-      const performanceThreshold = isCI ? (isWindows ? 75 : 50) : 10; // ms
+      // Increased from 75 to 100ms to account for occasional CI slowness
+      const performanceThreshold = isCI ? (isWindows ? 100 : 50) : 10; // ms
       
       // Should be very fast (less than 10ms local, 50ms CI for 100 accesses)
       expect(duration).toBeLessThan(performanceThreshold);
@@ -297,7 +298,8 @@ describe('ToolCache', () => {
       const isCI = process.env.CI === 'true';
       const isWindows = process.platform === 'win32';
       // Windows CI needs even more relaxed threshold due to slower filesystem operations
-      const performanceThreshold = isCI ? (isWindows ? 75 : 50) : 10; // ms
+      // Increased from 75 to 100ms to account for occasional CI slowness
+      const performanceThreshold = isCI ? (isWindows ? 100 : 50) : 10; // ms
       
       // Performance requirements with CI accommodation
       expect(averageTime).toBeLessThan(performanceThreshold); // <10ms local, <50ms CI average
