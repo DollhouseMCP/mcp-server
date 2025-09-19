@@ -340,8 +340,10 @@ export class MemoryManager implements IElementManager<Memory> {
       const dateFolders = await this.getDateFolders();
 
       // Also check root directory for any legacy files
+      // FIX: Memory files are stored as .md (markdown with YAML frontmatter), not .yaml
+      // This was causing memories to appear as "Unnamed Memory" because no files were found
       const rootFiles = await fs.readdir(this.memoriesDir)
-        .then(files => files.filter(f => f.endsWith('.yaml')))
+        .then(files => files.filter(f => f.endsWith('.md') || f.endsWith('.yaml')))
         .catch(() => []);
 
       // Process root files first (legacy)
@@ -362,8 +364,9 @@ export class MemoryManager implements IElementManager<Memory> {
       // Process date folders
       for (const dateFolder of dateFolders) {
         const folderPath = path.join(this.memoriesDir, dateFolder);
+        // FIX: Also look for .md files in date folders
         const files = await fs.readdir(folderPath)
-          .then(files => files.filter(f => f.endsWith('.yaml')))
+          .then(files => files.filter(f => f.endsWith('.md') || f.endsWith('.yaml')))
           .catch(() => []);
 
         for (const file of files) {
@@ -662,29 +665,47 @@ export class MemoryManager implements IElementManager<Memory> {
   }
   
   private parseMemoryFile(parsed: any): { metadata: MemoryMetadata; content: string } {
+    // FIX: SecureYamlParser returns data in 'data' property, not 'metadata'
+    // For markdown files with YAML frontmatter, the structure is:
+    // parsed.data = YAML frontmatter values
+    // parsed.content = markdown content after frontmatter
+    const yamlData = parsed.data || {};
+
     // Extract metadata with validation
     const metadata: MemoryMetadata = {
-      name: sanitizeInput(parsed.metadata?.name || 'Unnamed Memory', 100),
-      description: parsed.metadata?.description ? 
-        sanitizeInput(parsed.metadata.description, 500) : 
+      name: sanitizeInput(yamlData.name || 'Unnamed Memory', 100),
+      description: yamlData.description ?
+        sanitizeInput(yamlData.description, 500) :
         '',
-      version: parsed.metadata?.version || '1.0.0',
-      author: parsed.metadata?.author,
-      created: parsed.metadata?.created,
+      version: yamlData.version || '1.0.0',
+      author: yamlData.author,
+      created: yamlData.created,
       modified: new Date().toISOString(),
-      tags: Array.isArray(parsed.metadata?.tags) ?
-        parsed.metadata.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
+      tags: Array.isArray(yamlData.tags) ?
+        yamlData.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
-      storageBackend: parsed.metadata?.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
-      retentionDays: parsed.metadata?.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS,
-      privacyLevel: parsed.metadata?.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
-      searchable: parsed.metadata?.searchable !== false,
-      maxEntries: parsed.metadata?.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
+      storageBackend: yamlData.storage_backend || yamlData.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
+      retentionDays: yamlData.retention_policy?.default ?
+        this.parseRetentionDays(yamlData.retention_policy.default) :
+        (yamlData.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS),
+      privacyLevel: yamlData.privacy_level || yamlData.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      searchable: yamlData.searchable !== false,
+      maxEntries: yamlData.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     };
-    
+
     // Extract content (if any)
     const content = parsed.content || '';
-    
+
     return { metadata, content };
+  }
+
+  /**
+   * Helper to parse retention days from various formats
+   */
+  private parseRetentionDays(retention: string | number): number {
+    if (typeof retention === 'number') return retention;
+    if (retention === 'permanent' || retention === 'perpetual') return 999999;
+    const match = retention.match(/(\d+)\s*days?/i);
+    return match ? parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
   }
 }
