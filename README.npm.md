@@ -278,7 +278,7 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 
 ### Development
 - [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](docs/SECURITY.md)
+- [Security Policy](SECURITY.md)
 - [Full Changelog](CHANGELOG.md)
 
 ## 📄 License

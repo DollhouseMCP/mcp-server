@@ -613,7 +613,7 @@ If you discover a security vulnerability, please:
 3. Include steps to reproduce if possible
 4. Allow up to 48 hours for initial response
 
-For more details, see our [Security Policy](docs/SECURITY.md).
+For more details, see our [Security Policy](SECURITY.md).
 
 ## 🛠️ Development
 
