@@ -55,21 +55,17 @@ Enable autonomous task completion
 
 </td>
 </tr>
-</table>
-
-### 🔄 Coming Soon
-
-<table>
 <tr>
 <td width="50%">
 
-#### 🧠 Memory
+#### 🧠 Memory (NEW in v1.9.0!)
 Persistent context across sessions
 - **Project Context** - Remember project details and decisions
 - **Learning Progress** - Track skill development over time
 - **Personal Preferences** - Store user-specific settings
 - **Conversation History** - Maintain dialogue continuity
-- **Status**: Coming Soon
+- **Date-based organization** - Automatic folder structure
+- **Use**: `"Create a memory for this project"`
 
 </td>
 <td width="50%">
