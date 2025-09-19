@@ -1,4 +1,4 @@
-## 🎯 Getting Started
+## 🚀 Quick Start
 
 Once installed, try these commands in Claude:
 

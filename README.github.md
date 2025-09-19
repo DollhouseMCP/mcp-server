@@ -318,7 +318,7 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 - **Save your favorites**: `"Save this configuration as my default setup"`
 - **Share with others**: `"Submit my custom persona to the community collection"`
 
-## 🚀 Quick Start
+## 📦 Installation
 
 ### Choose Your Installation Method
 
@@ -496,7 +496,7 @@ By default, your elements are stored in:
 
 Use the `DOLLHOUSE_PORTFOLIO_DIR` environment variable to customize this location.
 
-## 🎯 Getting Started
+## 🚀 Quick Start
 
 Once installed, try these commands in Claude:
 
