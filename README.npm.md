@@ -178,7 +178,7 @@ After configuring and restarting Claude Desktop, test with:
 list_elements type="personas"
 ```
 
-You should see your available personas. If not, check the [Troubleshooting](#troubleshooting) section.
+You should see your available personas. If not, check the [Troubleshooting](#-troubleshooting) section.
 
 ---
 
