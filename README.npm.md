@@ -12,7 +12,7 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 **📦 NPM Package**: https://www.npmjs.com/package/@dollhousemcp/mcp-server  
 **🌍 Website**: https://dollhousemcp.com
 
-## 🚀 Quick Start
+## 📦 Installation
 
 ### Choose Your Installation Method
 
@@ -178,7 +178,7 @@ After configuring and restarting Claude Desktop, test with:
 list_elements type="personas"
 ```
 
-You should see your available personas. If not, check the [Troubleshooting](#troubleshooting) section.
+You should see your available personas. If not, check the [Troubleshooting](#-troubleshooting) section.
 
 ---
 
@@ -190,7 +190,7 @@ By default, your elements are stored in:
 
 Use the `DOLLHOUSE_PORTFOLIO_DIR` environment variable to customize this location.
 
-## 🎯 Getting Started
+## 🚀 Quick Start
 
 Once installed, try these commands in Claude:
 
