@@ -7,7 +7,7 @@ This document provides the complete configuration and setup for running Claude C
 
 ```bash
 # 1. Build the container
-docker build -f Dockerfile.claude-testing -t claude-mcp-test-env .
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-mcp-test-env .
 
 # 2. Set your API key
 export ANTHROPIC_API_KEY="sk-ant-api03-..."
@@ -78,7 +78,7 @@ Successfully detected and accessible:
 
 ### Build
 ```bash
-docker build -f Dockerfile.claude-testing -t claude-mcp-test-env .
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-mcp-test-env .
 ```
 
 ### Run Interactive Session
@@ -300,7 +300,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Build Docker image
-        run: docker build -f Dockerfile.claude-testing -t test:${{ github.sha }} .
+        run: docker build -f docker/test-configs/Dockerfile.claude-testing -t test:${{ github.sha }} .
       
       - name: Test MCP tools detection
         env:

@@ -17,7 +17,7 @@ fi
 
 # Build the test image if needed
 echo "📦 Building test environment..."
-docker build -f Dockerfile.claude-testing -t claude-mcp-test-env:1.0.0 . || {
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-mcp-test-env:1.0.0 . || {
     echo "❌ Failed to build Docker image"
     exit 1
 }

@@ -119,7 +119,7 @@ fi
 # Build if requested
 if [ "$BUILD" = true ]; then
     echo -e "${YELLOW}🔨 Building Docker image...${NC}"
-    docker build -f Dockerfile.claude-testing -t "$IMAGE_NAME" .
+    docker build -f docker/test-configs/Dockerfile.claude-testing -t "$IMAGE_NAME" .
     echo -e "${GREEN}✅ Build complete${NC}"
 fi
 

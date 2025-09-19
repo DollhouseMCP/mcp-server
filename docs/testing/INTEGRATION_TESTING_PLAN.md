@@ -160,7 +160,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Build Docker Image
-        run: docker build -f Dockerfile.claude-testing -t test:${{ github.sha }} .
+        run: docker build -f docker/test-configs/Dockerfile.claude-testing -t test:${{ github.sha }} .
       
       - name: Run Smoke Tests
         env:
