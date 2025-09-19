@@ -2031,7 +2031,7 @@ export class DollhouseMCPServer implements IToolHandler {
       // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
       // See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete checklist
       // This array is often forgotten and causes validation failures for new types
-      const validTypes = ['personas', 'skills', 'agents', 'templates'];  // Only MCP-supported types
+      const validTypes = ['personas', 'skills', 'agents', 'templates', 'memories'];  // Only MCP-supported types
       
       // Validate section if provided
       const validatedSection = section ? sanitizeInput(section.toLowerCase(), 100) : undefined;
@@ -5314,9 +5314,12 @@ Placeholders for custom format:
         case 'agents':
           elementTypeEnum = ElementType.AGENT;
           break;
+        case 'memories':
+          elementTypeEnum = ElementType.MEMORY;
+          break;
         default:
           // Instead of silently returning empty array, throw descriptive error
-          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories'];
           throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
       }
 
@@ -5386,9 +5389,12 @@ Placeholders for custom format:
         case 'agents':
           elementTypeEnum = ElementType.AGENT;
           break;
+        case 'memories':
+          elementTypeEnum = ElementType.MEMORY;
+          break;
         default:
           // Instead of silently returning null, throw descriptive error
-          const validTypes = ['personas', 'skills', 'templates', 'agents'];
+          const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories'];
           throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
       }
 
