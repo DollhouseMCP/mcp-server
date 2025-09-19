@@ -25,16 +25,23 @@ Please provide as much information as possible:
 - Suggested fix (if you have one)
 - Your contact information (for follow-up)
 
-## Response Timeline
+## Response Expectations
 
-We are committed to responding quickly to security issues:
+**Important**: DollhouseMCP is an open-source project maintained by a single developer in their spare time.
 
-| Severity | Initial Response | Status Update | Resolution Target |
-|----------|-----------------|---------------|-------------------|
-| Critical | Within 4 hours | Daily | 48 hours |
-| High | Within 24 hours | Every 2 days | 1 week |
-| Medium | Within 72 hours | Weekly | 2 weeks |
-| Low | Within 1 week | As needed | Next release |
+### What This Means
+- **No guaranteed response times** - I will respond when I'm able to
+- **No obligation to fix issues** - I will make best efforts to address security issues, but cannot guarantee fixes
+- **No SLA or support commitments** - This is free software provided as-is
+- **Response times vary** - Depending on my availability, work schedule, and other life commitments
+
+### Realistic Expectations
+- **Critical security issues**: I'll try to look at these as soon as I become aware of them
+- **Other issues**: Will be addressed when time permits
+- **Patches and fixes**: Provided on a best-effort basis with no guaranteed timeline
+- **Communication**: I'll try to acknowledge reports when I can, but please be patient
+
+This is a personal project I maintain because I believe in it, not a commercial product with support obligations.
 
 ## Supported Versions
 
@@ -123,16 +130,18 @@ For maximum security, we recommend:
 
 ## Disclosure Policy
 
-We follow a coordinated disclosure process:
+As a solo-maintained project, the disclosure process is straightforward:
 
-1. **Report Receipt**: We acknowledge receipt within 48 hours
-2. **Initial Triage**: We assess severity and impact
-3. **Fix Development**: We develop and test a fix
-4. **Private Notification**: We may notify critical users early
-5. **Public Release**: We release the fix with security advisory
-6. **Public Disclosure**: Details published after users have time to update
+1. **Report Receipt**: I'll acknowledge when I see it (no guaranteed timeline)
+2. **Assessment**: I'll evaluate the issue when I have time
+3. **Fix Development**: If I agree it's a security issue and have time, I'll work on a fix
+4. **Release**: When a fix is ready, I'll release it with appropriate notes
+5. **Public Disclosure**: Security advisories will be published when appropriate
 
-We typically request a 90-day disclosure window for non-critical issues, and may request shorter windows for critical issues to protect users.
+**Please note**:
+- I appreciate responsible disclosure and will do my best to coordinate with reporters
+- However, I cannot guarantee specific timelines or commit to embargo periods
+- If you need a fix urgently, you're welcome to submit a pull request
 
 ## Contact
 
