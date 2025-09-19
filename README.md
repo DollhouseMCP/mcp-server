@@ -49,7 +49,7 @@
 
 ## Elements That Customize Your AI's Capabilities and Actions
 
-**DollhouseMCP** is open source, community-powered AI customization. Create your own customization elements—personas that shape behavior, skills that add capabilities, templates for consistent outputs, and agents for automation—or use and modify an ever-growing number of customization elements from the community. Every element you create can be saved to your portfolio and used again or shared back to the DollhouseMCP Collection to help others.
+**DollhouseMCP** is open source, community-powered AI customization. Create your own customization elements—personas that shape behavior, skills that add capabilities, templates for consistent outputs, agents for automation, and memories for persistent context—or use and modify an ever-growing number of customization elements from the community. Every element you create can be saved to your portfolio and used again or shared back to the DollhouseMCP Collection to help others.
 
 ### What Are Customization Elements?
 
@@ -57,11 +57,12 @@
 - **Skills** – Add specialized capabilities your AI can use
 - **Templates** – Ensure consistent, high-quality outputs
 - **Agents** – Enable autonomous task completion with smart decision-making
+- **Memory** – Persistent context storage across sessions
 
 ### Core Capabilities
 
-- **🌍  Community Element Library** – A growing number of tested personas, skills, templates, and agents
-- **✨  Create Custom Elements** – Create personas, skills, templates, and agents from scratch using natural language
+- **🌍  Community Element Library** – A growing number of tested personas, skills, templates, agents, and memories
+- **✨  Create Custom Elements** – Create personas, skills, templates, agents, and memories from scratch using natural language
 - **🤝  Open Source** – AGPL-3.0 licensed, ensuring community contributions stay free
 - **📚  The DollhouseMCP Collection** – Install any community element with one command
 - **🛠️  41 Professional Tools** – Complete toolkit for element creation and management
@@ -97,11 +98,11 @@
 ```bash
 npm install @dollhousemcp/mcp-server
 ```
-See [Quick Start](#quick-start) for complete setup instructions.
+See [Quick Start](#-quick-start) for complete setup instructions.
 
 ---
 
-## 🎯 Element Types: Available Now & Coming Soon
+## 🎯 Element Types
 
 ### ✅ Available Now
 
@@ -121,7 +122,7 @@ Shape how your AI behaves and responds
 </td>
 <td width="50%">
 
-#### 💡 Skills  
+#### 💡 Skills
 Add specialized capabilities your AI can use
 - **Code Review** - Analyze code quality and suggest improvements
 - **Data Analysis** - Statistical analysis and visualization
@@ -159,18 +160,27 @@ Enable autonomous task completion
 </td>
 </tr>
 <tr>
-<td width="50%">
+<td colspan="2">
 
-#### 🧠 Memory (NEW in v1.9.0!)
-Persistent context across sessions
-- **Project Context** - Remember project details and decisions
-- **Learning Progress** - Track skill development over time
-- **Personal Preferences** - Store user-specific settings
-- **Conversation History** - Maintain dialogue continuity
-- **Date-based organization** - Automatic folder structure
-- **Use**: `"Create a memory for this project"`
+#### 🧠 Memory <span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">NEW in v1.9.0</span>
+Persistent context across sessions with intelligent organization
+- **Text-based storage** - Currently supports text content (PDFs, images, and other media types coming soon)
+- **Date-based folders** - Automatic YYYY-MM-DD organization prevents flat directory issues
+- **YAML format** - Human-readable structured data (vs Markdown for other elements)
+- **Smart deduplication** - SHA-256 hashing prevents duplicate storage
+- **Search indexing** - Fast queries across thousands of entries
+- **Use**: `"Create a memory for this project"` or `"Remember this conversation"`
+
+**Typical file sizes**: Single memories up to ~100KB, folder structure enables unlimited collections
 
 </td>
+</tr>
+</table>
+
+### 🚀 Coming Soon
+
+<table>
+<tr>
 <td width="50%">
 
 #### 🎯 Ensembles
@@ -179,7 +189,18 @@ Combine multiple elements as one unified entity
 - **Writing Suite** - Creative + Technical + Editorial capabilities
 - **Security Team** - Analyst + Auditor + Remediation skills
 - **Data Science Platform** - Analysis + Visualization + ML skills
-- **Status**: Coming Soon
+- **Status**: In development
+
+</td>
+<td width="50%">
+
+#### 📋 Prompts
+Reusable instruction sets
+- **Code Review Checklist** - Systematic review steps
+- **Security Audit Guide** - Vulnerability assessment process
+- **Writing Guidelines** - Style and tone instructions
+- **Debug Workflow** - Problem-solving methodology
+- **Status**: Planned
 
 </td>
 </tr>
@@ -192,18 +213,18 @@ External function calls and commands
 - **Database Queries** - Direct database interaction
 - **API Calls** - External service integration
 - **File Operations** - Advanced file manipulation
-- **Status**: Planned
+- **Status**: Under consideration
 
 </td>
 <td width="50%">
 
-#### 📋 Prompts
-Reusable instruction sets
-- **Code Review Checklist** - Systematic review steps
-- **Security Audit Guide** - Vulnerability assessment process
-- **Writing Guidelines** - Style and tone instructions
-- **Debug Workflow** - Problem-solving methodology
-- **Status**: Planned
+#### 📚 Memory Enhancements
+Expanding memory capabilities
+- **PDF Support** - Text extraction from PDF documents
+- **Image Analysis** - Visual content understanding
+- **Audio Transcription** - Voice and sound processing
+- **Video Understanding** - Motion and scene analysis
+- **Status**: Roadmap planned
 
 </td>
 </tr>
@@ -297,7 +318,7 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 - **Save your favorites**: `"Save this configuration as my default setup"`
 - **Share with others**: `"Submit my custom persona to the community collection"`
 
-## 🚀 Quick Start
+## 📦 Installation
 
 ### Choose Your Installation Method
 
@@ -463,7 +484,7 @@ After configuring and restarting Claude Desktop, test with:
 list_elements type="personas"
 ```
 
-You should see your available personas. If not, check the [Troubleshooting](#troubleshooting) section.
+You should see your available personas. If not, check the [Troubleshooting](#-troubleshooting) section.
 
 ---
 
@@ -475,7 +496,7 @@ By default, your elements are stored in:
 
 Use the `DOLLHOUSE_PORTFOLIO_DIR` environment variable to customize this location.
 
-## 🎯 Getting Started
+## 🚀 Quick Start
 
 Once installed, try these commands in Claude:
 
@@ -521,13 +542,27 @@ Your portfolio is organized by element type:
 
 ```
 ~/.dollhouse/portfolio/
-├── personas/       # Behavioral profiles
-├── skills/         # Discrete capabilities  
-├── templates/      # Reusable content structures
-├── agents/         # Goal-oriented actors
-├── memories/       # Persistent context
-└── ensembles/      # Element combinations
+├── personas/       # Behavioral profiles (Markdown files)
+├── skills/         # Discrete capabilities (Markdown files)
+├── templates/      # Reusable content structures (Markdown files)
+├── agents/         # Goal-oriented actors (Markdown files)
+├── memories/       # Persistent context (YAML files with date folders)
+│   ├── 2025-09-18/
+│   │   └── project-context.yaml
+│   └── 2025-09-19/
+│       ├── meeting-notes.yaml
+│       └── code-review.yaml
+└── ensembles/      # Element combinations (Markdown files)
 ```
+
+**Note on File Types:**
+- **Markdown (.md)**: Used for personas, skills, templates, agents, and ensembles - human-readable with YAML frontmatter
+- **YAML (.yaml)**: Used exclusively for memories - structured data optimized for context storage
+
+**Memory Organization:**
+- Memories use automatic **YYYY-MM-DD** folder structure to prevent flat directory performance issues
+- Each memory file can grow up to ~100KB before creating a new file
+- Folder structure enables unlimited memory collections without degradation
 
 ### Key Features
 
