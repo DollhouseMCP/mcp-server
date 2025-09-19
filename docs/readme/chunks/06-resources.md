@@ -15,5 +15,5 @@
 
 ### Development
 - [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](docs/SECURITY.md)
+- [Security Policy](SECURITY.md)
 - [Full Changelog](CHANGELOG.md)
