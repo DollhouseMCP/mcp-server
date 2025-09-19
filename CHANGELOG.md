@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.9.2] - 2025-09-19
+
+### Fixed
+- **Branch Synchronization**: Resolved divergence between main and develop branches
+  - Synchronized documentation updates that were only in develop
+  - Fixed security audit suppressions path to use proper location
+  - Ensured all v1.9.0 and v1.9.1 features are properly documented
+
+### Enhanced
+- **Documentation**: Updated README and CHANGELOG to accurately reflect all implemented features
+- **Security Audit**: Corrected suppressions file path from root to proper config location
+
+### Technical Details
+- Merged 58 commits from develop that were missing from main
+- No actual code changes to Memory element (already fully implemented in main)
+- Primary changes are documentation and configuration fixes
+
 ## [1.9.1] - 2025-09-19
 
 ### Fixed
