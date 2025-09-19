@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.9.4] - 2025-09-19
+
+### Fixed
+- **Memory Name Display**: Fixed memory elements showing as "Unnamed Memory" in list output
+  - Corrected metadata parsing to use `parsed.data` instead of `parsed.metadata`
+  - SecureYamlParser returns YAML frontmatter in the `data` property for markdown files
+  - Added `parseRetentionDays()` helper to handle various retention formats (permanent, perpetual, "30 days")
+  - Memory files are correctly identified as .yaml format only (removed incorrect .md support)
+  - Ensures `validateAndResolvePath()` only accepts .yaml and .yml extensions for consistency
+  - Fixes PR #1030: All memory names now display correctly instead of showing "Unnamed Memory"
+
+### Technical Details
+- The bug was caused by incorrect property path when parsing YAML frontmatter from SecureYamlParser
+- Legacy .md files in memories directory are templates/schemas, not actual memory files
+- All real memory files are stored as .yaml in date-based folders as designed
+
 ## [1.9.3] - 2025-09-19
 
 ### Fixed

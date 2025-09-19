@@ -190,6 +190,31 @@ data:
       expect(validMemories).toHaveLength(1);
       expect(validMemories[0].metadata.name).toBe('Good Memory');
     });
+
+    // Regression test for v1.9.4 bug fix
+    it('should parse memory names correctly from SecureYamlParser data property', async () => {
+      // This tests the specific bug where parseMemoryFile was looking for
+      // parsed.metadata instead of parsed.data, causing all memories to show
+      // as "Unnamed Memory"
+
+      // Create a memory with a specific name
+      const testMemory = new Memory({
+        name: 'Test Memory Name',
+        description: 'Testing that names are parsed correctly'
+      });
+      await manager.save(testMemory, 'regression-test.yaml');
+
+      // Load the memories using list() which internally uses parseMemoryFile
+      const memories = await manager.list();
+
+      // The bug would cause this to be "Unnamed Memory" instead of the actual name
+      expect(memories).toHaveLength(1);
+      expect(memories[0].metadata.name).toBe('Test Memory Name');
+      expect(memories[0].metadata.name).not.toBe('Unnamed Memory');
+
+      // Also test that the description was parsed correctly
+      expect(memories[0].metadata.description).toBe('Testing that names are parsed correctly');
+    });
   });
   
   describe('find and findMany', () => {
