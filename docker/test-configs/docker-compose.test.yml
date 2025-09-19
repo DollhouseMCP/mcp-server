@@ -5,8 +5,8 @@ services:
     image: claude-mcp-test-env:1.0.0
     container_name: dollhouse-mcp-test
     build:
-      context: .
-      dockerfile: Dockerfile.claude-testing
+      context: ../..
+      dockerfile: docker/test-configs/Dockerfile.claude-testing
     env_file:
       - docker/test-environment.env
     environment:

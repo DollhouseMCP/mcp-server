@@ -24,8 +24,8 @@ NC='\033[0m' # No Color
 
 # Configuration
 IMAGE_NAME="claude-mcp-test-env"
-DOCKERFILE="Dockerfile.claude-testing"
-DOCKERIGNORE=".dockerignore.claude-testing"
+DOCKERFILE="docker/test-configs/Dockerfile.claude-testing"
+DOCKERIGNORE="docker/test-configs/.dockerignore.claude-testing"
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║     Claude Code + DollhouseMCP Docker Testing Environment       ║${NC}"

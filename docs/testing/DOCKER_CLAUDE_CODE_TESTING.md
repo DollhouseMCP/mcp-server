@@ -42,7 +42,7 @@ This document describes how to create a Docker container that runs both Claude C
 ### Step 1: Build the Container
 ```bash
 # From the mcp-server directory
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-dollhouse-test .
 ```
 
 ### Step 2: Set Your API Key
@@ -78,7 +78,7 @@ Expected output should include tools like:
 
 ## Complete Dockerfile
 
-The `Dockerfile.claude-testing` has been created in the project root with the following key features:
+The `docker/test-configs/Dockerfile.claude-testing` has been created with the following key features:
 
 ### Key Components:
 
@@ -101,7 +101,7 @@ This is the recommended method from Anthropic for installing Claude Code in cont
 
 ```bash
 # From the mcp-server directory
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-dollhouse-test .
 ```
 
 ## Running the Container
@@ -242,7 +242,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Build test container
-        run: docker build -f Dockerfile.claude-testing -t claude-test .
+        run: docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-test .
       
       - name: Run integration tests
         env:
