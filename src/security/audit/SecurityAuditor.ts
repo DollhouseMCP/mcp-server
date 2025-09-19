@@ -298,7 +298,7 @@ export class SecurityAuditor {
       const fs = require('fs');
       const path = require('path');
       const projectRoot = process.cwd();
-      const suppressionsPath = path.join(projectRoot, '.security-suppressions.json');
+      const suppressionsPath = path.join(projectRoot, 'src', 'security', 'audit', 'config', 'security-suppressions.json');
 
       if (fs.existsSync(suppressionsPath)) {
         const suppressionsContent = fs.readFileSync(suppressionsPath, 'utf-8');
