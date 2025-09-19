@@ -1,4 +1,4 @@
-## 🚀 Quick Start
+## 📦 Installation
 
 ### Choose Your Installation Method
 
