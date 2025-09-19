@@ -873,7 +873,21 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.0 - September 19, 2025
+### v1.9.1 - September 19, 2025
+
+**Hotfix Release**: Critical memory element support fix
+
+#### 🔧 Bug Fixes
+- **Fixed memory element validation** - Resolves "Invalid type 'memories'" error when browsing collection
+- **Updated tool descriptions** - All MCP tools now properly recognize memory elements
+- **Fixed element type handling** - Added missing switch cases for memory elements in index.ts
+
+#### 📋 Technical Details
+- Issue #1019 resolved - Memory elements can now be browsed and installed from collection
+- Clean hotfix approach with minimal changes (2 commits)
+- Cherry-picked fix from develop to maintain stable release
+
+### v1.9.0 - September 17, 2025
 
 **🎉 Memory Element Release**: Persistent context storage with enterprise-grade features
 

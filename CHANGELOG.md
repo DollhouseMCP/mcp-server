@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.9.1] - 2025-09-19
+
+### Fixed
+- **Memory Element Support**: Fixed validation and tool descriptions for memory elements
+  - Added 'memories' to all validation arrays in index.ts
+  - Updated browse_collection, get_collection_content, and install_collection_content tool descriptions
+  - Fixed switch statements to handle memory element type properly
+  - Resolves Issue #1019 where browse_collection returned "Invalid type 'memories'" error
+  - Memory elements can now be browsed, installed, and managed through all MCP tools
+
+### Technical Details
+- Modified validation arrays at lines 2034, 5322, and 5394 in src/index.ts
+- Added memory case to element type switch statements
+- Updated all collection tool descriptions to include memory elements
+- Clean hotfix approach with cherry-picked commit from develop branch
+
+## [1.9.0] - 2025-09-17
+
+### Added
+- **Memory Element Implementation**: Complete memory element support with advanced features
+  - Persistent context storage across sessions
+  - Date-based folder organization for scalability
+  - Search indexing with content-based retrieval
+  - Retention policies and privacy levels
+  - Performance optimizations for large memory sets
+
+### Enhanced
+- **Collection Support**: Full memory element support in collection browsing and installation
+- **Portfolio System**: Memory elements fully integrated with portfolio management
+
 ## [1.8.1] - 2025-09-15
 
 ### Fixed
