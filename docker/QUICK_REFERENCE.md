@@ -4,7 +4,7 @@
 
 ```bash
 # Build and run (assumes ANTHROPIC_API_KEY is set)
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test . && \
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-dollhouse-test . && \
 docker run -it --rm -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" claude-dollhouse-test \
 claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 ```
@@ -13,7 +13,7 @@ claude --model sonnet --mcp-config /root/.config/claude-code/config.json
 
 ### Build
 ```bash
-docker build -f Dockerfile.claude-testing -t claude-dollhouse-test .
+docker build -f docker/test-configs/Dockerfile.claude-testing -t claude-dollhouse-test .
 ```
 
 ### Run Interactive
@@ -75,8 +75,8 @@ Options:
 
 ```
 .
-├── Dockerfile.claude-testing          # Main Dockerfile
-├── .dockerignore.claude-testing       # Build optimization
+├── docker/test-configs/Dockerfile.claude-testing          # Main Dockerfile
+├── docker/test-configs/.dockerignore.claude-testing       # Build optimization
 ├── scripts/test-claude-docker.sh      # Test script
 └── docs/
     ├── testing/DOCKER_CLAUDE_CODE_TESTING.md    # Full guide

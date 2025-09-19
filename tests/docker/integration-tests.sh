@@ -28,7 +28,7 @@ check_prerequisites() {
     
     if ! docker image ls | grep -q "$IMAGE_NAME"; then
         echo -e "${RED}❌ Docker image '$IMAGE_NAME' not found${NC}"
-        echo "Please build the image first: docker build -f Dockerfile.claude-testing -t $IMAGE_NAME ."
+        echo "Please build the image first: docker build -f docker/test-configs/Dockerfile.claude-testing -t $IMAGE_NAME ."
         exit 1
     fi
     
