@@ -43,6 +43,15 @@ Please provide as much information as possible:
 
 This is a personal project I maintain because I believe in it, not a commercial product with support obligations.
 
+### Want to Help?
+If you'd like to contribute to improving DollhouseMCP's security response:
+- **Submit PRs**: Security fixes with tests are always welcome
+- **Volunteer Time**: If you have security expertise and want to help review/fix issues, please reach out
+- **Sponsor Development**: Donations help me allocate more time to the project
+- **Join as Maintainer**: I'm open to bringing on trusted contributors to help with security responses
+
+Contact me if you're interested in helping make DollhouseMCP more secure and sustainable.
+
 ## Supported Versions
 
 We provide security updates for the following versions:
