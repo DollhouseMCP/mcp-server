@@ -645,9 +645,9 @@ export class MemoryManager implements IElementManager<Memory> {
       throw new Error('Invalid file path: Path traversal detected');
     }
     
-    // Ensure proper extension
-    if (!normalized.endsWith('.md') && !normalized.endsWith('.yaml') && !normalized.endsWith('.yml')) {
-      throw new Error('Memory files must have .md, .yaml, or .yml extension');
+    // Ensure proper extension - memories should only be .yaml or .yml
+    if (!normalized.endsWith('.yaml') && !normalized.endsWith('.yml')) {
+      throw new Error('Memory files must have .yaml or .yml extension');
     }
     
     // Construct full path
