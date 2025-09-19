@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.9.3] - 2025-09-19
+
+### Fixed
+- **Memory Element MCP Support**: Added complete Memory element support to all MCP tool handlers
+  - Fixed "Unknown element type 'memories'" errors in DollhouseMCP client
+  - Added Memory case handling to 8 critical methods in src/index.ts:
+    - `listElements`: Lists available memories with retention policy and tags
+    - `activateElement`: Activates memory and shows status
+    - `getActiveElements`: Shows active memories with their tags
+    - `deactivateElement`: Deactivates memory elements
+    - `getElementDetails`: Shows comprehensive memory details
+    - `reloadElements`: Reloads memories from portfolio
+    - `createElement`: Creates new memory instances with content
+    - `editElement`: Supports editing memory properties
+  - Memory infrastructure was already implemented but MCP tool handlers were missing the switch cases
+  - Fixes user-reported issue with memories not working in v1.9.2
+
+### Fixed
+- **Test Compatibility**: Updated GenericElementTools test to use ensembles instead of memories
+  - Test was expecting memories to be unsupported but they are now fully functional
+  - Changed test to use ensembles which remain unsupported for creation/editing/validation
+
 ## [1.9.2] - 2025-09-19
 
 ### Fixed
