@@ -16,7 +16,7 @@
 
 ## Elements That Customize Your AI's Capabilities and Actions
 
-**DollhouseMCP** is open source, community-powered AI customization. Create your own customization elements—personas that shape behavior, skills that add capabilities, templates for consistent outputs, and agents for automation—or use and modify an ever-growing number of customization elements from the community. Every element you create can be saved to your portfolio and used again or shared back to the DollhouseMCP Collection to help others.
+**DollhouseMCP** is open source, community-powered AI customization. Create your own customization elements—personas that shape behavior, skills that add capabilities, templates for consistent outputs, agents for automation, and memories for persistent context—or use and modify an ever-growing number of customization elements from the community. Every element you create can be saved to your portfolio and used again or shared back to the DollhouseMCP Collection to help others.
 
 ### What Are Customization Elements?
 
@@ -24,11 +24,12 @@
 - **Skills** – Add specialized capabilities your AI can use
 - **Templates** – Ensure consistent, high-quality outputs
 - **Agents** – Enable autonomous task completion with smart decision-making
+- **Memory** – Persistent context storage across sessions
 
 ### Core Capabilities
 
-- **🌍  Community Element Library** – A growing number of tested personas, skills, templates, and agents
-- **✨  Create Custom Elements** – Create personas, skills, templates, and agents from scratch using natural language
+- **🌍  Community Element Library** – A growing number of tested personas, skills, templates, agents, and memories
+- **✨  Create Custom Elements** – Create personas, skills, templates, agents, and memories from scratch using natural language
 - **🤝  Open Source** – AGPL-3.0 licensed, ensuring community contributions stay free
 - **📚  The DollhouseMCP Collection** – Install any community element with one command
 - **🛠️  41 Professional Tools** – Complete toolkit for element creation and management
