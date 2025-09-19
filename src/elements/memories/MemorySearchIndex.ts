@@ -179,7 +179,7 @@ class ContentIndex {
 
       // SECURITY FIX: Log security event for audit trail (DMCP-SEC-006)
       SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_UNICODE_VALIDATION_FAILED as any,
+        type: MEMORY_SECURITY_EVENTS.MEMORY_UNICODE_VALIDATION_FAILED,
         severity: 'LOW',
         source: 'MemorySearchIndex.extractTerms',
         details: `Invalid Unicode detected during term extraction${context?.entryId ? ` for entry ${context.entryId}` : ''}`,

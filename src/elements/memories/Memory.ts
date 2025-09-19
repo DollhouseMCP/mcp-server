@@ -18,6 +18,7 @@ import { IElement, ElementValidationResult, ValidationError } from '../../types/
 import { ElementType } from '../../portfolio/types.js';
 import { IElementMetadata } from '../../types/elements/IElement.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
@@ -146,6 +147,9 @@ export class Memory extends BaseElement implements IElement {
 
   // Search index for performance (Issue #984)
   private searchIndex: MemorySearchIndex;
+
+  // Sanitization cache to avoid redundant processing
+  private sanitizationCache: Map<string, string> = new Map();
   
   constructor(metadata: Partial<MemoryMetadata> = {}) {
     // SECURITY FIX: Sanitize all inputs during construction
@@ -253,9 +257,10 @@ export class Memory extends BaseElement implements IElement {
 
     // Check if we should build/rebuild the index
     if (!this.searchIndex.isIndexed && this.entries.size >= 100) {
-      // Build index asynchronously to avoid blocking
-      this.searchIndex.buildIndex(this.entries).catch(error => {
-        logger.error('Failed to build search index', error);
+      // Build index asynchronously to avoid blocking, with retry logic
+      this.buildSearchIndexWithRetry().catch(error => {
+        // Final failure after retries - search will fall back to linear scan
+        logger.error('Failed to build search index after retries, search will use fallback', error);
       });
     }
 
@@ -597,8 +602,8 @@ export class Memory extends BaseElement implements IElement {
       if (Array.isArray(parsed.entries)) {
         for (const entry of parsed.entries) {
           if (this.isValidEntry(entry)) {
-            // Re-sanitize on load
-            entry.content = sanitizeMemoryContent(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+            // Use optimized sanitization with caching
+            entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
             entry.tags = this.sanitizeTags(entry.tags || []);
             entry.timestamp = new Date(entry.timestamp);
             if (entry.expiresAt) {
@@ -684,5 +689,69 @@ export class Memory extends BaseElement implements IElement {
       typeof entry.content === 'string' &&
       entry.timestamp &&
       (!entry.tags || Array.isArray(entry.tags));
+  }
+
+  /**
+   * Optimized sanitization with checksum caching
+   * Avoids re-sanitizing content that hasn't changed
+   * @param content Content to sanitize
+   * @param maxLength Maximum allowed length
+   * @returns Sanitized content
+   */
+  private sanitizeWithCache(content: string, maxLength: number): string {
+    // Generate checksum for the input
+    const checksum = crypto.createHash('sha256').update(content).digest('hex');
+
+    // Check if we've already sanitized this exact content
+    const cacheKey = `${checksum}:${maxLength}`;
+    const cached = this.sanitizationCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Perform sanitization
+    const sanitized = sanitizeMemoryContent(content, maxLength);
+
+    // Cache the result (limit cache size to prevent memory issues)
+    if (this.sanitizationCache.size > 1000) {
+      // Remove oldest entries (simple FIFO)
+      const firstKey = this.sanitizationCache.keys().next().value;
+      if (firstKey) this.sanitizationCache.delete(firstKey);
+    }
+    this.sanitizationCache.set(cacheKey, sanitized);
+
+    return sanitized;
+  }
+
+  /**
+   * Build search index with retry logic
+   * Attempts to build the index up to 3 times with exponential backoff
+   * This ensures search functionality even if there are transient failures
+   */
+  private async buildSearchIndexWithRetry(retries = 3): Promise<void> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        await this.searchIndex.buildIndex(this.entries);
+        logger.debug(`Search index built successfully on attempt ${attempt}`);
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        logger.warn(`Search index build attempt ${attempt} failed`, {
+          error: lastError.message,
+          entriesCount: this.entries.size
+        });
+
+        if (attempt < retries) {
+          // Exponential backoff: 100ms, 200ms, 400ms
+          const delay = Math.pow(2, attempt - 1) * 100;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // If we get here, all retries failed
+    throw lastError || new Error('Failed to build search index');
   }
 }
