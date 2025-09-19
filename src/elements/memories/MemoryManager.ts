@@ -339,11 +339,10 @@ export class MemoryManager implements IElementManager<Memory> {
       // Get all date folders
       const dateFolders = await this.getDateFolders();
 
-      // Also check root directory for any legacy files
-      // FIX: Memory files are stored as .md (markdown with YAML frontmatter), not .yaml
-      // This was causing memories to appear as "Unnamed Memory" because no files were found
+      // Also check root directory for any memory files
+      // Memory files should be .yaml format only
       const rootFiles = await fs.readdir(this.memoriesDir)
-        .then(files => files.filter(f => f.endsWith('.md') || f.endsWith('.yaml')))
+        .then(files => files.filter(f => f.endsWith('.yaml')))
         .catch(() => []);
 
       // Process root files first (legacy)
@@ -364,9 +363,8 @@ export class MemoryManager implements IElementManager<Memory> {
       // Process date folders
       for (const dateFolder of dateFolders) {
         const folderPath = path.join(this.memoriesDir, dateFolder);
-        // FIX: Also look for .md files in date folders
         const files = await fs.readdir(folderPath)
-          .then(files => files.filter(f => f.endsWith('.md') || f.endsWith('.yaml')))
+          .then(files => files.filter(f => f.endsWith('.yaml')))
           .catch(() => []);
 
         for (const file of files) {
