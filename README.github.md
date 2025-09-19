@@ -158,21 +158,17 @@ Enable autonomous task completion
 
 </td>
 </tr>
-</table>
-
-### 🔄 Coming Soon
-
-<table>
 <tr>
 <td width="50%">
 
-#### 🧠 Memory
+#### 🧠 Memory (NEW in v1.9.0!)
 Persistent context across sessions
 - **Project Context** - Remember project details and decisions
 - **Learning Progress** - Track skill development over time
 - **Personal Preferences** - Store user-specific settings
 - **Conversation History** - Maintain dialogue continuity
-- **Status**: Coming Soon
+- **Date-based organization** - Automatic folder structure
+- **Use**: `"Create a memory for this project"`
 
 </td>
 <td width="50%">
@@ -841,6 +837,39 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 🏷️ Version History
+
+### v1.9.0 - September 19, 2025
+
+**🎉 Memory Element Release**: Persistent context storage with enterprise-grade features
+
+#### ✨ New Features
+- **Memory Element**: Complete implementation of persistent context storage (PR #1000 - The Milestone PR!)
+- **Date-based Organization**: Automatic folder structure (YYYY-MM-DD) prevents flat directory issues
+- **Content Deduplication**: SHA-256 hashing prevents duplicate storage (Issue #994)
+- **Search Indexing**: Fast queries across thousands of entries with O(log n) performance (Issue #984)
+- **Privacy Levels**: Three-tier access control (public, private, sensitive)
+- **Retention Policies**: Automatic cleanup based on age and capacity
+
+#### 🔧 Improvements
+- **Performance Optimizations**: 60-second cache for date folder operations
+- **Collision Handling**: Automatic version suffixes for same-named files
+- **Atomic Operations**: FileLockManager prevents corruption and race conditions
+- **Sanitization Caching**: SHA-256 checksums reduce CPU usage by ~40% during deserialization
+- **Retry Logic**: Search index building with exponential backoff
+
+#### 🛡️ Security
+- **Comprehensive Input Validation**: All memory content sanitized with DOMPurify
+- **Path Traversal Protection**: Robust validation in MemoryManager
+- **Size Limits**: DoS protection with 1MB memory and 100KB entry limits
+- **Audit Logging**: Complete security event tracking
+
+#### 🧪 Testing
+- **89 Memory Tests**: Comprehensive coverage across 4 test suites
+- **Concurrent Access Tests**: Thread safety verification
+- **Security Coverage**: XSS, Unicode attacks, path traversal
+- **CI Improvements**: Fixed GitHub integration test conflicts (PR #1001)
+
+---
 
 ### v1.8.1 - September 15, 2025
 

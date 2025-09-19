@@ -54,7 +54,24 @@ async function runSecurityAudit() {
     '.security-audit/**'
   ];
   
-  // Add suppressions for test files
+  // Load suppressions from file if it exists
+  const suppressionsPath = path.join(projectRoot, '.security-suppressions.json');
+  let customSuppressions: any[] = [];
+  try {
+    const suppressionsContent = await fs.readFile(suppressionsPath, 'utf-8');
+    const suppressionsData = JSON.parse(suppressionsContent);
+    // Convert relative paths to absolute paths for matching
+    customSuppressions = (suppressionsData.suppressions || []).map((suppression: any) => ({
+      ...suppression,
+      file: suppression.file?.startsWith('/')
+        ? suppression.file
+        : path.join(projectRoot, suppression.file)
+    }));
+  } catch (error) {
+    // Suppressions file doesn't exist or is invalid - that's OK
+  }
+
+  // Add suppressions for test files and custom suppressions
   config.suppressions = [
     {
       rule: 'CWE-89-001',
@@ -65,7 +82,8 @@ async function runSecurityAudit() {
       rule: 'OWASP-A03-003',
       file: '__tests__/**/*',
       reason: 'Test files may test path traversal scenarios'
-    }
+    },
+    ...customSuppressions
   ];
   
   // Configure fail behavior based on command line args

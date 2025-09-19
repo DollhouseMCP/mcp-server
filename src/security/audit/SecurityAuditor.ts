@@ -292,6 +292,28 @@ export class SecurityAuditor {
    * Get default configuration
    */
   static getDefaultConfig(): SecurityAuditConfig {
+    // Load suppressions from file if it exists
+    let customSuppressions: any[] = [];
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const projectRoot = process.cwd();
+      const suppressionsPath = path.join(projectRoot, '.security-suppressions.json');
+
+      if (fs.existsSync(suppressionsPath)) {
+        const suppressionsContent = fs.readFileSync(suppressionsPath, 'utf-8');
+        const suppressionsData = JSON.parse(suppressionsContent);
+        // Convert relative paths to patterns for matching
+        customSuppressions = (suppressionsData.suppressions || []).map((s: any) => ({
+          ...s,
+          // Convert file path to a pattern that works with minimatch
+          file: s.file?.includes('/') ? `**/${s.file}` : s.file
+        }));
+      }
+    } catch (error) {
+      // Suppressions file doesn't exist or is invalid - that's OK
+    }
+
     return {
       enabled: true,
       scanners: {
@@ -322,7 +344,8 @@ export class SecurityAuditor {
           rule: 'SEC-TEST-001',
           file: '__tests__/**/*',
           reason: 'Test files may contain security test patterns'
-        }
+        },
+        ...customSuppressions
       ]
     };
   }
