@@ -416,6 +416,26 @@ export class Memory extends BaseElement implements IElement {
   }
   
   /**
+   * Get formatted content of all memory entries
+   * Returns entries as a readable string for display
+   */
+  get content(): string {
+    if (this.entries.size === 0) {
+      return 'No content stored';
+    }
+
+    // Format entries as readable content
+    const sortedEntries = Array.from(this.entries.values())
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    return sortedEntries.map(entry => {
+      const timestamp = entry.timestamp.toISOString();
+      const tags = entry.tags ? ` [${entry.tags.join(', ')}]` : '';
+      return `[${timestamp}]${tags}: ${entry.content}`;
+    }).join('\n\n');
+  }
+
+  /**
    * Enforce retention policy by removing expired entries
    * SECURITY: Ensures memory doesn't grow unbounded
    */
