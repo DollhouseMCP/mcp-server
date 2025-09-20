@@ -1844,8 +1844,12 @@ export class DollhouseMCPServer implements IToolHandler {
         }
       }
       
-      // Save the element - need to determine filename
-      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      // Save the element - need to determine filename with correct extension
+      // FIX: Use .yaml extension for memories, .md for other elements
+      // Previously: All elements used .md extension, causing memory saves to fail
+      // Now: Memories use .yaml as required by MemoryManager
+      const extension = type === ElementType.MEMORY ? '.yaml' : '.md';
+      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}${extension}`;
       // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
       await manager!.save(element, filename);
       
@@ -1886,7 +1890,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      let manager: SkillManager | TemplateManager | AgentManager | MemoryManager | null = null;
       switch (type as ElementType) {
         case ElementType.SKILL:
           manager = this.skillManager;
@@ -1896,6 +1900,12 @@ export class DollhouseMCPServer implements IToolHandler {
           break;
         case ElementType.AGENT:
           manager = this.agentManager;
+          break;
+        case ElementType.MEMORY:
+          // FIX: Added memory validation support (fixes #1042)
+          // Previously: Memories returned "not yet supported for validation"
+          // Now: Full validation including metadata, retention, entry structure
+          manager = this.memoryManager;
           break;
         default:
           return {
@@ -2011,10 +2021,10 @@ export class DollhouseMCPServer implements IToolHandler {
           try {
             await fs.access(personaPath);
             await fs.unlink(personaPath);
-            
+
             // Reload personas to update the cache
             await this.loadPersonas();
-            
+
             return {
               content: [{
                 type: "text",
@@ -2032,6 +2042,149 @@ export class DollhouseMCPServer implements IToolHandler {
             }
             throw error;
           }
+
+        case ElementType.MEMORY: {
+          // FIX: Added memory deletion support (v1.9.8)
+          // Previously: Memories couldn't be deleted - returned "not yet supported"
+          // Now: Full deletion with proper cleanup of .yaml and optional .storage files
+          const allMemories = await this.memoryManager.list();
+          const memory = await this.findElementFlexibly(name, allMemories);
+
+          if (!memory) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory '${name}' not found`
+              }]
+            };
+          }
+
+          // Deactivate if currently active
+          if (memory.getStatus() === 'active') {
+            await memory.deactivate();
+          }
+
+          // Delete the memory YAML file
+          // Memories are stored in date folders (YYYY-MM-DD format)
+          const memoriesDir = PortfolioManager.getInstance().getElementDir(ElementType.MEMORY);
+          let memoryPath: string | null = null;
+
+          // First check if memory has a filePath property
+          if ((memory as any).filePath) {
+            memoryPath = (memory as any).filePath;
+          } else {
+            // Search for the file in date folders
+            const today = new Date().toISOString().split('T')[0];
+            const possiblePaths = [
+              path.join(memoriesDir, today, `${memory.metadata.name}.yaml`),
+              path.join(memoriesDir, `${memory.metadata.name}.yaml`) // fallback to root
+            ];
+
+            // Also check recent date folders
+            try {
+              const dirs = await fs.readdir(memoriesDir);
+              const dateDirs = dirs.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+              for (const dir of dateDirs.reverse()) { // Check most recent first
+                possiblePaths.unshift(path.join(memoriesDir, dir, `${memory.metadata.name}.yaml`));
+              }
+            } catch {
+              // Directory listing failed, continue with basic paths
+            }
+
+            // Find the actual file
+            for (const testPath of possiblePaths) {
+              try {
+                await fs.access(testPath);
+                memoryPath = testPath;
+                break;
+              } catch {
+                continue;
+              }
+            }
+          }
+
+          if (!memoryPath) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory file for '${memory.metadata.name}' not found in portfolio`
+              }]
+            };
+          }
+
+          try {
+            await fs.unlink(memoryPath);
+
+            // Delete storage data if requested
+            if (deleteData) {
+              const storagePath = path.join(
+                PortfolioManager.getInstance().getElementDir(ElementType.MEMORY),
+                '.storage',
+                `${memory.metadata.name}.json`
+              );
+              try {
+                await fs.access(storagePath);
+                await fs.unlink(storagePath);
+              } catch (storageError: any) {
+                // Storage file may not exist, that's fine
+                // Log for debugging if needed
+                if (storageError.code !== 'ENOENT') {
+                  logger.debug(`Storage file deletion warning: ${storageError.message}`);
+                }
+              }
+            }
+
+            // FIX: Memory manager cache consistency
+            // Previously: Cache could contain stale references after deletion
+            // Now: The next list() call will refresh from disk since the file is gone
+            // Note: MemoryManager doesn't expose clearCache(), but list() reads from disk
+
+            // Log successful deletion for audit trail
+            logger.info(`Memory deleted: ${memory.metadata.name}${deleteData ? ' (with storage)' : ''}`);
+
+            return {
+              content: [{
+                type: "text",
+                text: `✅ Successfully deleted memory '${memory.metadata.name}'${deleteData ? ' and its storage data' : ''}`
+              }]
+            };
+          } catch (error: any) {
+            // Enhanced error handling with more specific messages
+            if (error.code === 'ENOENT') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Memory file '${memory.metadata.name}.yaml' not found in portfolio`
+                }]
+              };
+            } else if (error.code === 'EACCES' || error.code === 'EPERM') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Permission denied: Cannot delete memory '${memory.metadata.name}' - ${error.message}`
+                }]
+              };
+            } else if (error.code === 'EBUSY') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ File is busy: Memory '${memory.metadata.name}' is currently in use`
+                }]
+              };
+            }
+
+            // Log unexpected errors for debugging
+            logger.error(`Failed to delete memory '${memory.metadata.name}':`, error);
+
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Failed to delete memory '${memory.metadata.name}': ${error.message || 'Unknown error'}`
+              }]
+            };
+          }
+        }
+
         default:
           return {
             content: [{

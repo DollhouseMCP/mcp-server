@@ -19,6 +19,21 @@
       "rule": "DMCP-SEC-006",
       "file": "**/test-version-validation.js",
       "reason": "Test file - Audit logging not required in test utilities"
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/test-memory-deletion.js",
+      "reason": "Test file - No user input processed, all test data is internally generated"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "**/test-memory-deletion.js",
+      "reason": "Test file - Audit logging happens in the server's deleteElement method, not in test"
+    },
+    {
+      "rule": "CWE-89-001",
+      "file": "**/test-memory-deletion.js",
+      "reason": "False positive - Template literals in error messages are not SQL queries"
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

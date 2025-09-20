@@ -873,6 +873,23 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
+### v1.9.8 - September 20, 2025
+
+**Memory System Complete**: Full CRUD operations and enhanced memory management
+
+#### ✨ Features
+- **Memory CRUD Operations**: Complete create, read, update, delete functionality for memories
+- **Memory Editing**: Full support for editing memory fields including metadata and content
+- **Memory Validation**: Comprehensive validation with detailed error reporting
+- **Enhanced Search**: Improved search across all sources with duplicate detection
+
+#### 🔧 Fixed
+- **Memory Display**: Fixed "No content stored" issue when memories have valid content
+- **Test Coverage**: Maintained >96% test coverage with comprehensive memory tests
+- **Documentation**: Updated all documentation to reflect new memory features
+
+---
+
 ### v1.9.7 - September 20, 2025
 
 **NPM Package Fix**: Corrected build issue from v1.9.6

@@ -407,7 +407,37 @@ export const suppressions: Suppression[] = [
     file: '**/test-version-validation.js',
     reason: 'Test utility script - not production code. Audit logging not required for test utilities.'
   },
-  
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-memory-deletion.js',
+    reason: 'Test file - No user input processed, all test data is internally generated'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/test-memory-deletion.js',
+    reason: 'Test file - No user input processed, all test data is internally generated'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'test-memory-deletion.js',
+    reason: 'Test file - Audit logging happens in the server deleteElement method, not in test'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/test-memory-deletion.js',
+    reason: 'Test file - Audit logging happens in the server deleteElement method, not in test'
+  },
+  {
+    rule: 'CWE-89-001',
+    file: 'test-memory-deletion.js',
+    reason: 'False positive - Template literals in error messages are not SQL queries'
+  },
+  {
+    rule: 'CWE-89-001',
+    file: '**/test-memory-deletion.js',
+    reason: 'False positive - Template literals in error messages are not SQL queries'
+  },
+
   // ========================================
   // Audit Logging False Positives
   // ========================================

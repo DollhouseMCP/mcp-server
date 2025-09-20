@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.9.8] - 2025-09-20
+
+### Added
+- **Memory Deletion Support** (PR #1043)
+  - Full deletion functionality for memory elements
+  - Handles date-based folder structure (YYYY-MM-DD)
+  - Cleans up both YAML and optional .storage files
+  - Deactivates memories before deletion
+  - Fixes issue #1040
+
+- **Memory Editing Support** (PR #1044)
+  - Complete edit functionality for memory elements
+  - Fixed file extension handling (.yaml for memories, .md for others)
+  - Supports field updates including nested properties
+  - Version auto-increment on edits
+  - Fixes issue #1041
+
+- **Memory Validation Support** (PR #1046)
+  - Full validation functionality for memory elements
+  - Validates metadata, retention settings, entry structure
+  - Supports strict mode for additional quality checks
+  - Returns detailed validation reports with errors/warnings
+  - Fixes issue #1042
+
+### Improved
+- **Code Organization**: Test files moved from root directory to proper test subdirectories (PR #1047)
+  - Manual test files now in `test/manual/`
+  - Security audit reports in `.security-audit/`
+  - Cleaner root directory structure
+
+### Technical Details
+- Memory elements now have complete CRUD + validation operations matching other element types
+- All memory operations properly handle the date-based folder structure
+- Comprehensive test coverage for all new memory operations
+
 ## [1.9.7] - 2025-09-20
 
 ### Fixed
