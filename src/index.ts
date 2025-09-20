@@ -1844,8 +1844,12 @@ export class DollhouseMCPServer implements IToolHandler {
         }
       }
       
-      // Save the element - need to determine filename
-      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+      // Save the element - need to determine filename with correct extension
+      // FIX: Use .yaml extension for memories, .md for other elements
+      // Previously: All elements used .md extension, causing memory saves to fail
+      // Now: Memories use .yaml as required by MemoryManager
+      const extension = type === ElementType.MEMORY ? '.yaml' : '.md';
+      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}${extension}`;
       // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
       await manager!.save(element, filename);
       
