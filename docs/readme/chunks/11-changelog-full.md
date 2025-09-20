@@ -1,5 +1,16 @@
 ## 🏷️ Version History
 
+### v1.9.7 - September 20, 2025
+
+**NPM Package Fix**: Corrected build issue from v1.9.6
+
+#### 🔧 Fixed
+- **NPM Package Build**: Republished with correct commit including all memory display fixes
+- **Memory Display**: Memories now correctly show content instead of "No content stored"
+- Note: v1.9.6 NPM package was accidentally built from wrong commit
+
+---
+
 ### v1.9.6 - September 20, 2025
 
 **🎉 First External Contribution**: Performance and security improvements from the community!
