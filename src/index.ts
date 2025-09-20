@@ -2115,10 +2115,22 @@ export class DollhouseMCPServer implements IToolHandler {
               try {
                 await fs.access(storagePath);
                 await fs.unlink(storagePath);
-              } catch {
+              } catch (storageError: any) {
                 // Storage file may not exist, that's fine
+                // Log for debugging if needed
+                if (storageError.code !== 'ENOENT') {
+                  logger.debug(`Storage file deletion warning: ${storageError.message}`);
+                }
               }
             }
+
+            // FIX: Memory manager cache consistency
+            // Previously: Cache could contain stale references after deletion
+            // Now: The next list() call will refresh from disk since the file is gone
+            // Note: MemoryManager doesn't expose clearCache(), but list() reads from disk
+
+            // Log successful deletion for audit trail
+            logger.info(`Memory deleted: ${memory.metadata.name}${deleteData ? ' (with storage)' : ''}`);
 
             return {
               content: [{
@@ -2126,16 +2138,40 @@ export class DollhouseMCPServer implements IToolHandler {
                 text: `✅ Successfully deleted memory '${memory.metadata.name}'${deleteData ? ' and its storage data' : ''}`
               }]
             };
-          } catch (error) {
-            if ((error as any).code === 'ENOENT') {
+          } catch (error: any) {
+            // Enhanced error handling with more specific messages
+            if (error.code === 'ENOENT') {
               return {
                 content: [{
                   type: "text",
                   text: `❌ Memory file '${memory.metadata.name}.yaml' not found in portfolio`
                 }]
               };
+            } else if (error.code === 'EACCES' || error.code === 'EPERM') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Permission denied: Cannot delete memory '${memory.metadata.name}' - ${error.message}`
+                }]
+              };
+            } else if (error.code === 'EBUSY') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ File is busy: Memory '${memory.metadata.name}' is currently in use`
+                }]
+              };
             }
-            throw error;
+
+            // Log unexpected errors for debugging
+            logger.error(`Failed to delete memory '${memory.metadata.name}':`, error);
+
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Failed to delete memory '${memory.metadata.name}': ${error.message || 'Unknown error'}`
+              }]
+            };
           }
         }
 
