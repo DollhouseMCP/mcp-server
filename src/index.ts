@@ -2011,10 +2011,10 @@ export class DollhouseMCPServer implements IToolHandler {
           try {
             await fs.access(personaPath);
             await fs.unlink(personaPath);
-            
+
             // Reload personas to update the cache
             await this.loadPersonas();
-            
+
             return {
               content: [{
                 type: "text",
@@ -2032,6 +2032,113 @@ export class DollhouseMCPServer implements IToolHandler {
             }
             throw error;
           }
+
+        case ElementType.MEMORY: {
+          // FIX: Added memory deletion support (v1.9.8)
+          // Previously: Memories couldn't be deleted - returned "not yet supported"
+          // Now: Full deletion with proper cleanup of .yaml and optional .storage files
+          const allMemories = await this.memoryManager.list();
+          const memory = await this.findElementFlexibly(name, allMemories);
+
+          if (!memory) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory '${name}' not found`
+              }]
+            };
+          }
+
+          // Deactivate if currently active
+          if (memory.getStatus() === 'active') {
+            await memory.deactivate();
+          }
+
+          // Delete the memory YAML file
+          // Memories are stored in date folders (YYYY-MM-DD format)
+          const memoriesDir = PortfolioManager.getInstance().getElementDir(ElementType.MEMORY);
+          let memoryPath: string | null = null;
+
+          // First check if memory has a filePath property
+          if ((memory as any).filePath) {
+            memoryPath = (memory as any).filePath;
+          } else {
+            // Search for the file in date folders
+            const today = new Date().toISOString().split('T')[0];
+            const possiblePaths = [
+              path.join(memoriesDir, today, `${memory.metadata.name}.yaml`),
+              path.join(memoriesDir, `${memory.metadata.name}.yaml`) // fallback to root
+            ];
+
+            // Also check recent date folders
+            try {
+              const dirs = await fs.readdir(memoriesDir);
+              const dateDirs = dirs.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+              for (const dir of dateDirs.reverse()) { // Check most recent first
+                possiblePaths.unshift(path.join(memoriesDir, dir, `${memory.metadata.name}.yaml`));
+              }
+            } catch {
+              // Directory listing failed, continue with basic paths
+            }
+
+            // Find the actual file
+            for (const testPath of possiblePaths) {
+              try {
+                await fs.access(testPath);
+                memoryPath = testPath;
+                break;
+              } catch {
+                continue;
+              }
+            }
+          }
+
+          if (!memoryPath) {
+            return {
+              content: [{
+                type: "text",
+                text: `❌ Memory file for '${memory.metadata.name}' not found in portfolio`
+              }]
+            };
+          }
+
+          try {
+            await fs.unlink(memoryPath);
+
+            // Delete storage data if requested
+            if (deleteData) {
+              const storagePath = path.join(
+                PortfolioManager.getInstance().getElementDir(ElementType.MEMORY),
+                '.storage',
+                `${memory.metadata.name}.json`
+              );
+              try {
+                await fs.access(storagePath);
+                await fs.unlink(storagePath);
+              } catch {
+                // Storage file may not exist, that's fine
+              }
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `✅ Successfully deleted memory '${memory.metadata.name}'${deleteData ? ' and its storage data' : ''}`
+              }]
+            };
+          } catch (error) {
+            if ((error as any).code === 'ENOENT') {
+              return {
+                content: [{
+                  type: "text",
+                  text: `❌ Memory file '${memory.metadata.name}.yaml' not found in portfolio`
+                }]
+              };
+            }
+            throw error;
+          }
+        }
+
         default:
           return {
             content: [{
