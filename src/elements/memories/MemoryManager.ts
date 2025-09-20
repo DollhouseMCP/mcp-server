@@ -98,11 +98,38 @@ export class MemoryManager implements IElementManager<Memory> {
       // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
       // Previously: Could use unsafe YAML parsing
       // Now: Uses SecureYamlParser which validates content and prevents malicious patterns
-      const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
-        validateContent: true
-      });
-      
+
+      // Memory files are pure YAML (unlike other elements which are markdown with frontmatter)
+      // Check if this is pure YAML (doesn't start with frontmatter markers)
+      let parsed: any;
+
+      // Efficient format detection without creating trimmed copy
+      let firstNonWhitespace = 0;
+      while (firstNonWhitespace < content.length && /\s/.test(content[firstNonWhitespace])) {
+        firstNonWhitespace++;
+      }
+
+      // Handle empty content edge case
+      if (firstNonWhitespace === content.length) {
+        // Empty or all whitespace file - create minimal valid structure
+        parsed = { data: {}, content: '' };
+      } else if (!content.startsWith('---', firstNonWhitespace)) {
+        // Pure YAML file - wrap it with frontmatter markers for SecureYamlParser
+        const wrappedContent = `---\n${content}\n---\n`;
+        const parseResult = SecureYamlParser.parse(wrappedContent, {
+          maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+          validateContent: true
+        });
+        // For pure YAML, the entire content becomes the data, no markdown content
+        parsed = { data: parseResult.data, content: '' };
+      } else {
+        // File with frontmatter (shouldn't happen for memories, but handle it)
+        parsed = SecureYamlParser.parse(content, {
+          maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+          validateContent: true
+        });
+      }
+
       // Extract metadata and content
       const { metadata, content: memoryContent } = this.parseMemoryFile(parsed);
       
@@ -110,14 +137,16 @@ export class MemoryManager implements IElementManager<Memory> {
       const memory = new Memory(metadata);
       
       // Load saved entries if present
-      if (parsed.data && parsed.data.entries) {
+      // Memory files have entries as a top-level key in the YAML
+      const entries = parsed.data?.entries;
+      if (entries) {
         memory.deserialize(JSON.stringify({
           id: memory.id,
           type: memory.type,
           version: memory.version,
           metadata: memory.metadata,
           extensions: memory.extensions,
-          entries: parsed.data.entries
+          entries: entries
         }));
       }
       
@@ -667,28 +696,33 @@ export class MemoryManager implements IElementManager<Memory> {
     // For markdown files with YAML frontmatter, the structure is:
     // parsed.data = YAML frontmatter values
     // parsed.content = markdown content after frontmatter
+
+    // For pure YAML memory files, we need to check if metadata is directly in data
     const yamlData = parsed.data || {};
+
+    // Memory files saved by the system have metadata as a top-level key
+    const metadataSource = yamlData.metadata || yamlData;
 
     // Extract metadata with validation
     const metadata: MemoryMetadata = {
-      name: sanitizeInput(yamlData.name || 'Unnamed Memory', 100),
-      description: yamlData.description ?
-        sanitizeInput(yamlData.description, 500) :
+      name: sanitizeInput(metadataSource.name || 'Unnamed Memory', 100),
+      description: metadataSource.description ?
+        sanitizeInput(metadataSource.description, 500) :
         '',
-      version: yamlData.version || '1.0.0',
-      author: yamlData.author,
-      created: yamlData.created,
-      modified: new Date().toISOString(),
-      tags: Array.isArray(yamlData.tags) ?
-        yamlData.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
+      version: metadataSource.version || '1.0.0',
+      author: metadataSource.author,
+      created: metadataSource.created,
+      modified: metadataSource.modified || new Date().toISOString(),
+      tags: Array.isArray(metadataSource.tags) ?
+        metadataSource.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
-      storageBackend: yamlData.storage_backend || yamlData.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
-      retentionDays: yamlData.retention_policy?.default ?
-        this.parseRetentionDays(yamlData.retention_policy.default) :
-        (yamlData.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS),
-      privacyLevel: yamlData.privacy_level || yamlData.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
-      searchable: yamlData.searchable !== false,
-      maxEntries: yamlData.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
+      storageBackend: metadataSource.storage_backend || metadataSource.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
+      retentionDays: metadataSource.retention_policy?.default ?
+        this.parseRetentionDays(metadataSource.retention_policy.default) :
+        (metadataSource.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS),
+      privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      searchable: metadataSource.searchable !== false,
+      maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     };
 
     // Extract content (if any)

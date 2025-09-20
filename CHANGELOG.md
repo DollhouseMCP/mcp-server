@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.9.5] - 2025-09-19
+
+### Fixed
+- **Memory YAML Parsing**: Fixed memory files not displaying correct names for pure YAML format
+  - Memory files saved by v1.9.3+ are pure YAML without frontmatter markers
+  - MemoryManager.load() now detects pure YAML and wraps it for SecureYamlParser compatibility
+  - Added proper handling for nested metadata structure (data.metadata || data)
+  - Fixed entries loading to look in correct location (parsed.data.entries)
+  - Added edge case handling for empty memory files
+  - Fixes issue where v1.9.3/v1.9.4 memory files showed as "Unnamed Memory"
+
+### Enhanced
+- **Test Coverage**: Added comprehensive tests for memory file format handling
+  - Test for pure YAML files without frontmatter markers
+  - Test for files with frontmatter (backward compatibility)
+  - Test for empty file handling
+  - Test for mixed formats in same directory
+  - All 40 MemoryManager tests now passing
+
+### Technical Details
+- SecureYamlParser is designed for markdown files with YAML frontmatter
+- Memory files are pure YAML, requiring format detection and wrapping
+- Solution maintains backward compatibility while fixing the core issue
+
 ## [1.9.4] - 2025-09-19
 
 ### Fixed
