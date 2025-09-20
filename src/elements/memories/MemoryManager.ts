@@ -102,13 +102,18 @@ export class MemoryManager implements IElementManager<Memory> {
       // Memory files are pure YAML (unlike other elements which are markdown with frontmatter)
       // Check if this is pure YAML (doesn't start with frontmatter markers)
       let parsed: any;
-      const trimmedContent = content.trim();
+
+      // Efficient format detection without creating trimmed copy
+      let firstNonWhitespace = 0;
+      while (firstNonWhitespace < content.length && /\s/.test(content[firstNonWhitespace])) {
+        firstNonWhitespace++;
+      }
 
       // Handle empty content edge case
-      if (!trimmedContent) {
-        // Empty file - create minimal valid structure
+      if (firstNonWhitespace === content.length) {
+        // Empty or all whitespace file - create minimal valid structure
         parsed = { data: {}, content: '' };
-      } else if (!trimmedContent.startsWith('---')) {
+      } else if (!content.startsWith('---', firstNonWhitespace)) {
         // Pure YAML file - wrap it with frontmatter markers for SecureYamlParser
         const wrappedContent = `---\n${content}\n---\n`;
         const parseResult = SecureYamlParser.parse(wrappedContent, {
