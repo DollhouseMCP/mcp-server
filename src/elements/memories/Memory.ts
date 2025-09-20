@@ -424,13 +424,13 @@ export class Memory extends BaseElement implements IElement {
       return 'No content stored';
     }
 
-    // Format entries as readable content
+    // Format entries as readable content (newest first)
     const sortedEntries = Array.from(this.entries.values())
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
     return sortedEntries.map(entry => {
       const timestamp = entry.timestamp.toISOString();
-      const tags = entry.tags ? ` [${entry.tags.join(', ')}]` : '';
+      const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
       return `[${timestamp}]${tags}: ${entry.content}`;
     }).join('\n\n');
   }

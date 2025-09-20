@@ -403,4 +403,49 @@ describe('Memory Element', () => {
       expect(entry.metadata!['object_key']).toBeUndefined();
     });
   });
+
+  describe('Content Getter', () => {
+    it('should format content correctly via content getter', async () => {
+      const memory = new Memory({ name: 'Test Memory' });
+
+      // Test with no entries
+      expect(memory.content).toBe('No content stored');
+
+      // Add entries with small delays to ensure different timestamps
+      await memory.addEntry('Entry 1', ['tag1', 'tag2']);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      await memory.addEntry('Entry 2');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      await memory.addEntry('Entry 3', ['important']);
+
+      const content = memory.content;
+
+      // Check content includes all entries
+      expect(content).toContain('Entry 1');
+      expect(content).toContain('Entry 2');
+      expect(content).toContain('Entry 3');
+
+      // Check tags are included
+      expect(content).toContain('[tag1, tag2]');
+      expect(content).toContain('[important]');
+
+      // Check entries are sorted newest first
+      const lines = content.split('\n\n');
+      expect(lines[0]).toContain('Entry 3'); // Most recent
+      expect(lines[1]).toContain('Entry 2');
+      expect(lines[2]).toContain('Entry 1'); // Oldest
+
+      // Check timestamp format
+      expect(content).toMatch(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]/);
+    });
+
+    it('should handle empty tags gracefully', async () => {
+      const memory = new Memory({ name: 'Test Memory' });
+      await memory.addEntry('Content without tags');
+
+      const content = memory.content;
+      expect(content).toContain('Content without tags');
+      expect(content).not.toContain('[]'); // Should not show empty brackets
+    });
+  });
 });

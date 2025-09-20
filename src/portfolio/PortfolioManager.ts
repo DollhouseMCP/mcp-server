@@ -13,7 +13,17 @@ import { DefaultElementProvider } from './DefaultElementProvider.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 
 // Constants
-const ELEMENT_FILE_EXTENSION = '.md';
+const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
+  [ElementType.PERSONA]: '.md',
+  [ElementType.SKILL]: '.md',
+  [ElementType.TEMPLATE]: '.md',
+  [ElementType.AGENT]: '.md',
+  [ElementType.MEMORY]: '.yaml',
+  [ElementType.ENSEMBLE]: '.md'
+};
+
+// Default extension for backward compatibility
+const DEFAULT_ELEMENT_FILE_EXTENSION = '.md';
 
 export { ElementType };
 export type { PortfolioConfig };
@@ -232,12 +242,13 @@ export class PortfolioManager {
    */
   public async listElements(type: ElementType): Promise<string[]> {
     const elementDir = this.getElementDir(type);
-    
+    const fileExtension = ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
+
     try {
       const files = await fs.readdir(elementDir);
-      // Filter for markdown files only and exclude test elements
+      // Filter for correct file extension based on element type and exclude test elements
       return files
-        .filter(file => file.endsWith(ELEMENT_FILE_EXTENSION))
+        .filter(file => file.endsWith(fileExtension))
         .filter(file => !this.isTestElement(file));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
