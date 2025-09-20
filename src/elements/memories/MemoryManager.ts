@@ -104,8 +104,15 @@ export class MemoryManager implements IElementManager<Memory> {
       let parsed: any;
 
       // Efficient format detection without creating trimmed copy
+      // Performance optimization: Use character codes instead of regex for whitespace detection
+      // Credit: Jeet Singh (@jeetsingh008) - PR #1035
       let firstNonWhitespace = 0;
-      while (firstNonWhitespace < content.length && /\s/.test(content[firstNonWhitespace])) {
+      while (firstNonWhitespace < content.length) {
+        const charCode = content.charCodeAt(firstNonWhitespace);
+        // Check for space (32), tab (9), newline (10), carriage return (13)
+        if (charCode !== 32 && charCode !== 9 && charCode !== 10 && charCode !== 13) {
+          break;
+        }
         firstNonWhitespace++;
       }
 
@@ -661,10 +668,17 @@ export class MemoryManager implements IElementManager<Memory> {
    */
   private async validateAndResolvePath(filePath: string): Promise<string> {
     // SECURITY FIX: Comprehensive path validation
+    // Enhanced validation inspired by Jeet Singh (@jeetsingh008) - PR #1035
+
+    // First normalize the path to resolve any ./ or ../ sequences
     const normalized = path.normalize(filePath);
-    
-    // Check for path traversal attempts
-    if (normalized.includes('..') || path.isAbsolute(normalized)) {
+
+    // Check for path traversal attempts - both in original and normalized
+    // Check both the normalized path and the original for any traversal patterns
+    if (normalized.includes('..') ||
+        filePath.includes('..') ||
+        path.isAbsolute(normalized) ||
+        path.isAbsolute(filePath)) {
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'HIGH',
