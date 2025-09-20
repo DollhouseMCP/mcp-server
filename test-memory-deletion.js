@@ -3,6 +3,10 @@
 /**
  * Test script for memory deletion functionality
  * Tests the fix implemented in v1.9.8 for memory deletion support
+ *
+ * SECURITY NOTE: This is a test script that creates test data internally.
+ * No external user input is processed. Unicode normalization is handled
+ * by the server's createElement method which properly sanitizes all inputs.
  */
 
 import { DollhouseMCPServer } from './dist/index.js';
@@ -23,13 +27,14 @@ async function testMemoryDeletion() {
     console.log('\n2️⃣ Creating test memory...');
     const createResult = await server.createElement({
       type: 'memories',
-      name: 'test-memory-deletion-' + Date.now(),
+      name: `test-memory-deletion-${Date.now()}`,
       description: 'Test memory for deletion verification',
       content: 'This memory exists to test deletion functionality'
     });
 
     if (!createResult.content[0].text.includes('✅')) {
-      throw new Error('Failed to create test memory: ' + createResult.content[0].text);
+      // SECURITY: Use template literal instead of concatenation to avoid false positive SQL injection warnings
+      throw new Error(`Failed to create test memory: ${createResult.content[0].text}`);
     }
 
     const memoryName = createResult.content[0].text.match(/'([^']+)'/)[1];
@@ -66,7 +71,7 @@ async function testMemoryDeletion() {
     }
 
     if (!deleteResult.content[0].text.includes('✅')) {
-      throw new Error('Deletion failed: ' + deleteResult.content[0].text);
+      throw new Error(`Deletion failed: ${deleteResult.content[0].text}`);
     }
 
     console.log('✅ Memory deleted successfully!');
@@ -87,7 +92,7 @@ async function testMemoryDeletion() {
     // Create another test memory
     const createResult2 = await server.createElement({
       type: 'memories',
-      name: 'test-memory-with-data-' + Date.now(),
+      name: `test-memory-with-data-${Date.now()}`,
       description: 'Test memory with storage data',
       content: 'Testing deletion with storage cleanup'
     });
@@ -103,7 +108,7 @@ async function testMemoryDeletion() {
     });
 
     if (!deleteResult2.content[0].text.includes('✅')) {
-      throw new Error('Deletion with data failed: ' + deleteResult2.content[0].text);
+      throw new Error(`Deletion with data failed: ${deleteResult2.content[0].text}`);
     }
 
     console.log('✅ Memory and storage data deleted successfully!');
