@@ -26,6 +26,15 @@ import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
 import * as crypto from 'crypto';
 
+// Character code constants for whitespace detection
+// Makes the code more readable and maintainable
+const WHITESPACE_CHARS = {
+  SPACE: 32,
+  TAB: 9,
+  NEWLINE: 10,
+  CARRIAGE_RETURN: 13
+} as const;
+
 export class MemoryManager implements IElementManager<Memory> {
   private portfolioManager: PortfolioManager;
   private memoriesDir: string;
@@ -104,8 +113,18 @@ export class MemoryManager implements IElementManager<Memory> {
       let parsed: any;
 
       // Efficient format detection without creating trimmed copy
+      // Performance optimization: Use character codes instead of regex for whitespace detection
+      // Credit: Jeet Singh (@jeetsingh008) - PR #1035
       let firstNonWhitespace = 0;
-      while (firstNonWhitespace < content.length && /\s/.test(content[firstNonWhitespace])) {
+      while (firstNonWhitespace < content.length) {
+        const charCode = content.charCodeAt(firstNonWhitespace);
+        // Check if character is NOT whitespace
+        if (charCode !== WHITESPACE_CHARS.SPACE &&
+            charCode !== WHITESPACE_CHARS.TAB &&
+            charCode !== WHITESPACE_CHARS.NEWLINE &&
+            charCode !== WHITESPACE_CHARS.CARRIAGE_RETURN) {
+          break;
+        }
         firstNonWhitespace++;
       }
 
@@ -661,10 +680,17 @@ export class MemoryManager implements IElementManager<Memory> {
    */
   private async validateAndResolvePath(filePath: string): Promise<string> {
     // SECURITY FIX: Comprehensive path validation
+    // Enhanced validation inspired by Jeet Singh (@jeetsingh008) - PR #1035
+
+    // First normalize the path to resolve any ./ or ../ sequences
     const normalized = path.normalize(filePath);
-    
-    // Check for path traversal attempts
-    if (normalized.includes('..') || path.isAbsolute(normalized)) {
+
+    // Check for path traversal attempts - both in original and normalized
+    // Check both the normalized path and the original for any traversal patterns
+    if (normalized.includes('..') ||
+        filePath.includes('..') ||
+        path.isAbsolute(normalized) ||
+        path.isAbsolute(filePath)) {
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'HIGH',
