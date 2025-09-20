@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.9.6] - 2025-09-20
+
+### 🎉 First External Contribution
+- **Community Milestone**: This release includes improvements from our first external contributor! Special thanks to **Jeet Singh (@jeetsingh008)** for identifying performance and security improvements in PR #1035.
+
+### Fixed
+- **Memory Display Bug**: Added content getter to Memory class (PR #1036)
+  - Fixed "No content stored" issue when displaying memory elements
+  - Memory files were being loaded but content wasn't accessible
+  - Added proper getter method to retrieve content from entries
+  - Resolves issue where memories appeared empty despite having content
+
+- **Flaky macOS Tests**: Fixed ToolCache test failures on macOS with Node 22+ (PR #1038)
+  - Addressed race condition in directory cleanup
+  - Added retry logic for ENOTEMPTY errors during rmdir operations
+  - Tests now consistently pass on all platforms and Node versions
+  - Particularly affects macOS runners with Node 22.x
+
+### Enhanced
+- **Performance Optimization**: Improved whitespace detection in memory file parsing (PR #1037)
+  - Replaced regex-based whitespace detection with character code checks
+  - Eliminates repeated regex evaluations during format detection
+  - More efficient for large memory files
+  - *Improvement identified by @jeetsingh008*
+
+### Security
+- **Path Validation**: Strengthened path traversal protection (PR #1037)
+  - Enhanced validation checks both original and normalized paths
+  - Adds validation before path normalization
+  - Comprehensive protection against directory traversal attacks
+  - *Security enhancement identified by @jeetsingh008*
+
+### Attribution
+The performance and security improvements in this release were originally identified and proposed by **Jeet Singh (@jeetsingh008)** in PR #1035. While we implemented these changes internally for security review purposes, full credit goes to Jeet for these valuable contributions. Thank you for helping make DollhouseMCP better! 🙏
+
 ## [1.9.5] - 2025-09-19
 
 ### Fixed
