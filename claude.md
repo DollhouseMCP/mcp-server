@@ -14,7 +14,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 **Collection**: https://github.com/DollhouseMCP/collection
 **NPM Package**: @dollhousemcp/mcp-server
 **License**: AGPL-3.0 with Platform Stability Commitments
-**Current Version**: v1.9.5
+**Current Version**: v1.9.6
 
 ## Key Documentation References
 
@@ -167,4 +167,4 @@ gh pr list                             # View open PRs
 ---
 
 *This document provides essential context for working in the mcp-server repository.*
-*Last verified: September 2025*
+*Last verified: September 20, 2025 (v1.9.6)*
