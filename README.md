@@ -162,17 +162,14 @@ Enable autonomous task completion
 <tr>
 <td colspan="2">
 
-#### 🧠 Memory <span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">ENHANCED in v1.9.8</span>
+#### 🧠 Memory <span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">NEW in v1.9.0</span>
 Persistent context across sessions with intelligent organization
-- **Full CRUD Operations** - Complete create, read, update, delete functionality (v1.9.8)
-- **Edit Support** - Modify memory fields including metadata and content (v1.9.8)
-- **Validation** - Comprehensive validation with detailed error reporting (v1.9.8)
 - **Text-based storage** - Currently supports text content (PDFs, images, and other media types coming soon)
 - **Date-based folders** - Automatic YYYY-MM-DD organization prevents flat directory issues
 - **YAML format** - Human-readable structured data (vs Markdown for other elements)
 - **Smart deduplication** - SHA-256 hashing prevents duplicate storage
 - **Search indexing** - Fast queries across thousands of entries
-- **Use**: `"Create a memory for this project"`, `"Edit the project memory"`, `"Validate my memories"`, `"Delete old memories"`
+- **Use**: `"Create a memory for this project"` or `"Remember this conversation"`
 
 **Typical file sizes**: Single memories up to ~100KB, folder structure enables unlimited collections
 
