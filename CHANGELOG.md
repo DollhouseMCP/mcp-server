@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.7] - 2025-09-20
+
+### Fixed
+- **NPM Package Build**: Corrected v1.9.6 NPM package which was built from wrong commit
+  - The v1.9.6 tag was created before the memory display fixes were merged
+  - This resulted in the NPM package missing the critical memory content display fix
+  - v1.9.7 includes all fixes that were intended for v1.9.6
+  - Memory elements now correctly display their content instead of "No content stored"
+
+### Note
+This release republishes v1.9.6 with the correct code. The memory display fix (PR #1036) and other improvements were merged to main before the v1.9.6 release but the NPM package was accidentally built from an earlier commit.
+
 ## [1.9.6] - 2025-09-20
 
 ### 🎉 First External Contribution
