@@ -26,6 +26,15 @@ import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
 import * as crypto from 'crypto';
 
+// Character code constants for whitespace detection
+// Makes the code more readable and maintainable
+const WHITESPACE_CHARS = {
+  SPACE: 32,
+  TAB: 9,
+  NEWLINE: 10,
+  CARRIAGE_RETURN: 13
+} as const;
+
 export class MemoryManager implements IElementManager<Memory> {
   private portfolioManager: PortfolioManager;
   private memoriesDir: string;
@@ -109,8 +118,11 @@ export class MemoryManager implements IElementManager<Memory> {
       let firstNonWhitespace = 0;
       while (firstNonWhitespace < content.length) {
         const charCode = content.charCodeAt(firstNonWhitespace);
-        // Check for space (32), tab (9), newline (10), carriage return (13)
-        if (charCode !== 32 && charCode !== 9 && charCode !== 10 && charCode !== 13) {
+        // Check if character is NOT whitespace
+        if (charCode !== WHITESPACE_CHARS.SPACE &&
+            charCode !== WHITESPACE_CHARS.TAB &&
+            charCode !== WHITESPACE_CHARS.NEWLINE &&
+            charCode !== WHITESPACE_CHARS.CARRIAGE_RETURN) {
           break;
         }
         firstNonWhitespace++;

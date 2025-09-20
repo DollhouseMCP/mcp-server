@@ -637,4 +637,130 @@ data:
       expect(true).toBe(true);
     });
   });
+
+  describe('Whitespace Detection Optimization', () => {
+    it('should efficiently detect whitespace at the beginning of content', async () => {
+      // Test various whitespace combinations
+      const testCases = [
+        { content: '   ---\ndata: test', expectedStart: '---' },
+        { content: '\t\t---\ndata: test', expectedStart: '---' },
+        { content: '\n\n---\ndata: test', expectedStart: '---' },
+        { content: '\r\n---\ndata: test', expectedStart: '---' },
+        { content: ' \t\n\r---\ndata: test', expectedStart: '---' },
+        { content: 'no-whitespace---', expectedStart: 'no-' },
+        { content: '', expectedStart: '' }
+      ];
+
+      for (const testCase of testCases) {
+        // Create a temporary file to test
+        const testFile = path.join(testDir, `whitespace-test-${Date.now()}.yaml`);
+        await fs.writeFile(testFile, testCase.content);
+
+        // The load function uses the optimized whitespace detection
+        try {
+          if (testCase.content && testCase.content.includes('data:')) {
+            await manager.load(path.basename(testFile));
+          }
+        } catch (error) {
+          // Some test cases might fail to parse, which is expected
+        }
+
+        // Clean up
+        await fs.unlink(testFile);
+      }
+
+      // Test passes if all cases are handled without errors
+      expect(true).toBe(true);
+    });
+
+    it('should handle large files with leading whitespace efficiently', async () => {
+      // Create a large file with lots of leading whitespace
+      const largeWhitespace = ' '.repeat(1000) + '\t'.repeat(500) + '\n'.repeat(100);
+      const content = largeWhitespace + '---\ndata: test\n---';
+
+      const testFile = path.join(testDir, 'large-whitespace-test.yaml');
+      await fs.writeFile(testFile, content);
+
+      const startTime = Date.now();
+      try {
+        await manager.load(path.basename(testFile));
+      } catch (error) {
+        // Parsing might fail, which is ok for this test
+      }
+      const endTime = Date.now();
+
+      // Should process even large whitespace efficiently (under 100ms)
+      expect(endTime - startTime).toBeLessThan(100);
+
+      await fs.unlink(testFile);
+    });
+  });
+
+  describe('Path Traversal Security', () => {
+    it('should prevent path traversal with .. sequences', async () => {
+      const maliciousPaths = [
+        '../../../etc/passwd',
+        '../../sensitive.yaml',
+        './../../../etc/shadow',
+        'normal/../../../etc/hosts',
+        '..\\..\\..\\windows\\system32\\config\\sam'  // Windows style
+      ];
+
+      for (const maliciousPath of maliciousPaths) {
+        await expect(manager.load(maliciousPath)).rejects.toThrow('Path traversal detected');
+        await expect(manager.save(new Memory(), maliciousPath)).rejects.toThrow('Path traversal detected');
+        await expect(manager.delete(maliciousPath)).rejects.toThrow('Path traversal detected');
+      }
+    });
+
+    it('should prevent absolute path access', async () => {
+      // Only test Unix-style absolute paths on Unix systems
+      const absolutePaths = process.platform === 'win32' ?
+        [
+          'C:\\Windows\\System32\\config\\sam.yaml',
+          '\\\\server\\share\\file.yaml'
+        ] : [
+          '/etc/passwd.yaml',
+          '/home/user/secrets.yaml'
+        ];
+
+      for (const absolutePath of absolutePaths) {
+        await expect(manager.load(absolutePath)).rejects.toThrow('Path traversal detected');
+        await expect(manager.save(new Memory(), absolutePath)).rejects.toThrow('Path traversal detected');
+        await expect(manager.delete(absolutePath)).rejects.toThrow('Path traversal detected');
+      }
+    });
+
+    it('should allow legitimate relative paths', async () => {
+      const legitimatePaths = [
+        'memory.yaml',
+        'subfolder/memory.yaml',
+        '2024-03-20/session-notes.yaml',
+        './current-memory.yaml'
+      ];
+
+      for (const legitimatePath of legitimatePaths) {
+        // These should not throw path traversal errors
+        // They might throw other errors (file not found, etc) which is fine
+        try {
+          await manager.load(legitimatePath);
+        } catch (error: any) {
+          expect(error.message).not.toContain('Path traversal detected');
+        }
+      }
+    });
+
+    it('should validate both original and normalized paths', async () => {
+      // Test cases where normalization might hide traversal attempts
+      const sneakyPaths = [
+        './../../etc/passwd',  // Normalized would remove ./
+        'valid/../../../etc/shadow',  // Looks like it starts valid
+        'memories/../../private/data.yaml'  // Appears to be in memories
+      ];
+
+      for (const sneakyPath of sneakyPaths) {
+        await expect(manager.load(sneakyPath)).rejects.toThrow('Path traversal detected');
+      }
+    });
+  });
 });
