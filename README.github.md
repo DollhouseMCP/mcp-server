@@ -873,6 +873,74 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
+### v1.9.6 - September 20, 2025
+
+**🎉 First External Contribution**: Performance and security improvements from the community!
+
+#### ✨ Highlights
+- **Fixed**: Memory display bug - added content getter to Memory class (PR #1036)
+- **Fixed**: Flaky macOS tests on Node 22+ (PR #1038)
+- **Enhanced**: Optimized whitespace detection for better performance (PR #1037)
+- **Security**: Strengthened path traversal protection (PR #1037)
+- **Attribution**: Thanks to @jeetsingh008 for identifying improvements!
+
+---
+
+### v1.9.5 - September 19, 2025
+
+**Memory YAML Parsing Fix**: Resolved display issues with pure YAML memory files
+
+#### 🔧 Bug Fixes
+- **Fixed**: Memory files showing incorrect names for pure YAML format
+- **Enhanced**: Added comprehensive test coverage for memory file formats
+- **Technical**: Improved compatibility between SecureYamlParser and pure YAML
+
+---
+
+### v1.9.4 - September 19, 2025
+
+**Memory Name Display Fix**: Corrected "Unnamed Memory" display issue
+
+#### 🔧 Bug Fixes
+- **Fixed**: Memory elements showing as "Unnamed Memory" in list output
+- **Fixed**: Corrected metadata parsing path in SecureYamlParser
+- **Technical**: Added retention format parsing for various formats
+
+---
+
+### v1.9.3 - September 19, 2025
+
+**Memory Element MCP Support**: Complete MCP tool handler integration
+
+#### 🔧 Bug Fixes
+- **Fixed**: Added Memory element support to all MCP tool handlers
+- **Fixed**: Resolved "Unknown element type 'memories'" errors
+- **Technical**: Added Memory case handling to 8 critical methods
+
+---
+
+### v1.9.2 - September 19, 2025
+
+**Branch Synchronization**: Documentation and configuration alignment
+
+#### 🔧 Improvements
+- **Fixed**: Resolved divergence between main and develop branches
+- **Enhanced**: Updated documentation to reflect all features
+- **Technical**: Merged 58 commits from develop branch
+
+---
+
+### v1.9.1 - September 19, 2025
+
+**Memory Element Hotfix**: Fixed validation and tool descriptions
+
+#### 🔧 Bug Fixes
+- **Fixed**: Added 'memories' to validation arrays
+- **Fixed**: Updated collection tool descriptions
+- **Technical**: Clean hotfix for memory element support
+
+---
+
 ### v1.9.0 - September 19, 2025
 
 **🎉 Memory Element Release**: Persistent context storage with enterprise-grade features
