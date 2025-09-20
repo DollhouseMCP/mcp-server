@@ -1,5 +1,13 @@
 /**
  * Unit tests for ToolCache implementation
+ *
+ * Environment Variables:
+ * - TOOLCACHE_THRESHOLD_MS: Override the performance threshold for cached operations (default varies by platform)
+ * - TOOLCACHE_IMPROVEMENT_RATIO: Override the minimum improvement ratio for caching (default: 5x, macOS+Node22: 2x)
+ *
+ * Platform-specific behavior:
+ * - macOS with Node 22+: Uses relaxed performance thresholds due to different V8 optimization and I/O characteristics
+ * - Other platforms: Standard strict performance requirements
  */
 
 import { ToolCache, ToolDiscoveryCache } from '../../../../src/utils/ToolCache.js';
@@ -348,14 +356,41 @@ describe('ToolCache', () => {
 
       expect(cachedTime).toBeLessThan(cacheThreshold); // Configurable threshold
 
-      // Performance improvement ratio varies by platform and Node version
-      // macOS with Node 22 has different performance characteristics
+      // Performance improvement ratio configuration
+      // The caching improvement ratio varies significantly across platforms and Node versions:
+      //
+      // Standard expectation (5x improvement):
+      // - Most platforms achieve 5x or better performance improvement with caching
+      // - This includes Linux, Windows, and macOS with Node versions < 22
+      //
+      // macOS + Node 22+ characteristics (2x improvement):
+      // - Node 22 introduced changes to V8's optimization strategies
+      // - macOS file system caching interacts differently with Node 22's I/O model
+      // - The combination results in smaller performance gaps between cached/uncached operations
+      // - While caching still provides benefit, the improvement ratio is reduced
+      //
+      // Environment variable override:
+      // - TOOLCACHE_IMPROVEMENT_RATIO allows customization for specific CI environments
+      // - This follows the same pattern as TOOLCACHE_THRESHOLD_MS for consistency
+
       const isMacOS = process.platform === 'darwin';
       const isNode22Plus = parseInt(process.version.slice(1).split('.')[0]) >= 22;
 
-      // Relax performance expectations for macOS + Node 22
-      const minImprovement = (isMacOS && isNode22Plus) ? 2 : 5;
-      expect(cachedTime).toBeLessThan(nonCachedTime / minImprovement); // At least 2x-5x improvement based on platform
+      // Determine the minimum improvement ratio
+      // Allow environment variable override, then platform-specific defaults
+      let minImprovement: number;
+      if (process.env.TOOLCACHE_IMPROVEMENT_RATIO) {
+        // Environment variable override for CI flexibility
+        minImprovement = parseFloat(process.env.TOOLCACHE_IMPROVEMENT_RATIO);
+      } else if (isMacOS && isNode22Plus) {
+        // Relaxed threshold for macOS + Node 22+
+        minImprovement = 2;
+      } else {
+        // Standard threshold for all other configurations
+        minImprovement = 5;
+      }
+
+      expect(cachedTime).toBeLessThan(nonCachedTime / minImprovement); // Validates caching provides meaningful improvement
     });
   });
 });
