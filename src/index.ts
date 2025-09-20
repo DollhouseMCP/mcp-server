@@ -1890,7 +1890,7 @@ export class DollhouseMCPServer implements IToolHandler {
       }
       
       // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
+      let manager: SkillManager | TemplateManager | AgentManager | MemoryManager | null = null;
       switch (type as ElementType) {
         case ElementType.SKILL:
           manager = this.skillManager;
@@ -1900,6 +1900,12 @@ export class DollhouseMCPServer implements IToolHandler {
           break;
         case ElementType.AGENT:
           manager = this.agentManager;
+          break;
+        case ElementType.MEMORY:
+          // FIX: Added memory validation support (fixes #1042)
+          // Previously: Memories returned "not yet supported for validation"
+          // Now: Full validation including metadata, retention, entry structure
+          manager = this.memoryManager;
           break;
         default:
           return {
