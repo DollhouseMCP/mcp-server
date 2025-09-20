@@ -215,6 +215,118 @@ data:
       // Also test that the description was parsed correctly
       expect(memories[0].metadata.description).toBe('Testing that names are parsed correctly');
     });
+
+    // Test for pure YAML format handling (v1.9.5 fix)
+    it('should handle pure YAML files without frontmatter markers', async () => {
+      // Create a pure YAML memory file (simulating v1.9.3+ format)
+      const pureYaml = `entries:
+  - content: Test entry
+    id: test-1
+    timestamp: ${new Date().toISOString()}
+metadata:
+  name: Pure YAML Memory
+  description: Memory saved as pure YAML
+  version: 1.0.0
+extensions:
+  storageBackend: memory
+stats:
+  entryCount: 1`;
+
+      // Write the pure YAML directly to test the parsing
+      const dateFolder = new Date().toISOString().split('T')[0];
+      const folderPath = path.join(memoriesDir, dateFolder);
+      await fs.mkdir(folderPath, { recursive: true });
+      await fs.writeFile(path.join(folderPath, 'pure-yaml-test.yaml'), pureYaml);
+
+      // Load the memory
+      const loaded = await manager.load(`${dateFolder}/pure-yaml-test.yaml`);
+
+      expect(loaded.metadata.name).toBe('Pure YAML Memory');
+      expect(loaded.metadata.description).toBe('Memory saved as pure YAML');
+      expect(loaded.metadata.version).toBe('1.0.0');
+    });
+
+    // Test for frontmatter format handling (backward compatibility)
+    it('should handle markdown files with YAML frontmatter', async () => {
+      // Create a memory file with frontmatter markers
+      const frontmatterYaml = `---
+metadata:
+  name: Frontmatter Memory
+  description: Memory with frontmatter markers
+  version: 2.0.0
+entries:
+  - content: Frontmatter entry
+    id: fm-1
+    timestamp: ${new Date().toISOString()}
+---
+
+# Optional markdown content`;
+
+      // Write the frontmatter YAML
+      const dateFolder = new Date().toISOString().split('T')[0];
+      const folderPath = path.join(memoriesDir, dateFolder);
+      await fs.mkdir(folderPath, { recursive: true });
+      await fs.writeFile(path.join(folderPath, 'frontmatter-test.yaml'), frontmatterYaml);
+
+      // Load the memory
+      const loaded = await manager.load(`${dateFolder}/frontmatter-test.yaml`);
+
+      expect(loaded.metadata.name).toBe('Frontmatter Memory');
+      expect(loaded.metadata.description).toBe('Memory with frontmatter markers');
+      expect(loaded.metadata.version).toBe('2.0.0');
+    });
+
+    // Test edge case: empty file
+    it('should handle empty memory files gracefully', async () => {
+      const dateFolder = new Date().toISOString().split('T')[0];
+      const folderPath = path.join(memoriesDir, dateFolder);
+      await fs.mkdir(folderPath, { recursive: true });
+      await fs.writeFile(path.join(folderPath, 'empty.yaml'), '');
+
+      const loaded = await manager.load(`${dateFolder}/empty.yaml`);
+      expect(loaded.metadata.name).toBe('Unnamed Memory');
+    });
+
+    // Test mixed format scenario
+    it('should handle both pure YAML and frontmatter files in same directory', async () => {
+      const dateFolder = new Date().toISOString().split('T')[0];
+      const folderPath = path.join(memoriesDir, dateFolder);
+      await fs.mkdir(folderPath, { recursive: true });
+
+      // Save pure YAML file with full structure
+      const pureYaml = `metadata:
+  name: Pure Format
+  version: 1.0.0
+entries: []`;
+      await fs.writeFile(path.join(folderPath, 'pure.yaml'), pureYaml);
+
+      // Save frontmatter file with full structure
+      const frontmatterYaml = `---
+metadata:
+  name: Frontmatter Format
+  version: 1.0.0
+entries: []
+---`;
+      await fs.writeFile(path.join(folderPath, 'frontmatter.yaml'), frontmatterYaml);
+
+      // Clear any cache that might exist
+      (manager as any).dateFoldersCache = null;
+
+      // List should find both
+      const memories = await manager.list();
+      const names = memories.map(m => m.metadata.name).sort();
+
+      // Debug output if test fails
+      if (names.length === 0) {
+        console.log('No memories found. Date folder:', dateFolder);
+        console.log('Folder path:', folderPath);
+        const files = await fs.readdir(folderPath);
+        console.log('Files in folder:', files);
+      }
+
+      expect(names).toContain('Frontmatter Format');
+      expect(names).toContain('Pure Format');
+    });
   });
   
   describe('find and findMany', () => {
