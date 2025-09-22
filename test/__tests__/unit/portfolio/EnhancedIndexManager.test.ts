@@ -7,6 +7,21 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { load as yamlLoad } from 'js-yaml';
 
+// Mock fs module to avoid file system operations in tests
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  readFileSync: jest.fn(() => '{}'),
+  existsSync: jest.fn(() => false)
+}));
+
+// Mock fs/promises
+jest.mock('fs/promises', () => ({
+  readFile: jest.fn(() => Promise.resolve('{}')),
+  writeFile: jest.fn(() => Promise.resolve()),
+  mkdir: jest.fn(() => Promise.resolve()),
+  stat: jest.fn(() => Promise.reject(new Error('File not found')))
+}));
+
 describe('EnhancedIndexManager - Extensibility Tests', () => {
   let manager: EnhancedIndexManager;
   const testIndexPath = path.join(process.env.HOME!, '.dollhouse', 'capability-index.yaml');

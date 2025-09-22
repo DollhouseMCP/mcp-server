@@ -47,14 +47,14 @@ describe('NLPScoringManager', () => {
       const text1 = 'the machine is learning';
       const text2 = 'a machine for learning';
 
-      // With minTokenLength: 2, single-char words "a" and "is" are filtered
-      // text1: {the, machine, learning} = 3 tokens
-      // text2: {machine, for, learning} = 3 tokens
+      // With minTokenLength: 2, only "a" (length=1) is filtered
+      // text1: {the, machine, is, learning} = 4 tokens
+      // text2: {machine, for, learning} = 3 tokens (a is filtered)
       // Shared: {machine, learning} = 2 tokens
-      // Union: {the, machine, learning, for} = 4 tokens
-      // Jaccard = 2/4 = 0.5
+      // Union: {the, machine, is, learning, for} = 5 tokens
+      // Jaccard = 2/5 = 0.4
       const similarity = manager.calculateJaccard(text1, text2);
-      expect(similarity).toBeCloseTo(0.5, 1);
+      expect(similarity).toBeCloseTo(0.4, 1);
     });
 
     it('should handle empty strings', () => {
