@@ -28,6 +28,7 @@ import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
+import { RelationshipManager, ElementPath } from './RelationshipManager.js';
 
 /**
  * Enhanced index schema - fully extensible
@@ -186,6 +187,7 @@ export class EnhancedIndexManager {
   private isBuilding = false;
   private nlpScoring: NLPScoringManager;
   private verbTriggers: VerbTriggerManager;
+  private relationshipManager: RelationshipManager;
   private config: IndexConfigManager;
   private fileLock: FileLock;
 
@@ -210,6 +212,12 @@ export class EnhancedIndexManager {
       confidenceThreshold: config.verbs.confidenceThreshold,
       maxElementsPerVerb: config.verbs.maxElementsPerVerb,
       includeSynonyms: config.verbs.includeSynonyms
+    });
+
+    // Initialize relationship manager
+    this.relationshipManager = RelationshipManager.getInstance({
+      minConfidence: config.performance.similarityThreshold,
+      enableAutoDiscovery: true
     });
 
     // Initialize file lock
@@ -336,6 +344,9 @@ export class EnhancedIndexManager {
 
       // Calculate semantic relationships using NLP
       await this.calculateSemanticRelationships(newIndex);
+
+      // Discover additional relationship types
+      await this.relationshipManager.discoverRelationships(newIndex);
 
       // Preserve extensions from existing index
       if (existingIndex?.extensions) {
@@ -1074,5 +1085,59 @@ export class EnhancedIndexManager {
   private randomSample<T>(array: T[], size: number): T[] {
     const shuffled = [...array].sort(() => 0.5 - Math.random());
     return shuffled.slice(0, size);
+  }
+
+  /**
+   * Find shortest path between two elements
+   */
+  public async findElementPath(
+    fromElement: string,
+    toElement: string,
+    options?: {
+      relationshipTypes?: string[];
+      minStrength?: number;
+      maxDepth?: number;
+    }
+  ): Promise<ElementPath | null> {
+    const index = await this.getIndex();
+    return this.relationshipManager.findPath(fromElement, toElement, index, options as any);
+  }
+
+  /**
+   * Get all elements connected to a given element
+   */
+  public async getConnectedElements(
+    element: string,
+    options?: {
+      maxDepth?: number;
+      relationshipTypes?: string[];
+      minStrength?: number;
+    }
+  ): Promise<Map<string, ElementPath>> {
+    const index = await this.getIndex();
+    return this.relationshipManager.getConnectedElements(element, index, options as any);
+  }
+
+  /**
+   * Get relationship statistics
+   */
+  public async getRelationshipStats(): Promise<Record<string, number>> {
+    const index = await this.getIndex();
+    return this.relationshipManager.getRelationshipStats(index);
+  }
+
+  /**
+   * Get all relationships for an element
+   */
+  public async getElementRelationships(elementId: string): Promise<Record<string, Relationship[]>> {
+    const index = await this.getIndex();
+    const [type, name] = elementId.split(':');
+    const element = index.elements[type]?.[name];
+
+    if (!element) {
+      return {};
+    }
+
+    return element.relationships || {};
   }
 }
