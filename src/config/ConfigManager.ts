@@ -510,15 +510,22 @@ export class ConfigManager {
     // Navigate to the parent object
     for (let i = 0; i < keys.length - 1; i++) {
       const key = keys[i];
-      if (!(key in current)) {
-        current[key] = {};
+      // SECURITY: Use hasOwnProperty and Object.create(null) to prevent prototype pollution
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        current[key] = Object.create(null);
       }
       current = current[key];
     }
-    
-    // Set the value
+
+    // Set the value with additional prototype pollution protection
     const lastKey = keys[keys.length - 1];
-    current[lastKey] = value;
+    // SECURITY: Use defineProperty to avoid prototype chain pollution
+    Object.defineProperty(current, lastKey, {
+      value: value,
+      writable: true,
+      enumerable: true,
+      configurable: true
+    });
     
     // Save the configuration
     await this.saveConfig();
@@ -873,7 +880,13 @@ export class ConfigManager {
         }
         
         const lastKey = sectionKeys[sectionKeys.length - 1];
-        current[lastKey] = defaultSection[lastKey];
+        // SECURITY: Use defineProperty to avoid prototype chain pollution
+        Object.defineProperty(current, lastKey, {
+          value: defaultSection[lastKey],
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
       }
       
       await this.saveConfig();
