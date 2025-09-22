@@ -26,7 +26,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
-import { IndexConfigManager } from './config/IndexConfig.js';
+import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
 
 /**
@@ -716,7 +716,7 @@ export class EnhancedIndexManager {
     index: EnhancedIndex,
     elementTexts: Map<string, string>,
     keys: string[],
-    config: any
+    config: IndexConfiguration
   ): Promise<void> {
     let comparisons = 0;
     const batchSize = config.performance.similarityBatchSize;
@@ -814,7 +814,7 @@ export class EnhancedIndexManager {
     index: EnhancedIndex,
     elementTexts: Map<string, string>,
     keys: string[],
-    config: any
+    config: IndexConfiguration
   ): Promise<void> {
     const threshold = config.performance.similarityThreshold;
     const maxComparisons = config.performance.maxSimilarityComparisons;

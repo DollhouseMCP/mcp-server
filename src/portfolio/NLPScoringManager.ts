@@ -16,6 +16,7 @@
 
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
 
 /**
  * Scoring result with detailed metrics
@@ -44,7 +45,8 @@ export interface PairwiseSimilarity {
  */
 export interface ScoringConfig {
   minTokenLength: number;
-  cacheExpiry: number;      // milliseconds
+  cacheExpiry: number;
+  maxCacheSize: number;  // Maximum cache entries for LRU eviction      // milliseconds
   entropyBands: {
     low: number;           // < 3.0 typically (high repetition/common words)
     moderate: number;      // 3.0 - 6.0 typically (balanced vocabulary)
@@ -58,29 +60,30 @@ export interface ScoringConfig {
 }
 
 export class NLPScoringManager {
-  private cache: Map<string, { result: ScoringResult; timestamp: number }>;
+  private cache: Map<string, { result: ScoringResult; timestamp: number; lastAccessed: number }>;
+  private cacheAccessOrder: string[];  // Track access order for LRU
   private config: ScoringConfig;
   private unicodeValidator: UnicodeValidator;
 
   constructor(config?: Partial<ScoringConfig>) {
+    // Get config from central manager
+    const indexConfig = IndexConfigManager.getInstance().getConfig();
+
     this.config = {
-      minTokenLength: 2,
-      cacheExpiry: 5 * 60 * 1000, // 5 minutes
-      entropyBands: {
-        low: 3.0,
-        moderate: 4.5,
-        high: 6.0
-      },
-      jaccardThresholds: {
-        low: 0.2,
-        moderate: 0.4,
-        high: 0.6
-      },
+      minTokenLength: indexConfig.nlp.minTokenLength,
+      cacheExpiry: indexConfig.nlp.cacheExpiryMinutes * 60 * 1000,
+      maxCacheSize: indexConfig.memory.maxCacheSize,
+      entropyBands: indexConfig.nlp.entropyBands,
+      jaccardThresholds: indexConfig.nlp.jaccardThresholds,
       ...config
     };
 
     this.cache = new Map();
+    this.cacheAccessOrder = [];
     this.unicodeValidator = new UnicodeValidator();
+
+    // Periodic cleanup of expired entries
+    setInterval(() => this.cleanExpiredCache(), 60000); // Every minute
   }
 
   /**
@@ -179,6 +182,9 @@ export class NLPScoringManager {
     const cached = this.cache.get(cacheKey);
 
     if (cached && Date.now() - cached.timestamp < this.config.cacheExpiry) {
+      // Update access order for LRU
+      cached.lastAccessed = Date.now();
+      this.updateAccessOrder(cacheKey);
       return cached.result;
     }
 
@@ -246,11 +252,8 @@ export class NLPScoringManager {
       overlapCount: intersection.size
     };
 
-    // Cache the result
-    this.cache.set(cacheKey, {
-      result,
-      timestamp: Date.now()
-    });
+    // Cache the result with LRU management
+    this.addToCache(cacheKey, result);
 
     // Log scoring event for monitoring
     logger.debug('NLP scoring completed', {
@@ -358,10 +361,83 @@ export class NLPScoringManager {
   }
 
   /**
+   * Add result to cache with LRU eviction
+   */
+  private addToCache(key: string, result: ScoringResult): void {
+    const now = Date.now();
+
+    // Check if we need to evict
+    if (this.cache.size >= this.config.maxCacheSize && !this.cache.has(key)) {
+      // Find least recently used entry
+      let lruKey: string | null = null;
+      let oldestAccess = now;
+
+      for (const [k, v] of this.cache.entries()) {
+        if (v.lastAccessed < oldestAccess) {
+          oldestAccess = v.lastAccessed;
+          lruKey = k;
+        }
+      }
+
+      if (lruKey) {
+        this.cache.delete(lruKey);
+        const idx = this.cacheAccessOrder.indexOf(lruKey);
+        if (idx > -1) {
+          this.cacheAccessOrder.splice(idx, 1);
+        }
+        logger.debug('Evicted LRU cache entry', { key: lruKey, cacheSize: this.cache.size });
+      }
+    }
+
+    // Add new entry
+    this.cache.set(key, {
+      result,
+      timestamp: now,
+      lastAccessed: now
+    });
+    this.updateAccessOrder(key);
+  }
+
+  /**
+   * Update access order for LRU tracking
+   */
+  private updateAccessOrder(key: string): void {
+    const idx = this.cacheAccessOrder.indexOf(key);
+    if (idx > -1) {
+      this.cacheAccessOrder.splice(idx, 1);
+    }
+    this.cacheAccessOrder.push(key);
+  }
+
+  /**
+   * Clean expired cache entries
+   */
+  private cleanExpiredCache(): void {
+    const now = Date.now();
+    let removed = 0;
+
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > this.config.cacheExpiry) {
+        this.cache.delete(key);
+        const idx = this.cacheAccessOrder.indexOf(key);
+        if (idx > -1) {
+          this.cacheAccessOrder.splice(idx, 1);
+        }
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      logger.debug('Cleaned expired cache entries', { removed, remaining: this.cache.size });
+    }
+  }
+
+  /**
    * Clear the cache
    */
   public clearCache(): void {
     this.cache.clear();
+    this.cacheAccessOrder = [];
     logger.debug('NLP scoring cache cleared');
   }
 

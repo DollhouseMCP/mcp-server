@@ -24,6 +24,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
 
 export interface IndexEntry {
   filePath: string;
@@ -75,7 +76,7 @@ export class PortfolioIndexManager {
   
   private index: PortfolioIndex | null = null;
   private lastBuilt: Date | null = null;
-  private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly TTL_MS = IndexConfigManager.getInstance().getConfig().index.ttlMinutes * 60 * 1000;
   private isBuilding = false;
   private buildPromise: Promise<void> | null = null;
 

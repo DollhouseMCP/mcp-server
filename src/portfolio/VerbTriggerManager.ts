@@ -13,7 +13,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndexManager } from './EnhancedIndexManager.js';
+import { EnhancedIndexManager, EnhancedIndex } from './EnhancedIndexManager.js';
 import { ElementDefinition } from './EnhancedIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -386,17 +386,20 @@ export class VerbTriggerManager {
     // Cache the results
     this.verbCache.set(verb, limited);
 
-    // Audit log for security tracking
+    // FIX: Proper audit logging for verb trigger operations
+    // Previously: Used 'ELEMENT_CREATED' which was incorrect
+    // Now: Using 'VERB_TRIGGERED' for operational observability
     if (limited.length > 0) {
       SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
+        type: 'VERB_TRIGGERED' as any, // Cast needed until security types updated
         severity: 'LOW',
         source: 'VerbTriggerManager.getElementsForVerb',
-        details: `Found ${limited.length} elements for verb: ${verb}`,
+        details: `Verb '${verb}' triggered, matched ${limited.length} elements`,
         metadata: {
           verb,
           elementCount: limited.length,
-          topElement: limited[0]?.name
+          topElement: limited[0]?.name,
+          confidence: limited[0]?.confidence
         }
       });
     }
@@ -407,7 +410,7 @@ export class VerbTriggerManager {
   /**
    * Find element type by name
    */
-  private findElementType(elementName: string, index: any): string {
+  private findElementType(elementName: string, index: EnhancedIndex): string {
     for (const [type, elements] of Object.entries(index.elements)) {
       if ((elements as any)[elementName]) {
         return type;

@@ -110,7 +110,9 @@ export class IndexConfigManager {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.configPath = path.join(portfolioPath, '.config', 'index-config.json');
     this.config = { ...this.defaultConfig };
-    this.loadConfig();
+    // FIX: Race condition - loadConfig is async but called sync in constructor
+    // Now using synchronous loading in constructor
+    this.loadConfigSync();
   }
 
   public static getInstance(): IndexConfigManager {
@@ -121,7 +123,30 @@ export class IndexConfigManager {
   }
 
   /**
-   * Load configuration from disk if it exists
+   * Load configuration from disk synchronously (for constructor)
+   */
+  private loadConfigSync(): void {
+    try {
+      const fs = require('fs');
+      const configData = fs.readFileSync(this.configPath, 'utf-8');
+      const loadedConfig = JSON.parse(configData);
+
+      // Deep merge with defaults to handle missing fields
+      this.config = this.deepMerge(this.defaultConfig, loadedConfig);
+
+      logger.info('Index configuration loaded', { path: this.configPath });
+    } catch (error) {
+      if ((error as any).code === 'ENOENT') {
+        // Config doesn't exist, will be created on first save
+        logger.info('No config file found, using defaults', { path: this.configPath });
+      } else {
+        logger.warn('Failed to load index config, using defaults', { error });
+      }
+    }
+  }
+
+  /**
+   * Load configuration from disk if it exists (async version)
    */
   private async loadConfig(): Promise<void> {
     try {
