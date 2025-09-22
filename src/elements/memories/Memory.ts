@@ -499,6 +499,40 @@ export class Memory extends BaseElement implements IElement {
   }
   
   /**
+   * Helper function to ensure a value is a valid Date object
+   * FIX #1069: Validates and converts timestamps to Date objects
+   */
+  private ensureDateObject(value: any): Date {
+    // Handle null/undefined
+    if (value == null) {
+      throw new Error(`Date value is null or undefined`);
+    }
+
+    // If already a Date, validate it
+    if (value instanceof Date) {
+      if (isNaN(value.getTime())) {
+        throw new Error(`Invalid Date object provided`);
+      }
+      return value;
+    }
+
+    // Try to convert to Date
+    const date = new Date(value);
+    if (isNaN(date.getTime())) {
+      throw new Error(`Invalid date value: ${value}`);
+    }
+
+    // Check for unreasonable dates (before 1970 or more than 100 years in future)
+    const now = Date.now();
+    const timestamp = date.getTime();
+    if (timestamp < 0 || timestamp > now + (100 * 365 * 24 * 60 * 60 * 1000)) {
+      throw new Error(`Date value out of reasonable range: ${value}`);
+    }
+
+    return date;
+  }
+
+  /**
    * Get memory statistics
    */
   public getStats(): {
@@ -516,17 +550,22 @@ export class Memory extends BaseElement implements IElement {
     for (const entry of this.entries.values()) {
       totalSize += entry.content.length;
 
-      // FIX #1069: Ensure timestamp is a Date object for comparison
+      // FIX #1069: Ensure timestamp is a valid Date object for comparison
       // When entries are edited, timestamps might be strings
-      const entryTimestamp = entry.timestamp instanceof Date
-        ? entry.timestamp
-        : new Date(entry.timestamp);
+      try {
+        const entryTimestamp = this.ensureDateObject(entry.timestamp);
 
-      if (!oldestEntry || entryTimestamp < oldestEntry) {
-        oldestEntry = entryTimestamp;
-      }
-      if (!newestEntry || entryTimestamp > newestEntry) {
-        newestEntry = entryTimestamp;
+        if (!oldestEntry || entryTimestamp < oldestEntry) {
+          oldestEntry = entryTimestamp;
+        }
+        if (!newestEntry || entryTimestamp > newestEntry) {
+          newestEntry = entryTimestamp;
+        }
+      } catch (error) {
+        // Log the error but continue processing other entries
+        logger.warn(`Invalid timestamp in memory entry: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        // Skip this entry's timestamp for statistics
+        continue;
       }
       
       entry.tags?.forEach(tag => {
