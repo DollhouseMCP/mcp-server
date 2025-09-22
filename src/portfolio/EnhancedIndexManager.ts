@@ -26,6 +26,8 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
+import { FileLock } from '../utils/FileLock.js';
 
 /**
  * Enhanced index schema - fully extensible
@@ -180,17 +182,46 @@ export class EnhancedIndexManager {
   private index: EnhancedIndex | null = null;
   private indexPath: string;
   private lastLoaded: Date | null = null;
-  private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private TTL_MS: number;
   private isBuilding = false;
   private nlpScoring: NLPScoringManager;
   private verbTriggers: VerbTriggerManager;
+  private config: IndexConfigManager;
+  private fileLock: FileLock;
 
   private constructor() {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
-    this.nlpScoring = new NLPScoringManager();
-    this.verbTriggers = VerbTriggerManager.getInstance();
-    logger.debug('EnhancedIndexManager initialized', { indexPath: this.indexPath });
+
+    // Initialize configuration
+    this.config = IndexConfigManager.getInstance();
+    const config = this.config.getConfig();
+    this.TTL_MS = config.index.ttlMinutes * 60 * 1000;
+
+    // Initialize components with config
+    this.nlpScoring = new NLPScoringManager({
+      cacheExpiry: config.nlp.cacheExpiryMinutes * 60 * 1000,
+      minTokenLength: config.nlp.minTokenLength,
+      entropyBands: config.nlp.entropyBands,
+      jaccardThresholds: config.nlp.jaccardThresholds
+    });
+
+    this.verbTriggers = VerbTriggerManager.getInstance({
+      confidenceThreshold: config.verbs.confidenceThreshold,
+      maxElementsPerVerb: config.verbs.maxElementsPerVerb,
+      includeSynonyms: config.verbs.includeSynonyms
+    });
+
+    // Initialize file lock
+    this.fileLock = new FileLock(this.indexPath);
+
+    logger.debug('EnhancedIndexManager initialized', {
+      indexPath: this.indexPath,
+      config: {
+        ttlMinutes: config.index.ttlMinutes,
+        maxElements: config.performance.maxElementsForFullMatrix
+      }
+    });
   }
 
   public static getInstance(): EnhancedIndexManager {
@@ -241,8 +272,15 @@ export class EnhancedIndexManager {
    * Build or rebuild the index from portfolio
    */
   private async buildIndex(options: IndexOptions = {}): Promise<void> {
-    if (this.isBuilding) {
-      logger.warn('Index build already in progress');
+    // Use file locking to prevent concurrent builds
+    const config = this.config.getConfig();
+    const lockAcquired = await this.fileLock.acquire({
+      timeout: config.index.lockTimeoutMs,
+      stale: 60000  // 1 minute
+    });
+
+    if (!lockAcquired) {
+      logger.warn('Could not acquire lock for index build');
       return;
     }
 
@@ -327,6 +365,7 @@ export class EnhancedIndexManager {
 
     } finally {
       this.isBuilding = false;
+      await this.fileLock.release();
     }
   }
 
@@ -610,13 +649,23 @@ export class EnhancedIndexManager {
 
   /**
    * Calculate semantic relationships between elements using NLP
+   * Optimized for large numbers of elements
    */
   private async calculateSemanticRelationships(index: EnhancedIndex): Promise<void> {
     const startTime = Date.now();
+    const config = this.config.getConfig();
 
     // Prepare text content for each element
     const elementTexts = new Map<string, string>();
+    const elementCount = Object.values(index.elements)
+      .reduce((sum, elements) => sum + Object.keys(elements).length, 0);
 
+    logger.info('Starting semantic relationship calculation', {
+      elementCount,
+      maxForFullMatrix: config.performance.maxElementsForFullMatrix
+    });
+
+    // First pass: Calculate entropy for all elements
     for (const [elementType, elements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(elements)) {
         // Combine relevant text fields for analysis
@@ -641,24 +690,60 @@ export class EnhancedIndexManager {
       }
     }
 
-    // Calculate pairwise Jaccard similarities
     const keys = Array.from(elementTexts.keys());
 
+    // Decide strategy based on element count
+    if (elementCount <= config.performance.maxElementsForFullMatrix) {
+      // Small dataset: Calculate all relationships
+      await this.calculateFullMatrix(index, elementTexts, keys, config);
+    } else {
+      // Large dataset: Use smart sampling and batching
+      await this.calculateSampledRelationships(index, elementTexts, keys, config);
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info('Semantic relationships calculated', {
+      elements: elementTexts.size,
+      duration: `${duration}ms`,
+      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled'
+    });
+  }
+
+  /**
+   * Calculate full similarity matrix for small datasets
+   */
+  private async calculateFullMatrix(
+    index: EnhancedIndex,
+    elementTexts: Map<string, string>,
+    keys: string[],
+    config: any
+  ): Promise<void> {
+    let comparisons = 0;
+    const batchSize = config.performance.similarityBatchSize;
+    const threshold = config.performance.similarityThreshold;
+
+    // Process in batches to allow event loop to breathe
     for (let i = 0; i < keys.length; i++) {
       const key1 = keys[i];
       const [type1, name1] = key1.split(':');
       const text1 = elementTexts.get(key1)!;
 
-      for (let j = i + 1; j < keys.length; j++) {
+      // Process batch of comparisons
+      const batch: Array<{ key2: string; type2: string; name2: string }> = [];
+
+      for (let j = i + 1; j < keys.length && batch.length < batchSize; j++) {
         const key2 = keys[j];
         const [type2, name2] = key2.split(':');
-        const text2 = elementTexts.get(key2)!;
+        batch.push({ key2, type2, name2 });
+      }
 
-        // Calculate similarity score
+      // Process batch asynchronously
+      await Promise.all(batch.map(async ({ key2, type2, name2 }) => {
+        const text2 = elementTexts.get(key2)!;
         const scoring = this.nlpScoring.scoreRelevance(text1, text2);
 
-        // Store high-confidence relationships (score > 0.5)
-        if (scoring.combinedScore > 0.5) {
+        // Store high-confidence relationships
+        if (scoring.combinedScore > threshold) {
           // Add relationship to element1
           if (!index.elements[type1][name1].relationships) {
             index.elements[type1][name1].relationships = {};
@@ -710,14 +795,167 @@ export class EnhancedIndexManager {
           }
           index.elements[type2][name2].semantic!.jaccard_scores[`${type1}:${name1}`] = scoring.jaccard;
         }
+      }));
+
+      comparisons += batch.length;
+
+      // Yield to event loop periodically
+      if (comparisons % 100 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
+  }
+
+  /**
+   * Calculate sampled relationships for large datasets
+   * Uses smart sampling to find most relevant relationships without O(n²) comparisons
+   */
+  private async calculateSampledRelationships(
+    index: EnhancedIndex,
+    elementTexts: Map<string, string>,
+    keys: string[],
+    config: any
+  ): Promise<void> {
+    const threshold = config.performance.similarityThreshold;
+    const maxComparisons = config.performance.maxSimilarityComparisons;
+
+    logger.info('Using sampled relationship calculation', {
+      elements: keys.length,
+      maxComparisons
+    });
+
+    // Strategy 1: Sample based on element types
+    // Compare each element with a random sample from each type
+    const elementsByType = new Map<string, string[]>();
+
+    for (const key of keys) {
+      const [type] = key.split(':');
+      if (!elementsByType.has(type)) {
+        elementsByType.set(type, []);
+      }
+      elementsByType.get(type)!.push(key);
+    }
+
+    let comparisons = 0;
+
+    for (const key1 of keys) {
+      if (comparisons >= maxComparisons) break;
+
+      const [type1, name1] = key1.split(':');
+      const text1 = elementTexts.get(key1)!;
+
+      // Sample from each element type
+      for (const [type, typeKeys] of elementsByType.entries()) {
+        if (comparisons >= maxComparisons) break;
+
+        // Sample size based on type size
+        const sampleSize = Math.min(
+          Math.ceil(Math.sqrt(typeKeys.length)),
+          10  // Max 10 samples per type
+        );
+
+        // Random sample
+        const sampledKeys = this.randomSample(typeKeys, sampleSize)
+          .filter(k => k !== key1);  // Don't compare with self
+
+        for (const key2 of sampledKeys) {
+          if (comparisons >= maxComparisons) break;
+
+          const [type2, name2] = key2.split(':');
+          const text2 = elementTexts.get(key2)!;
+
+          const scoring = this.nlpScoring.scoreRelevance(text1, text2);
+          comparisons++;
+
+          if (scoring.combinedScore > threshold) {
+            // Store relationship (same as in full matrix)
+            this.storeRelationship(index, type1, name1, type2, name2, scoring);
+          }
+        }
+      }
+
+      // Yield to event loop
+      if (comparisons % 100 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
       }
     }
 
-    const duration = Date.now() - startTime;
-    logger.info('Semantic relationships calculated', {
-      elements: elementTexts.size,
-      duration: `${duration}ms`,
-      comparisons: (keys.length * (keys.length - 1)) / 2
+    logger.info('Sampled relationships calculated', {
+      comparisons,
+      maxComparisons
     });
+  }
+
+  /**
+   * Store a bidirectional relationship between elements
+   */
+  private storeRelationship(
+    index: EnhancedIndex,
+    type1: string,
+    name1: string,
+    type2: string,
+    name2: string,
+    scoring: any
+  ): void {
+    // Add relationship to element1
+    if (!index.elements[type1][name1].relationships) {
+      index.elements[type1][name1].relationships = {};
+    }
+    if (!index.elements[type1][name1].relationships.similar) {
+      index.elements[type1][name1].relationships.similar = [];
+    }
+
+    // Check if relationship already exists to avoid duplicates
+    const existing1 = index.elements[type1][name1].relationships.similar
+      .find(r => r.element === `${type2}:${name2}`);
+
+    if (!existing1) {
+      index.elements[type1][name1].relationships.similar.push({
+        element: `${type2}:${name2}`,
+        type: 'semantic_similarity',
+        strength: scoring.combinedScore,
+        metadata: {
+          jaccard: scoring.jaccard,
+          entropy_diff: Math.abs(
+            (index.elements[type1][name1].semantic?.entropy || 0) -
+            (index.elements[type2][name2].semantic?.entropy || 0)
+          )
+        }
+      });
+    }
+
+    // Add reverse relationship
+    if (!index.elements[type2][name2].relationships) {
+      index.elements[type2][name2].relationships = {};
+    }
+    if (!index.elements[type2][name2].relationships.similar) {
+      index.elements[type2][name2].relationships.similar = [];
+    }
+
+    const existing2 = index.elements[type2][name2].relationships.similar
+      .find(r => r.element === `${type1}:${name1}`);
+
+    if (!existing2) {
+      index.elements[type2][name2].relationships.similar.push({
+        element: `${type1}:${name1}`,
+        type: 'semantic_similarity',
+        strength: scoring.combinedScore,
+        metadata: {
+          jaccard: scoring.jaccard,
+          entropy_diff: Math.abs(
+            (index.elements[type1][name1].semantic?.entropy || 0) -
+            (index.elements[type2][name2].semantic?.entropy || 0)
+          )
+        }
+      });
+    }
+  }
+
+  /**
+   * Random sample from array
+   */
+  private randomSample<T>(array: T[], size: number): T[] {
+    const shuffled = [...array].sort(() => 0.5 - Math.random());
+    return shuffled.slice(0, size);
   }
 }

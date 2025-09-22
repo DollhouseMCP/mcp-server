@@ -244,6 +244,22 @@ export class VerbTriggerManager {
    * Get elements that match a specific verb
    */
   public async getElementsForVerb(verb: string): Promise<ElementMatch[]> {
+    return this.getElementsForVerbInternal(verb, new Set());
+  }
+
+  /**
+   * Internal version with visited tracking to prevent infinite recursion
+   */
+  private async getElementsForVerbInternal(
+    verb: string,
+    visited: Set<string>
+  ): Promise<ElementMatch[]> {
+    // Check if we've already processed this verb (prevents infinite recursion)
+    if (visited.has(verb)) {
+      return [];
+    }
+    visited.add(verb);
+
     // Check cache first
     if (this.verbCache.has(verb)) {
       return this.verbCache.get(verb)!;
@@ -285,12 +301,13 @@ export class VerbTriggerManager {
       }
     }
 
-    // 3. Check synonyms if enabled
-    if (this.config.includeSynonyms) {
+    // 3. Check synonyms if enabled (with depth limit)
+    if (this.config.includeSynonyms && visited.size < 5) {  // Max recursion depth of 5
       const synonyms = this.getSynonyms(verb);
       for (const synonym of synonyms) {
-        if (synonym !== verb) {
-          const synonymElements = await this.getElementsForVerb(synonym);
+        if (synonym !== verb && !visited.has(synonym)) {
+          // Pass the visited set to recursive calls
+          const synonymElements = await this.getElementsForVerbInternal(synonym, visited);
           for (const elem of synonymElements) {
             const existing = elements.find(e => e.name === elem.name);
             if (!existing) {
