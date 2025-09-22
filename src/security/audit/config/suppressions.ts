@@ -652,6 +652,28 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: '**/test-memory-edit.js',
     reason: 'Test file for memory editing - no user input processing'
+  },
+
+  // Additional suppressions for remaining issues
+  {
+    rule: 'OWASP-A03-002',
+    file: 'test/experiments/capability-index-docker-test.js',
+    reason: 'Test file using spawn with hardcoded array arguments at line 279 - no user input'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/test/experiments/capability-index-docker-test.js',
+    reason: 'Test file using spawn with hardcoded array arguments at line 279 - no user input'
+  },
+  {
+    rule: 'DMCP-SEC-001',
+    file: 'scripts/test-capability-index.js',
+    reason: 'Test script loading test personas with hardcoded paths - not production code'
+  },
+  {
+    rule: 'DMCP-SEC-001',
+    file: '**/scripts/test-capability-index.js',
+    reason: 'Test script loading test personas with hardcoded paths - not production code'
   }
 ];
 
