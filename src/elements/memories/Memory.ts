@@ -220,7 +220,12 @@ export class Memory extends BaseElement implements IElement {
       // If still at capacity after retention, remove oldest to make room
       if (this.entries.size >= this.maxEntries) {
         const oldestEntry = Array.from(this.entries.values())
-          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())[0];
+          .sort((a, b) => {
+            // FIX #1069: Ensure timestamps are Date objects for sorting
+            const aTime = this.ensureDateObject(a.timestamp).getTime();
+            const bTime = this.ensureDateObject(b.timestamp).getTime();
+            return aTime - bTime;
+          })[0];
         if (oldestEntry) {
           this.entries.delete(oldestEntry.id);
         }
@@ -360,7 +365,10 @@ export class Memory extends BaseElement implements IElement {
     
     // Sort by timestamp (newest first) - using string comparison for IDs as secondary sort
     results.sort((a, b) => {
-      const timeDiff = b.timestamp.getTime() - a.timestamp.getTime();
+      // FIX #1069: Ensure timestamps are Date objects for sorting
+      const bTime = this.ensureDateObject(b.timestamp).getTime();
+      const aTime = this.ensureDateObject(a.timestamp).getTime();
+      const timeDiff = bTime - aTime;
       if (timeDiff !== 0) return timeDiff;
       // If timestamps are exactly the same, sort by ID (which contains timestamp)
       return b.id.localeCompare(a.id);
@@ -426,10 +434,16 @@ export class Memory extends BaseElement implements IElement {
 
     // Format entries as readable content (newest first)
     const sortedEntries = Array.from(this.entries.values())
-      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      .sort((a, b) => {
+        // FIX #1069: Ensure timestamps are Date objects for sorting
+        const aTime = this.ensureDateObject(a.timestamp).getTime();
+        const bTime = this.ensureDateObject(b.timestamp).getTime();
+        return bTime - aTime;
+      });
 
     return sortedEntries.map(entry => {
-      const timestamp = entry.timestamp.toISOString();
+      // FIX #1069: Ensure timestamp is Date object before calling toISOString
+      const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
       const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
       return `[${timestamp}]${tags}: ${entry.content}`;
     }).join('\n\n');
@@ -454,7 +468,12 @@ export class Memory extends BaseElement implements IElement {
     // If still at or over capacity, remove oldest entries to make room for one more
     if (this.entries.size >= this.maxEntries) {
       const sortedEntries = Array.from(this.entries.entries())
-        .sort((a, b) => a[1].timestamp.getTime() - b[1].timestamp.getTime());
+        .sort((a, b) => {
+          // FIX #1069: Ensure timestamps are Date objects for sorting
+          const aTime = this.ensureDateObject(a[1].timestamp).getTime();
+          const bTime = this.ensureDateObject(b[1].timestamp).getTime();
+          return aTime - bTime;
+        });
       
       // Remove one extra to make room for new entry
       const toDelete = Math.max(1, this.entries.size - this.maxEntries + 1);

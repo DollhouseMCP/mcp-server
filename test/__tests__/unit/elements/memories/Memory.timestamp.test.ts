@@ -151,4 +151,66 @@ describe('Memory Timestamp Handling', () => {
       expect(() => helper.call(memory, invalidDate)).toThrow('Invalid Date object');
     });
   });
+
+  describe('Auto-repair on read operations', () => {
+    it('should auto-repair string timestamps when accessing content getter', async () => {
+      await memory.addEntry('Test entry 1', ['test']);
+      await memory.addEntry('Test entry 2', ['test']);
+
+      // Corrupt the timestamps
+      const entries = (memory as any).entries;
+      const entriesArray = Array.from(entries.values());
+      entriesArray[0].timestamp = '2025-09-22T10:00:00Z';
+      entriesArray[1].timestamp = '2025-09-23T10:00:00Z';
+
+      // Should not throw and should return formatted content
+      const content = memory.content;
+      expect(content).toContain('[2025-09-23T10:00:00.000Z]');
+      expect(content).toContain('[2025-09-22T10:00:00.000Z]');
+      expect(content).toContain('Test entry 1');
+      expect(content).toContain('Test entry 2');
+    });
+
+    it('should auto-repair during search operations', async () => {
+      await memory.addEntry('Test entry 1', ['test1']);
+      await memory.addEntry('Test entry 2', ['test2']);
+      await memory.addEntry('Test entry 3', ['test3']);
+
+      // Corrupt the timestamps
+      const entries = (memory as any).entries;
+      const entriesArray = Array.from(entries.values());
+      entriesArray[0].timestamp = '2025-09-22T10:00:00Z';
+      entriesArray[1].timestamp = '2025-09-23T10:00:00Z';
+      entriesArray[2].timestamp = '2025-09-24T10:00:00Z';
+
+      // Should not throw and should return sorted results
+      const results = await memory.search({ tags: ['test2'] });
+      expect(results).toHaveLength(1);
+      expect(results[0].content).toBe('Test entry 2');
+    });
+
+    it('should auto-repair during enforceRetentionPolicy', async () => {
+      // Set a small max entries to trigger retention
+      (memory as any).maxEntries = 2;
+
+      await memory.addEntry('Entry 1', ['test']);
+      await memory.addEntry('Entry 2', ['test']);
+
+      // Corrupt the timestamps
+      const entries = (memory as any).entries;
+      const entriesArray = Array.from(entries.values());
+      entriesArray[0].timestamp = '2025-09-22T10:00:00Z';
+      entriesArray[1].timestamp = '2025-09-23T10:00:00Z';
+
+      // Adding a third entry should trigger retention without throwing
+      await memory.addEntry('Entry 3', ['test']);
+
+      // Should have removed the oldest entry
+      expect(memory.entries.size).toBe(2);
+      const remainingEntries = Array.from(memory.entries.values());
+      expect(remainingEntries.some(e => e.content === 'Entry 1')).toBe(false);
+      expect(remainingEntries.some(e => e.content === 'Entry 2')).toBe(true);
+      expect(remainingEntries.some(e => e.content === 'Entry 3')).toBe(true);
+    });
+  });
 });
