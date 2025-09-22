@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.9.9] - 2025-09-22
+
+### Added
+- **Security Utilities Module** (PR #1072)
+  - New `src/utils/securityUtils.ts` with reusable security patterns
+  - Prototype pollution protection functions
+  - Safe object creation with Object.create(null)
+  - Secure property setting with Object.defineProperty()
+
+- **Memory Auto-Repair** (PR #1070)
+  - Automatic repair of corrupted memory timestamps during read operations
+  - No migration needed - repairs happen transparently
+  - Enhanced sorting operations with defensive timestamp conversions
+
+### Fixed
+- **Memory Timestamp Crashes** (PR #1070)
+  - Fixed toISOString() errors when memory entries have string timestamps (#1069)
+  - Added comprehensive timestamp validation with detailed error reporting
+
+- **Security Badge Link** (PR #1071, #1075)
+  - Fixed broken security badge link in README pointing to docs/SECURITY.md
+  - Badge now correctly points to SECURITY.md at repository root
+
+- **Prototype Pollution False Positives** (PR #1072)
+  - Added CodeQL suppressions for false positive alerts (#202-#205)
+  - Implemented belt-and-suspenders protection to satisfy code scanners
+
+### Security
+- Added comprehensive prototype pollution protection across ConfigManager
+- Proper CodeQL suppressions for validated false positives
+- Enhanced input validation and sanitization
+
 ## [1.9.8] - 2025-09-20
 
 ### Added
