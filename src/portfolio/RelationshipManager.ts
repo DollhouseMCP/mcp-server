@@ -425,9 +425,9 @@ export class RelationshipManager {
     if (element.core.name) parts.push(element.core.name);
     if (element.core.description) parts.push(element.core.description);
 
-    // Keywords and tags
-    if (element.keywords) parts.push(...element.keywords);
-    if (element.tags) parts.push(...element.tags);
+    // Keywords and tags from search optimization
+    if (element.search?.keywords) parts.push(...element.search.keywords);
+    if (element.search?.tags) parts.push(...element.search.tags);
 
     // Custom fields (might contain relevant text)
     if (element.custom) {
