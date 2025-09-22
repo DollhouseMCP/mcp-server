@@ -598,6 +598,60 @@ export const suppressions: Suppression[] = [
     rule: '*',
     file: '**/*.yaml',
     reason: 'YAML configuration files are data, not code'
+  },
+
+  // ========================================
+  // September 22 Session Docs Restoration - PR #1082
+  // ========================================
+  {
+    rule: 'OWASP-A03-002',
+    file: 'scripts/test-capability-index.js',
+    reason: 'Test script using spawn with hardcoded array arguments - no user input'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/scripts/test-capability-index.js',
+    reason: 'Test script using spawn with hardcoded array arguments - no user input'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: 'test/experiments/capability-index-comprehensive-test.js',
+    reason: 'Test file using spawn with hardcoded array arguments - no user input'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/test/experiments/capability-index-comprehensive-test.js',
+    reason: 'Test file using spawn with hardcoded array arguments - no user input'
+  },
+  {
+    rule: 'DMCP-SEC-003',
+    file: 'scripts/test-capability-index.js',
+    reason: 'Test script with hardcoded test persona paths - not production code'
+  },
+  {
+    rule: 'DMCP-SEC-003',
+    file: '**/scripts/test-capability-index.js',
+    reason: 'Test script with hardcoded test persona paths - not production code'
+  },
+  {
+    rule: 'CWE-22-001',
+    file: 'test/experiments/capability-index-docker-test.js',
+    reason: 'Test file using hardcoded test paths - no user input'
+  },
+  {
+    rule: 'CWE-22-001',
+    file: '**/test/experiments/capability-index-docker-test.js',
+    reason: 'Test file using hardcoded test paths - no user input'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-memory-edit.js',
+    reason: 'Test file for memory editing - no user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/test-memory-edit.js',
+    reason: 'Test file for memory editing - no user input processing'
   }
 ];
 
