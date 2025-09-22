@@ -1,5 +1,27 @@
 ## 🏷️ Version History
 
+### v1.9.9 - September 22, 2025
+
+**Security & Stability**: Prototype pollution protection and memory timestamp fixes
+
+#### ✨ Features
+- **Security Utilities**: New reusable security module for prototype pollution protection
+- **Memory Auto-Repair**: Corrupted memory timestamps now auto-repair during read operations
+- **Enhanced Validation**: Comprehensive timestamp validation with detailed error reporting
+
+#### 🔧 Fixed
+- **Memory Timestamps**: Fixed toISOString errors when memory entries have string timestamps (#1069)
+- **Security Badge**: Fixed broken security badge link in README pointing to wrong location
+- **Prototype Pollution**: Added belt-and-suspenders protection to satisfy code scanners (#202-#205)
+
+#### 🔒 Security
+- Added `securityUtils.ts` module with reusable security patterns
+- Implemented Object.create(null) for prototype-less objects
+- Added Object.defineProperty() for secure property setting
+- Proper CodeQL suppressions for validated false positives
+
+---
+
 ### v1.9.8 - September 20, 2025
 
 **Memory System Complete**: Full CRUD operations and enhanced memory management
