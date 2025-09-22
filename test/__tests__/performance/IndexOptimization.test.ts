@@ -4,6 +4,21 @@ import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 import { LRUCache } from '../../../src/cache/LRUCache.js';
 import { IndexPerformanceBenchmark } from '../../../src/benchmarks/IndexPerformanceBenchmark.js';
 
+// Mock fs module to avoid file system operations in tests
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  readFileSync: jest.fn(() => '{}'),
+  existsSync: jest.fn(() => false)
+}));
+
+// Mock fs/promises
+jest.mock('fs/promises', () => ({
+  readFile: jest.fn(() => Promise.resolve('{}')),
+  writeFile: jest.fn(() => Promise.resolve()),
+  mkdir: jest.fn(() => Promise.resolve()),
+  stat: jest.fn(() => Promise.reject(new Error('File not found')))
+}));
+
 describe('Index Performance Optimization Tests', () => {
   let unifiedIndexManager: UnifiedIndexManager;
   let performanceMonitor: PerformanceMonitor;
