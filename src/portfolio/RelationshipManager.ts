@@ -19,6 +19,7 @@ import { logger } from '../utils/logger.js';
 import { EnhancedIndex, ElementDefinition, Relationship } from './EnhancedIndexManager.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 /**
  * Relationship types and their inverse mappings
@@ -435,7 +436,14 @@ export class RelationshipManager {
       if (customText) parts.push(customText);
     }
 
-    return parts.join(' ');
+    // Normalize Unicode for security (DMCP-SEC-004)
+    const combinedText = parts.join(' ');
+    const validation = UnicodeValidator.normalize(combinedText);
+    if (validation.detectedIssues && validation.detectedIssues.length > 0) {
+      logger.warn('Unicode issues in relationship text', { issues: validation.detectedIssues });
+    }
+
+    return validation.normalizedContent;
   }
 
   /**
