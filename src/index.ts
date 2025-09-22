@@ -48,6 +48,7 @@ import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { MemoryManager } from './elements/memories/MemoryManager.js';
 import { Memory } from './elements/memories/Memory.js';
+import { generateMemoryId } from './elements/memories/utils.js';
 import { ConfigManager } from './config/ConfigManager.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
@@ -1740,7 +1741,71 @@ export class DollhouseMCPServer implements IToolHandler {
         enumerable: true,
         configurable: true
       });
-      
+
+      // MEMORY FIX: Special handling for memory entries to ensure timestamps are Date objects
+      // Issue #1069: When editing memory entries, timestamps might be strings instead of Date objects
+      // This causes toISOString() errors when saving
+      if (type === ElementType.MEMORY && field === 'entries' && Array.isArray(value)) {
+        // Convert array of entries to Map with proper Date conversion and validation
+        const entriesMap = new Map();
+        const errors: string[] = [];
+
+        for (let i = 0; i < value.length; i++) {
+          const entry = value[i];
+
+          // Validate and convert timestamp
+          if (entry.timestamp) {
+            if (!(entry.timestamp instanceof Date)) {
+              const date = new Date(entry.timestamp);
+              if (isNaN(date.getTime())) {
+                errors.push(`Entry ${i}: Invalid timestamp '${entry.timestamp}'`);
+                continue; // Skip this entry
+              }
+              // Check for reasonable date range (not before 1970, not more than 100 years in future)
+              const now = Date.now();
+              const timestamp = date.getTime();
+              if (timestamp < 0 || timestamp > now + (100 * 365 * 24 * 60 * 60 * 1000)) {
+                errors.push(`Entry ${i}: Timestamp out of reasonable range '${entry.timestamp}'`);
+                continue; // Skip this entry
+              }
+              entry.timestamp = date;
+            }
+          } else {
+            // No timestamp provided, use current time
+            entry.timestamp = new Date();
+          }
+
+          // Validate and convert expiresAt if present
+          if (entry.expiresAt) {
+            if (!(entry.expiresAt instanceof Date)) {
+              const date = new Date(entry.expiresAt);
+              if (isNaN(date.getTime())) {
+                errors.push(`Entry ${i}: Invalid expiresAt '${entry.expiresAt}'`);
+                // Don't skip entry, just remove invalid expiresAt
+                delete entry.expiresAt;
+              } else {
+                entry.expiresAt = date;
+              }
+            }
+          }
+
+          entriesMap.set(entry.id || generateMemoryId(), entry);
+        }
+
+        // If there were validation errors, return them
+        if (errors.length > 0) {
+          return {
+            content: [{
+              type: "text",
+              text: `❌ Memory entry validation errors:\n${errors.join('\n')}\n\nValid entries were saved.`
+            }]
+          };
+        }
+
+        // Replace the entries array with the properly formatted Map
+        (element as any).entries = entriesMap;
+      }
+
       // VERSION FIX: Handle version field updates differently
       // If user is directly editing version field, don't auto-increment
       if (field === 'version' || field === 'metadata.version') {
