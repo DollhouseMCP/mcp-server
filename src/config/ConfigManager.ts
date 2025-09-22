@@ -17,6 +17,12 @@ import * as os from 'os';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import {
+  validatePropertyPath,
+  safeSetProperty,
+  createSafeObject,
+  safeHasOwnProperty
+} from '../utils/securityUtils.js';
 
 export interface UserConfig {
   username: string | null;
@@ -494,31 +500,26 @@ export class ConfigManager {
       await this.initialize();
     }
     
+    // SECURITY: Validate path to prevent prototype pollution
+    validatePropertyPath(path, 'path');
+
     const keys = path.split('.');
-    
-    // SECURITY: Validate all keys to prevent prototype pollution
-    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
-    for (const key of keys) {
-      if (FORBIDDEN_KEYS.includes(key)) {
-        throw new Error(`Forbidden property in path: ${key}`);
-      }
-    }
-    
     let current: any = this.config;
     const previousValue = this.getSetting(path);
-    
-    // Navigate to the parent object
+
+    // Navigate to the parent object using security utilities
     for (let i = 0; i < keys.length - 1; i++) {
       const key = keys[i];
-      if (!(key in current)) {
-        current[key] = {};
+      // SECURITY: Use safe property check and create prototype-less objects
+      if (!safeHasOwnProperty(current, key)) {
+        current[key] = createSafeObject();
       }
       current = current[key];
     }
-    
-    // Set the value
+
+    // Set the value using secure property setter
     const lastKey = keys[keys.length - 1];
-    current[lastKey] = value;
+    safeSetProperty(current, lastKey, value);
     
     // Save the configuration
     await this.saveConfig();
@@ -854,26 +855,21 @@ export class ConfigManager {
       if (!this.config) {
         this.config = defaults;
       } else {
+        // SECURITY: Validate section path to prevent prototype pollution
+        validatePropertyPath(section, 'section');
+
         const sectionKeys = section.split('.');
-        
-        // SECURITY: Validate all keys to prevent prototype pollution
-        const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
-        for (const key of sectionKeys) {
-          if (FORBIDDEN_KEYS.includes(key)) {
-            throw new Error(`Forbidden property in section: ${key}`);
-          }
-        }
-        
         let current: any = this.config;
         let defaultSection: any = defaults;
-        
+
         for (let i = 0; i < sectionKeys.length - 1; i++) {
           current = current[sectionKeys[i]];
           defaultSection = defaultSection[sectionKeys[i]];
         }
-        
+
         const lastKey = sectionKeys[sectionKeys.length - 1];
-        current[lastKey] = defaultSection[lastKey];
+        // SECURITY: Use secure property setter to avoid prototype chain pollution
+        safeSetProperty(current, lastKey, defaultSection[lastKey]);
       }
       
       await this.saveConfig();

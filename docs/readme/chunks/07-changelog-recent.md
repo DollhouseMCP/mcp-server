@@ -2,10 +2,10 @@
 
 ### Latest Releases
 
-- **Enhanced YAML Security** - Comprehensive YAML formatting security hardening
-- **Collection Submission Fix** - Fixed unique_id requirement for collection submissions
-- **Version Management** - Improved version update scripts and workflows
-- **OAuth Authentication** - Default OAuth client ID now works out of the box
-- **Element System** - Streamlined PersonaTools into unified ElementTools system
+- **v1.9.9** - Security utilities module and memory timestamp auto-repair
+- **v1.9.8** - Complete memory CRUD operations and validation
+- **v1.9.7** - NPM package fix for memory display functionality
+- **v1.9.6** - First external contribution with performance improvements
+- **v1.9.5** - Memory YAML parsing fixes
 
 > See [Full Changelog](CHANGELOG.md) for complete version history.
