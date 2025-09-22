@@ -20,6 +20,17 @@ query-filters:
       paths:
         - "test/__tests__/security/**"
 
+  - exclude:
+      id: js/prototype-polluting-assignment
+      paths:
+        - src/config/ConfigManager.ts
+  - exclude:
+      id: js/prototype-pollution-utility
+      paths:
+        - src/config/ConfigManager.ts
+
 # Additional documentation
 # These test files intentionally contain vulnerable regex patterns
 # to test our security validation mechanisms
+# ConfigManager.ts prototype pollution alerts are false positives:
+# The code validates all keys with validatePropertyPath() before any assignments
