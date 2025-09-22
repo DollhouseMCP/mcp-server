@@ -5,21 +5,6 @@
 import { RelationshipManager } from '../../../../src/portfolio/RelationshipManager.js';
 import { EnhancedIndex, ElementDefinition } from '../../../../src/portfolio/EnhancedIndexManager.js';
 
-// Mock fs module to avoid file system operations in tests
-jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
-  readFileSync: jest.fn(() => '{}'),
-  existsSync: jest.fn(() => false)
-}));
-
-// Mock fs/promises
-jest.mock('fs/promises', () => ({
-  readFile: jest.fn(() => Promise.resolve('{}')),
-  writeFile: jest.fn(() => Promise.resolve()),
-  mkdir: jest.fn(() => Promise.resolve()),
-  stat: jest.fn(() => Promise.reject(new Error('File not found')))
-}));
-
 describe('RelationshipManager', () => {
   let manager: RelationshipManager;
 

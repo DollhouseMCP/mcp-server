@@ -5,21 +5,6 @@
 import { VerbTriggerManager, VERB_TAXONOMY } from '../../../../src/portfolio/VerbTriggerManager.js';
 import { EnhancedIndexManager } from '../../../../src/portfolio/EnhancedIndexManager.js';
 
-// Mock fs module to avoid file system operations in tests
-jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
-  readFileSync: jest.fn(() => '{}'),
-  existsSync: jest.fn(() => false)
-}));
-
-// Mock fs/promises
-jest.mock('fs/promises', () => ({
-  readFile: jest.fn(() => Promise.resolve('{}')),
-  writeFile: jest.fn(() => Promise.resolve()),
-  mkdir: jest.fn(() => Promise.resolve()),
-  stat: jest.fn(() => Promise.reject(new Error('File not found')))
-}));
-
 describe('VerbTriggerManager', () => {
   let manager: VerbTriggerManager;
   let indexManager: EnhancedIndexManager;
