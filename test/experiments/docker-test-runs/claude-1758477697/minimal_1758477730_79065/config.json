@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/app/dollhousemcp/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",
+        "CLAUDE_MD_PATH": "/test/CLAUDE.md",
+        "NODE_ENV": "development",
+        "LOG_LEVEL": "info"
+      }
+    }
+  },
+  "defaultMcpServer": "dollhousemcp"
+}
