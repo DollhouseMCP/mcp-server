@@ -92,12 +92,12 @@ export interface ElementMatch {
 
 export class VerbTriggerManager {
   private static instance: VerbTriggerManager | null = null;
-  private indexManager: EnhancedIndexManager;
+  private indexManager: EnhancedIndexManager | null = null;
   private verbCache: Map<string, ElementMatch[]> = new Map();
   private config: VerbTriggerConfig;
 
   private constructor(config: VerbTriggerConfig = {}) {
-    this.indexManager = EnhancedIndexManager.getInstance();
+    // Don't initialize indexManager here to avoid circular dependency
     this.config = {
       confidenceThreshold: config.confidenceThreshold || 0.5,
       includeSynonyms: config.includeSynonyms !== false,
@@ -106,6 +106,13 @@ export class VerbTriggerManager {
     };
 
     logger.debug('VerbTriggerManager initialized', { config: this.config });
+  }
+
+  private getIndexManager(): EnhancedIndexManager {
+    if (!this.indexManager) {
+      this.indexManager = EnhancedIndexManager.getInstance();
+    }
+    return this.indexManager;
   }
 
   public static getInstance(config?: VerbTriggerConfig): VerbTriggerManager {
@@ -243,7 +250,7 @@ export class VerbTriggerManager {
     }
 
     const elements: ElementMatch[] = [];
-    const index = await this.indexManager.getIndex();
+    const index = await this.getIndexManager().getIndex();
 
     // 1. Check explicit verb mappings in action_triggers
     if (index.action_triggers[verb]) {
@@ -442,7 +449,7 @@ export class VerbTriggerManager {
    * Get all verbs that map to a specific element
    */
   public async getVerbsForElement(elementName: string): Promise<string[]> {
-    const index = await this.indexManager.getIndex();
+    const index = await this.getIndexManager().getIndex();
     const verbs: string[] = [];
 
     // Check action_triggers

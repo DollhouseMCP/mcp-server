@@ -189,7 +189,7 @@ export class EnhancedIndexManager {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
     this.nlpScoring = new NLPScoringManager();
-    this.verbTriggers = new VerbTriggerManager();
+    this.verbTriggers = VerbTriggerManager.getInstance();
     logger.debug('EnhancedIndexManager initialized', { indexPath: this.indexPath });
   }
 
@@ -319,12 +319,10 @@ export class EnhancedIndexManager {
 
       // Log security event
       SecurityMonitor.logSecurityEvent({
-        type: 'INDEX_REBUILT',
-        severity: 'INFO',
-        details: {
-          elements: newIndex.metadata.total_elements,
-          duration
-        }
+        type: 'PORTFOLIO_CACHE_INVALIDATION',
+        severity: 'LOW',
+        source: 'enhanced_index',
+        details: `Index rebuilt with ${newIndex.metadata.total_elements} elements in ${duration}ms`
       });
 
     } finally {
@@ -461,8 +459,8 @@ export class EnhancedIndexManager {
 
       // Validate Unicode before saving
       const validation = UnicodeValidator.normalize(yamlContent);
-      if (!validation.isValid) {
-        throw new Error(`Invalid Unicode in index: ${validation.error}`);
+      if (validation.detectedIssues && validation.detectedIssues.length > 0) {
+        throw new Error(`Unicode issues in index: ${validation.detectedIssues.join(', ')}`);
       }
 
       await fs.writeFile(this.indexPath, yamlContent, 'utf-8');
