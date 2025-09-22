@@ -808,7 +808,7 @@ export class EnhancedIndexManager {
 
   /**
    * Calculate sampled relationships for large datasets
-   * Uses smart sampling to find most relevant relationships without O(n²) comparisons
+   * Uses proportional sampling and keyword clustering
    */
   private async calculateSampledRelationships(
     index: EnhancedIndex,
@@ -824,39 +824,106 @@ export class EnhancedIndexManager {
       maxComparisons
     });
 
-    // Strategy 1: Sample based on element types
-    // Compare each element with a random sample from each type
+    // First Pass: Keyword-based clustering for high-probability relationships
+    const keywordClusters = await this.buildKeywordClusters(index, keys);
+    let comparisons = 0;
+
+    // Compare within clusters first (high probability of relationships)
+    const clusterComparisons = Math.floor(maxComparisons * 0.6); // 60% budget for clusters
+
+    for (const [keyword, clusterKeys] of keywordClusters.entries()) {
+      if (comparisons >= clusterComparisons) break;
+
+      // Within-cluster comparisons
+      for (let i = 0; i < clusterKeys.length - 1; i++) {
+        if (comparisons >= clusterComparisons) break;
+
+        const key1 = clusterKeys[i];
+        const [type1, name1] = key1.split(':');
+        const text1 = elementTexts.get(key1)!;
+
+        // Sample from rest of cluster
+        const sampleSize = Math.min(
+          Math.ceil(Math.sqrt(clusterKeys.length - i - 1)),
+          20  // Higher limit for clusters
+        );
+
+        const sampledIndices = this.randomSample(
+          Array.from({ length: clusterKeys.length - i - 1 }, (_, j) => i + j + 1),
+          sampleSize
+        );
+
+        for (const j of sampledIndices) {
+          if (comparisons >= clusterComparisons) break;
+
+          const key2 = clusterKeys[j];
+          const [type2, name2] = key2.split(':');
+          const text2 = elementTexts.get(key2)!;
+
+          const scoring = this.nlpScoring.scoreRelevance(text1, text2);
+          comparisons++;
+
+          if (scoring.combinedScore > threshold) {
+            this.storeRelationship(index, type1, name1, type2, name2, scoring);
+          }
+        }
+      }
+
+      // Yield to event loop
+      if (comparisons % 100 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
+
+    // Second Pass: Proportional cross-type sampling for unexpected relationships
+    const crossTypeComparisons = maxComparisons - comparisons; // Remaining budget
+
+    // Build type distribution
     const elementsByType = new Map<string, string[]>();
+    const typeCounts = new Map<string, number>();
 
     for (const key of keys) {
       const [type] = key.split(':');
       if (!elementsByType.has(type)) {
         elementsByType.set(type, []);
+        typeCounts.set(type, 0);
       }
       elementsByType.get(type)!.push(key);
+      typeCounts.set(type, typeCounts.get(type)! + 1);
     }
 
-    let comparisons = 0;
+    // Calculate proportional sample sizes
+    const totalElements = keys.length;
+    const typeSampleSizes = new Map<string, number>();
 
+    for (const [type, count] of typeCounts.entries()) {
+      const proportion = count / totalElements;
+      // Allocate comparisons proportionally, with minimum of 1
+      const allocatedComparisons = Math.max(1, Math.floor(crossTypeComparisons * proportion));
+      // Sample size is sqrt of allocated comparisons for efficiency
+      const sampleSize = Math.ceil(Math.sqrt(allocatedComparisons));
+      typeSampleSizes.set(type, sampleSize);
+    }
+
+    logger.debug('Proportional sampling distribution', {
+      typeCounts: Object.fromEntries(typeCounts),
+      sampleSizes: Object.fromEntries(typeSampleSizes)
+    });
+
+    // Perform proportional cross-type sampling
     for (const key1 of keys) {
       if (comparisons >= maxComparisons) break;
 
       const [type1, name1] = key1.split(':');
       const text1 = elementTexts.get(key1)!;
 
-      // Sample from each element type
+      // Sample from each type proportionally
       for (const [type, typeKeys] of elementsByType.entries()) {
         if (comparisons >= maxComparisons) break;
 
-        // Sample size based on type size
-        const sampleSize = Math.min(
-          Math.ceil(Math.sqrt(typeKeys.length)),
-          10  // Max 10 samples per type
-        );
-
-        // Random sample
-        const sampledKeys = this.randomSample(typeKeys, sampleSize)
-          .filter(k => k !== key1);  // Don't compare with self
+        const sampleSize = typeSampleSizes.get(type) || 1;
+        const sampledKeys = this.randomSample(typeKeys, Math.min(sampleSize, typeKeys.length))
+          .filter(k => k !== key1);
 
         for (const key2 of sampledKeys) {
           if (comparisons >= maxComparisons) break;
@@ -868,7 +935,6 @@ export class EnhancedIndexManager {
           comparisons++;
 
           if (scoring.combinedScore > threshold) {
-            // Store relationship (same as in full matrix)
             this.storeRelationship(index, type1, name1, type2, name2, scoring);
           }
         }
@@ -882,8 +948,59 @@ export class EnhancedIndexManager {
 
     logger.info('Sampled relationships calculated', {
       comparisons,
-      maxComparisons
+      maxComparisons,
+      clusterComparisons,
+      crossTypeComparisons: comparisons - clusterComparisons
     });
+  }
+
+  /**
+   * Build keyword clusters for first-pass relationship discovery
+   */
+  private async buildKeywordClusters(
+    index: EnhancedIndex,
+    keys: string[]
+  ): Promise<Map<string, string[]>> {
+    const clusters = new Map<string, string[]>();
+    const keywordFrequency = new Map<string, number>();
+
+    // Extract keywords from all elements
+    for (const key of keys) {
+      const [type, name] = key.split(':');
+      const element = index.elements[type][name];
+      const keywords = [
+        ...(element.search?.keywords || []),
+        ...(element.search?.tags || [])
+      ];
+
+      for (const keyword of keywords) {
+        const normalized = keyword.toLowerCase();
+        keywordFrequency.set(normalized, (keywordFrequency.get(normalized) || 0) + 1);
+
+        if (!clusters.has(normalized)) {
+          clusters.set(normalized, []);
+        }
+        clusters.get(normalized)!.push(key);
+      }
+    }
+
+    // Keep only significant clusters (appears in at least 2 elements but not more than 50% of elements)
+    const significantClusters = new Map<string, string[]>();
+    const maxFrequency = Math.floor(keys.length * 0.5);
+
+    for (const [keyword, elementKeys] of clusters.entries()) {
+      if (elementKeys.length >= 2 && elementKeys.length <= maxFrequency) {
+        significantClusters.set(keyword, elementKeys);
+      }
+    }
+
+    logger.debug('Keyword clusters built', {
+      totalClusters: clusters.size,
+      significantClusters: significantClusters.size,
+      largestCluster: Math.max(...Array.from(significantClusters.values()).map(v => v.length))
+    });
+
+    return significantClusters;
   }
 
   /**

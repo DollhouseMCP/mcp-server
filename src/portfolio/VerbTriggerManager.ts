@@ -15,6 +15,8 @@
 import { logger } from '../utils/logger.js';
 import { EnhancedIndexManager } from './EnhancedIndexManager.js';
 import { ElementDefinition } from './EnhancedIndexManager.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 /**
  * Verb taxonomy - Common verbs grouped by intent
@@ -126,8 +128,19 @@ export class VerbTriggerManager {
    * Extract verbs from a user query
    */
   public extractVerbs(query: string): string[] {
+    // Unicode validation for security
+    const validation = UnicodeValidator.normalize(query);
+    if (validation.detectedIssues && validation.detectedIssues.length > 0) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_VALIDATION_ERROR',
+        severity: 'MEDIUM',
+        source: 'VerbTriggerManager.extractVerbs',
+        details: `Unicode issues in query: ${validation.detectedIssues.join(', ')}`
+      });
+    }
+
     const verbs: string[] = [];
-    const normalizedQuery = query.toLowerCase();
+    const normalizedQuery = validation.normalizedContent.toLowerCase();
 
     // Check each word against our verb taxonomy
     const words = normalizedQuery.split(/\s+/);
@@ -372,6 +385,21 @@ export class VerbTriggerManager {
 
     // Cache the results
     this.verbCache.set(verb, limited);
+
+    // Audit log for security tracking
+    if (limited.length > 0) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'VerbTriggerManager.getElementsForVerb',
+        details: `Found ${limited.length} elements for verb: ${verb}`,
+        metadata: {
+          verb,
+          elementCount: limited.length,
+          topElement: limited[0]?.name
+        }
+      });
+    }
 
     return limited;
   }
