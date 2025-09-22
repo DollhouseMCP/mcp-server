@@ -10,7 +10,7 @@
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
 [![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/main/__tests__)
-[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](SECURITY.md)
+[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](docs/SECURITY.md)
 
 ## Platform Support
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
@@ -872,6 +872,28 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 🏷️ Version History
+
+### v1.9.9 - September 22, 2025
+
+**Security & Stability**: Prototype pollution protection and memory timestamp fixes
+
+#### ✨ Features
+- **Security Utilities**: New reusable security module for prototype pollution protection
+- **Memory Auto-Repair**: Corrupted memory timestamps now auto-repair during read operations
+- **Enhanced Validation**: Comprehensive timestamp validation with detailed error reporting
+
+#### 🔧 Fixed
+- **Memory Timestamps**: Fixed toISOString errors when memory entries have string timestamps (#1069)
+- **Security Badge**: Fixed broken security badge link in README pointing to wrong location
+- **Prototype Pollution**: Added belt-and-suspenders protection to satisfy code scanners (#202-#205)
+
+#### 🔒 Security
+- Added `securityUtils.ts` module with reusable security patterns
+- Implemented Object.create(null) for prototype-less objects
+- Added Object.defineProperty() for secure property setting
+- Proper CodeQL suppressions for validated false positives
+
+---
 
 ### v1.9.8 - September 20, 2025
 
