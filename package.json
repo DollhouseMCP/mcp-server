@@ -132,7 +132,7 @@
     "jsdom": "^27.0.0",
     "node-fetch": "^3.3.2",
     "uuid": "^11.1.0",
-    "zod": "^4.1.8"
+    "zod": "^4.1.11"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
