@@ -48,6 +48,7 @@ import { AgentManager } from './elements/agents/AgentManager.js';
 import { Agent } from './elements/agents/Agent.js';
 import { MemoryManager } from './elements/memories/MemoryManager.js';
 import { Memory } from './elements/memories/Memory.js';
+import { generateMemoryId } from './elements/memories/utils.js';
 import { ConfigManager } from './config/ConfigManager.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
@@ -1740,7 +1741,28 @@ export class DollhouseMCPServer implements IToolHandler {
         enumerable: true,
         configurable: true
       });
-      
+
+      // MEMORY FIX: Special handling for memory entries to ensure timestamps are Date objects
+      // Issue #1069: When editing memory entries, timestamps might be strings instead of Date objects
+      // This causes toISOString() errors when saving
+      if (type === ElementType.MEMORY && field === 'entries' && Array.isArray(value)) {
+        // Convert array of entries to Map with proper Date conversion
+        const entriesMap = new Map();
+        for (const entry of value) {
+          // Ensure timestamp is a Date object
+          if (entry.timestamp && !(entry.timestamp instanceof Date)) {
+            entry.timestamp = new Date(entry.timestamp);
+          }
+          // Ensure expiresAt is a Date object if present
+          if (entry.expiresAt && !(entry.expiresAt instanceof Date)) {
+            entry.expiresAt = new Date(entry.expiresAt);
+          }
+          entriesMap.set(entry.id || generateMemoryId(), entry);
+        }
+        // Replace the entries array with the properly formatted Map
+        (element as any).entries = entriesMap;
+      }
+
       // VERSION FIX: Handle version field updates differently
       // If user is directly editing version field, don't auto-increment
       if (field === 'version' || field === 'metadata.version') {

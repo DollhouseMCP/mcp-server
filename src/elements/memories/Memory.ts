@@ -512,15 +512,21 @@ export class Memory extends BaseElement implements IElement {
     let oldestEntry: Date | undefined;
     let newestEntry: Date | undefined;
     const tagFrequency = new Map<string, number>();
-    
+
     for (const entry of this.entries.values()) {
       totalSize += entry.content.length;
-      
-      if (!oldestEntry || entry.timestamp < oldestEntry) {
-        oldestEntry = entry.timestamp;
+
+      // FIX #1069: Ensure timestamp is a Date object for comparison
+      // When entries are edited, timestamps might be strings
+      const entryTimestamp = entry.timestamp instanceof Date
+        ? entry.timestamp
+        : new Date(entry.timestamp);
+
+      if (!oldestEntry || entryTimestamp < oldestEntry) {
+        oldestEntry = entryTimestamp;
       }
-      if (!newestEntry || entry.timestamp > newestEntry) {
-        newestEntry = entry.timestamp;
+      if (!newestEntry || entryTimestamp > newestEntry) {
+        newestEntry = entryTimestamp;
       }
       
       entry.tags?.forEach(tag => {
