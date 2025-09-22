@@ -24,6 +24,8 @@ import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioIndexManager, IndexEntry } from './PortfolioIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
+import { VerbTriggerManager } from './VerbTriggerManager.js';
 
 /**
  * Enhanced index schema - fully extensible
@@ -180,10 +182,14 @@ export class EnhancedIndexManager {
   private lastLoaded: Date | null = null;
   private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
   private isBuilding = false;
+  private nlpScoring: NLPScoringManager;
+  private verbTriggers: VerbTriggerManager;
 
   private constructor() {
-    const portfolioPath = PortfolioManager.getPortfolioPath();
+    const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
+    this.nlpScoring = new NLPScoringManager();
+    this.verbTriggers = new VerbTriggerManager();
     logger.debug('EnhancedIndexManager initialized', { indexPath: this.indexPath });
   }
 
@@ -289,6 +295,9 @@ export class EnhancedIndexManager {
           this.extractActionTriggers(elementDef, entry.metadata.name, newIndex.action_triggers);
         }
       }
+
+      // Calculate semantic relationships using NLP
+      await this.calculateSemanticRelationships(newIndex);
 
       // Preserve extensions from existing index
       if (existingIndex?.extensions) {
@@ -599,5 +608,118 @@ export class EnhancedIndexManager {
     }
 
     return results;
+  }
+
+  /**
+   * Calculate semantic relationships between elements using NLP
+   */
+  private async calculateSemanticRelationships(index: EnhancedIndex): Promise<void> {
+    const startTime = Date.now();
+
+    // Prepare text content for each element
+    const elementTexts = new Map<string, string>();
+
+    for (const [elementType, elements] of Object.entries(index.elements)) {
+      for (const [name, element] of Object.entries(elements)) {
+        // Combine relevant text fields for analysis
+        const textParts = [
+          element.core.name,
+          element.core.description || '',
+          ...(element.search?.keywords || []),
+          ...(element.search?.tags || []),
+          ...(element.search?.triggers || [])
+        ];
+
+        const fullText = textParts.join(' ');
+        const key = `${elementType}:${name}`;
+        elementTexts.set(key, fullText);
+
+        // Calculate entropy for this element
+        if (!element.semantic) {
+          element.semantic = {};
+        }
+        element.semantic.entropy = this.nlpScoring.calculateEntropy(fullText);
+        element.semantic.unique_terms = fullText.split(/\s+/).filter(t => t.length > 1).length;
+      }
+    }
+
+    // Calculate pairwise Jaccard similarities
+    const keys = Array.from(elementTexts.keys());
+
+    for (let i = 0; i < keys.length; i++) {
+      const key1 = keys[i];
+      const [type1, name1] = key1.split(':');
+      const text1 = elementTexts.get(key1)!;
+
+      for (let j = i + 1; j < keys.length; j++) {
+        const key2 = keys[j];
+        const [type2, name2] = key2.split(':');
+        const text2 = elementTexts.get(key2)!;
+
+        // Calculate similarity score
+        const scoring = this.nlpScoring.scoreRelevance(text1, text2);
+
+        // Store high-confidence relationships (score > 0.5)
+        if (scoring.combinedScore > 0.5) {
+          // Add relationship to element1
+          if (!index.elements[type1][name1].relationships) {
+            index.elements[type1][name1].relationships = {};
+          }
+          if (!index.elements[type1][name1].relationships.similar) {
+            index.elements[type1][name1].relationships.similar = [];
+          }
+          index.elements[type1][name1].relationships.similar.push({
+            element: `${type2}:${name2}`,
+            type: 'semantic_similarity',
+            strength: scoring.combinedScore,
+            metadata: {
+              jaccard: scoring.jaccard,
+              entropy_diff: Math.abs(
+                (index.elements[type1][name1].semantic?.entropy || 0) -
+                (index.elements[type2][name2].semantic?.entropy || 0)
+              )
+            }
+          });
+
+          // Add reverse relationship to element2
+          if (!index.elements[type2][name2].relationships) {
+            index.elements[type2][name2].relationships = {};
+          }
+          if (!index.elements[type2][name2].relationships.similar) {
+            index.elements[type2][name2].relationships.similar = [];
+          }
+          index.elements[type2][name2].relationships.similar.push({
+            element: `${type1}:${name1}`,
+            type: 'semantic_similarity',
+            strength: scoring.combinedScore,
+            metadata: {
+              jaccard: scoring.jaccard,
+              entropy_diff: Math.abs(
+                (index.elements[type1][name1].semantic?.entropy || 0) -
+                (index.elements[type2][name2].semantic?.entropy || 0)
+              )
+            }
+          });
+
+          // Store Jaccard scores in semantic data
+          if (!index.elements[type1][name1].semantic!.jaccard_scores) {
+            index.elements[type1][name1].semantic!.jaccard_scores = {};
+          }
+          index.elements[type1][name1].semantic!.jaccard_scores[`${type2}:${name2}`] = scoring.jaccard;
+
+          if (!index.elements[type2][name2].semantic!.jaccard_scores) {
+            index.elements[type2][name2].semantic!.jaccard_scores = {};
+          }
+          index.elements[type2][name2].semantic!.jaccard_scores[`${type1}:${name1}`] = scoring.jaccard;
+        }
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info('Semantic relationships calculated', {
+      elements: elementTexts.size,
+      duration: `${duration}ms`,
+      comparisons: (keys.length * (keys.length - 1)) / 2
+    });
   }
 }
