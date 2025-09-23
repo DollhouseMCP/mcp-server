@@ -4,27 +4,18 @@
 
 import { VerbTriggerManager, VERB_TAXONOMY } from '../../../../src/portfolio/VerbTriggerManager.js';
 import { EnhancedIndexManager } from '../../../../src/portfolio/EnhancedIndexManager.js';
-
-// Mock fs module to avoid file system operations in tests
-jest.mock('fs', () => ({
-  ...jest.requireActual('fs'),
-  readFileSync: jest.fn(() => '{}'),
-  existsSync: jest.fn(() => false)
-}));
-
-// Mock fs/promises
-jest.mock('fs/promises', () => ({
-  readFile: jest.fn(() => Promise.resolve('{}')),
-  writeFile: jest.fn(() => Promise.resolve()),
-  mkdir: jest.fn(() => Promise.resolve()),
-  stat: jest.fn(() => Promise.reject(new Error('File not found')))
-}));
+import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons } from './test-setup.js';
 
 describe('VerbTriggerManager', () => {
   let manager: VerbTriggerManager;
   let indexManager: EnhancedIndexManager;
+  let originalHome: string;
 
   beforeAll(async () => {
+    // Set up isolated test environment
+    originalHome = await setupTestEnvironment();
+    await resetSingletons();
+
     // Set up test index with sample elements
     indexManager = EnhancedIndexManager.getInstance();
     const index = await indexManager.getIndex();
@@ -400,5 +391,11 @@ describe('VerbTriggerManager', () => {
       const allElements = matches.flatMap(m => m.elements.map(e => e.name));
       // Skip element validation as we don't have the actual index in tests
     });
+  });
+
+  afterAll(async () => {
+    // Clean up test environment
+    await cleanupTestEnvironment(originalHome);
+    await resetSingletons();
   });
 });
