@@ -4,15 +4,27 @@
 
 import { RelationshipManager } from '../../../../src/portfolio/RelationshipManager.js';
 import { EnhancedIndex, ElementDefinition } from '../../../../src/portfolio/EnhancedIndexManager.js';
+import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons } from './test-setup.js';
 
 describe('RelationshipManager', () => {
   let manager: RelationshipManager;
+  let originalHome: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Set up isolated test environment
+    originalHome = await setupTestEnvironment();
+    await resetSingletons();
+
     manager = RelationshipManager.getInstance({
       minConfidence: 0.5,
       enableAutoDiscovery: true
     });
+  });
+
+  afterEach(async () => {
+    // Clean up test environment
+    await cleanupTestEnvironment(originalHome);
+    await resetSingletons();
   });
 
   describe('Relationship Discovery', () => {

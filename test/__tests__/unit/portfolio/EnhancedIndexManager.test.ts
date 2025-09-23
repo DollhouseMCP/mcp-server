@@ -6,13 +6,27 @@ import { EnhancedIndexManager } from '../../../../src/portfolio/EnhancedIndexMan
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { load as yamlLoad } from 'js-yaml';
+import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons } from './test-setup.js';
 
 describe('EnhancedIndexManager - Extensibility Tests', () => {
   let manager: EnhancedIndexManager;
-  const testIndexPath = path.join(process.env.HOME!, '.dollhouse', 'capability-index.yaml');
+  let originalHome: string;
+  let testIndexPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Set up isolated test environment
+    originalHome = await setupTestEnvironment();
+    await resetSingletons();
+
+    // Now getInstance() will use the test directory
     manager = EnhancedIndexManager.getInstance();
+    testIndexPath = path.join(process.env.HOME!, '.dollhouse', 'portfolio', 'capability-index.yaml');
+  });
+
+  afterEach(async () => {
+    // Clean up test environment
+    await cleanupTestEnvironment(originalHome);
+    await resetSingletons();
   });
 
   describe('Schema Extensibility', () => {
@@ -324,12 +338,5 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
     });
   });
 
-  // Clean up test file after tests
-  afterAll(async () => {
-    try {
-      await fs.unlink(testIndexPath);
-    } catch (error) {
-      // Ignore if doesn't exist
-    }
-  });
+  // Test cleanup now handled by afterEach with proper isolation
 });
