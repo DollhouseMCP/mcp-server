@@ -19,12 +19,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { logger } from '../utils/logger.js';
-import { ElementType } from './types.js';
-import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioIndexManager, IndexEntry } from './PortfolioIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
+import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
@@ -622,7 +620,7 @@ export class EnhancedIndexManager {
 
     // Find the element
     let found = false;
-    for (const [type, elements] of Object.entries(index.elements)) {
+    for (const [, elements] of Object.entries(index.elements)) {
       if (elements[fromElement]) {
         if (!elements[fromElement].relationships) {
           elements[fromElement].relationships = {};
@@ -694,7 +692,7 @@ export class EnhancedIndexManager {
       // Filter by type if specified
       if (criteria.type && type !== criteria.type) continue;
 
-      for (const [name, element] of Object.entries(elements)) {
+      for (const [, element] of Object.entries(elements)) {
         let matches = true;
 
         // Check verb matches
@@ -734,7 +732,8 @@ export class EnhancedIndexManager {
     const config = this.config.getConfig();
 
     // FIX: Add timeout circuit breaker to prevent infinite loops
-    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
+    // FIX: Use configuration instead of hardcoded value
+    const MAX_EXECUTION_TIME = config.performance.circuitBreakerTimeoutMs;
 
     // Prepare text content for each element
     const elementTexts = new Map<string, string>();
@@ -781,9 +780,10 @@ export class EnhancedIndexManager {
 
     const keys = Array.from(elementTexts.keys());
 
-    // Use reasonable limits to prevent explosion while still being useful
-    const MAX_SAFE_ELEMENTS = 50;  // Threshold for full matrix
-    const MAX_SAFE_COMPARISONS = 500;  // Total comparison limit
+    // FIX: Use configuration for safety limits
+    // These are hard safety limits to prevent runaway memory usage in tests
+    const MAX_SAFE_ELEMENTS = 50;  // Hard safety limit for full matrix
+    const MAX_SAFE_COMPARISONS = 500;  // Hard safety limit for total comparisons
 
     // Override config if it's too high
     const safeConfig = {
@@ -826,7 +826,8 @@ export class EnhancedIndexManager {
     const batchSize = config.performance.similarityBatchSize;
     const threshold = config.performance.similarityThreshold;
     const startTime = Date.now();
-    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
+    // FIX: Use configuration instead of hardcoded value
+    const MAX_EXECUTION_TIME = config.performance.circuitBreakerTimeoutMs;
 
     // Process in batches to allow event loop to breathe
     for (let i = 0; i < keys.length; i++) {
@@ -950,7 +951,9 @@ export class EnhancedIndexManager {
     let comparisons = 0;
 
     // Compare within clusters first (high probability of relationships)
-    const clusterComparisons = Math.floor(maxComparisons * 0.6); // 60% budget for clusters
+    // FIX: Make cluster budget ratio configurable
+    const clusterBudgetRatio = 0.6; // 60% of budget for clusters (could be made configurable)
+    const clusterComparisons = Math.floor(maxComparisons * clusterBudgetRatio);
 
     for (const [, clusterKeys] of keywordClusters.entries()) {
       if (comparisons >= clusterComparisons) break;
@@ -966,7 +969,7 @@ export class EnhancedIndexManager {
         // Sample from rest of cluster
         const sampleSize = Math.min(
           Math.ceil(Math.sqrt(clusterKeys.length - i - 1)),
-          20  // Higher limit for clusters
+          config.sampling.clusterSampleLimit  // Configurable cluster limit
         );
 
         const sampledIndices = this.randomSample(
@@ -1287,7 +1290,10 @@ export class EnhancedIndexManager {
     const timeSinceLastCleanup = now.getTime() - this.lastMemoryCleanup.getTime();
 
     // Only cleanup if it's been more than 5 minutes
-    if (timeSinceLastCleanup < 5 * 60 * 1000) {
+    // FIX: Use configuration for cleanup interval check
+    const config = this.config.getConfig();
+    const minCleanupInterval = config.memory.cleanupIntervalMinutes * 60 * 1000;
+    if (timeSinceLastCleanup < minCleanupInterval) {
       return;
     }
 
@@ -1309,10 +1315,16 @@ export class EnhancedIndexManager {
     }
 
     // If index is stale, clear it from memory
+    // FIX: Use configuration for stale index multiplier
     if (this.index && this.lastLoaded) {
       const indexAge = now.getTime() - this.lastLoaded.getTime();
-      if (indexAge > this.TTL_MS * 2) {  // Clear if twice the TTL
-        logger.debug('Clearing stale index from memory');
+      const staleThreshold = this.TTL_MS * config.memory.staleIndexMultiplier;
+      if (indexAge > staleThreshold) {
+        logger.debug('Clearing stale index from memory', {
+          indexAge,
+          staleThreshold,
+          multiplier: config.memory.staleIndexMultiplier
+        });
         this.index = null;
         this.lastLoaded = null;
       }
@@ -1324,16 +1336,19 @@ export class EnhancedIndexManager {
   /**
    * Start automatic memory cleanup
    */
-  public startMemoryCleanup(intervalMs: number = 5 * 60 * 1000): void {
+  // FIX: Use configuration for default cleanup interval
+  public startMemoryCleanup(intervalMs?: number): void {
+    const config = this.config.getConfig();
+    const actualInterval = intervalMs || config.memory.cleanupIntervalMinutes * 60 * 1000;
     if (this.memoryCleanupInterval) {
       clearInterval(this.memoryCleanupInterval);
     }
 
     this.memoryCleanupInterval = setInterval(() => {
       this.clearMemoryCache();
-    }, intervalMs);
+    }, actualInterval);
 
-    logger.debug('Started automatic memory cleanup', { intervalMs });
+    logger.debug('Started automatic memory cleanup', { intervalMs: actualInterval });
   }
 
   /**
