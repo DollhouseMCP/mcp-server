@@ -27,10 +27,6 @@ interface SearchByVerbArgs {
   limit?: number;
 }
 
-interface GetRelationshipStatsArgs {
-  // No args needed
-}
-
 // Tool handler function type
 type ToolHandler<T> = (args: T) => Promise<any>;
 
@@ -138,7 +134,7 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
           properties: {},
         },
       },
-      handler: (args: GetRelationshipStatsArgs) => server.getRelationshipStats()
+      handler: () => server.getRelationshipStats()
     }
   ];
 
