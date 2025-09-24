@@ -32,6 +32,15 @@ import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js'
 import { FileLock } from '../utils/FileLock.js';
 import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
 import { RelationshipManager, ElementPath } from './RelationshipManager.js';
+import {
+  BaseRelationship,
+  ParsedRelationship,
+  createRelationship,
+  parseRelationship,
+  isParsedRelationship,
+  sortRelationshipsByStrength,
+  RelationshipTypes
+} from './types/RelationshipTypes.js';
 
 /**
  * Enhanced index schema - fully extensible
@@ -121,12 +130,9 @@ export interface UseWhenPattern {
   [key: string]: any;
 }
 
-export interface Relationship {
-  element: string;      // Target element name
-  type?: string;        // Relationship type
-  strength?: number;    // Relationship strength/confidence
-  metadata?: Record<string, any>;  // Extensible metadata
-}
+// Re-export BaseRelationship as Relationship for backward compatibility
+// The actual implementation now uses type-safe variants
+export type Relationship = BaseRelationship;
 
 export interface SemanticData {
   entropy?: number;           // Shannon entropy
@@ -880,18 +886,19 @@ export class EnhancedIndexManager {
           if (!element1.relationships.similar) {
             element1.relationships.similar = [];
           }
-          element1.relationships.similar.push({
-            element: formatElementId(type2, name2),
-            type: 'semantic_similarity',
-            strength: scoring.combinedScore,
-            metadata: {
+          element1.relationships.similar.push(createRelationship(
+            type2,
+            name2,
+            RelationshipTypes.SEMANTIC_SIMILARITY,
+            scoring.combinedScore,
+            {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
                 (element1.semantic?.entropy || 0) -
                 (element2.semantic?.entropy || 0)
               )
             }
-          });
+          ));
 
           // Add reverse relationship to element2
           if (!element2.relationships) {
@@ -900,18 +907,19 @@ export class EnhancedIndexManager {
           if (!element2.relationships.similar) {
             element2.relationships.similar = [];
           }
-          element2.relationships.similar.push({
-            element: formatElementId(parsed1.type, parsed1.name),
-            type: 'semantic_similarity',
-            strength: scoring.combinedScore,
-            metadata: {
+          element2.relationships.similar.push(createRelationship(
+            parsed1.type,
+            parsed1.name,
+            RelationshipTypes.SEMANTIC_SIMILARITY,
+            scoring.combinedScore,
+            {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
                 (element1.semantic?.entropy || 0) -
                 (element2.semantic?.entropy || 0)
               )
             }
-          });
+          ));
 
           // Store Jaccard scores in semantic data
           if (element1.semantic) {
@@ -1198,22 +1206,24 @@ export class EnhancedIndexManager {
     }
 
     // Check if relationship already exists to avoid duplicates
+    const targetElement = formatElementId(type2, name2);
     const existing1 = index.elements[type1][name1].relationships.similar
-      .find(r => r.element === `${type2}:${name2}`);
+      .find(r => r.element === targetElement);
 
     if (!existing1) {
-      index.elements[type1][name1].relationships.similar.push({
-        element: `${type2}:${name2}`,
-        type: 'semantic_similarity',
-        strength: scoring.combinedScore,
-        metadata: {
+      index.elements[type1][name1].relationships.similar.push(createRelationship(
+        type2,
+        name2,
+        RelationshipTypes.SEMANTIC_SIMILARITY,
+        scoring.combinedScore,
+        {
           jaccard: scoring.jaccard,
           entropy_diff: Math.abs(
             (index.elements[type1][name1].semantic?.entropy || 0) -
             (index.elements[type2][name2].semantic?.entropy || 0)
           )
         }
-      });
+      ));
     }
 
     // Add reverse relationship
@@ -1224,22 +1234,24 @@ export class EnhancedIndexManager {
       index.elements[type2][name2].relationships.similar = [];
     }
 
+    const sourceElement = formatElementId(type1, name1);
     const existing2 = index.elements[type2][name2].relationships.similar
-      .find(r => r.element === `${type1}:${name1}`);
+      .find(r => r.element === sourceElement);
 
     if (!existing2) {
-      index.elements[type2][name2].relationships.similar.push({
-        element: `${type1}:${name1}`,
-        type: 'semantic_similarity',
-        strength: scoring.combinedScore,
-        metadata: {
+      index.elements[type2][name2].relationships.similar.push(createRelationship(
+        type1,
+        name1,
+        RelationshipTypes.SEMANTIC_SIMILARITY,
+        scoring.combinedScore,
+        {
           jaccard: scoring.jaccard,
           entropy_diff: Math.abs(
             (index.elements[type1][name1].semantic?.entropy || 0) -
             (index.elements[type2][name2].semantic?.entropy || 0)
           )
         }
-      });
+      ));
     }
   }
 

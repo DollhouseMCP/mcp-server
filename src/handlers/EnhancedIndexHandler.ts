@@ -17,6 +17,7 @@ import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { parseElementIdWithFallback, formatElementId } from '../utils/elementId.js';
+import { parseRelationship, isParsedRelationship } from '../portfolio/types/RelationshipTypes.js';
 
 export class EnhancedIndexHandler {
   private enhancedIndexManager: EnhancedIndexManager;
@@ -235,14 +236,21 @@ export class EnhancedIndexHandler {
           if (Array.isArray(relations) && relations.length > 0) {
             text += `**${relType.charAt(0).toUpperCase() + relType.slice(1)} (${relations.length})**\n`;
             for (const rel of relations) {
-              // FIX: Use centralized element ID parsing
-              const parsed = parseElementIdWithFallback(rel.element);
-              const icon = this.getElementIcon(parsed.type);
-              text += `  ${icon} ${parsed.name}`;
-              if (rel.strength) {
-                text += ` (strength: ${(rel.strength * 100).toFixed(0)}%)`;
+              // FIX: Use type-safe relationship parsing
+              const parsedRel = parseRelationship(rel);
+              if (isParsedRelationship(parsedRel)) {
+                const icon = this.getElementIcon(parsedRel.targetType);
+                text += `  ${icon} ${parsedRel.targetName}`;
+                if (parsedRel.strength) {
+                  text += ` (strength: ${(parsedRel.strength * 100).toFixed(0)}%)`;
+                }
+                text += '\n';
+              } else {
+                // Fallback for invalid relationships
+                const parsed = parseElementIdWithFallback(rel.element);
+                const icon = this.getElementIcon(parsed.type);
+                text += `  ${icon} ${parsed.name} ⚠️\n`;
               }
-              text += '\n';
             }
             text += '\n';
           }

@@ -20,11 +20,24 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndex, ElementDefinition, Relationship } from './EnhancedIndexManager.js';
+import { EnhancedIndex, ElementDefinition } from './EnhancedIndexManager.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { parseElementId } from '../utils/elementId.js';
+import {
+  BaseRelationship,
+  ParsedRelationship,
+  createRelationship,
+  parseRelationship,
+  isParsedRelationship,
+  deduplicateRelationships,
+  filterRelationshipsByStrength,
+  RelationshipTypes
+} from './types/RelationshipTypes.js';
+
+// Use BaseRelationship instead of importing Relationship from EnhancedIndexManager
+type Relationship = BaseRelationship;
 
 /**
  * Relationship types and their inverse mappings
