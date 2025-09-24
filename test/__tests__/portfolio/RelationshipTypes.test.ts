@@ -106,7 +106,7 @@ describe('RelationshipTypes', () => {
       expect(isInvalidRelationship(parsed)).toBe(true);
       if (isInvalidRelationship(parsed)) {
         expect(parsed.isValid).toBe(false);
-        expect(parsed.parseError).toBe('Missing element ID');
+        expect(parsed.parseError).toContain('missing or empty');
         expect(parsed.targetType).toBeNull();
         expect(parsed.targetName).toBeNull();
       }
@@ -354,6 +354,187 @@ describe('RelationshipTypes', () => {
       expect(RelationshipTypes.CONTRADICTS).toBe('contradicts');
       expect(RelationshipTypes.SUPPORTS).toBe('supports');
       expect(RelationshipTypes.SEMANTIC_SIMILARITY).toBe('semantic_similarity');
+    });
+  });
+
+  describe('Edge Cases and Boundary Conditions', () => {
+    describe('Unicode and special characters', () => {
+      it('should handle unicode characters in element names', () => {
+        const unicodeCases = [
+          { element: 'personas:développeur', type: 'personas', name: 'développeur' },
+          { element: 'skills:测试', type: 'skills', name: '测试' },
+          { element: 'templates:тест', type: 'templates', name: 'тест' },
+          { element: 'agents:🚀rocket', type: 'agents', name: '🚀rocket' },
+          { element: 'memories:café☕', type: 'memories', name: 'café☕' }
+        ];
+
+        for (const test of unicodeCases) {
+          const result = parseRelationship({ element: test.element });
+          expect(isParsedRelationship(result)).toBe(true);
+          if (isParsedRelationship(result)) {
+            expect(result.targetType).toBe(test.type);
+            expect(result.targetName).toBe(test.name);
+          }
+        }
+      });
+
+      it('should handle special characters in valid positions', () => {
+        const validCases = [
+          'personas:test-name',
+          'skills:test_skill',
+          'templates:test.template',
+          'agents:test123',
+          'memories:TEST_MEMORY'
+        ];
+
+        for (const element of validCases) {
+          const result = parseRelationship({ element });
+          expect(isParsedRelationship(result)).toBe(true);
+        }
+      });
+    });
+
+    describe('Extreme input sizes', () => {
+      it('should handle very long element names', () => {
+        const longName = 'a'.repeat(10000);
+        const element = `personas:${longName}`;
+        const result = parseRelationship({ element });
+
+        expect(isParsedRelationship(result)).toBe(true);
+        if (isParsedRelationship(result)) {
+          expect(result.targetName.length).toBe(10000);
+        }
+      });
+
+      it('should handle empty arrays in batch operations', () => {
+        expect(parseRelationships([])).toEqual([]);
+        expect(groupRelationshipsByType([])).toEqual(new Map());
+        expect(findDuplicateRelationships([])).toEqual([]);
+        expect(deduplicateRelationships([])).toEqual([]);
+        expect(sortRelationshipsByStrength([])).toEqual([]);
+        expect(filterRelationshipsByStrength([], 0.5)).toEqual([]);
+      });
+
+      it('should handle large arrays efficiently', () => {
+        const large = Array(1000).fill(null).map((_, i) => ({
+          element: `personas:test${i}`,
+          strength: Math.random()
+        }));
+
+        const start = performance.now();
+        const sorted = sortRelationshipsByStrength(large);
+        const duration = performance.now() - start;
+
+        expect(sorted.length).toBe(1000);
+        expect(duration).toBeLessThan(50); // Should be very fast
+
+        // Verify sorting is correct
+        for (let i = 1; i < sorted.length; i++) {
+          const prev = sorted[i - 1].strength || 0;
+          const curr = sorted[i].strength || 0;
+          expect(prev).toBeGreaterThanOrEqual(curr);
+        }
+      });
+    });
+
+    describe('Strength boundary values', () => {
+      it('should handle extreme strength values in createRelationship', () => {
+        // Invalid extremes
+        expect(() => createRelationship('p', 'n', 't', -Infinity))
+          .toThrow('Relationship strength must be between 0 and 1');
+        expect(() => createRelationship('p', 'n', 't', Infinity))
+          .toThrow('Relationship strength must be between 0 and 1');
+        expect(() => createRelationship('p', 'n', 't', NaN))
+          .toThrow('Relationship strength must be between 0 and 1');
+
+        // Just outside boundaries
+        expect(() => createRelationship('p', 'n', 't', -0.0000001))
+          .toThrow('Relationship strength must be between 0 and 1');
+        expect(() => createRelationship('p', 'n', 't', 1.0000001))
+          .toThrow('Relationship strength must be between 0 and 1');
+      });
+
+      it('should handle very small valid strength values', () => {
+        const tiny = createRelationship('personas', 'test', 'similar_to', Number.MIN_VALUE);
+        expect(tiny.strength).toBe(Number.MIN_VALUE);
+        expect(tiny.strength).toBeGreaterThan(0);
+      });
+
+      it('should handle undefined vs null strength in deduplication', () => {
+        const relationships = [
+          { element: 'p:t', strength: undefined },
+          { element: 'p:t', strength: null as any },
+          { element: 'p:t', strength: 0 },
+          { element: 'p:t', strength: 0.5 }
+        ];
+
+        const deduped = deduplicateRelationships(relationships);
+        expect(deduped.length).toBe(1);
+        expect(deduped[0].strength).toBe(0.5);
+      });
+    });
+
+    describe('Error message consistency', () => {
+      it('should provide consistent error format for all invalid cases', () => {
+        const errorCases = [
+          { element: '', expected: 'missing or empty' },
+          { element: 'no-colon', expected: 'Invalid element ID format.*missing separator' },
+          { element: ':type', expected: 'Invalid element ID format.*missing type before' },
+          { element: 'name:', expected: 'Invalid element ID format.*missing name after' },
+          { element: 'a:b:c', expected: 'Invalid element ID format.*multiple separators.*positions' }
+        ];
+
+        for (const test of errorCases) {
+          const result = parseRelationship({ element: test.element });
+          expect(isInvalidRelationship(result)).toBe(true);
+          if (isInvalidRelationship(result)) {
+            expect(result.parseError).toMatch(new RegExp(test.expected));
+          }
+        }
+      });
+
+      it('should include original input in all error messages', () => {
+        const inputs = ['bad', ':bad', 'bad:', 'too:many:parts'];
+
+        for (const input of inputs) {
+          const result = parseRelationship({ element: input });
+          if (isInvalidRelationship(result)) {
+            expect(result.parseError).toContain(input);
+          }
+        }
+      });
+    });
+
+    describe('Metadata handling', () => {
+      it('should preserve complex metadata through operations', () => {
+        const metadata = {
+          nested: { deep: { value: 'test' } },
+          array: [1, 2, 3],
+          nullValue: null,
+          date: new Date().toISOString(),
+          bigNumber: Number.MAX_SAFE_INTEGER
+        };
+
+        const rel = createRelationship('personas', 'test', 'uses', 0.5, metadata);
+        expect(rel.metadata).toEqual(metadata);
+
+        // Should preserve through parsing
+        const parsed = parseRelationship(rel);
+        if (isParsedRelationship(parsed)) {
+          expect(parsed.metadata).toEqual(metadata);
+        }
+      });
+
+      it('should handle metadata in deduplication correctly', () => {
+        const relationships = [
+          { element: 'p:t', strength: 0.3, metadata: { version: 1 } },
+          { element: 'p:t', strength: 0.7, metadata: { version: 2 } },
+          { element: 'p:t', strength: 0.5, metadata: { version: 3 } }
+        ];
+
+        const deduped = deduplicateRelationships(relationships);
+        expect(deduped[0].metadata).toEqual({ version: 2 }); // Keeps highest strength
+      });
     });
   });
 });

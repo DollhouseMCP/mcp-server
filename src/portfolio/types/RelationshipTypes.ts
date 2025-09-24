@@ -1,46 +1,133 @@
 /**
  * Type-safe relationship definitions for Enhanced Index
  *
- * Provides strongly-typed relationship interfaces with proper validation
- * and type guards to prevent runtime errors.
+ * This module provides a comprehensive type system for managing relationships
+ * between elements in the DollhouseMCP Enhanced Index. It implements a three-tier
+ * type hierarchy that ensures both compile-time and runtime safety.
+ *
+ * ## Type Hierarchy:
+ * 1. BaseRelationship - The storage format (what's persisted to disk)
+ * 2. ParsedRelationship - Valid runtime format with extracted metadata
+ * 3. InvalidRelationship - Error state with detailed diagnostics
+ *
+ * ## Key Features:
+ * - Strongly-typed interfaces with discriminated unions
+ * - Runtime type guards for safe type narrowing
+ * - Detailed error messages with position information
+ * - Batch processing utilities with performance optimizations
+ * - Relationship deduplication and sorting algorithms
+ *
+ * ## Usage Example:
+ * ```typescript
+ * // Parse a relationship from storage
+ * const stored: BaseRelationship = { element: 'personas:expert-coder' };
+ * const parsed = parseRelationship(stored);
+ *
+ * if (isParsedRelationship(parsed)) {
+ *   console.log(`Type: ${parsed.targetType}, Name: ${parsed.targetName}`);
+ * } else {
+ *   console.error(`Parse failed: ${parsed.parseError}`);
+ * }
+ * ```
  *
  * FIXES IMPLEMENTED (Issue #1103):
- * - Type-safe relationship variants
- * - Compile-time validation
- * - Runtime type guards
- * - Safe parsing utilities
+ * - Type-safe relationship variants with discriminated unions
+ * - Compile-time validation through TypeScript's type system
+ * - Runtime type guards for safe type narrowing
+ * - Safe parsing utilities with detailed error reporting
+ * - Security audit logging for relationship operations
  */
 
 import { parseElementId, formatElementId } from '../../utils/elementId.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 /**
- * Base relationship interface - the stored format
+ * Base relationship interface - the storage format
+ *
+ * This is the fundamental relationship structure that gets persisted to disk.
+ * It contains only the raw data without any parsed or computed fields.
+ *
+ * @example
+ * ```typescript
+ * const relationship: BaseRelationship = {
+ *   element: 'skills:debugging',
+ *   type: 'similar_to',
+ *   strength: 0.85,
+ *   metadata: { reason: 'Both involve code analysis' }
+ * };
+ * ```
  */
 export interface BaseRelationship {
-  element: string;                     // Element ID in format "type:name"
-  type?: string;                       // Relationship type (e.g., 'uses', 'similar_to')
-  strength?: number;                   // Relationship strength/confidence (0-1)
-  metadata?: Record<string, any>;      // Extensible metadata
+  /** Element ID in format "type:name" (e.g., "personas:expert", "skills:refactor") */
+  element: string;
+
+  /** Semantic relationship type from RelationshipTypes enum (e.g., 'uses', 'similar_to', 'extends') */
+  type?: string;
+
+  /** Relationship strength/confidence score between 0.0 and 1.0 (inclusive) */
+  strength?: number;
+
+  /** Extensible metadata for custom properties (e.g., similarity scores, timestamps) */
+  metadata?: Record<string, any>;
 }
 
 /**
- * Parsed relationship with extracted type and name
- * This is the runtime format after parsing
+ * Parsed relationship with extracted type and name components
+ *
+ * This is the runtime format after successfully parsing a BaseRelationship.
+ * It includes all base fields plus extracted metadata for efficient querying.
+ *
+ * @example
+ * ```typescript
+ * const parsed: ParsedRelationship = {
+ *   element: 'personas:expert-coder',
+ *   type: 'similar_to',
+ *   strength: 0.9,
+ *   targetType: 'personas',  // Extracted from element
+ *   targetName: 'expert-coder',  // Extracted from element
+ *   isValid: true  // Type discriminator
+ * };
+ * ```
  */
 export interface ParsedRelationship extends BaseRelationship {
-  targetType: string;                  // Extracted element type
-  targetName: string;                  // Extracted element name
-  isValid: true;                       // Type discriminator
+  /** Extracted element type (e.g., 'personas', 'skills', 'templates') */
+  targetType: string;
+
+  /** Extracted element name (e.g., 'expert-coder', 'debugging') */
+  targetName: string;
+
+  /** Type discriminator - always true for valid parsed relationships */
+  isValid: true;
 }
 
 /**
- * Invalid relationship - when parsing fails
+ * Invalid relationship state with diagnostic information
+ *
+ * This type represents a relationship that failed to parse, preserving
+ * the original data while providing detailed error context for debugging.
+ *
+ * @example
+ * ```typescript
+ * const invalid: InvalidRelationship = {
+ *   element: 'malformed:element:id',
+ *   targetType: null,
+ *   targetName: null,
+ *   isValid: false,
+ *   parseError: 'Invalid element ID format: "malformed:element:id" - multiple separators...'
+ * };
+ * ```
  */
 export interface InvalidRelationship extends BaseRelationship {
+  /** Null when parsing fails */
   targetType: null;
+
+  /** Null when parsing fails */
   targetName: null;
+
+  /** Type discriminator - always false for invalid relationships */
   isValid: false;
+
+  /** Detailed error message with position information and expected format */
   parseError: string;
 }
 
@@ -50,7 +137,19 @@ export interface InvalidRelationship extends BaseRelationship {
 export type Relationship = BaseRelationship | ParsedRelationship | InvalidRelationship;
 
 /**
- * Type guard to check if a relationship has been parsed
+ * Type guard to check if a relationship is successfully parsed
+ *
+ * @param rel - The relationship to check
+ * @returns True if the relationship is a ParsedRelationship with valid data
+ *
+ * @example
+ * ```typescript
+ * const rel = parseRelationship(baseRel);
+ * if (isParsedRelationship(rel)) {
+ *   // TypeScript knows rel is ParsedRelationship here
+ *   console.log(rel.targetType, rel.targetName);
+ * }
+ * ```
  */
 export function isParsedRelationship(rel: Relationship): rel is ParsedRelationship {
   return 'isValid' in rel && rel.isValid === true &&
@@ -59,22 +158,69 @@ export function isParsedRelationship(rel: Relationship): rel is ParsedRelationsh
 }
 
 /**
- * Type guard to check if a relationship is invalid
+ * Type guard to check if a relationship failed to parse
+ *
+ * @param rel - The relationship to check
+ * @returns True if the relationship is an InvalidRelationship with error details
+ *
+ * @example
+ * ```typescript
+ * const rel = parseRelationship(baseRel);
+ * if (isInvalidRelationship(rel)) {
+ *   console.error(`Parse failed: ${rel.parseError}`);
+ * }
+ * ```
  */
 export function isInvalidRelationship(rel: Relationship): rel is InvalidRelationship {
   return 'isValid' in rel && rel.isValid === false;
 }
 
 /**
- * Type guard to check if a relationship is just the base type
+ * Type guard to check if a relationship is unparsed (base type only)
+ *
+ * @param rel - The relationship to check
+ * @returns True if the relationship is a BaseRelationship without parsed fields
+ *
+ * @example
+ * ```typescript
+ * if (isBaseRelationship(rel)) {
+ *   // Need to parse this relationship before use
+ *   const parsed = parseRelationship(rel);
+ * }
+ * ```
  */
 export function isBaseRelationship(rel: Relationship): rel is BaseRelationship {
   return !('isValid' in rel);
 }
 
 /**
- * Safely parse a base relationship into a parsed relationship
- * Returns InvalidRelationship if parsing fails
+ * Safely parse a base relationship into a typed relationship variant
+ *
+ * This function attempts to parse the element ID and extract type/name components.
+ * If parsing fails, it returns an InvalidRelationship with detailed error context
+ * including position information and what was expected.
+ *
+ * @param rel - The base relationship to parse
+ * @returns ParsedRelationship if successful, InvalidRelationship with diagnostics if failed
+ *
+ * @example Success case
+ * ```typescript
+ * const base: BaseRelationship = { element: 'skills:debugging' };
+ * const result = parseRelationship(base);
+ * // result: ParsedRelationship with targetType='skills', targetName='debugging'
+ * ```
+ *
+ * @example Error cases with detailed diagnostics
+ * ```typescript
+ * parseRelationship({ element: 'no-separator' });
+ * // Error: "missing separator ':'"
+ *
+ * parseRelationship({ element: ':missing-type' });
+ * // Error: "missing type before ':'"
+ *
+ * parseRelationship({ element: 'too:many:colons' });
+ * // Error: "multiple separators ':' found at positions [3, 8]"
+ * ```
  */
 export function parseRelationship(rel: BaseRelationship): ParsedRelationship | InvalidRelationship {
   if (!rel.element) {
@@ -83,7 +229,7 @@ export function parseRelationship(rel: BaseRelationship): ParsedRelationship | I
       targetType: null,
       targetName: null,
       isValid: false,
-      parseError: 'Missing element ID'
+      parseError: 'Invalid element ID: missing or empty (expected format: "type:name")'
     };
   }
 
@@ -156,7 +302,7 @@ export function createRelationship(
   metadata?: Record<string, any>
 ): ParsedRelationship {
   // Validate strength is in range
-  if (strength !== undefined && (strength < 0 || strength > 1)) {
+  if (strength !== undefined && (strength < 0 || strength > 1 || isNaN(strength))) {
     throw new Error(`Relationship strength must be between 0 and 1, got ${strength}`);
   }
 
