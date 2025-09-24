@@ -714,9 +714,9 @@ export class EnhancedIndexManager {
 
     const keys = Array.from(elementTexts.keys());
 
-    // FIX: Use much more conservative limits to prevent explosion
-    const MAX_SAFE_ELEMENTS = 20;  // Reduced from config default
-    const MAX_SAFE_COMPARISONS = 100;  // Much lower limit
+    // Use reasonable limits to prevent explosion while still being useful
+    const MAX_SAFE_ELEMENTS = 50;  // Threshold for full matrix
+    const MAX_SAFE_COMPARISONS = 500;  // Total comparison limit
 
     // Override config if it's too high
     const safeConfig = {

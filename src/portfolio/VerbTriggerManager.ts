@@ -255,18 +255,21 @@ export class VerbTriggerManager {
 
   /**
    * Get elements that match a specific verb
+   * @param verb The verb to search for
+   * @param index The index to search in (passed to avoid circular dependency)
    */
-  public async getElementsForVerb(verb: string): Promise<ElementMatch[]> {
-    return this.getElementsForVerbInternal(verb, new Set());
+  public getElementsForVerb(verb: string, index: EnhancedIndex): ElementMatch[] {
+    return this.getElementsForVerbInternal(verb, index, new Set());
   }
 
   /**
    * Internal version with visited tracking to prevent infinite recursion
    */
-  private async getElementsForVerbInternal(
+  private getElementsForVerbInternal(
     verb: string,
+    index: EnhancedIndex,
     visited: Set<string>
-  ): Promise<ElementMatch[]> {
+  ): ElementMatch[] {
     // Check if we've already processed this verb (prevents infinite recursion)
     if (visited.has(verb)) {
       return [];
@@ -279,7 +282,6 @@ export class VerbTriggerManager {
     }
 
     const elements: ElementMatch[] = [];
-    const index = await this.getIndexManager().getIndex();
 
     // 1. Check explicit verb mappings in action_triggers
     if (index.action_triggers[verb]) {
@@ -320,7 +322,7 @@ export class VerbTriggerManager {
       for (const synonym of synonyms) {
         if (synonym !== verb && !visited.has(synonym)) {
           // Pass the visited set to recursive calls
-          const synonymElements = await this.getElementsForVerbInternal(synonym, visited);
+          const synonymElements = this.getElementsForVerbInternal(synonym, index, visited);
           for (const elem of synonymElements) {
             const existing = elements.find(e => e.name === elem.name);
             if (!existing) {
@@ -445,13 +447,15 @@ export class VerbTriggerManager {
 
   /**
    * Process a query and get all verb matches
+   * @param query The query to process
+   * @param index The index to search in
    */
-  public async processQuery(query: string): Promise<VerbMatch[]> {
+  public processQuery(query: string, index: EnhancedIndex): VerbMatch[] {
     const verbs = this.extractVerbs(query);
     const matches: VerbMatch[] = [];
 
     for (const verb of verbs) {
-      const elements = await this.getElementsForVerb(verb);
+      const elements = this.getElementsForVerb(verb, index);
       if (elements.length > 0) {
         matches.push({
           verb,
@@ -495,9 +499,10 @@ export class VerbTriggerManager {
 
   /**
    * Get all verbs that map to a specific element
+   * @param elementName The element to get verbs for
+   * @param index The index to search in (passed to avoid circular dependency)
    */
-  public async getVerbsForElement(elementName: string): Promise<string[]> {
-    const index = await this.getIndexManager().getIndex();
+  public getVerbsForElement(elementName: string, index: EnhancedIndex): string[] {
     const verbs: string[] = [];
 
     // Check action_triggers

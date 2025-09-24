@@ -273,10 +273,9 @@ export class RelationshipManager {
       }
     }
 
-    // FIX: Skip verb-based relationships to avoid circular dependency
-    // VerbTriggerManager.getVerbsForElement() calls getIndex() which creates circular loop
-    // const verbRelationships = await this.discoverVerbRelationships(element, elementId, index);
-    // relationships.push(...verbRelationships);
+    // Discover verb-based relationships (fixed: now passes index to avoid circular dependency)
+    const verbRelationships = this.discoverVerbRelationships(element, elementId, index);
+    relationships.push(...verbRelationships);
 
     // Filter by confidence and limit
     const filtered = relationships
@@ -290,21 +289,21 @@ export class RelationshipManager {
   /**
    * Discover relationships based on verb associations
    */
-  private async discoverVerbRelationships(
+  private discoverVerbRelationships(
     element: ElementDefinition,
     elementId: string,
     index: EnhancedIndex
-  ): Promise<Relationship[]> {
+  ): Relationship[] {
     const relationships: Relationship[] = [];
 
     try {
       // Get verbs associated with this element
-      const [type, name] = elementId.split(':');
-      const verbs = await this.verbTriggers.getVerbsForElement(name);
+      const [, name] = elementId.split(':');
+      const verbs = this.verbTriggers.getVerbsForElement(name, index);
 
       for (const verb of verbs) {
         // Find other elements with same verb
-        const matches = await this.verbTriggers.getElementsForVerb(verb);
+        const matches = this.verbTriggers.getElementsForVerb(verb, index);
 
         for (const match of matches) {
           if (match.name !== name) {
