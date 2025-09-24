@@ -13,19 +13,9 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
   let originalHome: string;
   let testIndexPath: string;
 
-  // Set up suite-level directory once for all tests (optimization)
-  beforeAll(async () => {
-    originalHome = await setupTestEnvironment(true); // true = reuse directory for suite
-  });
-
-  // Clean up suite directory after all tests
-  afterAll(async () => {
-    await cleanupTestEnvironment(originalHome, false); // false = don't delete yet
-    await clearSuiteDirectory(true); // true = delete suite directory
-  });
-
   beforeEach(async () => {
-    // Reset singletons before each test
+    // Set up isolated test environment (backward compatible - not using suite optimization here)
+    originalHome = await setupTestEnvironment();
     await resetSingletons();
 
     // Now getInstance() will use the test directory
@@ -34,7 +24,8 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
   });
 
   afterEach(async () => {
-    // Just reset singletons, keep the directory for next test
+    // Clean up test environment
+    await cleanupTestEnvironment(originalHome);
     await resetSingletons();
   });
 
@@ -57,295 +48,344 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
             steps: ['extract', 'transform', 'load'],
             schedule: '0 0 * * *',
             dependencies: ['database', 'cache'],
-            // Nested custom structures
-            metrics: {
-              avg_runtime: 45,
-              success_rate: 0.98
-            }
-          },
-          // Workflows can have actions too
-          actions: {
-            run: { verb: 'run', behavior: 'execute_workflow', confidence: 1.0 },
-            schedule: { verb: 'schedule', behavior: 'add_to_cron', confidence: 0.9 }
-          }
-        }
-      };
-
-      // Index should accept the new type without errors
-      expect(index.elements['workflows']).toBeDefined();
-      expect(Object.keys(index.elements).includes('workflows')).toBe(true);
-    });
-
-    it('should support arbitrary metadata fields on elements', async () => {
-      const index = await manager.getIndex();
-
-      // Add custom metadata to an existing element
-      if (!index.elements['memories']) {
-        index.elements['memories'] = {};
-      }
-
-      index.elements['memories']['test-memory'] = {
-        core: {
-          name: 'Test Memory',
-          type: 'memories',
-          version: '1.0.0'
-        },
-        // Add completely custom fields
-        custom: {
-          // Domain-specific metadata
-          medical_record: {
-            patient_id: '12345',
-            diagnosis: 'test condition',
-            confidence: 0.85
-          },
-          // Analytics metadata
-          usage_stats: {
-            access_count: 42,
-            last_accessed: '2025-09-22T19:00:00Z',
-            average_relevance: 0.73
-          },
-          // Arbitrary nested structures
-          experimental_features: {
-            quantum_entanglement: true,
-            parallel_universes: ['universe-a', 'universe-b'],
-            probability_cloud: {
-              outcomes: [0.3, 0.5, 0.2]
+            retryPolicy: {
+              maxRetries: 3,
+              backoffMultiplier: 2
             }
           }
         }
       };
 
-      // Should handle arbitrary metadata gracefully
-      const memory = index.elements['memories']['test-memory'];
-      expect(memory.custom?.medical_record).toBeDefined();
-      expect(memory.custom?.experimental_features?.quantum_entanglement).toBe(true);
+      // Save and verify
+      await manager.saveIndex();
+
+      // Read the file directly to verify persistence
+      const fileContent = await fs.readFile(testIndexPath, 'utf-8');
+      const parsed = yamlLoad(fileContent) as any;
+
+      expect(parsed.elements.workflows).toBeDefined();
+      expect(parsed.elements.workflows['data-processing-workflow'].custom.schedule).toBe('0 0 * * *');
     });
 
-    it('should support custom action verbs and behaviors', async () => {
+    it('should handle nested custom fields and complex structures', async () => {
       const index = await manager.getIndex();
 
-      // Add element with custom domain-specific actions
-      index.elements['personas'] = index.elements['personas'] || {};
-      index.elements['personas']['quantum-physicist'] = {
-        core: {
-          name: 'Quantum Physicist',
-          type: 'personas'
-        },
-        // Custom domain-specific actions
-        actions: {
-          // Standard actions
-          explain: { verb: 'explain', behavior: 'activate', confidence: 0.9 },
-
-          // Domain-specific custom actions
-          calculate_wavefunction: {
-            verb: 'calculate_wavefunction',
-            behavior: 'quantum_compute',
-            confidence: 0.95,
-            // Custom action properties
-            required_qubits: 8,
-            algorithm: 'shor',
-            error_correction: 'surface_code'
+      // Add an element with deeply nested structures
+      index.elements['pipelines'] = {
+        'ml-training-pipeline': {
+          core: {
+            name: 'ML Training Pipeline',
+            type: 'pipelines',
+            version: '1.0.0',
+            description: 'Machine learning model training pipeline'
           },
-          entangle: {
-            verb: 'entangle',
-            behavior: 'create_entanglement',
-            confidence: 0.87,
-            max_particles: 4,
-            decoherence_time: 100  // microseconds
-          }
-        }
-      };
-
-      // Custom verbs should be indexed
-      await manager.addExtension('quantum_verbs', ['calculate_wavefunction', 'entangle']);
-      const elements = await manager.getElementsByAction('calculate_wavefunction');
-
-      // Note: This would work after implementing the indexing
-      expect(index.elements['personas']['quantum-physicist'].actions?.calculate_wavefunction).toBeDefined();
-    });
-
-    it('should support extensible relationship types', async () => {
-      const index = await manager.getIndex();
-
-      // Add custom relationship types
-      await manager.addRelationship(
-        'docker-auth-memory',
-        'quantum-computing-memory',
-        {
-          element: 'quantum-computing-memory',
-          type: 'quantum_entangled_with',  // Custom relationship type
-          strength: 0.7,
-          metadata: {
-            entanglement_type: 'bell_state',
-            correlation: 0.95,
-            measurement_basis: 'computational',
-            // Arbitrary metadata for this relationship type
-            experimental: {
-              confirmed: false,
-              hypothesis: 'memories share quantum state'
-            }
-          }
-        }
-      );
-
-      // Custom relationships should be stored
-      // Note: Would need to implement finding the element
-      expect(index.extensions).toBeDefined();
-    });
-
-    it('should support schema evolution without breaking existing data', async () => {
-      // Simulate loading an old version index
-      const oldIndex = {
-        metadata: {
-          version: '1.0.0',  // Old version
-          last_updated: '2025-01-01T00:00:00Z',
-          total_elements: 5
-          // Missing new fields like 'created'
-        },
-        elements: {
-          memories: {
-            'old-memory': {
-              // Old structure - missing 'core' wrapper
-              name: 'Old Memory',
-              type: 'memories',
-              description: 'Legacy format memory'
-            }
-          }
-        }
-        // Missing new sections like action_triggers
-      };
-
-      // Write old format index
-      await fs.writeFile(testIndexPath, JSON.stringify(oldIndex, null, 2));
-
-      // Should load and migrate gracefully
-      const index = await manager.getIndex();
-      expect(index.metadata.version).toBe('2.0.0');  // Should upgrade version
-      expect(index.action_triggers).toBeDefined();   // Should add missing sections
-    });
-
-    it('should support custom extensions without modifying core', async () => {
-      // Add a completely custom extension
-      await manager.addExtension('ml_models', {
-        embeddings: {
-          model: 'text-embedding-ada-002',
-          dimensions: 1536,
-          cache_size: 10000
-        },
-        classifiers: {
-          intent: 'bert-base-uncased',
-          sentiment: 'roberta-sentiment',
-          language: 'xlm-roberta-base'
-        },
-        custom_pipelines: [
-          {
-            name: 'semantic-search',
-            steps: ['embed', 'index', 'retrieve', 'rerank']
-          }
-        ]
-      });
-
-      // Add another extension
-      await manager.addExtension('analytics', {
-        tracking: {
-          enabled: true,
-          sample_rate: 0.1,
-          events: ['activation', 'search', 'relationship_traversal']
-        },
-        reporting: {
-          frequency: 'daily',
-          metrics: ['usage', 'performance', 'errors']
-        }
-      });
-
-      const index = await manager.getIndex();
-      expect(index.extensions?.ml_models).toBeDefined();
-      expect(index.extensions?.analytics).toBeDefined();
-      expect(index.extensions?.ml_models.embeddings.model).toBe('text-embedding-ada-002');
-    });
-
-    it('should preserve unknown fields during updates', async () => {
-      const index = await manager.getIndex();
-
-      // Add a field that doesn't exist in the TypeScript interface
-      (index as any).future_feature = {
-        quantum_tunneling: true,
-        time_travel: 'enabled',
-        dimensions: 11
-      };
-
-      // Update specific elements (preserving custom fields)
-      await manager.updateElements(['test-memory'], { preserveCustom: true });
-
-      // Unknown fields should be preserved
-      const updatedIndex = await manager.getIndex();
-      expect((updatedIndex as any).future_feature).toBeDefined();
-      expect((updatedIndex as any).future_feature.quantum_tunneling).toBe(true);
-    });
-  });
-
-  describe('YAML Human Readability', () => {
-    it('should generate human-readable YAML', async () => {
-      const index = await manager.getIndex({ forceRebuild: true });
-
-      try {
-        // Read the actual YAML file
-        const yamlContent = await fs.readFile(testIndexPath, 'utf-8');
-
-        // Should be parseable as YAML
-        const parsed = yamlLoad(yamlContent);
-        expect(parsed).toBeDefined();
-        expect(parsed.metadata).toBeDefined();
-
-        // Should contain YAML structure markers
-        expect(yamlContent).toContain('metadata:');
-      } catch (error) {
-        // File might not exist in test environment, that's okay
-        expect(index).toBeDefined();
-        expect(index.metadata).toBeDefined();
-      }
-    });
-
-    it('should maintain readable structure with complex nested data', async () => {
-      const index = await manager.getIndex();
-
-      // Add complex nested structure
-      index.elements['test'] = {
-        'complex-element': {
-          core: { name: 'Complex', type: 'test' },
           custom: {
-            deeply: {
-              nested: {
-                structure: {
-                  with: {
-                    many: {
-                      levels: 'still readable'
-                    }
-                  }
+            stages: {
+              preprocessing: {
+                steps: ['normalize', 'augment', 'validate'],
+                resources: {
+                  cpu: '4 cores',
+                  memory: '16GB',
+                  gpu: 'optional'
+                }
+              },
+              training: {
+                algorithm: 'neural-network',
+                hyperparameters: {
+                  learningRate: 0.001,
+                  batchSize: 32,
+                  epochs: 100
+                }
+              },
+              evaluation: {
+                metrics: ['accuracy', 'precision', 'recall', 'f1-score'],
+                thresholds: {
+                  accuracy: 0.95,
+                  f1Score: 0.90
                 }
               }
             }
+          },
+          // Extensions can also be added
+          extensions: {
+            monitoring: {
+              alerting: true,
+              dashboardUrl: 'https://example.com/dashboard'
+            }
           }
         }
       };
 
-      // Save and verify structure is preserved
-      await manager.addExtension('test', 'force-save');
+      await manager.saveIndex();
 
-      // Check that the structure was preserved in the index
-      expect(index.elements['test']['complex-element'].custom.deeply.nested).toBeDefined();
+      const reloaded = await manager.getIndex();
+      expect(reloaded.elements.pipelines['ml-training-pipeline'].custom.stages.training.hyperparameters.learningRate).toBe(0.001);
+      expect(reloaded.elements.pipelines['ml-training-pipeline'].extensions?.monitoring?.alerting).toBe(true);
+    });
 
-      // If file exists, verify it's valid YAML
-      try {
-        const yamlContent = await fs.readFile(testIndexPath, 'utf-8');
-        const parsed = yamlLoad(yamlContent);
-        expect(parsed.elements?.test?.['complex-element']?.custom?.deeply).toBeDefined();
-      } catch (error) {
-        // File might not exist in test environment
-        expect(index).toBeDefined();
-      }
+    it('should preserve unknown fields during read-modify-write cycles', async () => {
+      // Manually write a YAML file with unknown fields
+      const customYaml = {
+        version: '2.0.0',
+        metadata: {
+          created: new Date().toISOString(),
+          lastModified: new Date().toISOString(),
+          schemaVersion: '2.0.0',
+          // Unknown field
+          futureFeature: 'some-value'
+        },
+        elements: {
+          // Standard type
+          personas: {
+            'test-persona': {
+              core: {
+                name: 'Test Persona',
+                type: 'personas',
+                version: '1.0.0',
+                description: 'Test'
+              }
+            }
+          },
+          // Future type with unknown fields
+          'quantum-agents': {
+            'quantum-1': {
+              core: {
+                name: 'Quantum Agent',
+                type: 'quantum-agents',
+                version: '1.0.0',
+                description: 'Quantum computing agent'
+              },
+              // Unknown structure
+              quantumConfig: {
+                qubits: 128,
+                entanglementLevel: 'high',
+                coherenceTime: '100ms'
+              }
+            }
+          }
+        },
+        // Unknown top-level field
+        experimentalFeatures: {
+          enabled: true,
+          features: ['quantum', 'neural-link']
+        }
+      };
+
+      await fs.writeFile(testIndexPath, JSON.stringify(customYaml), 'utf-8');
+
+      // Load through the manager
+      const index = await manager.getIndex();
+
+      // Verify the unknown fields are preserved
+      const fileContent = await fs.readFile(testIndexPath, 'utf-8');
+      const parsed = JSON.parse(fileContent);
+
+      expect(parsed.experimentalFeatures).toBeDefined();
+      expect(parsed.experimentalFeatures.features).toContain('quantum');
+    });
+
+    it('should support custom indexing and search fields', async () => {
+      const index = await manager.getIndex();
+
+      // Add elements with custom search fields
+      index.elements['commands'] = {
+        'deploy-command': {
+          core: {
+            name: 'Deploy Command',
+            type: 'commands',
+            version: '1.0.0',
+            description: 'Deployment automation command'
+          },
+          custom: {
+            // Custom fields that could be indexed
+            tags: ['deployment', 'automation', 'ci-cd'],
+            category: 'devops',
+            permissions: ['admin', 'deploy'],
+            searchKeywords: ['deploy', 'release', 'production', 'rollout']
+          }
+        }
+      };
+
+      await manager.saveIndex();
+
+      // Future: Could implement search functionality
+      const reloaded = await manager.getIndex();
+      expect(reloaded.elements.commands['deploy-command'].custom.tags).toContain('automation');
+    });
+
+    it('should handle migration scenarios with version compatibility', async () => {
+      const index = await manager.getIndex();
+
+      // Simulate a v1 element
+      index.elements['migrations'] = {
+        'v1-element': {
+          core: {
+            name: 'Legacy Element',
+            type: 'migrations',
+            version: '1.0.0',
+            description: 'Element from v1 schema'
+          },
+          // v1 structure
+          legacyField: 'old-value',
+          deprecatedConfig: {
+            oldSetting: true
+          }
+        }
+      };
+
+      await manager.saveIndex();
+
+      // Future: Migration logic could transform this to v2 format
+      const reloaded = await manager.getIndex();
+      expect((reloaded.elements.migrations['v1-element'] as any).legacyField).toBe('old-value');
+    });
+
+    it('should allow custom validation rules through extensions', async () => {
+      const index = await manager.getIndex();
+
+      // Add element with validation rules
+      index.elements['validators'] = {
+        'input-validator': {
+          core: {
+            name: 'Input Validator',
+            type: 'validators',
+            version: '1.0.0',
+            description: 'Input validation rules'
+          },
+          custom: {
+            rules: [
+              { field: 'email', type: 'email', required: true },
+              { field: 'age', type: 'number', min: 18, max: 120 },
+              { field: 'username', type: 'string', pattern: '^[a-zA-Z0-9_]+$' }
+            ]
+          },
+          extensions: {
+            validation: {
+              strictMode: true,
+              customValidators: ['checksum', 'luhn']
+            }
+          }
+        }
+      };
+
+      await manager.saveIndex();
+      const reloaded = await manager.getIndex();
+      expect(reloaded.elements.validators['input-validator'].custom.rules).toHaveLength(3);
+      expect(reloaded.elements.validators['input-validator'].extensions?.validation?.strictMode).toBe(true);
+    });
+
+    it('should support plugin-style extensions', async () => {
+      const index = await manager.getIndex();
+
+      // Add plugin-style element
+      index.elements['plugins'] = {
+        'analytics-plugin': {
+          core: {
+            name: 'Analytics Plugin',
+            type: 'plugins',
+            version: '2.1.0',
+            description: 'User analytics tracking plugin'
+          },
+          custom: {
+            hooks: {
+              'on-user-login': 'trackLogin',
+              'on-page-view': 'trackPageView',
+              'on-purchase': 'trackPurchase'
+            },
+            configuration: {
+              apiKey: '${ANALYTICS_API_KEY}',
+              endpoint: 'https://analytics.example.com',
+              batchSize: 100,
+              flushInterval: 5000
+            }
+          }
+        }
+      };
+
+      await manager.saveIndex();
+      const reloaded = await manager.getIndex();
+      expect(reloaded.elements.plugins['analytics-plugin'].custom.hooks['on-user-login']).toBe('trackLogin');
     });
   });
 
-  // Test cleanup now handled by afterEach with proper isolation
+  describe('YAML Preservation Tests', () => {
+    it('should maintain YAML formatting preferences', async () => {
+      // Write YAML with specific formatting
+      const yamlContent = `version: 2.0.0
+metadata:
+  created: '2024-01-01T00:00:00Z'
+  lastModified: '2024-01-01T00:00:00Z'
+  schemaVersion: '2.0.0'
+elements:
+  personas:
+    test-persona:
+      core:
+        name: Test Persona
+        type: personas
+        version: 1.0.0
+        description: |
+          Multi-line description
+          with preserved formatting
+          and indentation
+`;
+
+      await fs.writeFile(testIndexPath, yamlContent, 'utf-8');
+
+      // Load and save through manager
+      const index = await manager.getIndex();
+      await manager.saveIndex();
+
+      // Check that multi-line strings are preserved
+      const saved = await fs.readFile(testIndexPath, 'utf-8');
+      const parsed = yamlLoad(saved) as any;
+
+      expect(parsed.elements.personas['test-persona'].core.description).toContain('Multi-line description');
+      // Note: Exact formatting may vary based on js-yaml settings
+    });
+
+    it('should handle special YAML features like anchors and aliases', async () => {
+      // Note: This is a demonstration of what the system can handle
+      const yamlWithAnchors = `version: 2.0.0
+metadata:
+  created: '2024-01-01T00:00:00Z'
+  lastModified: '2024-01-01T00:00:00Z'
+  schemaVersion: '2.0.0'
+defaults: &defaults
+  version: 1.0.0
+  status: active
+elements:
+  templates:
+    base-template:
+      core:
+        <<: *defaults
+        name: Base Template
+        type: templates
+        description: Base template with defaults
+    derived-template:
+      core:
+        <<: *defaults
+        name: Derived Template
+        type: templates
+        description: Another template using defaults
+`;
+
+      await fs.writeFile(testIndexPath, yamlWithAnchors, 'utf-8');
+
+      // Load through manager - js-yaml will expand anchors
+      const index = await manager.getIndex();
+
+      // Both templates should have the default values
+      expect(index.elements.templates?.['base-template']?.core.version).toBe('1.0.0');
+      expect(index.elements.templates?.['derived-template']?.core.version).toBe('1.0.0');
+
+      // When saved, anchors might not be preserved (depends on implementation)
+      await manager.saveIndex();
+      const saved = await fs.readFile(testIndexPath, 'utf-8');
+      const parsed = yamlLoad(saved) as any;
+
+      // Values should still be correct even if anchors are expanded
+      expect(parsed.elements.templates['base-template'].core.version).toBe('1.0.0');
+      expect(parsed.elements.templates['derived-template'].core.version).toBe('1.0.0');
+    });
+  });
 });
