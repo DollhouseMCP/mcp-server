@@ -6,16 +6,26 @@ import { EnhancedIndexManager } from '../../../../src/portfolio/EnhancedIndexMan
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { load as yamlLoad } from 'js-yaml';
-import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons } from './test-setup.js';
+import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons, clearSuiteDirectory } from './test-setup.js';
 
 describe('EnhancedIndexManager - Extensibility Tests', () => {
   let manager: EnhancedIndexManager;
   let originalHome: string;
   let testIndexPath: string;
 
+  // Set up suite-level directory once for all tests (optimization)
+  beforeAll(async () => {
+    originalHome = await setupTestEnvironment(true); // true = reuse directory for suite
+  });
+
+  // Clean up suite directory after all tests
+  afterAll(async () => {
+    await cleanupTestEnvironment(originalHome, false); // false = don't delete yet
+    await clearSuiteDirectory(true); // true = delete suite directory
+  });
+
   beforeEach(async () => {
-    // Set up isolated test environment
-    originalHome = await setupTestEnvironment();
+    // Reset singletons before each test
     await resetSingletons();
 
     // Now getInstance() will use the test directory
@@ -24,8 +34,7 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
   });
 
   afterEach(async () => {
-    // Clean up test environment
-    await cleanupTestEnvironment(originalHome);
+    // Just reset singletons, keep the directory for next test
     await resetSingletons();
   });
 
