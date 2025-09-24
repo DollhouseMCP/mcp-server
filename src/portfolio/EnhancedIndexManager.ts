@@ -23,12 +23,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { logger } from '../utils/logger.js';
-import { ElementType } from './types.js';
-import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioIndexManager, IndexEntry } from './PortfolioIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { NLPScoringManager, ScoringResult } from './NLPScoringManager.js';
+import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
@@ -627,7 +625,7 @@ export class EnhancedIndexManager {
 
     // Find the element
     let found = false;
-    for (const [type, elements] of Object.entries(index.elements)) {
+    for (const [, elements] of Object.entries(index.elements)) {
       if (elements[fromElement]) {
         if (!elements[fromElement].relationships) {
           elements[fromElement].relationships = {};
@@ -699,7 +697,7 @@ export class EnhancedIndexManager {
       // Filter by type if specified
       if (criteria.type && type !== criteria.type) continue;
 
-      for (const [name, element] of Object.entries(elements)) {
+      for (const [, element] of Object.entries(elements)) {
         let matches = true;
 
         // Check verb matches

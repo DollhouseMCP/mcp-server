@@ -24,7 +24,7 @@ import { EnhancedIndex, ElementDefinition, Relationship } from './EnhancedIndexM
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
+import { parseElementId } from '../utils/elementId.js';
 
 /**
  * Relationship types and their inverse mappings
@@ -118,7 +118,7 @@ export interface ElementPath {
 
 export class RelationshipManager {
   private static instance: RelationshipManager | null = null;
-  private nlpScoring: NLPScoringManager;
+  private _nlpScoring: NLPScoringManager;
   private verbTriggers: VerbTriggerManager;
   private config: RelationshipConfig;
 
@@ -155,7 +155,7 @@ export class RelationshipManager {
       customPatterns: config.customPatterns || []
     };
 
-    this.nlpScoring = new NLPScoringManager();
+    this._nlpScoring = new NLPScoringManager();
     this.verbTriggers = VerbTriggerManager.getInstance();
 
     logger.debug('RelationshipManager initialized', { config: this.config });
@@ -295,7 +295,7 @@ export class RelationshipManager {
    * Discover relationships based on verb associations
    */
   private discoverVerbRelationships(
-    element: ElementDefinition,
+    _element: ElementDefinition,
     elementId: string,
     index: EnhancedIndex
   ): Relationship[] {
