@@ -13,6 +13,10 @@
  * - Graph traversal for relationship paths
  * - Relationship strength scoring
  * - Bidirectional relationship tracking
+ *
+ * FIXES IMPLEMENTED (Issue #1099):
+ * - Uses centralized element ID parsing utilities
+ * - Consistent ID format handling
  */
 
 import { logger } from '../utils/logger.js';
@@ -20,6 +24,7 @@ import { EnhancedIndex, ElementDefinition, Relationship } from './EnhancedIndexM
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
 
 /**
  * Relationship types and their inverse mappings
@@ -297,9 +302,13 @@ export class RelationshipManager {
     const relationships: Relationship[] = [];
 
     try {
+      // FIX: Use centralized element ID parsing
+      const parsed = parseElementId(elementId);
+      if (!parsed) {
+        return [];
+      }
       // Get verbs associated with this element
-      const [, name] = elementId.split(':');
-      const verbs = this.verbTriggers.getVerbsForElement(name, index);
+      const verbs = this.verbTriggers.getVerbsForElement(parsed.name, index);
 
       for (const verb of verbs) {
         // Find other elements with same verb
@@ -363,8 +372,12 @@ export class RelationshipManager {
       return;
     }
 
-    const [targetType, targetName] = relationship.element.split(':');
-    const targetElement = index.elements[targetType]?.[targetName];
+    // FIX: Use centralized element ID parsing
+    const parsed = parseElementId(relationship.element);
+    if (!parsed) {
+      return false;
+    }
+    const targetElement = index.elements[parsed.type]?.[parsed.name];
 
     if (!targetElement) {
       return;
@@ -515,9 +528,10 @@ export class RelationshipManager {
         return current;
       }
 
-      // Get relationships from current element
-      const [type, name] = currentElement.split(':');
-      const element = index.elements[type]?.[name];
+      // FIX: Use centralized element ID parsing
+      const parsed = parseElementId(currentElement);
+      if (!parsed) continue;
+      const element = index.elements[parsed.type]?.[parsed.name];
 
       if (!element?.relationships) {
         continue;
@@ -583,8 +597,10 @@ export class RelationshipManager {
       }
 
       const currentElement = current.path[current.path.length - 1];
-      const [type, name] = currentElement.split(':');
-      const elementDef = index.elements[type]?.[name];
+      // FIX: Use centralized element ID parsing
+      const parsed = parseElementId(currentElement);
+      if (!parsed) continue;
+      const elementDef = index.elements[parsed.type]?.[parsed.name];
 
       if (!elementDef?.relationships) {
         continue;

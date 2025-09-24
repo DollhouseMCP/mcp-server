@@ -3,6 +3,11 @@
  *
  * Implements the MCP tool handlers for Enhanced Index functionality
  * including similarity search, relationship discovery, and verb-based search.
+ *
+ * FIXES IMPLEMENTED (Issue #1099):
+ * - Uses centralized element ID parsing utilities
+ * - Consistent ID format handling
+ * - Better error handling for invalid IDs
  */
 
 import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
@@ -11,6 +16,7 @@ import { SecureErrorHandler } from '../security/errorHandler.js';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { parseElementIdWithFallback, formatElementId } from '../utils/elementId.js';
 
 export class EnhancedIndexHandler {
   private enhancedIndexManager: EnhancedIndexManager;
@@ -192,9 +198,10 @@ export class EnhancedIndexHandler {
         }
       });
 
-      // Get relationships
+      // FIX: Use centralized element ID formatting
+      // If no element type provided, use full element name as-is (may already include type)
       const elementId = options.elementType ?
-        `${options.elementType}/${options.elementName}` :
+        formatElementId(options.elementType, options.elementName) :
         options.elementName;
 
       const relationships = await this.enhancedIndexManager.getElementRelationships(elementId);
@@ -228,11 +235,10 @@ export class EnhancedIndexHandler {
           if (Array.isArray(relations) && relations.length > 0) {
             text += `**${relType.charAt(0).toUpperCase() + relType.slice(1)} (${relations.length})**\n`;
             for (const rel of relations) {
-              // Parse element ID to get type and name
-              const [targetType, targetName] = rel.element.includes(':') ?
-                rel.element.split(':') : ['unknown', rel.element];
-              const icon = this.getElementIcon(targetType);
-              text += `  ${icon} ${targetName}`;
+              // FIX: Use centralized element ID parsing
+              const parsed = parseElementIdWithFallback(rel.element);
+              const icon = this.getElementIcon(parsed.type);
+              text += `  ${icon} ${parsed.name}`;
               if (rel.strength) {
                 text += ` (strength: ${(rel.strength * 100).toFixed(0)}%)`;
               }
@@ -311,13 +317,14 @@ export class EnhancedIndexHandler {
         text += `• Check element descriptions for supported actions\n`;
       } else {
         for (const elementName of limited) {
-          // Parse element type and name from the ID
-          const parts = elementName.split('/');
-          const type = parts.length > 1 ? parts[0] : 'unknown';
-          const name = parts.length > 1 ? parts[1] : elementName;
+          // FIX: Use centralized element ID parsing
+          // Note: getElementsByAction returns names in "type/name" format for legacy reasons
+          const parsed = elementName.includes('/') ?
+            { type: elementName.split('/')[0], name: elementName.split('/')[1] } :
+            parseElementIdWithFallback(elementName);
 
-          const icon = this.getElementIcon(type);
-          text += `${icon} **${name}** (${type})\n`;
+          const icon = this.getElementIcon(parsed.type);
+          text += `${icon} **${parsed.name}** (${parsed.type})\n`;
         }
       }
 
