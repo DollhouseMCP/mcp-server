@@ -566,13 +566,7 @@ export class EnhancedIndexManager {
         return true;
       }
 
-      // Check if we have it loaded in memory
-      if (!this.index) {
-        logger.debug('Enhanced index not in memory, will load from file');
-        return false; // We can load it, no rebuild needed
-      }
-
-      // Check file age
+      // Check file age FIRST - this is the key fix
       const fileAge = Date.now() - indexStats.mtime.getTime();
       const ttlMs = this.TTL_MS;
 
@@ -581,10 +575,17 @@ export class EnhancedIndexManager {
           ageMinutes: Math.round(fileAge / 60000),
           ttlMinutes: Math.round(ttlMs / 60000)
         });
-        return true;
+        return true;  // File is too old, rebuild needed
       }
 
-      // For now, just check TTL. Portfolio modification check can be added later
+      // If we reach here, file exists and is fresh
+      // If not in memory, we can load it
+      if (!this.index) {
+        logger.debug('Enhanced index not in memory but file is fresh, will load from file');
+        return false; // We can load the fresh file, no rebuild needed
+      }
+
+      // File is fresh and we have it in memory
       logger.debug('Enhanced index is current, no rebuild needed');
       return false;
     } catch (error) {
