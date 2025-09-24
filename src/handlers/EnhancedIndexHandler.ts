@@ -9,6 +9,8 @@ import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export class EnhancedIndexHandler {
   private enhancedIndexManager: EnhancedIndexManager;
@@ -33,6 +35,22 @@ export class EnhancedIndexHandler {
       if (!options.elementName || typeof options.elementName !== 'string') {
         throw new Error('Element name is required and must be a string');
       }
+
+      // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+      const normalized = UnicodeValidator.normalize(options.elementName);
+      if (!normalized.isValid) {
+        throw new Error(`Invalid element name: ${normalized.detectedIssues?.join(', ')}`);
+      }
+      options.elementName = normalized.normalizedContent;
+
+      // Also normalize element type if provided
+      if (options.elementType) {
+        const normalizedType = UnicodeValidator.normalize(options.elementType);
+        if (!normalizedType.isValid) {
+          throw new Error(`Invalid element type: ${normalizedType.detectedIssues?.join(', ')}`);
+        }
+        options.elementType = normalizedType.normalizedContent;
+      }
       if (options.limit <= 0 || options.limit > 100) {
         options.limit = 5; // Default to reasonable limit
       }
@@ -51,6 +69,19 @@ export class EnhancedIndexHandler {
           throw new Error('Enhanced Index is unavailable. Please try again later.');
         }
       }
+
+      // FIX: DMCP-SEC-006 - Add security audit logging for index operations
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'EnhancedIndexHandler.findSimilarElements',
+        details: `Similarity search performed for element: ${options.elementName}`,
+        additionalData: {
+          elementType: options.elementType,
+          limit: options.limit,
+          threshold: options.threshold
+        }
+      });
 
       // Find the element
       const elementId = options.elementType ?
@@ -128,10 +159,37 @@ export class EnhancedIndexHandler {
     relationshipTypes?: string[];
   }) {
     try {
+      // FIX: DMCP-SEC-004 - Normalize Unicode in user input
+      const normalized = UnicodeValidator.normalize(options.elementName);
+      if (!normalized.isValid) {
+        throw new Error(`Invalid element name: ${normalized.detectedIssues?.join(', ')}`);
+      }
+      options.elementName = normalized.normalizedContent;
+
+      if (options.elementType) {
+        const normalizedType = UnicodeValidator.normalize(options.elementType);
+        if (!normalizedType.isValid) {
+          throw new Error(`Invalid element type: ${normalizedType.detectedIssues?.join(', ')}`);
+        }
+        options.elementType = normalizedType.normalizedContent;
+      }
+
       // Get the index with error handling
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
+
+      // FIX: DMCP-SEC-006 - Add security audit logging
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'EnhancedIndexHandler.getElementRelationships',
+        details: `Relationship query performed for element: ${options.elementName}`,
+        additionalData: {
+          elementType: options.elementType,
+          relationshipTypes: options.relationshipTypes
+        }
       });
 
       // Get relationships
@@ -210,10 +268,29 @@ export class EnhancedIndexHandler {
     limit: number;
   }) {
     try {
+      // FIX: DMCP-SEC-004 - Normalize Unicode in user input
+      const normalized = UnicodeValidator.normalize(options.verb);
+      if (!normalized.isValid) {
+        throw new Error(`Invalid verb: ${normalized.detectedIssues?.join(', ')}`);
+      }
+      options.verb = normalized.normalizedContent;
+
       // Get the index with error handling
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
+
+      // FIX: DMCP-SEC-006 - Add security audit logging
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'EnhancedIndexHandler.searchByVerb',
+        details: `Verb search performed for action: ${options.verb}`,
+        additionalData: {
+          verb: options.verb,
+          limit: options.limit
+        }
       });
 
       // Search by verb
@@ -270,6 +347,15 @@ export class EnhancedIndexHandler {
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
+
+      // FIX: DMCP-SEC-006 - Add security audit logging
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED',
+        severity: 'LOW',
+        source: 'EnhancedIndexHandler.getRelationshipStats',
+        details: 'Enhanced Index statistics retrieved',
+        additionalData: {}
       });
 
       // Get stats
