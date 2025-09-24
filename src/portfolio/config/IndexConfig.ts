@@ -3,6 +3,10 @@
  *
  * Centralizes all tunable parameters for the index, NLP scoring,
  * and relationship discovery systems.
+ *
+ * FIXES IMPLEMENTED (Issue #1100):
+ * - Added all magic numbers from Enhanced Index to configuration
+ * - Centralized thresholds, limits, and timeouts
  */
 
 import * as fs from 'fs/promises';
@@ -23,9 +27,21 @@ export interface IndexConfiguration {
   performance: {
     maxElementsForFullMatrix: number;      // Max elements for full similarity matrix (default: 100)
     maxSimilarityComparisons: number;      // Max total comparisons (default: 10000)
+    maxRelationshipComparisons: number;    // Max comparisons for relationship discovery (default: 100)
     similarityBatchSize: number;           // Batch size for async processing (default: 50)
     similarityThreshold: number;           // Min score to store relationship (default: 0.5)
+    defaultSimilarityThreshold: number;    // Default similarity threshold for queries (default: 0.3)
+    defaultSimilarLimit: number;           // Default limit for similar elements (default: 5)
+    defaultVerbSearchLimit: number;        // Default limit for verb search (default: 10)
     parallelProcessing: boolean;           // Use parallel processing (default: true)
+    circuitBreakerTimeoutMs: number;       // Circuit breaker timeout (default: 5000)
+  };
+
+  // Sampling Configuration
+  sampling: {
+    baseSampleSize: number;                // Base sample size for relationships (default: 10)
+    sampleRatio: number;                   // Sample ratio for large datasets (default: 0.1)
+    clusterSampleLimit: number;            // Max sample size within clusters (default: 20)
   };
 
   // NLP Scoring
@@ -57,6 +73,8 @@ export interface IndexConfiguration {
     maxCacheSize: number;                 // Max cache entries (default: 1000)
     enableGarbageCollection: boolean;     // Enable periodic GC (default: true)
     gcIntervalMinutes: number;            // GC interval (default: 30)
+    cleanupIntervalMinutes: number;       // Memory cleanup interval (default: 5)
+    staleIndexMultiplier: number;         // Multiplier for stale index cleanup (default: 2)
   };
 }
 
@@ -75,9 +93,19 @@ export class IndexConfigManager {
     performance: {
       maxElementsForFullMatrix: 100,
       maxSimilarityComparisons: 10000,
+      maxRelationshipComparisons: 100,
       similarityBatchSize: 50,
       similarityThreshold: 0.5,
-      parallelProcessing: true
+      defaultSimilarityThreshold: 0.3,
+      defaultSimilarLimit: 5,
+      defaultVerbSearchLimit: 10,
+      parallelProcessing: true,
+      circuitBreakerTimeoutMs: 5000
+    },
+    sampling: {
+      baseSampleSize: 10,
+      sampleRatio: 0.1,
+      clusterSampleLimit: 20
     },
     nlp: {
       cacheExpiryMinutes: 5,
@@ -102,7 +130,9 @@ export class IndexConfigManager {
     memory: {
       maxCacheSize: 1000,
       enableGarbageCollection: true,
-      gcIntervalMinutes: 30
+      gcIntervalMinutes: 30,
+      cleanupIntervalMinutes: 5,
+      staleIndexMultiplier: 2
     }
   };
 
