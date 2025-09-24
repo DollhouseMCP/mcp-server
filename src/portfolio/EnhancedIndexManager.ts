@@ -13,6 +13,10 @@
  * - Cross-element relationships
  * - Semantic scoring with Jaccard/entropy
  * - Context-aware element discovery
+ *
+ * FIXES IMPLEMENTED (Issue #1099):
+ * - Uses centralized element ID parsing utilities
+ * - Consistent ID format handling throughout
  */
 
 import * as fs from 'fs/promises';
@@ -26,6 +30,7 @@ import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
+import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
 import { RelationshipManager, ElementPath } from './RelationshipManager.js';
 
 /**
@@ -841,7 +846,8 @@ export class EnhancedIndexManager {
         return;
       }
       const key1 = keys[i];
-      const [type1, name1] = key1.split(':');
+      // FIX: Use centralized element ID parsing
+      const parsed1 = parseElementIdStrict(key1);
       const text1 = elementTexts.get(key1)!;
 
       // Process batch of comparisons
@@ -849,8 +855,9 @@ export class EnhancedIndexManager {
 
       for (let j = i + 1; j < keys.length && batch.length < batchSize; j++) {
         const key2 = keys[j];
-        const [type2, name2] = key2.split(':');
-        batch.push({ key2, type2, name2 });
+        // FIX: Use centralized element ID parsing
+        const parsed2 = parseElementIdStrict(key2);
+        batch.push({ key2, type2: parsed2.type, name2: parsed2.name });
       }
 
       // Process batch asynchronously
@@ -860,56 +867,66 @@ export class EnhancedIndexManager {
 
         // Store high-confidence relationships
         if (scoring.combinedScore > threshold) {
+          // Get elements safely
+          const element1 = index.elements[parsed1.type]?.[parsed1.name];
+          const element2 = index.elements[type2]?.[name2];
+
+          if (!element1 || !element2) return;
+
           // Add relationship to element1
-          if (!index.elements[type1][name1].relationships) {
-            index.elements[type1][name1].relationships = {};
+          if (!element1.relationships) {
+            element1.relationships = {};
           }
-          if (!index.elements[type1][name1].relationships.similar) {
-            index.elements[type1][name1].relationships.similar = [];
+          if (!element1.relationships.similar) {
+            element1.relationships.similar = [];
           }
-          index.elements[type1][name1].relationships.similar.push({
-            element: `${type2}:${name2}`,
+          element1.relationships.similar.push({
+            element: formatElementId(type2, name2),
             type: 'semantic_similarity',
             strength: scoring.combinedScore,
             metadata: {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
-                (index.elements[type1][name1].semantic?.entropy || 0) -
-                (index.elements[type2][name2].semantic?.entropy || 0)
+                (element1.semantic?.entropy || 0) -
+                (element2.semantic?.entropy || 0)
               )
             }
           });
 
           // Add reverse relationship to element2
-          if (!index.elements[type2][name2].relationships) {
-            index.elements[type2][name2].relationships = {};
+          if (!element2.relationships) {
+            element2.relationships = {};
           }
-          if (!index.elements[type2][name2].relationships.similar) {
-            index.elements[type2][name2].relationships.similar = [];
+          if (!element2.relationships.similar) {
+            element2.relationships.similar = [];
           }
-          index.elements[type2][name2].relationships.similar.push({
-            element: `${type1}:${name1}`,
+          element2.relationships.similar.push({
+            element: formatElementId(parsed1.type, parsed1.name),
             type: 'semantic_similarity',
             strength: scoring.combinedScore,
             metadata: {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
-                (index.elements[type1][name1].semantic?.entropy || 0) -
-                (index.elements[type2][name2].semantic?.entropy || 0)
+                (element1.semantic?.entropy || 0) -
+                (element2.semantic?.entropy || 0)
               )
             }
           });
 
           // Store Jaccard scores in semantic data
-          if (!index.elements[type1][name1].semantic!.jaccard_scores) {
-            index.elements[type1][name1].semantic!.jaccard_scores = {};
+          if (element1.semantic) {
+            if (!element1.semantic.jaccard_scores) {
+              element1.semantic.jaccard_scores = {};
+            }
+            element1.semantic.jaccard_scores[formatElementId(type2, name2)] = scoring.jaccard;
           }
-          index.elements[type1][name1].semantic!.jaccard_scores[`${type2}:${name2}`] = scoring.jaccard;
 
-          if (!index.elements[type2][name2].semantic!.jaccard_scores) {
-            index.elements[type2][name2].semantic!.jaccard_scores = {};
+          if (element2.semantic) {
+            if (!element2.semantic.jaccard_scores) {
+              element2.semantic.jaccard_scores = {};
+            }
+            element2.semantic.jaccard_scores[formatElementId(parsed1.type, parsed1.name)] = scoring.jaccard;
           }
-          index.elements[type2][name2].semantic!.jaccard_scores[`${type1}:${name1}`] = scoring.jaccard;
         }
       }));
 
@@ -963,7 +980,8 @@ export class EnhancedIndexManager {
         if (comparisons >= clusterComparisons) break;
 
         const key1 = clusterKeys[i];
-        const [type1, name1] = key1.split(':');
+        // FIX: Use centralized element ID parsing
+        const parsed1 = parseElementIdStrict(key1);
         const text1 = elementTexts.get(key1)!;
 
         // Sample from rest of cluster
@@ -981,14 +999,15 @@ export class EnhancedIndexManager {
           if (comparisons >= clusterComparisons) break;
 
           const key2 = clusterKeys[j];
-          const [type2, name2] = key2.split(':');
+          // FIX: Use centralized element ID parsing
+          const parsed2 = parseElementIdStrict(key2);
           const text2 = elementTexts.get(key2)!;
 
           const scoring = this.nlpScoring.scoreRelevance(text1, text2);
           comparisons++;
 
           if (scoring.combinedScore > threshold) {
-            this.storeRelationship(index, type1, name1, type2, name2, scoring);
+            this.storeRelationship(index, parsed1.type, parsed1.name, parsed2.type, parsed2.name, scoring);
           }
         }
       }
@@ -1016,13 +1035,15 @@ export class EnhancedIndexManager {
     const typeCounts = new Map<string, number>();
 
     for (const key of keys) {
-      const [type] = key.split(':');
-      if (!elementsByType.has(type)) {
-        elementsByType.set(type, []);
-        typeCounts.set(type, 0);
+      // FIX: Use centralized element ID parsing
+      const parsed = parseElementId(key);
+      if (!parsed) continue;
+      if (!elementsByType.has(parsed.type)) {
+        elementsByType.set(parsed.type, []);
+        typeCounts.set(parsed.type, 0);
       }
-      elementsByType.get(type)!.push(key);
-      typeCounts.set(type, typeCounts.get(type)! + 1);
+      elementsByType.get(parsed.type)!.push(key);
+      typeCounts.set(parsed.type, typeCounts.get(parsed.type)! + 1);
     }
 
     // Calculate proportional sample sizes
@@ -1065,7 +1086,8 @@ export class EnhancedIndexManager {
     for (const key1 of sampledKeys1) {
       if (comparisons >= maxComparisons) break;
 
-      const [type1, name1] = key1.split(':');
+      // FIX: Use centralized element ID parsing
+      const parsed1 = parseElementIdStrict(key1);
       const text1 = elementTexts.get(key1)!;
 
       // Sample from each type proportionally
@@ -1079,14 +1101,15 @@ export class EnhancedIndexManager {
         for (const key2 of sampledKeys) {
           if (comparisons >= maxComparisons) break;
 
-          const [type2, name2] = key2.split(':');
+          // FIX: Use centralized element ID parsing
+          const parsed2 = parseElementIdStrict(key2);
           const text2 = elementTexts.get(key2)!;
 
           const scoring = this.nlpScoring.scoreRelevance(text1, text2);
           comparisons++;
 
           if (scoring.combinedScore > threshold) {
-            this.storeRelationship(index, type1, name1, type2, name2, scoring);
+            this.storeRelationship(index, parsed1.type, parsed1.name, parsed2.type, parsed2.name, scoring);
           }
         }
       }
@@ -1117,8 +1140,9 @@ export class EnhancedIndexManager {
 
     // Extract keywords from all elements
     for (const key of keys) {
-      const [type, name] = key.split(':');
-      const element = index.elements[type][name];
+      // FIX: Use centralized element ID parsing
+      const parsed = parseElementIdStrict(key);
+      const element = index.elements[parsed.type][parsed.name];
       const keywords = [
         ...(element.search?.keywords || []),
         ...(element.search?.tags || [])
@@ -1271,8 +1295,12 @@ export class EnhancedIndexManager {
    */
   public async getElementRelationships(elementId: string): Promise<Record<string, Relationship[]>> {
     const index = await this.getIndex();
-    const [type, name] = elementId.split(':');
-    const element = index.elements[type]?.[name];
+    // FIX: Use centralized element ID parsing
+    const parsed = parseElementId(elementId);
+    if (!parsed) {
+      return {};
+    }
+    const element = index.elements[parsed.type]?.[parsed.name];
 
     if (!element) {
       return {};
