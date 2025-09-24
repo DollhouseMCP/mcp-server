@@ -3,11 +3,17 @@
  *
  * Centralizes all tunable parameters for the index, NLP scoring,
  * and relationship discovery systems.
+ *
+ * FIXES IMPLEMENTED (Issue #1100):
+ * - Added all magic numbers from Enhanced Index to configuration
+ * - Centralized thresholds, limits, and timeouts
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { logger } from '../../utils/logger.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export interface IndexConfiguration {
   // Index Management
@@ -23,9 +29,21 @@ export interface IndexConfiguration {
   performance: {
     maxElementsForFullMatrix: number;      // Max elements for full similarity matrix (default: 100)
     maxSimilarityComparisons: number;      // Max total comparisons (default: 10000)
+    maxRelationshipComparisons: number;    // Max comparisons for relationship discovery (default: 100)
     similarityBatchSize: number;           // Batch size for async processing (default: 50)
     similarityThreshold: number;           // Min score to store relationship (default: 0.5)
+    defaultSimilarityThreshold: number;    // Default similarity threshold for queries (default: 0.3)
+    defaultSimilarLimit: number;           // Default limit for similar elements (default: 5)
+    defaultVerbSearchLimit: number;        // Default limit for verb search (default: 10)
     parallelProcessing: boolean;           // Use parallel processing (default: true)
+    circuitBreakerTimeoutMs: number;       // Circuit breaker timeout (default: 5000)
+  };
+
+  // Sampling Configuration
+  sampling: {
+    baseSampleSize: number;                // Base sample size for relationships (default: 10)
+    sampleRatio: number;                   // Sample ratio for large datasets (default: 0.1)
+    clusterSampleLimit: number;            // Max sample size within clusters (default: 20)
   };
 
   // NLP Scoring
@@ -57,6 +75,8 @@ export interface IndexConfiguration {
     maxCacheSize: number;                 // Max cache entries (default: 1000)
     enableGarbageCollection: boolean;     // Enable periodic GC (default: true)
     gcIntervalMinutes: number;            // GC interval (default: 30)
+    cleanupIntervalMinutes: number;       // Memory cleanup interval (default: 5)
+    staleIndexMultiplier: number;         // Multiplier for stale index cleanup (default: 2)
   };
 }
 
@@ -75,9 +95,19 @@ export class IndexConfigManager {
     performance: {
       maxElementsForFullMatrix: 100,
       maxSimilarityComparisons: 10000,
+      maxRelationshipComparisons: 100,
       similarityBatchSize: 50,
       similarityThreshold: 0.5,
-      parallelProcessing: true
+      defaultSimilarityThreshold: 0.3,
+      defaultSimilarLimit: 5,
+      defaultVerbSearchLimit: 10,
+      parallelProcessing: true,
+      circuitBreakerTimeoutMs: 5000
+    },
+    sampling: {
+      baseSampleSize: 10,
+      sampleRatio: 0.1,
+      clusterSampleLimit: 20
     },
     nlp: {
       cacheExpiryMinutes: 5,
@@ -102,7 +132,9 @@ export class IndexConfigManager {
     memory: {
       maxCacheSize: 1000,
       enableGarbageCollection: true,
-      gcIntervalMinutes: 30
+      gcIntervalMinutes: 30,
+      cleanupIntervalMinutes: 5,
+      staleIndexMultiplier: 2
     }
   };
 
@@ -127,46 +159,28 @@ export class IndexConfigManager {
    */
   private loadConfigSync(): void {
     try {
-      const fs = require('fs');
-      const configData = fs.readFileSync(this.configPath, 'utf-8');
-      const loadedConfig = JSON.parse(configData);
-
-      // Deep merge with defaults to handle missing fields
-      this.config = this.deepMerge(this.defaultConfig, loadedConfig);
-
-      logger.info('Index configuration loaded', { path: this.configPath });
-    } catch (error) {
-      if ((error as any).code === 'ENOENT') {
-        // Config doesn't exist, will be created on first save
+      // Check if file exists
+      if (!fsSync.existsSync(this.configPath)) {
         logger.info('No config file found, using defaults', { path: this.configPath });
-      } else {
-        logger.warn('Failed to load index config, using defaults', { error });
+        return;
       }
-    }
-  }
 
-  /**
-   * Load configuration from disk if it exists (async version)
-   */
-  private async loadConfig(): Promise<void> {
-    try {
-      const configData = await fs.readFile(this.configPath, 'utf-8');
+      const configData = fsSync.readFileSync(this.configPath, 'utf-8');
       const loadedConfig = JSON.parse(configData);
 
       // Deep merge with defaults to handle missing fields
+      // FIX: Loaded config should override defaults
       this.config = this.deepMerge(this.defaultConfig, loadedConfig);
 
       logger.info('Index configuration loaded', { path: this.configPath });
     } catch (error) {
-      if ((error as any).code === 'ENOENT') {
-        // Config doesn't exist, use defaults and create it
-        await this.saveConfig();
-        logger.info('Created default index configuration', { path: this.configPath });
-      } else {
-        logger.warn('Failed to load index config, using defaults', { error });
-      }
+      logger.warn('Failed to load index config, using defaults', {
+        error: error instanceof Error ? error.message : String(error),
+        path: this.configPath
+      });
     }
   }
+
 
   /**
    * Save current configuration to disk
@@ -196,19 +210,229 @@ export class IndexConfigManager {
   }
 
   /**
-   * Update configuration
+   * Update configuration with validation
    */
   public async updateConfig(updates: Partial<IndexConfiguration>): Promise<void> {
+    // SECURITY FIX: Add audit logging for configuration changes (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any, // Using existing config update type
+      severity: 'LOW',
+      source: 'IndexConfigManager.updateConfig',
+      details: 'Index configuration update attempted',
+      additionalData: {
+        configType: 'index',
+        updateKeys: Object.keys(updates)
+      }
+    });
+
+    // Validate the updates before applying
+    this.validateConfig(updates);
+
     this.config = this.deepMerge(this.config, updates);
     await this.saveConfig();
 
     logger.info('Index configuration updated', { updates });
+
+    // Log successful update
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'LOW',
+      source: 'IndexConfigManager.updateConfig',
+      details: 'Index configuration update successful',
+      additionalData: {
+        configType: 'index',
+        updatedFields: Object.keys(updates)
+      }
+    });
+  }
+
+  /**
+   * Validate configuration values
+   * Throws an error if any value is invalid
+   */
+  private validateConfig(config: Partial<IndexConfiguration>): void {
+    // Validate performance thresholds (0-1 range)
+    if (config.performance) {
+      const perf = config.performance;
+
+      // Similarity thresholds must be between 0 and 1
+      if (perf.similarityThreshold !== undefined) {
+        if (perf.similarityThreshold < 0 || perf.similarityThreshold > 1) {
+          throw new Error(`similarityThreshold must be between 0 and 1, got ${perf.similarityThreshold}`);
+        }
+      }
+
+      if (perf.defaultSimilarityThreshold !== undefined) {
+        if (perf.defaultSimilarityThreshold < 0 || perf.defaultSimilarityThreshold > 1) {
+          throw new Error(`defaultSimilarityThreshold must be between 0 and 1, got ${perf.defaultSimilarityThreshold}`);
+        }
+      }
+
+      // Positive integer validations
+      if (perf.maxElementsForFullMatrix !== undefined && perf.maxElementsForFullMatrix <= 0) {
+        throw new Error(`maxElementsForFullMatrix must be positive, got ${perf.maxElementsForFullMatrix}`);
+      }
+
+      if (perf.maxSimilarityComparisons !== undefined && perf.maxSimilarityComparisons <= 0) {
+        throw new Error(`maxSimilarityComparisons must be positive, got ${perf.maxSimilarityComparisons}`);
+      }
+
+      if (perf.maxRelationshipComparisons !== undefined && perf.maxRelationshipComparisons <= 0) {
+        throw new Error(`maxRelationshipComparisons must be positive, got ${perf.maxRelationshipComparisons}`);
+      }
+
+      if (perf.similarityBatchSize !== undefined && perf.similarityBatchSize <= 0) {
+        throw new Error(`similarityBatchSize must be positive, got ${perf.similarityBatchSize}`);
+      }
+
+      if (perf.defaultSimilarLimit !== undefined && perf.defaultSimilarLimit <= 0) {
+        throw new Error(`defaultSimilarLimit must be positive, got ${perf.defaultSimilarLimit}`);
+      }
+
+      if (perf.defaultVerbSearchLimit !== undefined && perf.defaultVerbSearchLimit <= 0) {
+        throw new Error(`defaultVerbSearchLimit must be positive, got ${perf.defaultVerbSearchLimit}`);
+      }
+
+      if (perf.circuitBreakerTimeoutMs !== undefined && perf.circuitBreakerTimeoutMs <= 0) {
+        throw new Error(`circuitBreakerTimeoutMs must be positive, got ${perf.circuitBreakerTimeoutMs}`);
+      }
+    }
+
+    // Validate sampling configuration
+    if (config.sampling) {
+      const sampling = config.sampling;
+
+      // Sample ratio must be between 0 and 1
+      if (sampling.sampleRatio !== undefined) {
+        if (sampling.sampleRatio <= 0 || sampling.sampleRatio > 1) {
+          throw new Error(`sampleRatio must be between 0 and 1, got ${sampling.sampleRatio}`);
+        }
+      }
+
+      if (sampling.baseSampleSize !== undefined && sampling.baseSampleSize <= 0) {
+        throw new Error(`baseSampleSize must be positive, got ${sampling.baseSampleSize}`);
+      }
+
+      if (sampling.clusterSampleLimit !== undefined && sampling.clusterSampleLimit <= 0) {
+        throw new Error(`clusterSampleLimit must be positive, got ${sampling.clusterSampleLimit}`);
+      }
+    }
+
+    // Validate NLP configuration
+    if (config.nlp) {
+      const nlp = config.nlp;
+
+      // Jaccard thresholds must be between 0 and 1
+      if (nlp.jaccardThresholds) {
+        const jaccard = nlp.jaccardThresholds;
+        if (jaccard.low !== undefined && (jaccard.low < 0 || jaccard.low > 1)) {
+          throw new Error(`jaccardThresholds.low must be between 0 and 1, got ${jaccard.low}`);
+        }
+        if (jaccard.moderate !== undefined && (jaccard.moderate < 0 || jaccard.moderate > 1)) {
+          throw new Error(`jaccardThresholds.moderate must be between 0 and 1, got ${jaccard.moderate}`);
+        }
+        if (jaccard.high !== undefined && (jaccard.high < 0 || jaccard.high > 1)) {
+          throw new Error(`jaccardThresholds.high must be between 0 and 1, got ${jaccard.high}`);
+        }
+      }
+
+      // Entropy bands must be positive
+      if (nlp.entropyBands) {
+        const entropy = nlp.entropyBands;
+        if (entropy.low !== undefined && entropy.low < 0) {
+          throw new Error(`entropyBands.low must be non-negative, got ${entropy.low}`);
+        }
+        if (entropy.moderate !== undefined && entropy.moderate < 0) {
+          throw new Error(`entropyBands.moderate must be non-negative, got ${entropy.moderate}`);
+        }
+        if (entropy.high !== undefined && entropy.high < 0) {
+          throw new Error(`entropyBands.high must be non-negative, got ${entropy.high}`);
+        }
+      }
+
+      if (nlp.cacheExpiryMinutes !== undefined && nlp.cacheExpiryMinutes <= 0) {
+        throw new Error(`cacheExpiryMinutes must be positive, got ${nlp.cacheExpiryMinutes}`);
+      }
+
+      if (nlp.minTokenLength !== undefined && nlp.minTokenLength < 1) {
+        throw new Error(`minTokenLength must be at least 1, got ${nlp.minTokenLength}`);
+      }
+    }
+
+    // Validate verb configuration
+    if (config.verbs) {
+      const verbs = config.verbs;
+
+      if (verbs.confidenceThreshold !== undefined) {
+        if (verbs.confidenceThreshold < 0 || verbs.confidenceThreshold > 1) {
+          throw new Error(`confidenceThreshold must be between 0 and 1, got ${verbs.confidenceThreshold}`);
+        }
+      }
+
+      if (verbs.maxRecursionDepth !== undefined && verbs.maxRecursionDepth <= 0) {
+        throw new Error(`maxRecursionDepth must be positive, got ${verbs.maxRecursionDepth}`);
+      }
+
+      if (verbs.maxElementsPerVerb !== undefined && verbs.maxElementsPerVerb <= 0) {
+        throw new Error(`maxElementsPerVerb must be positive, got ${verbs.maxElementsPerVerb}`);
+      }
+    }
+
+    // Validate memory configuration
+    if (config.memory) {
+      const memory = config.memory;
+
+      if (memory.maxCacheSize !== undefined && memory.maxCacheSize <= 0) {
+        throw new Error(`maxCacheSize must be positive, got ${memory.maxCacheSize}`);
+      }
+
+      if (memory.gcIntervalMinutes !== undefined && memory.gcIntervalMinutes <= 0) {
+        throw new Error(`gcIntervalMinutes must be positive, got ${memory.gcIntervalMinutes}`);
+      }
+
+      if (memory.cleanupIntervalMinutes !== undefined && memory.cleanupIntervalMinutes <= 0) {
+        throw new Error(`cleanupIntervalMinutes must be positive, got ${memory.cleanupIntervalMinutes}`);
+      }
+
+      if (memory.staleIndexMultiplier !== undefined && memory.staleIndexMultiplier <= 0) {
+        throw new Error(`staleIndexMultiplier must be positive, got ${memory.staleIndexMultiplier}`);
+      }
+    }
+
+    // Validate index configuration
+    if (config.index) {
+      const index = config.index;
+
+      if (index.ttlMinutes !== undefined && index.ttlMinutes <= 0) {
+        throw new Error(`ttlMinutes must be positive, got ${index.ttlMinutes}`);
+      }
+
+      if (index.lockTimeoutMs !== undefined && index.lockTimeoutMs <= 0) {
+        throw new Error(`lockTimeoutMs must be positive, got ${index.lockTimeoutMs}`);
+      }
+
+      if (index.maxConcurrentBuilds !== undefined && index.maxConcurrentBuilds <= 0) {
+        throw new Error(`maxConcurrentBuilds must be positive, got ${index.maxConcurrentBuilds}`);
+      }
+    }
   }
 
   /**
    * Reset to default configuration
    */
   public async resetToDefaults(): Promise<void> {
+    // SECURITY FIX: Add audit logging for configuration reset (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'MEDIUM', // Higher severity for full reset
+      source: 'IndexConfigManager.resetToDefaults',
+      details: 'Index configuration reset to defaults',
+      additionalData: {
+        configType: 'index',
+        action: 'reset'
+      }
+    });
+
     this.config = { ...this.defaultConfig };
     await this.saveConfig();
 
@@ -264,6 +488,19 @@ export class IndexConfigManager {
    * Set specific configuration value by path
    */
   public async set(path: string, value: any): Promise<void> {
+    // SECURITY FIX: Add audit logging for direct config modifications (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'LOW',
+      source: 'IndexConfigManager.set',
+      details: `Index configuration value set: ${path}`,
+      additionalData: {
+        configType: 'index',
+        path,
+        valueType: typeof value
+      }
+    });
+
     const parts = path.split('.');
     const lastPart = parts.pop()!;
     let target = this.config as any;

@@ -3,10 +3,14 @@
  *
  * Provides MCP tools for accessing semantic relationships, similarity search,
  * and verb-based discovery features of the Enhanced Capability Index.
+ *
+ * FIXES IMPLEMENTED (Issue #1100):
+ * - Uses configuration for default values instead of hardcoded numbers
  */
 
 import { ToolDefinition } from './ToolRegistry.js';
 import { IToolHandler } from '../types.js';
+import { IndexConfigManager } from '../../portfolio/config/IndexConfig.js';
 
 // Tool argument interfaces
 interface FindSimilarElementsArgs {
@@ -31,6 +35,8 @@ interface SearchByVerbArgs {
 type ToolHandler<T> = (args: T) => Promise<any>;
 
 export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
+  // FIX: Get configuration for default values
+  const config = IndexConfigManager.getInstance().getConfig();
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> = [
     {
       tool: {
@@ -50,11 +56,11 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
             },
             limit: {
               type: "number",
-              description: "Maximum number of similar elements to return. Defaults to 5.",
+              description: `Maximum number of similar elements to return. Defaults to ${config.performance.defaultSimilarLimit}.`,
             },
             threshold: {
               type: "number",
-              description: "Minimum similarity score (0-1) to include. Defaults to 0.3.",
+              description: `Minimum similarity score (0-1) to include. Defaults to ${config.performance.defaultSimilarityThreshold}.`,
             },
           },
           required: ["element_name"],
@@ -63,8 +69,8 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
       handler: (args: FindSimilarElementsArgs) => server.findSimilarElements({
         elementName: args.element_name,
         elementType: args.element_type,
-        limit: args.limit || 5,
-        threshold: args.threshold || 0.3
+        limit: args.limit || config.performance.defaultSimilarLimit,
+        threshold: args.threshold || config.performance.defaultSimilarityThreshold
       })
     },
     {
@@ -114,7 +120,7 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
             },
             limit: {
               type: "number",
-              description: "Maximum number of results to return. Defaults to 10.",
+              description: `Maximum number of results to return. Defaults to ${config.performance.defaultVerbSearchLimit}.`,
             },
           },
           required: ["verb"],
@@ -122,7 +128,7 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
       },
       handler: (args: SearchByVerbArgs) => server.searchByVerb({
         verb: args.verb,
-        limit: args.limit || 10
+        limit: args.limit || config.performance.defaultVerbSearchLimit
       })
     },
     {
