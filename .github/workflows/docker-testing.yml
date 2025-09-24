@@ -91,6 +91,14 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Log in to Docker Hub (optional - helps avoid rate limits)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+
       - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
         uses: docker/setup-qemu-action@v3
         with:
@@ -640,6 +648,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Log in to Docker Hub (optional - helps avoid rate limits)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
 
       - name: Test MINIMAL Docker Compose (hello world test)
         shell: bash
