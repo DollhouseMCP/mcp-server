@@ -90,12 +90,32 @@ export function parseRelationship(rel: BaseRelationship): ParsedRelationship | I
   const parsed = parseElementId(rel.element);
 
   if (!parsed) {
+    // Provide detailed error context about what was found
+    const colonIndex = rel.element.indexOf(':');
+    let errorDetail: string;
+
+    if (colonIndex === -1) {
+      errorDetail = `Invalid element ID format: "${rel.element}" - missing separator ':' (expected format: "type:name")`;
+    } else if (colonIndex === 0) {
+      errorDetail = `Invalid element ID format: "${rel.element}" - missing type before ':' (expected format: "type:name")`;
+    } else if (colonIndex === rel.element.length - 1) {
+      errorDetail = `Invalid element ID format: "${rel.element}" - missing name after ':' (expected format: "type:name")`;
+    } else if (rel.element.split(':').length > 2) {
+      const positions = [];
+      for (let i = 0; i < rel.element.length; i++) {
+        if (rel.element[i] === ':') positions.push(i);
+      }
+      errorDetail = `Invalid element ID format: "${rel.element}" - multiple separators ':' found at positions [${positions.join(', ')}] (expected format: "type:name" with single ':')`;
+    } else {
+      errorDetail = `Invalid element ID format: "${rel.element}" (expected format: "type:name")`;
+    }
+
     return {
       ...rel,
       targetType: null,
       targetName: null,
       isValid: false,
-      parseError: `Invalid element ID format: ${rel.element} (expected format: "type:name")`
+      parseError: errorDetail
     };
   }
 

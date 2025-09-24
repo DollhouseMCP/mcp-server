@@ -123,6 +123,39 @@ describe('RelationshipTypes', () => {
       if (isInvalidRelationship(parsed)) {
         expect(parsed.isValid).toBe(false);
         expect(parsed.parseError).toContain('Invalid element ID format');
+        expect(parsed.parseError).toContain('missing separator');
+      }
+    });
+
+    it('should provide detailed error for various malformed IDs', () => {
+      const testCases = [
+        {
+          element: 'no-colon',
+          expectedError: 'missing separator'
+        },
+        {
+          element: ':missing-type',
+          expectedError: 'missing type before'
+        },
+        {
+          element: 'missing-name:',
+          expectedError: 'missing name after'
+        },
+        {
+          element: 'too:many:colons',
+          expectedError: 'multiple separators'
+        }
+      ];
+
+      for (const { element, expectedError } of testCases) {
+        const base: BaseRelationship = { element };
+        const result = parseRelationship(base);
+
+        expect(isInvalidRelationship(result)).toBe(true);
+        if (isInvalidRelationship(result)) {
+          expect(result.parseError).toContain(expectedError);
+          expect(result.parseError).toContain(element); // Should include the actual input
+        }
       }
     });
   });
