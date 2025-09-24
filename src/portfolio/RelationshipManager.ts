@@ -315,7 +315,7 @@ export class RelationshipManager {
         const matches = this.verbTriggers.getElementsForVerb(verb, index);
 
         for (const match of matches) {
-          if (match.name !== name) {
+          if (match.name !== parsed.name) {
             // Determine relationship type based on verb category
             const category = this.verbTriggers.getVerbCategory(verb);
             let relType: RelationshipType = 'similar_to';
@@ -375,7 +375,7 @@ export class RelationshipManager {
     // FIX: Use centralized element ID parsing
     const parsed = parseElementId(relationship.element);
     if (!parsed) {
-      return false;
+      return;
     }
     const targetElement = index.elements[parsed.type]?.[parsed.name];
 

@@ -866,56 +866,66 @@ export class EnhancedIndexManager {
 
         // Store high-confidence relationships
         if (scoring.combinedScore > threshold) {
+          // Get elements safely
+          const element1 = index.elements[parsed1.type]?.[parsed1.name];
+          const element2 = index.elements[type2]?.[name2];
+
+          if (!element1 || !element2) return;
+
           // Add relationship to element1
-          if (!index.elements[parsed1.type][parsed1.name].relationships) {
-            index.elements[parsed1.type][parsed1.name].relationships = {};
+          if (!element1.relationships) {
+            element1.relationships = {};
           }
-          if (!index.elements[parsed1.type][parsed1.name].relationships.similar) {
-            index.elements[parsed1.type][parsed1.name].relationships.similar = [];
+          if (!element1.relationships.similar) {
+            element1.relationships.similar = [];
           }
-          index.elements[parsed1.type][parsed1.name].relationships.similar.push({
+          element1.relationships.similar.push({
             element: formatElementId(type2, name2),
             type: 'semantic_similarity',
             strength: scoring.combinedScore,
             metadata: {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
-                (index.elements[parsed1.type][parsed1.name].semantic?.entropy || 0) -
-                (index.elements[type2][name2].semantic?.entropy || 0)
+                (element1.semantic?.entropy || 0) -
+                (element2.semantic?.entropy || 0)
               )
             }
           });
 
           // Add reverse relationship to element2
-          if (!index.elements[type2][name2].relationships) {
-            index.elements[type2][name2].relationships = {};
+          if (!element2.relationships) {
+            element2.relationships = {};
           }
-          if (!index.elements[type2][name2].relationships.similar) {
-            index.elements[type2][name2].relationships.similar = [];
+          if (!element2.relationships.similar) {
+            element2.relationships.similar = [];
           }
-          index.elements[type2][name2].relationships.similar.push({
+          element2.relationships.similar.push({
             element: formatElementId(parsed1.type, parsed1.name),
             type: 'semantic_similarity',
             strength: scoring.combinedScore,
             metadata: {
               jaccard: scoring.jaccard,
               entropy_diff: Math.abs(
-                (index.elements[parsed1.type][parsed1.name].semantic?.entropy || 0) -
-                (index.elements[type2][name2].semantic?.entropy || 0)
+                (element1.semantic?.entropy || 0) -
+                (element2.semantic?.entropy || 0)
               )
             }
           });
 
           // Store Jaccard scores in semantic data
-          if (!index.elements[parsed1.type][parsed1.name].semantic!.jaccard_scores) {
-            index.elements[parsed1.type][parsed1.name].semantic!.jaccard_scores = {};
+          if (element1.semantic) {
+            if (!element1.semantic.jaccard_scores) {
+              element1.semantic.jaccard_scores = {};
+            }
+            element1.semantic.jaccard_scores[formatElementId(type2, name2)] = scoring.jaccard;
           }
-          index.elements[parsed1.type][parsed1.name].semantic!.jaccard_scores[formatElementId(type2, name2)] = scoring.jaccard;
 
-          if (!index.elements[type2][name2].semantic!.jaccard_scores) {
-            index.elements[type2][name2].semantic!.jaccard_scores = {};
+          if (element2.semantic) {
+            if (!element2.semantic.jaccard_scores) {
+              element2.semantic.jaccard_scores = {};
+            }
+            element2.semantic.jaccard_scores[formatElementId(parsed1.type, parsed1.name)] = scoring.jaccard;
           }
-          index.elements[type2][name2].semantic!.jaccard_scores[formatElementId(parsed1.type, parsed1.name)] = scoring.jaccard;
         }
       }));
 
