@@ -163,18 +163,20 @@ export class EnhancedIndexHandler {
       text += '\n';
 
       const relationshipCount = Object.values(filteredRelationships)
-        .reduce((sum, rels) => sum + (rels as any[]).length, 0);
+        .reduce((sum, rels) => sum + (Array.isArray(rels) ? rels.length : 0), 0);
 
       if (relationshipCount === 0) {
         text += `No relationships found for this element.\n`;
       } else {
         for (const [relType, relations] of Object.entries(filteredRelationships)) {
-          const relArray = relations as any[];
-          if (relArray.length > 0) {
-            text += `**${relType.charAt(0).toUpperCase() + relType.slice(1)} (${relArray.length})**\n`;
-            for (const rel of relArray) {
-              const icon = this.getElementIcon(rel.targetType);
-              text += `  ${icon} ${rel.targetName}`;
+          if (Array.isArray(relations) && relations.length > 0) {
+            text += `**${relType.charAt(0).toUpperCase() + relType.slice(1)} (${relations.length})**\n`;
+            for (const rel of relations) {
+              // Parse element ID to get type and name
+              const [targetType, targetName] = rel.element.includes(':') ?
+                rel.element.split(':') : ['unknown', rel.element];
+              const icon = this.getElementIcon(targetType);
+              text += `  ${icon} ${targetName}`;
               if (rel.strength) {
                 text += ` (strength: ${(rel.strength * 100).toFixed(0)}%)`;
               }
@@ -239,7 +241,7 @@ export class EnhancedIndexHandler {
           const type = parts.length > 1 ? parts[0] : 'unknown';
           const name = parts.length > 1 ? parts[1] : elementName;
 
-          const icon = this.getElementIcon(type as any);
+          const icon = this.getElementIcon(type);
           text += `${icon} **${name}** (${type})\n`;
         }
       }

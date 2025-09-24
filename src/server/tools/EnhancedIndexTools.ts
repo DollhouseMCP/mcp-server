@@ -66,7 +66,7 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
       },
       handler: (args: FindSimilarElementsArgs) => server.findSimilarElements({
         elementName: args.element_name,
-        elementType: args.element_type as any,
+        elementType: args.element_type,
         limit: args.limit || 5,
         threshold: args.threshold || 0.3
       })
@@ -101,7 +101,7 @@ export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolD
       },
       handler: (args: GetElementRelationshipsArgs) => server.getElementRelationships({
         elementName: args.element_name,
-        elementType: args.element_type as any,
+        elementType: args.element_type,
         relationshipTypes: args.relationship_types
       })
     },
