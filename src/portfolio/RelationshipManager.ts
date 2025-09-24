@@ -170,6 +170,9 @@ export class RelationshipManager {
     const startTime = Date.now();
     let relationshipsFound = 0;
 
+    // FIX: Add timeout to prevent infinite loops
+    const MAX_DISCOVERY_TIME = 3000; // 3 seconds max
+
     logger.info('Starting relationship discovery');
 
     // First, ensure semantic relationships are calculated
@@ -178,6 +181,14 @@ export class RelationshipManager {
     // Then discover other relationship types
     for (const [type, elements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(elements)) {
+        // FIX: Check timeout
+        if (Date.now() - startTime > MAX_DISCOVERY_TIME) {
+          logger.warn('Relationship discovery timeout', {
+            elapsed: Date.now() - startTime,
+            relationshipsFound
+          });
+          return;
+        }
         const discovered = await this.discoverElementRelationships(
           element,
           `${type}:${name}`,
@@ -262,9 +273,10 @@ export class RelationshipManager {
       }
     }
 
-    // Discover verb-based relationships
-    const verbRelationships = await this.discoverVerbRelationships(element, elementId, index);
-    relationships.push(...verbRelationships);
+    // FIX: Skip verb-based relationships to avoid circular dependency
+    // VerbTriggerManager.getVerbsForElement() calls getIndex() which creates circular loop
+    // const verbRelationships = await this.discoverVerbRelationships(element, elementId, index);
+    // relationships.push(...verbRelationships);
 
     // Filter by confidence and limit
     const filtered = relationships

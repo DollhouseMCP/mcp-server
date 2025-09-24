@@ -666,6 +666,9 @@ export class EnhancedIndexManager {
     const startTime = Date.now();
     const config = this.config.getConfig();
 
+    // FIX: Add timeout circuit breaker to prevent infinite loops
+    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
+
     // Prepare text content for each element
     const elementTexts = new Map<string, string>();
     const elementCount = Object.values(index.elements)
@@ -679,6 +682,14 @@ export class EnhancedIndexManager {
     // First pass: Calculate entropy for all elements
     for (const [elementType, elements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(elements)) {
+        // FIX: Check for timeout
+        if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+          logger.warn('Semantic relationship calculation timeout', {
+            elapsed: Date.now() - startTime,
+            processed: elementTexts.size
+          });
+          return;
+        }
         // Combine relevant text fields for analysis
         const textParts = [
           element.core.name,
@@ -703,20 +714,35 @@ export class EnhancedIndexManager {
 
     const keys = Array.from(elementTexts.keys());
 
+    // FIX: Use much more conservative limits to prevent explosion
+    const MAX_SAFE_ELEMENTS = 20;  // Reduced from config default
+    const MAX_SAFE_COMPARISONS = 100;  // Much lower limit
+
+    // Override config if it's too high
+    const safeConfig = {
+      ...config,
+      performance: {
+        ...config.performance,
+        maxElementsForFullMatrix: Math.min(config.performance.maxElementsForFullMatrix, MAX_SAFE_ELEMENTS),
+        maxSimilarityComparisons: Math.min(config.performance.maxSimilarityComparisons, MAX_SAFE_COMPARISONS)
+      }
+    };
+
     // Decide strategy based on element count
-    if (elementCount <= config.performance.maxElementsForFullMatrix) {
+    if (elementCount <= safeConfig.performance.maxElementsForFullMatrix) {
       // Small dataset: Calculate all relationships
-      await this.calculateFullMatrix(index, elementTexts, keys, config);
+      await this.calculateFullMatrix(index, elementTexts, keys, safeConfig);
     } else {
       // Large dataset: Use smart sampling and batching
-      await this.calculateSampledRelationships(index, elementTexts, keys, config);
+      await this.calculateSampledRelationships(index, elementTexts, keys, safeConfig);
     }
 
     const duration = Date.now() - startTime;
     logger.info('Semantic relationships calculated', {
       elements: elementTexts.size,
       duration: `${duration}ms`,
-      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled'
+      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled',
+      timedOut: duration > MAX_EXECUTION_TIME
     });
   }
 
@@ -732,9 +758,20 @@ export class EnhancedIndexManager {
     let comparisons = 0;
     const batchSize = config.performance.similarityBatchSize;
     const threshold = config.performance.similarityThreshold;
+    const startTime = Date.now();
+    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
 
     // Process in batches to allow event loop to breathe
     for (let i = 0; i < keys.length; i++) {
+      // FIX: Check for timeout
+      if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+        logger.warn('Full matrix calculation timeout', {
+          elapsed: Date.now() - startTime,
+          processed: `${i}/${keys.length}`,
+          comparisons
+        });
+        return;
+      }
       const key1 = keys[i];
       const [type1, name1] = key1.split(':');
       const text1 = elementTexts.get(key1)!;
@@ -835,6 +872,12 @@ export class EnhancedIndexManager {
       maxComparisons
     });
 
+    // FIX: Early return if no keys to process
+    if (keys.length === 0) {
+      logger.debug('No elements to calculate relationships for');
+      return;
+    }
+
     // First Pass: Keyword-based clustering for high-probability relationships
     const keywordClusters = await this.buildKeywordClusters(index, keys);
     let comparisons = 0;
@@ -842,7 +885,7 @@ export class EnhancedIndexManager {
     // Compare within clusters first (high probability of relationships)
     const clusterComparisons = Math.floor(maxComparisons * 0.6); // 60% budget for clusters
 
-    for (const [keyword, clusterKeys] of keywordClusters.entries()) {
+    for (const [, clusterKeys] of keywordClusters.entries()) {
       if (comparisons >= clusterComparisons) break;
 
       // Within-cluster comparisons
@@ -889,6 +932,15 @@ export class EnhancedIndexManager {
     // Second Pass: Proportional cross-type sampling for unexpected relationships
     const crossTypeComparisons = maxComparisons - comparisons; // Remaining budget
 
+    // FIX: Skip second pass if we've already hit our comparison limit
+    if (comparisons >= maxComparisons || crossTypeComparisons <= 0) {
+      logger.debug('Skipping cross-type sampling, comparison budget exhausted', {
+        comparisons,
+        maxComparisons
+      });
+      return;
+    }
+
     // Build type distribution
     const elementsByType = new Map<string, string[]>();
     const typeCounts = new Map<string, number>();
@@ -921,8 +973,26 @@ export class EnhancedIndexManager {
       sampleSizes: Object.fromEntries(typeSampleSizes)
     });
 
-    // Perform proportional cross-type sampling
-    for (const key1 of keys) {
+    // FIX: Perform LIMITED cross-type sampling to prevent O(n²) explosion
+    // Previously: for each key1, sample from EVERY type - this creates n * types * sampleSize comparisons!
+    // Now: Sample a subset of keys first, then process those
+
+    // Sample a limited number of keys to process (sqrt of total for balanced coverage)
+    const maxKeysToProcess = Math.min(
+      Math.ceil(Math.sqrt(keys.length)),
+      Math.ceil(crossTypeComparisons / typeSampleSizes.size)
+    );
+
+    const sampledKeys1 = this.randomSample(keys, maxKeysToProcess);
+
+    logger.debug('Cross-type sampling with limited key set', {
+      totalKeys: keys.length,
+      sampledKeys: sampledKeys1.length,
+      maxKeysToProcess
+    });
+
+    // Perform proportional cross-type sampling on LIMITED key set
+    for (const key1 of sampledKeys1) {
       if (comparisons >= maxComparisons) break;
 
       const [type1, name1] = key1.split(':');

@@ -9,9 +9,16 @@ import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { setupTestEnvironment, cleanupTestEnvironment, resetSingletons, clearSuiteDirectory } from './test-setup.js';
 
 describe.skip('EnhancedIndexManager - Extensibility Tests', () => {
-  // FIXME: These tests are timing out due to complex initialization issues
-  // The EnhancedIndexManager tries to scan portfolio directories and acquire file locks
-  // which causes hangs in the test environment. Needs proper mocking strategy.
+  // FIXME: Still timing out despite fixes. The Enhanced Index feature needs major refactoring.
+  // Issues fixed but still problematic:
+  // 1. Reduced max comparisons from 500 to 100
+  // 2. Added timeout circuit breakers (5 second max)
+  // 3. Removed circular dependency with VerbTriggerManager
+  //
+  // Remaining issues:
+  // - File locking conflicts in tests
+  // - Complex initialization chain
+  // - Feature not actually used in production
   let manager: EnhancedIndexManager;
   let originalHome: string;
   let testIndexPath: string;
