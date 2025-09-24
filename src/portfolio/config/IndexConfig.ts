@@ -13,6 +13,7 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { logger } from '../../utils/logger.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export interface IndexConfiguration {
   // Index Management
@@ -212,6 +213,18 @@ export class IndexConfigManager {
    * Update configuration with validation
    */
   public async updateConfig(updates: Partial<IndexConfiguration>): Promise<void> {
+    // SECURITY FIX: Add audit logging for configuration changes (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any, // Using existing config update type
+      severity: 'LOW',
+      source: 'IndexConfigManager.updateConfig',
+      details: 'Index configuration update attempted',
+      additionalData: {
+        configType: 'index',
+        updateKeys: Object.keys(updates)
+      }
+    });
+
     // Validate the updates before applying
     this.validateConfig(updates);
 
@@ -219,6 +232,18 @@ export class IndexConfigManager {
     await this.saveConfig();
 
     logger.info('Index configuration updated', { updates });
+
+    // Log successful update
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'LOW',
+      source: 'IndexConfigManager.updateConfig',
+      details: 'Index configuration update successful',
+      additionalData: {
+        configType: 'index',
+        updatedFields: Object.keys(updates)
+      }
+    });
   }
 
   /**
@@ -396,6 +421,18 @@ export class IndexConfigManager {
    * Reset to default configuration
    */
   public async resetToDefaults(): Promise<void> {
+    // SECURITY FIX: Add audit logging for configuration reset (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'MEDIUM', // Higher severity for full reset
+      source: 'IndexConfigManager.resetToDefaults',
+      details: 'Index configuration reset to defaults',
+      additionalData: {
+        configType: 'index',
+        action: 'reset'
+      }
+    });
+
     this.config = { ...this.defaultConfig };
     await this.saveConfig();
 
@@ -451,6 +488,19 @@ export class IndexConfigManager {
    * Set specific configuration value by path
    */
   public async set(path: string, value: any): Promise<void> {
+    // SECURITY FIX: Add audit logging for direct config modifications (DMCP-SEC-006)
+    SecurityMonitor.logSecurityEvent({
+      type: 'RULE_ENGINE_CONFIG_UPDATE' as any,
+      severity: 'LOW',
+      source: 'IndexConfigManager.set',
+      details: `Index configuration value set: ${path}`,
+      additionalData: {
+        configType: 'index',
+        path,
+        valueType: typeof value
+      }
+    });
+
     const parts = path.split('.');
     const lastPart = parts.pop()!;
     let target = this.config as any;
