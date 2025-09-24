@@ -39,6 +39,7 @@ import { PersonaExporter, PersonaImporter } from './persona/export-import/index.
 import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
 import { MigrationManager } from './portfolio/MigrationManager.js';
+import { EnhancedIndexHandler } from './handlers/EnhancedIndexHandler.js';
 import { SkillManager } from './elements/skills/index.js';
 import { Skill } from './elements/skills/Skill.js';
 import { TemplateManager } from './elements/templates/TemplateManager.js';
@@ -96,6 +97,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private personaImporter?: PersonaImporter;
   private portfolioManager: PortfolioManager;
   private migrationManager: MigrationManager;
+  private enhancedIndexHandler: EnhancedIndexHandler;
   private skillManager: SkillManager;
   private templateManager: TemplateManager;
   private templateRenderer: TemplateRenderer;
@@ -121,6 +123,7 @@ export class DollhouseMCPServer implements IToolHandler {
     // Initialize portfolio system
     this.portfolioManager = PortfolioManager.getInstance();
     this.migrationManager = new MigrationManager(this.portfolioManager);
+    this.enhancedIndexHandler = new EnhancedIndexHandler(this.getPersonaIndicator());
     
     // CRITICAL FIX: Don't access directories until after migration runs
     // Previously: this.personasDir was set here, creating directories before migration could fix them
@@ -5636,6 +5639,46 @@ Placeholders for custom format:
         }]
       };
     }
+  }
+
+  /**
+   * Find semantically similar elements using Enhanced Index
+   */
+  async findSimilarElements(options: {
+    elementName: string;
+    elementType?: string;
+    limit: number;
+    threshold: number;
+  }) {
+    return this.enhancedIndexHandler.findSimilarElements(options);
+  }
+
+  /**
+   * Get all relationships for a specific element
+   */
+  async getElementRelationships(options: {
+    elementName: string;
+    elementType?: string;
+    relationshipTypes?: string[];
+  }) {
+    return this.enhancedIndexHandler.getElementRelationships(options);
+  }
+
+  /**
+   * Search for elements by action verb
+   */
+  async searchByVerb(options: {
+    verb: string;
+    limit: number;
+  }) {
+    return this.enhancedIndexHandler.searchByVerb(options);
+  }
+
+  /**
+   * Get statistics about Enhanced Index relationships
+   */
+  async getRelationshipStats() {
+    return this.enhancedIndexHandler.getRelationshipStats();
   }
 
   /**

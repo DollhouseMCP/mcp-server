@@ -170,6 +170,9 @@ export class RelationshipManager {
     const startTime = Date.now();
     let relationshipsFound = 0;
 
+    // FIX: Add timeout to prevent infinite loops
+    const MAX_DISCOVERY_TIME = 3000; // 3 seconds max
+
     logger.info('Starting relationship discovery');
 
     // First, ensure semantic relationships are calculated
@@ -178,6 +181,14 @@ export class RelationshipManager {
     // Then discover other relationship types
     for (const [type, elements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(elements)) {
+        // FIX: Check timeout
+        if (Date.now() - startTime > MAX_DISCOVERY_TIME) {
+          logger.warn('Relationship discovery timeout', {
+            elapsed: Date.now() - startTime,
+            relationshipsFound
+          });
+          return;
+        }
         const discovered = await this.discoverElementRelationships(
           element,
           `${type}:${name}`,
@@ -262,8 +273,8 @@ export class RelationshipManager {
       }
     }
 
-    // Discover verb-based relationships
-    const verbRelationships = await this.discoverVerbRelationships(element, elementId, index);
+    // Discover verb-based relationships (fixed: now passes index to avoid circular dependency)
+    const verbRelationships = this.discoverVerbRelationships(element, elementId, index);
     relationships.push(...verbRelationships);
 
     // Filter by confidence and limit
@@ -278,21 +289,21 @@ export class RelationshipManager {
   /**
    * Discover relationships based on verb associations
    */
-  private async discoverVerbRelationships(
+  private discoverVerbRelationships(
     element: ElementDefinition,
     elementId: string,
     index: EnhancedIndex
-  ): Promise<Relationship[]> {
+  ): Relationship[] {
     const relationships: Relationship[] = [];
 
     try {
       // Get verbs associated with this element
-      const [type, name] = elementId.split(':');
-      const verbs = await this.verbTriggers.getVerbsForElement(name);
+      const [, name] = elementId.split(':');
+      const verbs = this.verbTriggers.getVerbsForElement(name, index);
 
       for (const verb of verbs) {
         // Find other elements with same verb
-        const matches = await this.verbTriggers.getElementsForVerb(verb);
+        const matches = this.verbTriggers.getElementsForVerb(verb, index);
 
         for (const match of matches) {
           if (match.name !== name) {

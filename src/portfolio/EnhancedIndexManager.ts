@@ -190,6 +190,8 @@ export class EnhancedIndexManager {
   private relationshipManager: RelationshipManager;
   private config: IndexConfigManager;
   private fileLock: FileLock;
+  private memoryCleanupInterval: NodeJS.Timeout | null = null;
+  private lastMemoryCleanup: Date = new Date();
 
   private constructor() {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
@@ -230,6 +232,9 @@ export class EnhancedIndexManager {
         maxElements: config.performance.maxElementsForFullMatrix
       }
     });
+
+    // Start automatic memory cleanup to prevent leaks
+    this.startMemoryCleanup();
   }
 
   public static getInstance(): EnhancedIndexManager {
@@ -243,13 +248,45 @@ export class EnhancedIndexManager {
    * Get the current index, loading or building as needed
    */
   public async getIndex(options: IndexOptions = {}): Promise<EnhancedIndex> {
-    if (options.forceRebuild || this.needsRebuild()) {
-      await this.buildIndex(options);
-    } else if (!this.index) {
-      await this.loadIndex();
-    }
+    try {
+      // Add performance tracking
+      const startTime = Date.now();
+      const operation = options.forceRebuild ? 'rebuild' :
+                       !this.index ? 'load' : 'cached';
 
-    return this.index!;
+      if (options.forceRebuild) {
+        logger.info('Force rebuild requested for Enhanced Index');
+        await this.buildIndex(options);
+      } else if (await this.needsRebuild()) {
+        logger.info('Enhanced Index needs rebuild');
+        await this.buildIndex(options);
+      } else if (!this.index) {
+        // Try to load from file first
+        logger.info('Loading Enhanced Index from cache file');
+        await this.loadIndex();
+      } else {
+        logger.debug('Using cached Enhanced Index from memory');
+      }
+
+      const elapsed = Date.now() - startTime;
+      logger.info('Enhanced Index operation completed', {
+        operation,
+        elapsedMs: elapsed,
+        elements: this.index?.metadata?.total_elements || 0
+      });
+
+      if (elapsed > 1000) {
+        logger.warn('Enhanced Index operation took longer than expected', {
+          elapsedMs: elapsed,
+          operation
+        });
+      }
+
+      return this.index!;
+    } catch (error) {
+      logger.error('Failed to get Enhanced Index', error);
+      throw error;
+    }
   }
 
   /**
@@ -525,11 +562,41 @@ export class EnhancedIndexManager {
   /**
    * Check if index needs rebuilding
    */
-  private needsRebuild(): boolean {
-    if (!this.index || !this.lastLoaded) return true;
+  private async needsRebuild(): Promise<boolean> {
+    try {
+      // Check if index file exists
+      const indexStats = await fs.stat(this.indexPath).catch(() => null);
+      if (!indexStats) {
+        logger.info('Enhanced index file does not exist, rebuild needed');
+        return true;
+      }
 
-    const age = Date.now() - this.lastLoaded.getTime();
-    return age > this.TTL_MS;
+      // Check file age FIRST - this is the key fix
+      const fileAge = Date.now() - indexStats.mtime.getTime();
+      const ttlMs = this.TTL_MS;
+
+      if (fileAge > ttlMs) {
+        logger.info('Enhanced index file is stale', {
+          ageMinutes: Math.round(fileAge / 60000),
+          ttlMinutes: Math.round(ttlMs / 60000)
+        });
+        return true;  // File is too old, rebuild needed
+      }
+
+      // If we reach here, file exists and is fresh
+      // If not in memory, we can load it
+      if (!this.index) {
+        logger.debug('Enhanced index not in memory but file is fresh, will load from file');
+        return false; // We can load the fresh file, no rebuild needed
+      }
+
+      // File is fresh and we have it in memory
+      logger.debug('Enhanced index is current, no rebuild needed');
+      return false;
+    } catch (error) {
+      logger.error('Error checking if rebuild needed', error);
+      return true; // Safer to rebuild on error
+    }
   }
 
   /**
@@ -666,6 +733,9 @@ export class EnhancedIndexManager {
     const startTime = Date.now();
     const config = this.config.getConfig();
 
+    // FIX: Add timeout circuit breaker to prevent infinite loops
+    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
+
     // Prepare text content for each element
     const elementTexts = new Map<string, string>();
     const elementCount = Object.values(index.elements)
@@ -679,6 +749,14 @@ export class EnhancedIndexManager {
     // First pass: Calculate entropy for all elements
     for (const [elementType, elements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(elements)) {
+        // FIX: Check for timeout
+        if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+          logger.warn('Semantic relationship calculation timeout', {
+            elapsed: Date.now() - startTime,
+            processed: elementTexts.size
+          });
+          return;
+        }
         // Combine relevant text fields for analysis
         const textParts = [
           element.core.name,
@@ -703,20 +781,35 @@ export class EnhancedIndexManager {
 
     const keys = Array.from(elementTexts.keys());
 
+    // Use reasonable limits to prevent explosion while still being useful
+    const MAX_SAFE_ELEMENTS = 50;  // Threshold for full matrix
+    const MAX_SAFE_COMPARISONS = 500;  // Total comparison limit
+
+    // Override config if it's too high
+    const safeConfig = {
+      ...config,
+      performance: {
+        ...config.performance,
+        maxElementsForFullMatrix: Math.min(config.performance.maxElementsForFullMatrix, MAX_SAFE_ELEMENTS),
+        maxSimilarityComparisons: Math.min(config.performance.maxSimilarityComparisons, MAX_SAFE_COMPARISONS)
+      }
+    };
+
     // Decide strategy based on element count
-    if (elementCount <= config.performance.maxElementsForFullMatrix) {
+    if (elementCount <= safeConfig.performance.maxElementsForFullMatrix) {
       // Small dataset: Calculate all relationships
-      await this.calculateFullMatrix(index, elementTexts, keys, config);
+      await this.calculateFullMatrix(index, elementTexts, keys, safeConfig);
     } else {
       // Large dataset: Use smart sampling and batching
-      await this.calculateSampledRelationships(index, elementTexts, keys, config);
+      await this.calculateSampledRelationships(index, elementTexts, keys, safeConfig);
     }
 
     const duration = Date.now() - startTime;
     logger.info('Semantic relationships calculated', {
       elements: elementTexts.size,
       duration: `${duration}ms`,
-      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled'
+      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled',
+      timedOut: duration > MAX_EXECUTION_TIME
     });
   }
 
@@ -732,9 +825,20 @@ export class EnhancedIndexManager {
     let comparisons = 0;
     const batchSize = config.performance.similarityBatchSize;
     const threshold = config.performance.similarityThreshold;
+    const startTime = Date.now();
+    const MAX_EXECUTION_TIME = 5000; // 5 seconds max
 
     // Process in batches to allow event loop to breathe
     for (let i = 0; i < keys.length; i++) {
+      // FIX: Check for timeout
+      if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+        logger.warn('Full matrix calculation timeout', {
+          elapsed: Date.now() - startTime,
+          processed: `${i}/${keys.length}`,
+          comparisons
+        });
+        return;
+      }
       const key1 = keys[i];
       const [type1, name1] = key1.split(':');
       const text1 = elementTexts.get(key1)!;
@@ -835,6 +939,12 @@ export class EnhancedIndexManager {
       maxComparisons
     });
 
+    // FIX: Early return if no keys to process
+    if (keys.length === 0) {
+      logger.debug('No elements to calculate relationships for');
+      return;
+    }
+
     // First Pass: Keyword-based clustering for high-probability relationships
     const keywordClusters = await this.buildKeywordClusters(index, keys);
     let comparisons = 0;
@@ -842,7 +952,7 @@ export class EnhancedIndexManager {
     // Compare within clusters first (high probability of relationships)
     const clusterComparisons = Math.floor(maxComparisons * 0.6); // 60% budget for clusters
 
-    for (const [keyword, clusterKeys] of keywordClusters.entries()) {
+    for (const [, clusterKeys] of keywordClusters.entries()) {
       if (comparisons >= clusterComparisons) break;
 
       // Within-cluster comparisons
@@ -889,6 +999,15 @@ export class EnhancedIndexManager {
     // Second Pass: Proportional cross-type sampling for unexpected relationships
     const crossTypeComparisons = maxComparisons - comparisons; // Remaining budget
 
+    // FIX: Skip second pass if we've already hit our comparison limit
+    if (comparisons >= maxComparisons || crossTypeComparisons <= 0) {
+      logger.debug('Skipping cross-type sampling, comparison budget exhausted', {
+        comparisons,
+        maxComparisons
+      });
+      return;
+    }
+
     // Build type distribution
     const elementsByType = new Map<string, string[]>();
     const typeCounts = new Map<string, number>();
@@ -921,8 +1040,26 @@ export class EnhancedIndexManager {
       sampleSizes: Object.fromEntries(typeSampleSizes)
     });
 
-    // Perform proportional cross-type sampling
-    for (const key1 of keys) {
+    // FIX: Perform LIMITED cross-type sampling to prevent O(n²) explosion
+    // Previously: for each key1, sample from EVERY type - this creates n * types * sampleSize comparisons!
+    // Now: Sample a subset of keys first, then process those
+
+    // Sample a limited number of keys to process (sqrt of total for balanced coverage)
+    const maxKeysToProcess = Math.min(
+      Math.ceil(Math.sqrt(keys.length)),
+      Math.ceil(crossTypeComparisons / typeSampleSizes.size)
+    );
+
+    const sampledKeys1 = this.randomSample(keys, maxKeysToProcess);
+
+    logger.debug('Cross-type sampling with limited key set', {
+      totalKeys: keys.length,
+      sampledKeys: sampledKeys1.length,
+      maxKeysToProcess
+    });
+
+    // Perform proportional cross-type sampling on LIMITED key set
+    for (const key1 of sampledKeys1) {
       if (comparisons >= maxComparisons) break;
 
       const [type1, name1] = key1.split(':');
@@ -1139,5 +1276,102 @@ export class EnhancedIndexManager {
     }
 
     return element.relationships || {};
+  }
+
+  /**
+   * Clean up memory by clearing caches and old data
+   * FIX: Added to prevent memory leaks as identified in PR review
+   */
+  public clearMemoryCache(): void {
+    const now = new Date();
+    const timeSinceLastCleanup = now.getTime() - this.lastMemoryCleanup.getTime();
+
+    // Only cleanup if it's been more than 5 minutes
+    if (timeSinceLastCleanup < 5 * 60 * 1000) {
+      return;
+    }
+
+    logger.debug('Performing memory cleanup for Enhanced Index');
+
+    // Clear NLP scoring caches
+    if (this.nlpScoring) {
+      (this.nlpScoring as any).clearCache?.();
+    }
+
+    // Clear verb trigger caches
+    if (this.verbTriggers) {
+      (this.verbTriggers as any).clearCache?.();
+    }
+
+    // Clear relationship manager caches
+    if (this.relationshipManager) {
+      (this.relationshipManager as any).clearCache?.();
+    }
+
+    // If index is stale, clear it from memory
+    if (this.index && this.lastLoaded) {
+      const indexAge = now.getTime() - this.lastLoaded.getTime();
+      if (indexAge > this.TTL_MS * 2) {  // Clear if twice the TTL
+        logger.debug('Clearing stale index from memory');
+        this.index = null;
+        this.lastLoaded = null;
+      }
+    }
+
+    this.lastMemoryCleanup = now;
+  }
+
+  /**
+   * Start automatic memory cleanup
+   */
+  public startMemoryCleanup(intervalMs: number = 5 * 60 * 1000): void {
+    if (this.memoryCleanupInterval) {
+      clearInterval(this.memoryCleanupInterval);
+    }
+
+    this.memoryCleanupInterval = setInterval(() => {
+      this.clearMemoryCache();
+    }, intervalMs);
+
+    logger.debug('Started automatic memory cleanup', { intervalMs });
+  }
+
+  /**
+   * Stop automatic memory cleanup
+   */
+  public stopMemoryCleanup(): void {
+    if (this.memoryCleanupInterval) {
+      clearInterval(this.memoryCleanupInterval);
+      this.memoryCleanupInterval = null;
+      logger.debug('Stopped automatic memory cleanup');
+    }
+  }
+
+  /**
+   * Clean up all resources (for testing and shutdown)
+   */
+  public async cleanup(): Promise<void> {
+    this.stopMemoryCleanup();
+    this.clearMemoryCache();
+
+    // Release file lock if held
+    if (this.fileLock) {
+      await this.fileLock.release().catch(() => {});
+    }
+
+    // Clear the singleton instance
+    if (EnhancedIndexManager.instance === this) {
+      EnhancedIndexManager.instance = null;
+    }
+  }
+
+  /**
+   * Reset singleton instance (mainly for testing)
+   */
+  public static resetInstance(): void {
+    if (this.instance) {
+      this.instance.cleanup().catch(() => {});
+      this.instance = null;
+    }
   }
 }
