@@ -91,16 +91,18 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
   });
 
   afterEach(async () => {
-    // Force clear the singleton instance to prevent file locking
+    // Use the new cleanup method to properly release resources
     if (manager) {
       try {
-        // Clear any in-memory cache
-        (manager as any).index = null;
-        (manager as any).lastBuildTime = 0;
+        await manager.cleanup();
       } catch (e) {
         // Ignore errors during cleanup
+        console.warn('Error during manager cleanup:', e);
       }
     }
+
+    // Reset the singleton instance
+    EnhancedIndexManager.resetInstance();
 
     // Clean up test environment
     await cleanupTestEnvironment(originalHome);

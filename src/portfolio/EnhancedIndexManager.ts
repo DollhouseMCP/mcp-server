@@ -190,6 +190,8 @@ export class EnhancedIndexManager {
   private relationshipManager: RelationshipManager;
   private config: IndexConfigManager;
   private fileLock: FileLock;
+  private memoryCleanupInterval: NodeJS.Timeout | null = null;
+  private lastMemoryCleanup: Date = new Date();
 
   private constructor() {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
@@ -230,6 +232,9 @@ export class EnhancedIndexManager {
         maxElements: config.performance.maxElementsForFullMatrix
       }
     });
+
+    // Start automatic memory cleanup to prevent leaks
+    this.startMemoryCleanup();
   }
 
   public static getInstance(): EnhancedIndexManager {
@@ -1271,5 +1276,102 @@ export class EnhancedIndexManager {
     }
 
     return element.relationships || {};
+  }
+
+  /**
+   * Clean up memory by clearing caches and old data
+   * FIX: Added to prevent memory leaks as identified in PR review
+   */
+  public clearMemoryCache(): void {
+    const now = new Date();
+    const timeSinceLastCleanup = now.getTime() - this.lastMemoryCleanup.getTime();
+
+    // Only cleanup if it's been more than 5 minutes
+    if (timeSinceLastCleanup < 5 * 60 * 1000) {
+      return;
+    }
+
+    logger.debug('Performing memory cleanup for Enhanced Index');
+
+    // Clear NLP scoring caches
+    if (this.nlpScoring) {
+      (this.nlpScoring as any).clearCache?.();
+    }
+
+    // Clear verb trigger caches
+    if (this.verbTriggers) {
+      (this.verbTriggers as any).clearCache?.();
+    }
+
+    // Clear relationship manager caches
+    if (this.relationshipManager) {
+      (this.relationshipManager as any).clearCache?.();
+    }
+
+    // If index is stale, clear it from memory
+    if (this.index && this.lastLoaded) {
+      const indexAge = now.getTime() - this.lastLoaded.getTime();
+      if (indexAge > this.TTL_MS * 2) {  // Clear if twice the TTL
+        logger.debug('Clearing stale index from memory');
+        this.index = null;
+        this.lastLoaded = null;
+      }
+    }
+
+    this.lastMemoryCleanup = now;
+  }
+
+  /**
+   * Start automatic memory cleanup
+   */
+  public startMemoryCleanup(intervalMs: number = 5 * 60 * 1000): void {
+    if (this.memoryCleanupInterval) {
+      clearInterval(this.memoryCleanupInterval);
+    }
+
+    this.memoryCleanupInterval = setInterval(() => {
+      this.clearMemoryCache();
+    }, intervalMs);
+
+    logger.debug('Started automatic memory cleanup', { intervalMs });
+  }
+
+  /**
+   * Stop automatic memory cleanup
+   */
+  public stopMemoryCleanup(): void {
+    if (this.memoryCleanupInterval) {
+      clearInterval(this.memoryCleanupInterval);
+      this.memoryCleanupInterval = null;
+      logger.debug('Stopped automatic memory cleanup');
+    }
+  }
+
+  /**
+   * Clean up all resources (for testing and shutdown)
+   */
+  public async cleanup(): Promise<void> {
+    this.stopMemoryCleanup();
+    this.clearMemoryCache();
+
+    // Release file lock if held
+    if (this.fileLock) {
+      await this.fileLock.release().catch(() => {});
+    }
+
+    // Clear the singleton instance
+    if (EnhancedIndexManager.instance === this) {
+      EnhancedIndexManager.instance = null;
+    }
+  }
+
+  /**
+   * Reset singleton instance (mainly for testing)
+   */
+  public static resetInstance(): void {
+    if (this.instance) {
+      this.instance.cleanup().catch(() => {});
+      this.instance = null;
+    }
   }
 }
