@@ -56,6 +56,16 @@ describe('RelationshipTypes', () => {
       }).toThrow('Relationship strength must be between 0 and 1');
     });
 
+    it('should accept boundary values for strength (0 and 1)', () => {
+      const relZero = createRelationship('personas', 'test', 'similar_to', 0);
+      expect(relZero.strength).toBe(0);
+      expect(relZero.isValid).toBe(true);
+
+      const relOne = createRelationship('personas', 'test', 'similar_to', 1);
+      expect(relOne.strength).toBe(1);
+      expect(relOne.isValid).toBe(true);
+    });
+
     it('should handle optional parameters', () => {
       const rel = createRelationship('skills', 'test-skill');
 

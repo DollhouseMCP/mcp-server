@@ -130,8 +130,13 @@ export interface UseWhenPattern {
   [key: string]: any;
 }
 
-// Re-export BaseRelationship as Relationship for backward compatibility
-// The actual implementation now uses type-safe variants
+/**
+ * Re-export BaseRelationship as Relationship for backward compatibility
+ *
+ * This maintains API compatibility with existing code while the internal
+ * implementation now uses type-safe variants (ParsedRelationship, InvalidRelationship).
+ * Existing code using the 'Relationship' type will continue to work without changes.
+ */
 export type Relationship = BaseRelationship;
 
 export interface SemanticData {

@@ -12,6 +12,7 @@
  */
 
 import { parseElementId, formatElementId } from '../../utils/elementId.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 /**
  * Base relationship interface - the stored format
@@ -94,7 +95,7 @@ export function parseRelationship(rel: BaseRelationship): ParsedRelationship | I
       targetType: null,
       targetName: null,
       isValid: false,
-      parseError: `Invalid element ID format: ${rel.element}`
+      parseError: `Invalid element ID format: ${rel.element} (expected format: "type:name")`
     };
   }
 
@@ -140,6 +141,22 @@ export function createRelationship(
   }
 
   const element = formatElementId(targetType, targetName);
+
+  // FIX: Add security audit logging for relationship creation
+  // Previously: No logging of relationship operations
+  // Now: Log relationship creation for security audit trail
+  SecurityMonitor.logSecurityEvent({
+    type: 'ELEMENT_CREATED',
+    severity: 'LOW',
+    source: 'RelationshipTypes.createRelationship',
+    details: `Created relationship to ${element}`,
+    metadata: {
+      targetType,
+      targetName,
+      relationType: relationType || 'unspecified',
+      strength: strength ?? 1.0
+    }
+  });
 
   return {
     element,
