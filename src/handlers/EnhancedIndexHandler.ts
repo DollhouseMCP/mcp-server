@@ -8,7 +8,6 @@
 import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
-import { ElementType } from '../portfolio/PortfolioManager.js';
 import { logger } from '../utils/logger.js';
 
 export class EnhancedIndexHandler {
@@ -40,15 +39,14 @@ export class EnhancedIndexHandler {
       if (options.threshold < 0 || options.threshold > 1) {
         options.threshold = 0.3; // Default to reasonable threshold
       }
-      // Get the enhanced index with error handling
-      let index;
+      // Ensure the enhanced index is available with error handling
       try {
-        index = await this.enhancedIndexManager.getIndex();
+        await this.enhancedIndexManager.getIndex();
       } catch (indexError) {
         logger.error('Failed to get Enhanced Index', indexError);
         // Try to recover by forcing rebuild
         try {
-          index = await this.enhancedIndexManager.getIndex({ forceRebuild: true });
+          await this.enhancedIndexManager.getIndex({ forceRebuild: true });
         } catch (rebuildError) {
           throw new Error('Enhanced Index is unavailable. Please try again later.');
         }
