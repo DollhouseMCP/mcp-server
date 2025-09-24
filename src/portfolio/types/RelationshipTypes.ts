@@ -40,6 +40,7 @@
 
 import { parseElementId, formatElementId } from '../../utils/elementId.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 
 /**
  * Base relationship interface - the storage format
@@ -233,27 +234,39 @@ export function parseRelationship(rel: BaseRelationship): ParsedRelationship | I
     };
   }
 
-  const parsed = parseElementId(rel.element);
+  // FIX: DMCP-SEC-004 - Normalize Unicode before parsing to prevent attacks
+  const normalized = UnicodeValidator.normalize(rel.element);
+  if (!normalized.isValid) {
+    return {
+      ...rel,
+      targetType: null,
+      targetName: null,
+      isValid: false,
+      parseError: `Invalid element ID - Unicode security issue: ${normalized.detectedIssues?.join(', ')}`
+    };
+  }
+
+  const parsed = parseElementId(normalized.normalizedContent);
 
   if (!parsed) {
-    // Provide detailed error context about what was found
-    const colonIndex = rel.element.indexOf(':');
+    // Provide detailed error context about what was found (use normalized for safety)
+    const colonIndex = normalized.normalizedContent.indexOf(':');
     let errorDetail: string;
 
     if (colonIndex === -1) {
-      errorDetail = `Invalid element ID format: "${rel.element}" - missing separator ':' (expected format: "type:name")`;
+      errorDetail = `Invalid element ID format: "${normalized.normalizedContent}" - missing separator ':' (expected format: "type:name")`;
     } else if (colonIndex === 0) {
-      errorDetail = `Invalid element ID format: "${rel.element}" - missing type before ':' (expected format: "type:name")`;
-    } else if (colonIndex === rel.element.length - 1) {
-      errorDetail = `Invalid element ID format: "${rel.element}" - missing name after ':' (expected format: "type:name")`;
-    } else if (rel.element.split(':').length > 2) {
+      errorDetail = `Invalid element ID format: "${normalized.normalizedContent}" - missing type before ':' (expected format: "type:name")`;
+    } else if (colonIndex === normalized.normalizedContent.length - 1) {
+      errorDetail = `Invalid element ID format: "${normalized.normalizedContent}" - missing name after ':' (expected format: "type:name")`;
+    } else if (normalized.normalizedContent.split(':').length > 2) {
       const positions = [];
-      for (let i = 0; i < rel.element.length; i++) {
-        if (rel.element[i] === ':') positions.push(i);
+      for (let i = 0; i < normalized.normalizedContent.length; i++) {
+        if (normalized.normalizedContent[i] === ':') positions.push(i);
       }
-      errorDetail = `Invalid element ID format: "${rel.element}" - multiple separators ':' found at positions [${positions.join(', ')}] (expected format: "type:name" with single ':')`;
+      errorDetail = `Invalid element ID format: "${normalized.normalizedContent}" - multiple separators ':' found at positions [${positions.join(', ')}] (expected format: "type:name" with single ':')`;
     } else {
-      errorDetail = `Invalid element ID format: "${rel.element}" (expected format: "type:name")`;
+      errorDetail = `Invalid element ID format: "${normalized.normalizedContent}" (expected format: "type:name")`;
     }
 
     return {
@@ -301,12 +314,35 @@ export function createRelationship(
   strength?: number,
   metadata?: Record<string, any>
 ): ParsedRelationship {
+  // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+  // Previously: Accepting raw user input without normalization
+  // Now: Normalizing all string inputs to prevent Unicode-based security attacks
+  const normalizedType = UnicodeValidator.normalize(targetType);
+  if (!normalizedType.isValid) {
+    throw new Error(`Invalid target type - Unicode security issue: ${normalizedType.detectedIssues?.join(', ')}`);
+  }
+
+  const normalizedName = UnicodeValidator.normalize(targetName);
+  if (!normalizedName.isValid) {
+    throw new Error(`Invalid target name - Unicode security issue: ${normalizedName.detectedIssues?.join(', ')}`);
+  }
+
+  // Also normalize relationship type if provided
+  let normalizedRelType: string | undefined;
+  if (relationType) {
+    const normalizedRel = UnicodeValidator.normalize(relationType);
+    if (!normalizedRel.isValid) {
+      throw new Error(`Invalid relationship type - Unicode security issue: ${normalizedRel.detectedIssues?.join(', ')}`);
+    }
+    normalizedRelType = normalizedRel.normalizedContent;
+  }
+
   // Validate strength is in range
   if (strength !== undefined && (strength < 0 || strength > 1 || isNaN(strength))) {
     throw new Error(`Relationship strength must be between 0 and 1, got ${strength}`);
   }
 
-  const element = formatElementId(targetType, targetName);
+  const element = formatElementId(normalizedType.normalizedContent, normalizedName.normalizedContent);
 
   // FIX: Add security audit logging for relationship creation
   // Previously: No logging of relationship operations
@@ -317,20 +353,20 @@ export function createRelationship(
     source: 'RelationshipTypes.createRelationship',
     details: `Created relationship to ${element}`,
     metadata: {
-      targetType,
-      targetName,
-      relationType: relationType || 'unspecified',
+      targetType: normalizedType.normalizedContent,
+      targetName: normalizedName.normalizedContent,
+      relationType: normalizedRelType || 'unspecified',
       strength: strength ?? 1.0
     }
   });
 
   return {
     element,
-    type: relationType,
+    type: normalizedRelType,
     strength,
     metadata,
-    targetType,
-    targetName,
+    targetType: normalizedType.normalizedContent,
+    targetName: normalizedName.normalizedContent,
     isValid: true
   };
 }
