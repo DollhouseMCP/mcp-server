@@ -9,6 +9,7 @@ import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { ElementType } from '../portfolio/PortfolioManager.js';
+import { logger } from '../utils/logger.js';
 
 export class EnhancedIndexHandler {
   private enhancedIndexManager: EnhancedIndexManager;
@@ -29,11 +30,29 @@ export class EnhancedIndexHandler {
     threshold: number;
   }) {
     try {
-      // Get the index (builds if needed)
-      await this.enhancedIndexManager.getIndex();
-
-      // Get the enhanced index
-      const index = await this.enhancedIndexManager.getIndex();
+      // Validate inputs
+      if (!options.elementName || typeof options.elementName !== 'string') {
+        throw new Error('Element name is required and must be a string');
+      }
+      if (options.limit <= 0 || options.limit > 100) {
+        options.limit = 5; // Default to reasonable limit
+      }
+      if (options.threshold < 0 || options.threshold > 1) {
+        options.threshold = 0.3; // Default to reasonable threshold
+      }
+      // Get the enhanced index with error handling
+      let index;
+      try {
+        index = await this.enhancedIndexManager.getIndex();
+      } catch (indexError) {
+        logger.error('Failed to get Enhanced Index', indexError);
+        // Try to recover by forcing rebuild
+        try {
+          index = await this.enhancedIndexManager.getIndex({ forceRebuild: true });
+        } catch (rebuildError) {
+          throw new Error('Enhanced Index is unavailable. Please try again later.');
+        }
+      }
 
       // Find the element
       const elementId = options.elementType ?
@@ -111,8 +130,11 @@ export class EnhancedIndexHandler {
     relationshipTypes?: string[];
   }) {
     try {
-      // Get the index (builds if needed)
-      await this.enhancedIndexManager.getIndex();
+      // Get the index with error handling
+      await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        logger.error('Failed to get Enhanced Index, attempting rebuild', error);
+        return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
 
       // Get relationships
       const elementId = options.elementType ?
@@ -188,8 +210,11 @@ export class EnhancedIndexHandler {
     limit: number;
   }) {
     try {
-      // Get the index (builds if needed)
-      await this.enhancedIndexManager.getIndex();
+      // Get the index with error handling
+      await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        logger.error('Failed to get Enhanced Index, attempting rebuild', error);
+        return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
 
       // Search by verb
       const results = await this.enhancedIndexManager.getElementsByAction(options.verb);
@@ -241,8 +266,11 @@ export class EnhancedIndexHandler {
    */
   async getRelationshipStats() {
     try {
-      // Get the index (builds if needed)
-      await this.enhancedIndexManager.getIndex();
+      // Get the index with error handling
+      await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        logger.error('Failed to get Enhanced Index, attempting rebuild', error);
+        return this.enhancedIndexManager.getIndex({ forceRebuild: true });
+      });
 
       // Get stats
       const stats = await this.enhancedIndexManager.getRelationshipStats();

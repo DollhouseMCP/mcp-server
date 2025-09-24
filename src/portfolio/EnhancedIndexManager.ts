@@ -243,13 +243,45 @@ export class EnhancedIndexManager {
    * Get the current index, loading or building as needed
    */
   public async getIndex(options: IndexOptions = {}): Promise<EnhancedIndex> {
-    if (options.forceRebuild || this.needsRebuild()) {
-      await this.buildIndex(options);
-    } else if (!this.index) {
-      await this.loadIndex();
-    }
+    try {
+      // Add performance tracking
+      const startTime = Date.now();
+      const operation = options.forceRebuild ? 'rebuild' :
+                       !this.index ? 'load' : 'cached';
 
-    return this.index!;
+      if (options.forceRebuild) {
+        logger.info('Force rebuild requested for Enhanced Index');
+        await this.buildIndex(options);
+      } else if (await this.needsRebuild()) {
+        logger.info('Enhanced Index needs rebuild');
+        await this.buildIndex(options);
+      } else if (!this.index) {
+        // Try to load from file first
+        logger.info('Loading Enhanced Index from cache file');
+        await this.loadIndex();
+      } else {
+        logger.debug('Using cached Enhanced Index from memory');
+      }
+
+      const elapsed = Date.now() - startTime;
+      logger.info('Enhanced Index operation completed', {
+        operation,
+        elapsedMs: elapsed,
+        elements: this.index?.metadata?.total_elements || 0
+      });
+
+      if (elapsed > 1000) {
+        logger.warn('Enhanced Index operation took longer than expected', {
+          elapsedMs: elapsed,
+          operation
+        });
+      }
+
+      return this.index!;
+    } catch (error) {
+      logger.error('Failed to get Enhanced Index', error);
+      throw error;
+    }
   }
 
   /**
@@ -525,11 +557,40 @@ export class EnhancedIndexManager {
   /**
    * Check if index needs rebuilding
    */
-  private needsRebuild(): boolean {
-    if (!this.index || !this.lastLoaded) return true;
+  private async needsRebuild(): Promise<boolean> {
+    try {
+      // Check if index file exists
+      const indexStats = await fs.stat(this.indexPath).catch(() => null);
+      if (!indexStats) {
+        logger.info('Enhanced index file does not exist, rebuild needed');
+        return true;
+      }
 
-    const age = Date.now() - this.lastLoaded.getTime();
-    return age > this.TTL_MS;
+      // Check if we have it loaded in memory
+      if (!this.index) {
+        logger.debug('Enhanced index not in memory, will load from file');
+        return false; // We can load it, no rebuild needed
+      }
+
+      // Check file age
+      const fileAge = Date.now() - indexStats.mtime.getTime();
+      const ttlMs = this.TTL_MS;
+
+      if (fileAge > ttlMs) {
+        logger.info('Enhanced index file is stale', {
+          ageMinutes: Math.round(fileAge / 60000),
+          ttlMinutes: Math.round(ttlMs / 60000)
+        });
+        return true;
+      }
+
+      // For now, just check TTL. Portfolio modification check can be added later
+      logger.debug('Enhanced index is current, no rebuild needed');
+      return false;
+    } catch (error) {
+      logger.error('Error checking if rebuild needed', error);
+      return true; // Safer to rebuild on error
+    }
   }
 
   /**
