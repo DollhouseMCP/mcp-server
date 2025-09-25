@@ -110,3 +110,51 @@
 *Session conducted by Claude with Mick*
 *Duration: ~1.5 hours*
 *Context preserved for continuation*
+
+## September 25, 2025 - Docker Hub Resolution
+
+### The Real Issue: Docker Hub Rate Limiting
+
+After extensive investigation, we discovered the actual issue with the Docker failures:
+
+1. **The Problem**: GitHub Actions was hitting Docker Hub's anonymous rate limit (100 pulls/6 hours per IP)
+2. **Initial Misdiagnosis**: We thought we needed Docker Hub authentication
+3. **Failed Solution**: Added Docker Hub login to workflow, but credentials never worked correctly
+4. **Actual Solution**: Simply remove the Docker Hub authentication and use anonymous pulls
+
+### Key Findings
+
+- Docker tests worked fine on PR branches
+- They only failed after merging to develop
+- The 401 errors were misleading - they suggested authentication was needed
+- In reality, we just needed to wait for the rate limit to reset
+- Removing the Docker Hub login steps entirely fixed the issue
+
+### Important Note on Docker Hub Authentication
+
+**We do not currently have a working process for Docker Hub authentication in GitHub Actions.**
+
+Attempted approaches that failed:
+
+- Created DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets
+- Tried multiple username formats (capitalized, lowercase, email)
+- Docker login action with various configurations
+
+The authentication consistently failed with "unauthorized: incorrect username or password" despite correct credentials.
+
+### Resolution
+
+- Removed all Docker Hub authentication from the workflow
+- Tests now pass using anonymous Docker pulls
+- For our usage pattern, anonymous pulls are sufficient
+
+### Lessons Learned
+
+1. Rate limit errors can be misleading - sometimes waiting is the solution
+2. Docker Hub authentication in CI is more complex than expected
+3. Don't overcomplicate - anonymous pulls work fine for low-volume CI
+4. Document these infrastructure issues for future reference
+
+---
+
+*Updated: September 25, 2025*
