@@ -320,7 +320,7 @@ export class EnhancedIndexManager {
       if ((error as any).code === 'ENOENT') {
         logger.info('No existing index found, will build new one');
         await this.buildIndex();
-        return; // FIX: Return early since buildIndex will set up the index
+        return; // Return early since buildIndex will set up the index
       } else {
         logger.error('Failed to load index', error);
         throw error;
