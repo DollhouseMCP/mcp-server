@@ -305,7 +305,16 @@ export class EnhancedIndexManager {
   private async loadIndex(): Promise<void> {
     try {
       const yamlContent = await fs.readFile(this.indexPath, 'utf-8');
-      const loadedData = yamlLoad(yamlContent);
+
+      let loadedData;
+      try {
+        loadedData = yamlLoad(yamlContent);
+      } catch (yamlError) {
+        // Handle YAML parse errors gracefully
+        logger.warn('Failed to parse YAML, rebuilding index', yamlError);
+        await this.buildIndex();
+        return;
+      }
 
       // FIX: Add defensive checks for malformed YAML with undefined/null index
       // Previously: Assumed yamlLoad always returns valid data
@@ -435,7 +444,7 @@ export class EnhancedIndexManager {
       }
 
       // Save to file
-      await this.saveIndexToFile(newIndex);
+      await this.writeToFile(newIndex);
 
       this.index = newIndex;
       this.lastLoaded = new Date();
@@ -581,9 +590,10 @@ export class EnhancedIndexManager {
   }
 
   /**
-   * Save index to YAML file
+   * Write index data to YAML file on disk
+   * Private implementation detail
    */
-  private async saveIndexToFile(index: EnhancedIndex): Promise<void> {
+  private async writeToFile(index: EnhancedIndex): Promise<void> {
     try {
       // Ensure directory exists
       const dir = path.dirname(this.indexPath);
@@ -703,7 +713,7 @@ export class EnhancedIndexManager {
 
     if (found) {
       index.metadata.last_updated = new Date().toISOString();
-      await this.saveIndexToFile(index);
+      await this.writeToFile(index);
     }
   }
 
@@ -720,18 +730,18 @@ export class EnhancedIndexManager {
     index.extensions[key] = data;
     index.metadata.last_updated = new Date().toISOString();
 
-    await this.saveIndexToFile(index);
+    await this.writeToFile(index);
   }
 
   /**
-   * Save the current index to disk
-   * Public method for tests and external callers
+   * Persist the current in-memory index to disk
+   * Public method for tests and external callers to save current state
    */
-  public async saveIndex(): Promise<void> {
+  public async persist(): Promise<void> {
     if (!this.index) {
-      throw new Error('No index loaded to save');
+      throw new Error('No index loaded to persist');
     }
-    await this.saveIndexToFile(this.index);
+    await this.writeToFile(this.index);
   }
 
   /**
