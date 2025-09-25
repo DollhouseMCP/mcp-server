@@ -472,4 +472,111 @@ elements:
       expect(index.elements.templates?.['derived-template']?.core.type).toBe('templates');
     });
   });
+
+  describe('Defensive Error Handling', () => {
+    it('should rebuild when YAML loads as null', async () => {
+      // Write empty file (which yamlLoad returns as null)
+      await fs.writeFile(testIndexPath, '', 'utf-8');
+
+      // Should rebuild index without throwing
+      const index = await manager.getIndex({ forceRebuild: false });
+
+      // Should have valid structure after rebuild
+      expect(index).toBeDefined();
+      expect(index.metadata).toBeDefined();
+      expect(index.elements).toBeDefined();
+      expect(index.action_triggers).toBeDefined();
+    });
+
+    it('should handle undefined metadata gracefully', async () => {
+      // Write YAML without metadata
+      const malformedYaml = `
+elements:
+  personas: {}
+action_triggers: {}
+`;
+      await fs.writeFile(testIndexPath, malformedYaml, 'utf-8');
+
+      // Should rebuild index without throwing
+      const index = await manager.getIndex({ forceRebuild: false });
+
+      // Should have valid metadata after rebuild
+      expect(index.metadata).toBeDefined();
+      expect(index.metadata.version).toBeDefined();
+    });
+
+    it('should handle missing elements structure', async () => {
+      // Write YAML with missing elements
+      const incompleteYaml = `
+metadata:
+  version: '2.0.0'
+  created: '2024-01-01T00:00:00Z'
+  last_updated: '2024-01-01T00:00:00Z'
+  total_elements: 0
+action_triggers: {}
+`;
+      await fs.writeFile(testIndexPath, incompleteYaml, 'utf-8');
+
+      // Should rebuild index without throwing
+      const index = await manager.getIndex({ forceRebuild: false });
+
+      // Should have valid elements structure after rebuild
+      expect(index.elements).toBeDefined();
+      expect(typeof index.elements).toBe('object');
+    });
+
+    it('should skip entries with missing metadata.name', async () => {
+      // Create mock portfolio manager that returns entry with undefined metadata
+      const mockPortfolioManager = {
+        getIndexData: jest.fn().mockResolvedValue({
+          byType: new Map([
+            ['personas', [
+              {
+                filePath: '/test/persona1.md',
+                elementType: 'personas',
+                metadata: {
+                  name: 'valid-persona',
+                  description: 'Valid entry'
+                }
+              },
+              {
+                filePath: '/test/persona2.md',
+                elementType: 'personas',
+                metadata: {} // Missing name
+              }
+            ]]
+          ])
+        })
+      };
+
+      // Create manager with mock
+      const testManager = new (EnhancedIndexManager as any)();
+      testManager.portfolioManager = mockPortfolioManager;
+
+      // Build index - should skip the entry with missing name
+      await testManager.buildIndex();
+
+      const index = testManager.index;
+      expect(index.elements.personas['valid-persona']).toBeDefined();
+      expect(Object.keys(index.elements.personas)).toHaveLength(1);
+    });
+
+    it('should handle completely malformed YAML gracefully', async () => {
+      // Write invalid YAML that will cause parse error
+      const invalidYaml = `
+this is not: valid: yaml: at all
+  - mixed indentation
+    and broken: syntax: everywhere
+`;
+      await fs.writeFile(testIndexPath, invalidYaml, 'utf-8');
+
+      // Should handle parse error and rebuild
+      const index = await manager.getIndex({ forceRebuild: false });
+
+      // Should have valid structure after error handling
+      expect(index).toBeDefined();
+      expect(index.metadata).toBeDefined();
+      expect(index.elements).toBeDefined();
+    });
+  });
 });

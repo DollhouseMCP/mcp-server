@@ -34,11 +34,7 @@ import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/
 import { RelationshipManager, ElementPath } from './RelationshipManager.js';
 import {
   BaseRelationship,
-  ParsedRelationship,
   createRelationship,
-  parseRelationship,
-  isParsedRelationship,
-  sortRelationshipsByStrength,
   RelationshipTypes
 } from './types/RelationshipTypes.js';
 
@@ -198,7 +194,7 @@ export class EnhancedIndexManager {
   private indexPath: string;
   private lastLoaded: Date | null = null;
   private TTL_MS: number;
-  private isBuilding = false;
+  private isBuilding = false;  // Track if index is being built
   private nlpScoring: NLPScoringManager;
   private verbTriggers: VerbTriggerManager;
   private relationshipManager: RelationshipManager;
@@ -313,9 +309,21 @@ export class EnhancedIndexManager {
 
       // FIX: Add defensive checks for malformed YAML with undefined/null index
       // Previously: Assumed yamlLoad always returns valid data
-      // Now: Handle cases where YAML might be empty, null, or malformed
-      if (!loadedData) {
-        logger.warn('Loaded YAML is null or undefined, rebuilding index');
+      // Now: Validate structure deeply to ensure all required fields exist
+      if (!loadedData || typeof loadedData !== 'object') {
+        logger.warn('Loaded YAML is null or not an object, rebuilding index');
+        await this.buildIndex();
+        return;
+      }
+
+      // Validate required structure
+      const indexData = loadedData as any;
+      if (!indexData.metadata || !indexData.elements || !indexData.action_triggers) {
+        logger.warn('Invalid index structure (missing metadata, elements, or action_triggers), rebuilding', {
+          hasMetadata: !!indexData.metadata,
+          hasElements: !!indexData.elements,
+          hasActionTriggers: !!indexData.action_triggers
+        });
         await this.buildIndex();
         return;
       }
