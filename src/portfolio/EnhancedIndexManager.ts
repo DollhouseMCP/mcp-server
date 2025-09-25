@@ -309,12 +309,26 @@ export class EnhancedIndexManager {
   private async loadIndex(): Promise<void> {
     try {
       const yamlContent = await fs.readFile(this.indexPath, 'utf-8');
-      this.index = yamlLoad(yamlContent) as EnhancedIndex;
+      const loadedData = yamlLoad(yamlContent);
+
+      // FIX: Add defensive checks for malformed YAML with undefined/null index
+      // Previously: Assumed yamlLoad always returns valid data
+      // Now: Handle cases where YAML might be empty, null, or malformed
+      if (!loadedData) {
+        logger.warn('Loaded YAML is null or undefined, rebuilding index');
+        await this.buildIndex();
+        return;
+      }
+
+      this.index = loadedData as EnhancedIndex;
       this.lastLoaded = new Date();
 
+      // FIX: Add defensive checks for malformed YAML with undefined metadata
+      // Previously: Assumed metadata always exists, causing test failures
+      // Now: Safely handle cases where metadata might be undefined
       logger.info('Enhanced index loaded', {
-        elements: this.index.metadata.total_elements,
-        version: this.index.metadata.version
+        elements: this.index?.metadata?.total_elements ?? 0,
+        version: this.index?.metadata?.version ?? 'unknown'
       });
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
@@ -375,22 +389,29 @@ export class EnhancedIndexManager {
 
         for (const entry of entries) {
           // Skip if not in update list (when specified)
-          if (options.updateOnly && !options.updateOnly.includes(entry.metadata.name)) {
+          // FIX: Add defensive check for entry.metadata
+          const entryName = entry.metadata?.name;
+          if (!entryName) {
+            logger.warn('Skipping entry with undefined metadata.name');
+            continue;
+          }
+
+          if (options.updateOnly && !options.updateOnly.includes(entryName)) {
             // Preserve existing entry
-            if (existingIndex?.elements[elementType]?.[entry.metadata.name]) {
-              newIndex.elements[elementType][entry.metadata.name] =
-                existingIndex.elements[elementType][entry.metadata.name];
+            if (existingIndex?.elements[elementType]?.[entryName]) {
+              newIndex.elements[elementType][entryName] =
+                existingIndex.elements[elementType][entryName];
               continue;
             }
           }
 
           // Build element definition
           const elementDef = await this.buildElementDefinition(entry, existingIndex);
-          newIndex.elements[elementType][entry.metadata.name] = elementDef;
+          newIndex.elements[elementType][entryName] = elementDef;
           newIndex.metadata.total_elements++;
 
           // Extract action triggers
-          this.extractActionTriggers(elementDef, entry.metadata.name, newIndex.action_triggers);
+          this.extractActionTriggers(elementDef, entryName, newIndex.action_triggers);
         }
       }
 
@@ -406,7 +427,7 @@ export class EnhancedIndexManager {
       }
 
       // Save to file
-      await this.saveIndex(newIndex);
+      await this.saveIndexToFile(newIndex);
 
       this.index = newIndex;
       this.lastLoaded = new Date();
@@ -439,25 +460,28 @@ export class EnhancedIndexManager {
     entry: IndexEntry,
     existingIndex: EnhancedIndex | null
   ): Promise<ElementDefinition> {
-    const existing = existingIndex?.elements[entry.elementType]?.[entry.metadata.name];
+    // FIX: Add defensive checks for entry.metadata properties
+    const entryName = entry.metadata?.name || 'unknown';
+    const existing = existingIndex?.elements[entry.elementType]?.[entryName];
 
     const definition: ElementDefinition = {
       core: {
-        name: entry.metadata.name,
+        name: entryName,
         type: entry.elementType,
-        version: entry.metadata.version,
-        description: entry.metadata.description,
-        created: entry.metadata.created,
-        updated: entry.metadata.updated || new Date().toISOString()
+        version: entry.metadata?.version,
+        description: entry.metadata?.description,
+        created: entry.metadata?.created,
+        updated: entry.metadata?.updated || new Date().toISOString()
       }
     };
 
     // Add search fields if present
-    if (entry.metadata.keywords || entry.metadata.tags || entry.metadata.triggers) {
+    // FIX: Add defensive checks for metadata properties
+    if (entry.metadata?.keywords || entry.metadata?.tags || entry.metadata?.triggers) {
       definition.search = {
-        keywords: entry.metadata.keywords,
-        tags: entry.metadata.tags,
-        triggers: entry.metadata.triggers
+        keywords: entry.metadata?.keywords,
+        tags: entry.metadata?.tags,
+        triggers: entry.metadata?.triggers
       };
     }
 
@@ -490,21 +514,27 @@ export class EnhancedIndexManager {
   private generateDefaultActions(entry: IndexEntry): Record<string, ActionDefinition> | undefined {
     const actions: Record<string, ActionDefinition> = {};
 
+    // FIX: Add defensive check for metadata.name
+    const entryName = entry.metadata?.name || '';
+    if (!entryName) {
+      return undefined;
+    }
+
     // Generate based on element type
     switch (entry.elementType) {
       case 'personas':
-        if (entry.metadata.name.includes('debug')) {
+        if (entryName.includes('debug')) {
           actions.debug = { verb: 'debug', behavior: 'activate', confidence: 0.8 };
           actions.fix = { verb: 'fix', behavior: 'activate', confidence: 0.7 };
         }
-        if (entry.metadata.name.includes('creative')) {
+        if (entryName.includes('creative')) {
           actions.write = { verb: 'write', behavior: 'activate', confidence: 0.8 };
           actions.create = { verb: 'create', behavior: 'activate', confidence: 0.8 };
         }
         break;
 
       case 'memories':
-        if (entry.metadata.name.includes('session')) {
+        if (entryName.includes('session')) {
           actions.recall = { verb: 'recall', behavior: 'retrieve', confidence: 0.7 };
           actions.remember = { verb: 'remember', behavior: 'retrieve', confidence: 0.7 };
         }
@@ -545,7 +575,7 @@ export class EnhancedIndexManager {
   /**
    * Save index to YAML file
    */
-  private async saveIndex(index: EnhancedIndex): Promise<void> {
+  private async saveIndexToFile(index: EnhancedIndex): Promise<void> {
     try {
       // Ensure directory exists
       const dir = path.dirname(this.indexPath);
@@ -665,7 +695,7 @@ export class EnhancedIndexManager {
 
     if (found) {
       index.metadata.last_updated = new Date().toISOString();
-      await this.saveIndex(index);
+      await this.saveIndexToFile(index);
     }
   }
 
@@ -682,7 +712,18 @@ export class EnhancedIndexManager {
     index.extensions[key] = data;
     index.metadata.last_updated = new Date().toISOString();
 
-    await this.saveIndex(index);
+    await this.saveIndexToFile(index);
+  }
+
+  /**
+   * Save the current index to disk
+   * Public method for tests and external callers
+   */
+  public async saveIndex(): Promise<void> {
+    if (!this.index) {
+      throw new Error('No index loaded to save');
+    }
+    await this.saveIndexToFile(this.index);
   }
 
   /**
