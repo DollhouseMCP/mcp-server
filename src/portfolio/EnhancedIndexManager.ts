@@ -204,6 +204,12 @@ export class EnhancedIndexManager {
   private memoryCleanupInterval: NodeJS.Timeout | null = null;
   private lastMemoryCleanup: Date = new Date();
 
+  // Batch metrics update support for high-volume scenarios
+  private metricsBatch: Map<string, number> = new Map();
+  private metricsFlushTimer: NodeJS.Timeout | null = null;
+  private readonly METRICS_BATCH_SIZE = 10;
+  private readonly METRICS_FLUSH_INTERVAL = 5000; // 5 seconds
+
   private constructor() {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
@@ -1303,9 +1309,53 @@ export class EnhancedIndexManager {
 
   /**
    * Track trigger usage for optimization metrics
-   * Persists usage data to help optimize search ranking
+   * Supports batching for high-volume scenarios to reduce disk writes
+   *
+   * @param trigger - The trigger verb to track
+   * @param immediate - Force immediate write (bypass batching)
    */
-  private async trackTriggerUsage(trigger: string): Promise<void> {
+  private async trackTriggerUsage(trigger: string, immediate: boolean = false): Promise<void> {
+    try {
+      // Add to batch
+      this.metricsBatch.set(trigger, (this.metricsBatch.get(trigger) || 0) + 1);
+
+      // Check if we should flush immediately
+      const shouldFlush = immediate ||
+                         this.metricsBatch.size >= this.METRICS_BATCH_SIZE;
+
+      if (shouldFlush) {
+        await this.flushMetricsBatch();
+      } else {
+        // Schedule a flush if not already scheduled
+        if (!this.metricsFlushTimer) {
+          this.metricsFlushTimer = setTimeout(() => {
+            this.flushMetricsBatch().catch(error => {
+              logger.warn('Failed to flush metrics batch', { error });
+            });
+          }, this.METRICS_FLUSH_INTERVAL);
+        }
+      }
+    } catch (error) {
+      // Don't fail the operation if metrics tracking fails
+      logger.warn('Failed to track trigger usage', { trigger, error });
+    }
+  }
+
+  /**
+   * Flush batched metrics to disk
+   * Combines multiple metric updates into a single disk write for efficiency
+   */
+  private async flushMetricsBatch(): Promise<void> {
+    if (this.metricsBatch.size === 0) {
+      return;
+    }
+
+    // Clear the timer
+    if (this.metricsFlushTimer) {
+      clearTimeout(this.metricsFlushTimer);
+      this.metricsFlushTimer = null;
+    }
+
     try {
       const index = await this.getIndex();
 
@@ -1323,22 +1373,33 @@ export class EnhancedIndexManager {
       const today = new Date().toISOString().split('T')[0];
       const now = new Date().toISOString();
 
-      // Update usage count
-      metrics.usage_count[trigger] = (metrics.usage_count[trigger] || 0) + 1;
-
-      // Update last used timestamp
-      metrics.last_used[trigger] = now;
-
-      // Set first used if not present
-      if (!metrics.first_used[trigger]) {
-        metrics.first_used[trigger] = now;
-      }
-
-      // Track daily usage
+      // Initialize daily usage for today
       if (!metrics.daily_usage[today]) {
         metrics.daily_usage[today] = {};
       }
-      metrics.daily_usage[today][trigger] = (metrics.daily_usage[today][trigger] || 0) + 1;
+
+      // Process all batched metrics
+      for (const [trigger, count] of this.metricsBatch.entries()) {
+        // Update usage count
+        metrics.usage_count[trigger] = (metrics.usage_count[trigger] || 0) + count;
+
+        // Update last used timestamp
+        metrics.last_used[trigger] = now;
+
+        // Set first used if not present
+        if (!metrics.first_used[trigger]) {
+          metrics.first_used[trigger] = now;
+        }
+
+        // Track daily usage
+        metrics.daily_usage[today][trigger] = (metrics.daily_usage[today][trigger] || 0) + count;
+
+        logger.debug('Flushing batched metrics', {
+          trigger,
+          batch_count: count,
+          total_uses: metrics.usage_count[trigger]
+        });
+      }
 
       // Clean up old daily usage (keep last 30 days)
       const cutoffDate = new Date();
@@ -1357,20 +1418,40 @@ export class EnhancedIndexManager {
       // Persist the updated metrics
       await this.writeToFile(index);
 
-      logger.debug('Trigger usage tracked', {
-        trigger,
-        total_uses: metrics.usage_count[trigger],
-        today_uses: metrics.daily_usage[today][trigger]
+      logger.info('Metrics batch flushed', {
+        triggers_updated: this.metricsBatch.size,
+        total_updates: Array.from(this.metricsBatch.values()).reduce((a, b) => a + b, 0)
       });
+
+      // Clear the batch
+      this.metricsBatch.clear();
     } catch (error) {
-      // Don't fail the operation if metrics tracking fails
-      logger.warn('Failed to track trigger usage', { trigger, error });
+      logger.error('Failed to flush metrics batch', { error });
+      // Don't clear batch on error - will retry on next trigger
     }
   }
 
   /**
-   * Get trigger usage metrics for optimization analysis
-   * Returns sorted list of triggers by usage frequency
+   * Get comprehensive trigger usage metrics for optimization analysis
+   *
+   * @returns Promise resolving to sorted array of trigger metrics
+   * @returns {Array<Object>} metrics - Array of trigger metric objects sorted by usage frequency (descending)
+   * @returns {string} metrics[].trigger - The trigger word/verb
+   * @returns {number} metrics[].usage_count - Total number of times this trigger has been used
+   * @returns {string} metrics[].last_used - ISO timestamp of most recent usage
+   * @returns {string} metrics[].first_used - ISO timestamp of first recorded usage
+   * @returns {number} metrics[].daily_average - Average daily usage based on historical data
+   * @returns {'increasing'|'stable'|'decreasing'} metrics[].trend - Usage trend based on last 7 days
+   *
+   * @example
+   * const metrics = await indexManager.getTriggerMetrics();
+   * // Returns: [
+   * //   { trigger: 'debug', usage_count: 45, trend: 'increasing', ... },
+   * //   { trigger: 'analyze', usage_count: 32, trend: 'stable', ... }
+   * // ]
+   *
+   * @public
+   * @since 1.9.9
    */
   public async getTriggerMetrics(): Promise<{
     trigger: string;
@@ -1438,6 +1519,74 @@ export class EnhancedIndexManager {
 
     // Sort by usage count (descending)
     return results.sort((a, b) => b.usage_count - a.usage_count);
+  }
+
+  /**
+   * Export trigger metrics for external analytics systems
+   * Provides data in a format suitable for analytics platforms
+   *
+   * @param format - Export format ('json' | 'csv' | 'prometheus')
+   * @returns Formatted metrics data
+   *
+   * @example
+   * // Export for Prometheus monitoring
+   * const prometheusMetrics = await indexManager.exportMetrics('prometheus');
+   *
+   * // Export as CSV for data analysis
+   * const csvData = await indexManager.exportMetrics('csv');
+   */
+  public async exportMetrics(format: 'json' | 'csv' | 'prometheus' = 'json'): Promise<string> {
+    const metrics = await this.getTriggerMetrics();
+
+    switch (format) {
+      case 'csv': {
+        // CSV header
+        let csv = 'trigger,usage_count,last_used,first_used,daily_average,trend\n';
+
+        // CSV rows
+        for (const metric of metrics) {
+          csv += `"${metric.trigger}",${metric.usage_count},"${metric.last_used}","${metric.first_used}",${metric.daily_average.toFixed(2)},"${metric.trend}"\n`;
+        }
+
+        return csv;
+      }
+
+      case 'prometheus': {
+        let output = '';
+        const timestamp = Date.now();
+
+        // Prometheus metrics format
+        output += '# HELP enhanced_index_trigger_usage Total usage count for each trigger\n';
+        output += '# TYPE enhanced_index_trigger_usage counter\n';
+
+        for (const metric of metrics) {
+          output += `enhanced_index_trigger_usage{trigger="${metric.trigger}",trend="${metric.trend}"} ${metric.usage_count} ${timestamp}\n`;
+        }
+
+        output += '\n# HELP enhanced_index_trigger_daily_avg Average daily usage for each trigger\n';
+        output += '# TYPE enhanced_index_trigger_daily_avg gauge\n';
+
+        for (const metric of metrics) {
+          output += `enhanced_index_trigger_daily_avg{trigger="${metric.trigger}"} ${metric.daily_average.toFixed(2)} ${timestamp}\n`;
+        }
+
+        return output;
+      }
+
+      case 'json':
+      default: {
+        return JSON.stringify({
+          timestamp: new Date().toISOString(),
+          metrics,
+          summary: {
+            total_triggers: metrics.length,
+            total_usage: metrics.reduce((sum, m) => sum + m.usage_count, 0),
+            trending_up: metrics.filter(m => m.trend === 'increasing').length,
+            trending_down: metrics.filter(m => m.trend === 'decreasing').length
+          }
+        }, null, 2);
+      }
+    }
   }
 
   /**
