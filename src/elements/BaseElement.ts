@@ -83,10 +83,11 @@ export abstract class BaseElement implements IElement {
     this.version = metadata.version || '1.0.0';
     
     // Initialize metadata with defaults
+    // FIX #1124: Preserve all metadata fields including triggers
     this.metadata = {
+      ...metadata,  // Preserve all fields from input
       name: metadata.name || 'Unnamed Element',
       description: metadata.description || '',
-      author: metadata.author,
       version: this.version,
       created: metadata.created || new Date().toISOString(),
       modified: metadata.modified || new Date().toISOString(),
