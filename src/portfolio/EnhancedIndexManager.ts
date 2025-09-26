@@ -500,6 +500,15 @@ export class EnhancedIndexManager {
         tags: entry.metadata?.tags,
         triggers: entry.metadata?.triggers
       };
+
+      // Debug logging for trigger extraction
+      if (entry.metadata?.triggers && entry.metadata.triggers.length > 0) {
+        logger.debug('Found triggers for element', {
+          name: entryName,
+          type: entry.elementType,
+          triggers: entry.metadata.triggers
+        });
+      }
     }
 
     // Preserve custom fields from existing
@@ -568,25 +577,82 @@ export class EnhancedIndexManager {
 
   /**
    * Extract action triggers from element definition
+   *
+   * FIX: Enhanced verb extraction from multiple sources
+   * Previously: Only checked elementDef.actions which personas don't have
+   * Now: Checks search.triggers (personas), actions field, and keywords
    */
   private extractActionTriggers(
     elementDef: ElementDefinition,
     elementName: string,
     triggers: Record<string, string[]>
   ): void {
-    if (!elementDef.actions) return;
+    // 1. Check search.triggers field (used by personas and other elements)
+    if (elementDef.search?.triggers) {
+      const metaTriggers = Array.isArray(elementDef.search.triggers)
+        ? elementDef.search.triggers
+        : [elementDef.search.triggers];
 
-    for (const [actionKey, action] of Object.entries(elementDef.actions)) {
-      const verb = action.verb || actionKey;
-
-      if (!triggers[verb]) {
-        triggers[verb] = [];
-      }
-
-      if (!triggers[verb].includes(elementName)) {
-        triggers[verb].push(elementName);
+      for (const trigger of metaTriggers) {
+        if (typeof trigger === 'string') {
+          const verb = trigger.toLowerCase();
+          if (!triggers[verb]) {
+            triggers[verb] = [];
+          }
+          if (!triggers[verb].includes(elementName)) {
+            triggers[verb].push(elementName);
+          }
+        }
       }
     }
+
+    // 2. Check actions field (for elements with explicit action definitions)
+    if (elementDef.actions) {
+      for (const [actionKey, action] of Object.entries(elementDef.actions)) {
+        const verb = action.verb || actionKey;
+
+        if (!triggers[verb]) {
+          triggers[verb] = [];
+        }
+
+        if (!triggers[verb].includes(elementName)) {
+          triggers[verb].push(elementName);
+        }
+      }
+    }
+
+    // 3. Extract verbs from keywords if present
+    if (elementDef.search?.keywords) {
+      const keywords = Array.isArray(elementDef.search.keywords)
+        ? elementDef.search.keywords
+        : [elementDef.search.keywords];
+
+      // Check if any keywords are known verbs
+      for (const keyword of keywords) {
+        if (typeof keyword === 'string' && this.looksLikeVerb(keyword)) {
+          const verb = keyword.toLowerCase();
+          if (!triggers[verb]) {
+            triggers[verb] = [];
+          }
+          if (!triggers[verb].includes(elementName)) {
+            triggers[verb].push(elementName);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Simple heuristic to check if a word might be a verb
+   */
+  private looksLikeVerb(word: string): boolean {
+    // Common verb patterns
+    const verbPatterns = [
+      /^(debug|fix|create|write|test|run|explain|analyze|review|optimize|document|troubleshoot|solve|investigate)/,
+      /(ify|ize|ate|ect|ute)$/,  // Common verb endings
+    ];
+
+    return verbPatterns.some(pattern => pattern.test(word.toLowerCase()));
   }
 
   /**
