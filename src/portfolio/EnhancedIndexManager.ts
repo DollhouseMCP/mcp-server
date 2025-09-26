@@ -575,84 +575,206 @@ export class EnhancedIndexManager {
     return Object.keys(actions).length > 0 ? actions : undefined;
   }
 
+  // Pre-compiled regex patterns for performance
+  private static readonly VERB_PREFIX_PATTERN = /^(debug|fix|create|write|test|run|explain|analyze|review|optimize|troubleshoot|solve|investigate|build|deploy|configure|install|update|delete|remove|generate|execute|validate|search|find|check)/;
+  private static readonly VERB_SUFFIX_PATTERN = /(ify|ize|ate)$/;
+
+  // Limits for DoS protection
+  private static readonly MAX_TRIGGERS_PER_ELEMENT = 50;
+  private static readonly MAX_TRIGGER_LENGTH = 50;
+
   /**
    * Extract action triggers from element definition
    *
    * FIX: Enhanced verb extraction from multiple sources
    * Previously: Only checked elementDef.actions which personas don't have
    * Now: Checks search.triggers (personas), actions field, and keywords
+   *
+   * Security improvements:
+   * - Added trigger count limits
+   * - Added trigger length validation
+   * - Using Sets for O(1) duplicate checking
+   * - Pre-compiled regex patterns
    */
   private extractActionTriggers(
     elementDef: ElementDefinition,
     elementName: string,
     triggers: Record<string, string[]>
   ): void {
-    // 1. Check search.triggers field (used by personas and other elements)
-    if (elementDef.search?.triggers) {
-      const metaTriggers = Array.isArray(elementDef.search.triggers)
-        ? elementDef.search.triggers
-        : [elementDef.search.triggers];
+    // Null safety check
+    if (!elementDef) return;
 
-      for (const trigger of metaTriggers) {
-        if (typeof trigger === 'string') {
-          const verb = trigger.toLowerCase();
-          if (!triggers[verb]) {
-            triggers[verb] = [];
-          }
-          if (!triggers[verb].includes(elementName)) {
-            triggers[verb].push(elementName);
-          }
-        }
+    // Track unique triggers for this element to prevent duplicates
+    const elementTriggers = new Set<string>();
+    const triggerCountRef = { count: 0 }; // Use object reference to track count across methods
+
+    // Extract from search.triggers field
+    this.extractTriggersFromSearchField(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Extract from actions field
+    this.extractTriggersFromActions(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Extract from keywords (limited to prevent DoS)
+    this.extractTriggersFromKeywords(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+  }
+
+  /**
+   * Extract triggers from search.triggers field
+   */
+  private extractTriggersFromSearchField(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
+    if (!elementDef.search?.triggers) return;
+
+    const triggerArray = this.normalizeToArray(elementDef.search.triggers);
+
+    for (const trigger of triggerArray) {
+      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
+        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+        break;
       }
-    }
 
-    // 2. Check actions field (for elements with explicit action definitions)
-    if (elementDef.actions) {
-      for (const [actionKey, action] of Object.entries(elementDef.actions)) {
-        const verb = action.verb || actionKey;
+      const normalizedTrigger = this.normalizeTrigger(trigger);
+      if (!normalizedTrigger) continue;
 
-        if (!triggers[verb]) {
-          triggers[verb] = [];
-        }
-
-        if (!triggers[verb].includes(elementName)) {
-          triggers[verb].push(elementName);
-        }
-      }
-    }
-
-    // 3. Extract verbs from keywords if present
-    if (elementDef.search?.keywords) {
-      const keywords = Array.isArray(elementDef.search.keywords)
-        ? elementDef.search.keywords
-        : [elementDef.search.keywords];
-
-      // Check if any keywords are known verbs
-      for (const keyword of keywords) {
-        if (typeof keyword === 'string' && this.looksLikeVerb(keyword)) {
-          const verb = keyword.toLowerCase();
-          if (!triggers[verb]) {
-            triggers[verb] = [];
-          }
-          if (!triggers[verb].includes(elementName)) {
-            triggers[verb].push(elementName);
-          }
-        }
+      if (!elementTriggers.has(normalizedTrigger)) {
+        elementTriggers.add(normalizedTrigger);
+        this.addTriggerMapping(normalizedTrigger, elementName, triggers);
+        triggerCountRef.count++;
       }
     }
   }
 
   /**
-   * Simple heuristic to check if a word might be a verb
+   * Extract triggers from actions field
+   */
+  private extractTriggersFromActions(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
+    if (!elementDef.actions) return;
+
+    for (const [actionKey, action] of Object.entries(elementDef.actions)) {
+      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
+        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+        break;
+      }
+
+      const verb = action.verb || actionKey;
+      const normalizedVerb = this.normalizeTrigger(verb);
+      if (!normalizedVerb) continue;
+
+      if (!elementTriggers.has(normalizedVerb)) {
+        elementTriggers.add(normalizedVerb);
+        this.addTriggerMapping(normalizedVerb, elementName, triggers);
+        triggerCountRef.count++;
+      }
+    }
+  }
+
+  /**
+   * Extract verb-like keywords as triggers
+   */
+  private extractTriggersFromKeywords(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
+    if (!elementDef.search?.keywords) return;
+
+    const keywords = this.normalizeToArray(elementDef.search.keywords);
+
+    for (const keyword of keywords) {
+      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
+        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+        break;
+      }
+
+      const normalizedKeyword = this.normalizeTrigger(keyword);
+      if (!normalizedKeyword || !this.looksLikeVerb(normalizedKeyword)) continue;
+
+      if (!elementTriggers.has(normalizedKeyword)) {
+        elementTriggers.add(normalizedKeyword);
+        this.addTriggerMapping(normalizedKeyword, elementName, triggers);
+        triggerCountRef.count++;
+      }
+    }
+  }
+
+  /**
+   * Normalize a value to an array of strings
+   */
+  private normalizeToArray(value: any): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return value.filter(v => typeof v === 'string');
+    }
+    if (typeof value === 'string') {
+      return [value];
+    }
+    return [];
+  }
+
+  /**
+   * Normalize and validate a trigger string
+   */
+  private normalizeTrigger(trigger: any): string | null {
+    if (typeof trigger !== 'string') return null;
+
+    // Trim and lowercase
+    const normalized = trigger.trim().toLowerCase();
+
+    // Validate
+    if (!normalized ||
+        normalized.length > EnhancedIndexManager.MAX_TRIGGER_LENGTH ||
+        !/^[a-z][a-z-]*$/.test(normalized)) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Add a trigger to element mapping
+   */
+  private addTriggerMapping(
+    verb: string,
+    elementName: string,
+    triggers: Record<string, string[]>
+  ): void {
+    if (!triggers[verb]) {
+      triggers[verb] = [];
+    }
+    // Using array for now, but could optimize to Set if needed
+    if (!triggers[verb].includes(elementName)) {
+      triggers[verb].push(elementName);
+    }
+  }
+
+  /**
+   * Check if a word looks like a verb using pre-compiled patterns
+   * Avoid false positives like "documentation" which ends in "ation" (noun suffix)
    */
   private looksLikeVerb(word: string): boolean {
-    // Common verb patterns
-    const verbPatterns = [
-      /^(debug|fix|create|write|test|run|explain|analyze|review|optimize|document|troubleshoot|solve|investigate)/,
-      /(ify|ize|ate|ect|ute)$/,  // Common verb endings
-    ];
+    const lowerWord = word.toLowerCase();
 
-    return verbPatterns.some(pattern => pattern.test(word.toLowerCase()));
+    // Check for noun suffixes that should NOT be considered verbs
+    const nounSuffixes = /(tion|sion|ment|ness|ance|ence|ity|ism|ship|hood|dom|ery)$/;
+    if (nounSuffixes.test(lowerWord)) {
+      return false;
+    }
+
+    return EnhancedIndexManager.VERB_PREFIX_PATTERN.test(lowerWord) ||
+           EnhancedIndexManager.VERB_SUFFIX_PATTERN.test(lowerWord);
   }
 
   /**
