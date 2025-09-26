@@ -171,6 +171,95 @@ entries: []`;
     });
   });
 
+  describe('Edge Cases', () => {
+    it('should filter out triggers with invalid characters', async () => {
+      const memoryWithInvalidTriggers = `metadata:
+  name: "memory-invalid-chars"
+  description: "Memory with invalid character triggers"
+  triggers: ["valid-trigger", "invalid!@#", "another$test", "good_one", "bad space", "okay-dash"]
+  version: "1.0.0"
+
+entries: []`;
+
+      await fs.writeFile(path.join(memoriesDir, 'invalid-chars.yaml'), memoryWithInvalidTriggers);
+      const memory = await memoryManager.load('invalid-chars.yaml');
+
+      // Should only include valid triggers (alphanumeric, hyphens, underscores)
+      expect(memory.metadata.triggers).toBeDefined();
+      expect(memory.metadata.triggers).toContain('valid-trigger');
+      expect(memory.metadata.triggers).toContain('good_one');
+      expect(memory.metadata.triggers).toContain('okay-dash');
+
+      // Invalid triggers should be filtered out
+      expect(memory.metadata.triggers).not.toContain('invalid!@#');
+      expect(memory.metadata.triggers).not.toContain('another$test');
+      expect(memory.metadata.triggers).not.toContain('bad space');
+    });
+
+    it('should handle extremely long trigger lists', async () => {
+      // Create a memory with many triggers
+      const manyTriggers = Array.from({ length: 100 }, (_, i) => `trigger-${i}`);
+      const memoryWithManyTriggers = `metadata:
+  name: "memory-many-triggers"
+  description: "Memory with many triggers"
+  triggers: ${JSON.stringify(manyTriggers)}
+  version: "1.0.0"
+
+entries: []`;
+
+      await fs.writeFile(path.join(memoriesDir, 'many-triggers.yaml'), memoryWithManyTriggers);
+      const memory = await memoryManager.load('many-triggers.yaml');
+
+      // Should handle all triggers without error
+      expect(memory.metadata.triggers).toBeDefined();
+      expect(Array.isArray(memory.metadata.triggers)).toBe(true);
+      expect(memory.metadata.triggers?.length).toBe(100);
+    });
+
+    it('should truncate triggers that exceed maximum length', async () => {
+      const longTrigger = 'a'.repeat(100); // Much longer than MAX_TAG_LENGTH
+      const memoryWithLongTrigger = `metadata:
+  name: "memory-long-trigger"
+  description: "Memory with overly long trigger"
+  triggers: ["short", "${longTrigger}"]
+  version: "1.0.0"
+
+entries: []`;
+
+      await fs.writeFile(path.join(memoriesDir, 'long-trigger.yaml'), memoryWithLongTrigger);
+      const memory = await memoryManager.load('long-trigger.yaml');
+
+      // Long trigger should be truncated to MAX_TAG_LENGTH
+      expect(memory.metadata.triggers).toBeDefined();
+      expect(memory.metadata.triggers).toContain('short');
+
+      // The long trigger should be truncated
+      const truncatedTrigger = memory.metadata.triggers?.find(t => t !== 'short');
+      expect(truncatedTrigger).toBeDefined();
+      expect(truncatedTrigger?.length).toBeLessThanOrEqual(50); // MAX_TAG_LENGTH default
+    });
+
+    it('should handle mixed valid and invalid trigger types', async () => {
+      const memoryWithMixedTypes = `metadata:
+  name: "memory-mixed-types"
+  description: "Memory with mixed trigger types"
+  triggers: ["valid-string", 123, null, true, {"object": "value"}, ["array"], "another-valid"]
+  version: "1.0.0"
+
+entries: []`;
+
+      await fs.writeFile(path.join(memoriesDir, 'mixed-types.yaml'), memoryWithMixedTypes);
+
+      // Should not throw error, but only include valid string triggers
+      const memory = await memoryManager.load('mixed-types.yaml');
+
+      expect(memory.metadata.triggers).toBeDefined();
+      expect(memory.metadata.triggers).toContain('valid-string');
+      expect(memory.metadata.triggers).toContain('another-valid');
+      expect(memory.metadata.triggers?.length).toBe(2);
+    });
+  });
+
   describe('Enhanced Index Integration', () => {
     it('should make triggers available for portfolio indexing', async () => {
       // Copy fixture to memories directory

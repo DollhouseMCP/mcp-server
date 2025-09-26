@@ -28,6 +28,10 @@ import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 
+// Constants for trigger validation
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 // Initialize DOMPurify with JSDOM
 const window = new JSDOM('').window;
 const purify = DOMPurify(window as any);
@@ -165,7 +169,9 @@ export class Memory extends BaseElement implements IElement {
         undefined,
       // FIX #1124: Preserve triggers for Enhanced Index
       triggers: Array.isArray(metadata.triggers) ?
-        metadata.triggers.map(t => sanitizeInput(t, 50)) :
+        metadata.triggers
+          .map(t => sanitizeInput(t, MAX_TRIGGER_LENGTH))
+          .filter(t => t && TRIGGER_VALIDATION_REGEX.test(t)) : // Only allow valid trigger patterns
         []
     };
 
