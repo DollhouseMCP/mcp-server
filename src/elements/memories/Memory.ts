@@ -28,8 +28,16 @@ import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 
-// Constants for trigger validation
+/**
+ * Maximum length for individual trigger words used in Enhanced Index
+ * @constant {number}
+ */
 const MAX_TRIGGER_LENGTH = 50;
+
+/**
+ * Validation pattern for trigger words - allows alphanumeric characters, hyphens, and underscores
+ * @constant {RegExp}
+ */
 const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
 
 // Initialize DOMPurify with JSDOM

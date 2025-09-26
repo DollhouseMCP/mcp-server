@@ -819,6 +819,12 @@ export class EnhancedIndexManager {
   /**
    * Add a trigger to element mapping
    * Preserves original element name casing for proper resolution
+   *
+   * TODO: Future enhancement - Implement persistent trigger indexing for better performance at scale
+   *       Could use a dedicated trigger index file with lazy loading and incremental updates
+   *
+   * TODO: Add trigger usage metrics to track which triggers are most frequently used
+   *       This data could be used to optimize Enhanced Index search ranking
    */
   private addTriggerMapping(
     verb: string,
