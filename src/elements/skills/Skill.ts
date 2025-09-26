@@ -18,6 +18,10 @@ import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
+// Validation constants for skill triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 // Extend IElementMetadata with skill-specific fields
 export interface SkillMetadata extends IElementMetadata {
   languages?: string[];           // Programming/spoken languages this skill works with
@@ -28,6 +32,7 @@ export interface SkillMetadata extends IElementMetadata {
   examples?: SkillExample[];      // Usage examples
   certification?: string;         // External certification or validation
   proficiency_level?: number;     // 1-100 proficiency level
+  triggers?: string[];            // Action verbs that trigger this skill (e.g., "analyze", "validate", "optimize")
 }
 
 export interface SkillParameter {

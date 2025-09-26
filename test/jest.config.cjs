@@ -31,7 +31,8 @@ const config = {
     'EnhancedIndexManager\\.extractActionTriggers\\.test\\.ts$',  // ESM mocking issues with logger
     'EnhancedIndexManager\\.telemetry\\.test\\.ts$',  // ESM mocking issues with ConfigManager
     'EnhancedIndexManager\\.triggerMetrics\\.test\\.ts$',  // ESM compatibility issues with rebuild method
-    'memory-enhanced-index\\.test\\.ts$'  // ESM compatibility issues with EnhancedIndexManager
+    'memory-enhanced-index\\.test\\.ts$',  // ESM compatibility issues with EnhancedIndexManager
+    'skill-enhanced-index\\.test\\.ts$'  // ESM compatibility issues with EnhancedIndexManager (Issue #1121)
   ],
   collectCoverageFrom: [
     'src/**/*.ts',
