@@ -203,11 +203,15 @@ describe('CI Environment Validation', () => {
 
   describe('GitHub Actions Integration', () => {
     it('should have GitHub-specific environment variables in CI', () => {
-      if (isCI) {
+      // Only check for GitHub-specific variables when actually in GitHub Actions
+      if (isCI && process.env.GITHUB_ACTIONS) {
         expect(process.env.GITHUB_WORKFLOW).toBeDefined();
         expect(process.env.GITHUB_RUN_ID).toBeDefined();
         expect(process.env.GITHUB_RUN_NUMBER).toBeDefined();
         expect(process.env.RUNNER_OS).toBeDefined();
+      } else if (isCI && !process.env.GITHUB_ACTIONS) {
+        // Skip this test when in CI but not GitHub Actions
+        console.log('⏭️  Skipping GitHub Actions specific checks - not in GitHub Actions environment');
       }
     });
 

@@ -119,11 +119,15 @@ describe('CI Environment Tests', () => {
     });
 
     it('should have appropriate CI environment variables', () => {
-      if (isCI) {
+      // Only check GitHub Actions specific variables when actually in GitHub Actions
+      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
         // GitHub Actions specific
         expect(process.env.GITHUB_ACTIONS).toBe('true');
         expect(process.env.RUNNER_OS).toBeDefined();
         expect(process.env.GITHUB_WORKSPACE).toBeDefined();
+      } else if (isCI && !process.env.GITHUB_ACTIONS) {
+        // Skip GitHub-specific checks when in other CI environments
+        console.log('⏭️  Skipping GitHub Actions specific checks - not in GitHub Actions environment');
       }
     });
   });
