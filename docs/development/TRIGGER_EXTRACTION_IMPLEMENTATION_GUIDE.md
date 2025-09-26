@@ -294,6 +294,82 @@ Fixes #[issue-number]
 - [ ] Backward compatible
 ```
 
+## Performance Expectations
+
+The trigger extraction system is designed to be efficient:
+
+- **Trigger extraction**: Should complete in <100ms for files up to 1MB
+- **Index rebuild**: With 1000+ elements should complete in <5 seconds
+- **Memory usage**: Should not exceed 50MB during trigger processing
+- **Search performance**: O(1) lookups with hash-based action_triggers map
+- **Validation overhead**: Negligible (<5ms) due to pre-compiled regex patterns
+
+Performance considerations:
+
+- Triggers are extracted once during element load, not on every access
+- Maximum 20 triggers per element prevents unbounded processing
+- 50-character limit per trigger keeps memory usage predictable
+- Index uses Maps for O(1) average-case lookups
+
+## Troubleshooting Common Issues
+
+### TypeScript Compilation Errors
+
+**Problem**: TypeScript errors about missing trigger field
+**Solution**: Ensure triggers field is added to the interface with proper typing:
+
+```typescript
+triggers?: string[];  // Note the optional ? operator
+```
+
+### Tests Failing in ESM Mode
+**Problem**: Jest tests fail with ESM import errors
+**Solution**: Add test file to ignore list in `test/jest.config.cjs`:
+```javascript
+testPathIgnorePatterns: [
+  // ... other patterns
+  'your-element-enhanced-index\\.test\\.ts$'
+]
+```
+
+### Index Not Updating
+**Problem**: Triggers not appearing in searches after adding
+**Solution**:
+1. Clear the capability index: `rm ~/.dollhouse/portfolio/capability-index.yaml`
+2. Restart the MCP server
+3. The index will rebuild automatically on next access
+
+### Invalid Characters in Triggers
+**Problem**: Triggers with spaces or special characters not working
+**Solution**: Only alphanumeric, hyphens, and underscores allowed. The validation regex is:
+```javascript
+/^[a-zA-Z0-9\-_]+$/
+```
+
+### Triggers Not Being Preserved
+**Problem**: Triggers disappear after saving element
+**Solution**: Check that the Manager's save method preserves the triggers array, even when empty:
+```typescript
+if (key === 'triggers' && Array.isArray(value)) {
+  acc[key] = value;  // Preserve even empty arrays
+}
+```
+
+## Version Compatibility
+
+> **Note**: This guide applies to **mcp-server v1.9.6+**.
+>
+> For earlier versions:
+> - v1.9.5 and below: Triggers not supported
+> - v1.9.6: Memory triggers added (PR #1133)
+> - v1.9.7+: Skills triggers added (PR #1136)
+> - Future: Templates and Agents triggers planned
+
+The trigger extraction system is backward compatible:
+- Elements without triggers continue to work normally
+- Existing elements can add triggers without breaking changes
+- Enhanced Index gracefully handles missing trigger fields
+
 ## Success Metrics
 
 Implementation is complete when:
@@ -308,9 +384,11 @@ Implementation is complete when:
 ## Support
 
 For questions or issues:
+
 - Review PR #1133 for Memory implementation reference
 - Check SESSION_NOTES_2025-09-26-memory-triggers.md
 - Create issue with `trigger-extraction` label
 
 ---
-*Based on successful Memory trigger implementation in PR #1133*
+
+*Last updated: September 2025 (v1.9.7) - Based on successful Memory trigger implementation in PR #1133*
