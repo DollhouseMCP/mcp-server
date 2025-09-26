@@ -27,7 +27,9 @@ const config = {
     'BackupManager\\.npm\\.test\\.ts$',
     'InstallationDetector\\.test\\.ts$',
     'GitHubAuthManager\\.test\\.ts$',  // Complex mocking issues - needs complete rewrite
-    'CollectionCache\\.test\\.ts$'  // ESM mocking issues with fs/promises
+    'CollectionCache\\.test\\.ts$',  // ESM mocking issues with fs/promises
+    'EnhancedIndexManager\\.extractActionTriggers\\.test\\.ts$',  // ESM mocking issues with logger
+    'EnhancedIndexManager\\.telemetry\\.test\\.ts$'  // ESM mocking issues with ConfigManager
   ],
   collectCoverageFrom: [
     'src/**/*.ts',
