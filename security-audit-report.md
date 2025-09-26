@@ -1,6 +1,6 @@
 # Security Audit Report
 
-Generated: 2025-09-25T22:43:08.228Z
+Generated: 2025-09-26T14:31:36.943Z
 Duration: 4ms
 
 ## Summary
@@ -22,7 +22,7 @@ Duration: 4ms
 
 #### DMCP-SEC-006: Security operation without audit logging
 
-- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-jJQ0km/auth-handler.js`
+- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-HrzRT9/auth-handler.js`
 - **Confidence**: medium
 - **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
 
