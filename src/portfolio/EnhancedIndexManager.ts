@@ -575,13 +575,56 @@ export class EnhancedIndexManager {
     return Object.keys(actions).length > 0 ? actions : undefined;
   }
 
-  // Pre-compiled regex patterns for performance
-  private static readonly VERB_PREFIX_PATTERN = /^(debug|fix|create|write|test|run|explain|analyze|review|optimize|troubleshoot|solve|investigate|build|deploy|configure|install|update|delete|remove|generate|execute|validate|search|find|check)/;
-  private static readonly VERB_SUFFIX_PATTERN = /(ify|ize|ate)$/;
+  // Configuration for verb extraction
+  private static readonly VERB_EXTRACTION_CONFIG = {
+    // Security limits for DoS protection
+    limits: {
+      maxTriggersPerElement: 50,  // Maximum triggers to extract per element
+      maxTriggerLength: 50,        // Maximum length for a single trigger
+      maxKeywordsToCheck: 100,     // Maximum keywords to process for verb detection
+    },
 
-  // Limits for DoS protection
-  private static readonly MAX_TRIGGERS_PER_ELEMENT = 50;
-  private static readonly MAX_TRIGGER_LENGTH = 50;
+    // Common verb prefixes broken down by category for maintainability
+    verbPrefixes: {
+      actions: ['create', 'build', 'make', 'generate', 'produce', 'write', 'compose'],
+      analysis: ['analyze', 'review', 'examine', 'investigate', 'inspect', 'evaluate', 'assess'],
+      debugging: ['debug', 'fix', 'troubleshoot', 'solve', 'resolve', 'repair', 'patch'],
+      operations: ['run', 'execute', 'start', 'stop', 'deploy', 'configure', 'install'],
+      modification: ['update', 'modify', 'change', 'edit', 'alter', 'transform', 'refactor'],
+      removal: ['delete', 'remove', 'clear', 'clean', 'purge', 'destroy', 'eliminate'],
+      information: ['explain', 'describe', 'document', 'search', 'find', 'check', 'validate'],
+      optimization: ['optimize', 'improve', 'enhance', 'streamline', 'accelerate'],
+      testing: ['test', 'verify', 'validate', 'confirm', 'assert', 'ensure'],
+    },
+
+    // Common verb suffixes that indicate action words
+    verbSuffixes: ['ify', 'ize', 'ate', 'en', 'fy'],
+
+    // Noun suffixes that indicate non-verbs (to filter out)
+    nounSuffixes: ['tion', 'sion', 'ment', 'ness', 'ance', 'ence', 'ity', 'ism', 'ship', 'hood', 'dom', 'ery', 'ing'],
+
+    // Telemetry settings
+    telemetry: {
+      enabled: false,  // Will be configurable via environment variable
+      sampleRate: 0.1, // Sample 10% of operations when enabled
+      metricsInterval: 60000, // Report metrics every 60 seconds
+    }
+  };
+
+  // Pre-compiled regex patterns built from config
+  private static readonly VERB_PREFIX_PATTERN = new RegExp(
+    `^(${Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes)
+      .flat()
+      .join('|')})`
+  );
+
+  private static readonly VERB_SUFFIX_PATTERN = new RegExp(
+    `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes.join('|')})$`
+  );
+
+  private static readonly NOUN_SUFFIX_PATTERN = new RegExp(
+    `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes.join('|')})$`
+  );
 
   /**
    * Extract action triggers from element definition
@@ -595,6 +638,12 @@ export class EnhancedIndexManager {
    * - Added trigger length validation
    * - Using Sets for O(1) duplicate checking
    * - Pre-compiled regex patterns
+   *
+   * Future enhancements:
+   * - Background deep content analysis for dynamic verb extraction
+   * - This could scan element descriptions and content to find action words
+   * - Would run asynchronously to avoid blocking main operations
+   * - Results would progressively enhance the index over time
    */
   private extractActionTriggers(
     elementDef: ElementDefinition,
@@ -603,6 +652,9 @@ export class EnhancedIndexManager {
   ): void {
     // Null safety check
     if (!elementDef) return;
+
+    // Start telemetry tracking if enabled
+    const telemetryStartTime = this.startTelemetry('extractActionTriggers');
 
     // Track unique triggers for this element to prevent duplicates
     const elementTriggers = new Set<string>();
@@ -616,6 +668,14 @@ export class EnhancedIndexManager {
 
     // Extract from keywords (limited to prevent DoS)
     this.extractTriggersFromKeywords(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Record telemetry
+    this.recordTelemetry('extractActionTriggers', telemetryStartTime, {
+      elementName,
+      elementType: elementDef.core?.type,
+      triggersExtracted: triggerCountRef.count,
+      uniqueTriggers: elementTriggers.size,
+    });
   }
 
   /**
@@ -633,8 +693,11 @@ export class EnhancedIndexManager {
     const triggerArray = this.normalizeToArray(elementDef.search.triggers);
 
     for (const trigger of triggerArray) {
-      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
-        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
         break;
       }
 
@@ -662,8 +725,11 @@ export class EnhancedIndexManager {
     if (!elementDef.actions) return;
 
     for (const [actionKey, action] of Object.entries(elementDef.actions)) {
-      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
-        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
         break;
       }
 
@@ -694,8 +760,11 @@ export class EnhancedIndexManager {
     const keywords = this.normalizeToArray(elementDef.search.keywords);
 
     for (const keyword of keywords) {
-      if (triggerCountRef.count >= EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT) {
-        logger.warn('Trigger limit exceeded for element', { elementName, limit: EnhancedIndexManager.MAX_TRIGGERS_PER_ELEMENT });
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
         break;
       }
 
@@ -735,7 +804,7 @@ export class EnhancedIndexManager {
 
     // Validate
     if (!normalized ||
-        normalized.length > EnhancedIndexManager.MAX_TRIGGER_LENGTH ||
+        normalized.length > EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggerLength ||
         !/^[a-z][a-z-]*$/.test(normalized)) {
       return null;
     }
@@ -745,18 +814,29 @@ export class EnhancedIndexManager {
 
   /**
    * Add a trigger to element mapping
+   * Preserves original element name casing for proper resolution
    */
   private addTriggerMapping(
     verb: string,
     elementName: string,
     triggers: Record<string, string[]>
   ): void {
-    if (!triggers[verb]) {
-      triggers[verb] = [];
+    // Store verb in lowercase for consistent lookup
+    const normalizedVerb = verb.toLowerCase();
+
+    if (!triggers[normalizedVerb]) {
+      triggers[normalizedVerb] = [];
     }
-    // Using array for now, but could optimize to Set if needed
-    if (!triggers[verb].includes(elementName)) {
-      triggers[verb].push(elementName);
+
+    // Preserve original element name casing for accurate resolution
+    // This supports various naming conventions users might use:
+    // - lowercase: debug-detective
+    // - kebab-case: Debug-Detective
+    // - snake_case: debug_detective
+    // - CamelCase: DebugDetective
+    // - Custom: DeBuG-DeTecTiVe
+    if (!triggers[normalizedVerb].includes(elementName)) {
+      triggers[normalizedVerb].push(elementName);
     }
   }
 
@@ -768,13 +848,119 @@ export class EnhancedIndexManager {
     const lowerWord = word.toLowerCase();
 
     // Check for noun suffixes that should NOT be considered verbs
-    const nounSuffixes = /(tion|sion|ment|ness|ance|ence|ity|ism|ship|hood|dom|ery)$/;
-    if (nounSuffixes.test(lowerWord)) {
+    if (EnhancedIndexManager.NOUN_SUFFIX_PATTERN.test(lowerWord)) {
       return false;
     }
 
+    // Check for verb patterns
     return EnhancedIndexManager.VERB_PREFIX_PATTERN.test(lowerWord) ||
            EnhancedIndexManager.VERB_SUFFIX_PATTERN.test(lowerWord);
+  }
+
+  /**
+   * Telemetry tracking infrastructure
+   */
+  private telemetryMetrics: Map<string, any> = new Map();
+  private telemetryTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Start telemetry tracking for an operation
+   */
+  private startTelemetry(operationName: string): number | null {
+    if (!this.isTelemetryEnabled()) return null;
+
+    // Sample based on configured rate
+    if (Math.random() > EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.sampleRate) {
+      return null;
+    }
+
+    return Date.now();
+  }
+
+  /**
+   * Record telemetry metrics for an operation
+   */
+  private recordTelemetry(
+    operationName: string,
+    startTime: number | null,
+    metrics: Record<string, any>
+  ): void {
+    if (!startTime || !this.isTelemetryEnabled()) return;
+
+    const duration = Date.now() - startTime;
+
+    // Aggregate metrics
+    if (!this.telemetryMetrics.has(operationName)) {
+      this.telemetryMetrics.set(operationName, {
+        count: 0,
+        totalDuration: 0,
+        avgDuration: 0,
+        maxDuration: 0,
+        minDuration: Infinity,
+        lastMetrics: {},
+      });
+    }
+
+    const stats = this.telemetryMetrics.get(operationName);
+    stats.count++;
+    stats.totalDuration += duration;
+    stats.avgDuration = stats.totalDuration / stats.count;
+    stats.maxDuration = Math.max(stats.maxDuration, duration);
+    stats.minDuration = Math.min(stats.minDuration, duration);
+    stats.lastMetrics = { ...metrics, duration };
+
+    // Log detailed metrics in debug mode
+    logger.debug(`Telemetry: ${operationName}`, {
+      duration,
+      ...metrics,
+    });
+
+    // Schedule periodic reporting
+    this.scheduleTelemetryReport();
+  }
+
+  /**
+   * Check if telemetry is enabled
+   */
+  private isTelemetryEnabled(): boolean {
+    // Check environment variable or config
+    return process.env.DOLLHOUSE_TELEMETRY_ENABLED === 'true' ||
+           EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled;
+  }
+
+  /**
+   * Schedule periodic telemetry reporting
+   */
+  private scheduleTelemetryReport(): void {
+    if (this.telemetryTimer) return;
+
+    this.telemetryTimer = setTimeout(() => {
+      this.reportTelemetry();
+      this.telemetryTimer = null;
+    }, EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.metricsInterval);
+  }
+
+  /**
+   * Report aggregated telemetry metrics
+   */
+  private reportTelemetry(): void {
+    if (this.telemetryMetrics.size === 0) return;
+
+    const report = {
+      timestamp: new Date().toISOString(),
+      metrics: Object.fromEntries(this.telemetryMetrics),
+    };
+
+    // Log summary report
+    logger.info('Telemetry Report', report);
+
+    // Future: Send to telemetry endpoint if configured
+    // if (process.env.DOLLHOUSE_TELEMETRY_ENDPOINT) {
+    //   this.sendTelemetryToEndpoint(report);
+    // }
+
+    // Clear metrics after reporting
+    this.telemetryMetrics.clear();
   }
 
   /**
