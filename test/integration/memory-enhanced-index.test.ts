@@ -74,8 +74,8 @@ describe('Memory Enhanced Index Integration', () => {
 
       await memory.addEntry(memData.content, ['test']);
 
-      const memoryPath = path.join(memoriesDir, `${memData.name}.yaml`);
-      await memoryManager.save(memory, memoryPath);
+      // Use relative path for save (MemoryManager expects basename, not full path)
+      await memoryManager.save(memory, `${memData.name}.yaml`);
     }
 
     // Force rebuild the Enhanced Index
