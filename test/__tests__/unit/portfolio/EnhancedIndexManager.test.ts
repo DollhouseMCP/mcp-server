@@ -269,7 +269,7 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
 
       // Verify the unknown fields are preserved
       const fileContent = await fs.readFile(testIndexPath, 'utf-8');
-      const parsed = JSON.parse(fileContent);
+      const parsed = yamlLoad(fileContent) as any;
 
       expect(parsed.experimentalFeatures).toBeDefined();
       expect(parsed.experimentalFeatures.features).toContain('quantum');
