@@ -820,11 +820,8 @@ export class EnhancedIndexManager {
    * Add a trigger to element mapping
    * Preserves original element name casing for proper resolution
    *
-   * TODO: Future enhancement - Implement persistent trigger indexing for better performance at scale
-   *       Could use a dedicated trigger index file with lazy loading and incremental updates
-   *
-   * TODO: Add trigger usage metrics to track which triggers are most frequently used
-   *       This data could be used to optimize Enhanced Index search ranking
+   * Note: Triggers are persisted in the index file under action_triggers
+   * Usage metrics are tracked via trackTriggerUsage() and can be retrieved with getTriggerMetrics()
    */
   private addTriggerMapping(
     verb: string,
@@ -1293,10 +1290,154 @@ export class EnhancedIndexManager {
 
   /**
    * Get elements by action verb
+   * Tracks usage metrics for trigger optimization
    */
   public async getElementsByAction(verb: string): Promise<string[]> {
     const index = await this.getIndex();
+
+    // Track trigger usage metrics
+    await this.trackTriggerUsage(verb);
+
     return index.action_triggers[verb] || [];
+  }
+
+  /**
+   * Track trigger usage for optimization metrics
+   * Persists usage data to help optimize search ranking
+   */
+  private async trackTriggerUsage(trigger: string): Promise<void> {
+    try {
+      const index = await this.getIndex();
+
+      // Initialize trigger metrics if not present
+      if (!index.metadata.trigger_metrics) {
+        index.metadata.trigger_metrics = {
+          usage_count: {},
+          last_used: {},
+          first_used: {},
+          daily_usage: {}
+        };
+      }
+
+      const metrics = index.metadata.trigger_metrics;
+      const today = new Date().toISOString().split('T')[0];
+      const now = new Date().toISOString();
+
+      // Update usage count
+      metrics.usage_count[trigger] = (metrics.usage_count[trigger] || 0) + 1;
+
+      // Update last used timestamp
+      metrics.last_used[trigger] = now;
+
+      // Set first used if not present
+      if (!metrics.first_used[trigger]) {
+        metrics.first_used[trigger] = now;
+      }
+
+      // Track daily usage
+      if (!metrics.daily_usage[today]) {
+        metrics.daily_usage[today] = {};
+      }
+      metrics.daily_usage[today][trigger] = (metrics.daily_usage[today][trigger] || 0) + 1;
+
+      // Clean up old daily usage (keep last 30 days)
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 30);
+      const cutoff = cutoffDate.toISOString().split('T')[0];
+
+      for (const date in metrics.daily_usage) {
+        if (date < cutoff) {
+          delete metrics.daily_usage[date];
+        }
+      }
+
+      // Update metadata timestamp
+      index.metadata.last_updated = now;
+
+      // Persist the updated metrics
+      await this.writeToFile(index);
+
+      logger.debug('Trigger usage tracked', {
+        trigger,
+        total_uses: metrics.usage_count[trigger],
+        today_uses: metrics.daily_usage[today][trigger]
+      });
+    } catch (error) {
+      // Don't fail the operation if metrics tracking fails
+      logger.warn('Failed to track trigger usage', { trigger, error });
+    }
+  }
+
+  /**
+   * Get trigger usage metrics for optimization analysis
+   * Returns sorted list of triggers by usage frequency
+   */
+  public async getTriggerMetrics(): Promise<{
+    trigger: string;
+    usage_count: number;
+    last_used: string;
+    first_used: string;
+    daily_average: number;
+    trend: 'increasing' | 'stable' | 'decreasing';
+  }[]> {
+    const index = await this.getIndex();
+
+    if (!index.metadata.trigger_metrics) {
+      return [];
+    }
+
+    const metrics = index.metadata.trigger_metrics;
+    const results: any[] = [];
+
+    // Calculate metrics for each trigger
+    for (const trigger in metrics.usage_count) {
+      // Calculate daily average
+      let totalDailyUsage = 0;
+      let daysWithUsage = 0;
+      const recentUsage: number[] = [];
+
+      // Get last 7 days of usage for trend analysis
+      const today = new Date();
+      for (let i = 0; i < 7; i++) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+
+        if (metrics.daily_usage[dateStr] && metrics.daily_usage[dateStr][trigger]) {
+          recentUsage.push(metrics.daily_usage[dateStr][trigger]);
+        } else {
+          recentUsage.push(0);
+        }
+      }
+
+      // Calculate trend (simple comparison of first and last 3 days)
+      const firstHalf = recentUsage.slice(4, 7).reduce((a, b) => a + b, 0);
+      const secondHalf = recentUsage.slice(0, 3).reduce((a, b) => a + b, 0);
+      let trend: 'increasing' | 'stable' | 'decreasing' = 'stable';
+
+      if (secondHalf > firstHalf * 1.2) trend = 'increasing';
+      else if (secondHalf < firstHalf * 0.8) trend = 'decreasing';
+
+      // Calculate overall daily average
+      for (const date in metrics.daily_usage) {
+        if (metrics.daily_usage[date][trigger]) {
+          totalDailyUsage += metrics.daily_usage[date][trigger];
+          daysWithUsage++;
+        }
+      }
+
+      results.push({
+        trigger,
+        usage_count: metrics.usage_count[trigger],
+        last_used: metrics.last_used[trigger],
+        first_used: metrics.first_used[trigger],
+        daily_average: daysWithUsage > 0 ? totalDailyUsage / daysWithUsage : 0,
+        trend
+      });
+    }
+
+    // Sort by usage count (descending)
+    return results.sort((a, b) => b.usage_count - a.usage_count);
   }
 
   /**
