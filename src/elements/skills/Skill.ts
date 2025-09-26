@@ -14,13 +14,9 @@ import { BaseElement } from '../BaseElement.js';
 import { IElement, IElementMetadata, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
-import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-
-// Validation constants for skill triggers
-const MAX_TRIGGER_LENGTH = 50;
-const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
 
 // Extend IElementMetadata with skill-specific fields
 export interface SkillMetadata extends IElementMetadata {

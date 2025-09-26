@@ -27,6 +27,10 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 
+// Validation constants for skill triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 export class SkillManager implements IElementManager<Skill> {
   private portfolioManager: PortfolioManager;
   private skillsDir: string;
