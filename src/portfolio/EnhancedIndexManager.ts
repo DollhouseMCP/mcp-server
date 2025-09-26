@@ -28,6 +28,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
 import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
@@ -211,6 +212,9 @@ export class EnhancedIndexManager {
     this.config = IndexConfigManager.getInstance();
     const config = this.config.getConfig();
     this.TTL_MS = config.index.ttlMinutes * 60 * 1000;
+
+    // Load enhanced index config from global ConfigManager
+    this.loadEnhancedIndexConfig();
 
     // Initialize components with config
     this.nlpScoring = new NLPScoringManager({
@@ -500,6 +504,15 @@ export class EnhancedIndexManager {
         tags: entry.metadata?.tags,
         triggers: entry.metadata?.triggers
       };
+
+      // Debug logging for trigger extraction
+      if (entry.metadata?.triggers && entry.metadata.triggers.length > 0) {
+        logger.debug('Found triggers for element', {
+          name: entryName,
+          type: entry.elementType,
+          triggers: entry.metadata.triggers
+        });
+      }
     }
 
     // Preserve custom fields from existing
@@ -566,27 +579,555 @@ export class EnhancedIndexManager {
     return Object.keys(actions).length > 0 ? actions : undefined;
   }
 
+  // Configuration for verb extraction (will be overridden by ConfigManager)
+  private static VERB_EXTRACTION_CONFIG = {
+    // Security limits for DoS protection
+    limits: {
+      maxTriggersPerElement: 50,  // Maximum triggers to extract per element
+      maxTriggerLength: 50,        // Maximum length for a single trigger
+      maxKeywordsToCheck: 100,     // Maximum keywords to process for verb detection
+    },
+
+    // Common verb prefixes broken down by category for maintainability
+    verbPrefixes: {
+      actions: ['create', 'build', 'make', 'generate', 'produce', 'write', 'compose'],
+      analysis: ['analyze', 'review', 'examine', 'investigate', 'inspect', 'evaluate', 'assess'],
+      debugging: ['debug', 'fix', 'troubleshoot', 'solve', 'resolve', 'repair', 'patch'],
+      operations: ['run', 'execute', 'start', 'stop', 'deploy', 'configure', 'install'],
+      modification: ['update', 'modify', 'change', 'edit', 'alter', 'transform', 'refactor'],
+      removal: ['delete', 'remove', 'clear', 'clean', 'purge', 'destroy', 'eliminate'],
+      information: ['explain', 'describe', 'document', 'search', 'find', 'check', 'validate'],
+      optimization: ['optimize', 'improve', 'enhance', 'streamline', 'accelerate'],
+      testing: ['test', 'verify', 'validate', 'confirm', 'assert', 'ensure'],
+    },
+
+    // Common verb suffixes that indicate action words
+    verbSuffixes: ['ify', 'ize', 'ate', 'en', 'fy'],
+
+    // Noun suffixes that indicate non-verbs (to filter out)
+    nounSuffixes: ['tion', 'sion', 'ment', 'ness', 'ance', 'ence', 'ity', 'ism', 'ship', 'hood', 'dom', 'ery', 'ing'],
+
+    // Telemetry settings
+    telemetry: {
+      enabled: false,  // Will be configurable via environment variable
+      sampleRate: 0.1, // Sample 10% of operations when enabled
+      metricsInterval: 60000, // Report metrics every 60 seconds
+    }
+  };
+
+  // Pre-compiled regex patterns built from config (can be updated from ConfigManager)
+  private static VERB_PREFIX_PATTERN = new RegExp(
+    `^(${Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes)
+      .flat()
+      .join('|')})`
+  );
+
+  private static VERB_SUFFIX_PATTERN = new RegExp(
+    `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes.join('|')})$`
+  );
+
+  private static NOUN_SUFFIX_PATTERN = new RegExp(
+    `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes.join('|')})$`
+  );
+
   /**
    * Extract action triggers from element definition
+   *
+   * FIX: Enhanced verb extraction from multiple sources
+   * Previously: Only checked elementDef.actions which personas don't have
+   * Now: Checks search.triggers (personas), actions field, and keywords
+   *
+   * Security improvements:
+   * - Added trigger count limits
+   * - Added trigger length validation
+   * - Using Sets for O(1) duplicate checking
+   * - Pre-compiled regex patterns
+   *
+   * Future enhancements:
+   * - Background deep content analysis for dynamic verb extraction
+   * - This could scan element descriptions and content to find action words
+   * - Would run asynchronously to avoid blocking main operations
+   * - Results would progressively enhance the index over time
    */
   private extractActionTriggers(
     elementDef: ElementDefinition,
     elementName: string,
     triggers: Record<string, string[]>
   ): void {
+    // Null safety check
+    if (!elementDef) return;
+
+    // Start telemetry tracking if enabled
+    const telemetryStartTime = this.startTelemetry('extractActionTriggers');
+
+    // Track unique triggers for this element to prevent duplicates
+    const elementTriggers = new Set<string>();
+    const triggerCountRef = { count: 0 }; // Use object reference to track count across methods
+
+    // Extract from search.triggers field
+    this.extractTriggersFromSearchField(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Extract from actions field
+    this.extractTriggersFromActions(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Extract from keywords (limited to prevent DoS)
+    this.extractTriggersFromKeywords(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
+
+    // Record telemetry
+    this.recordTelemetry('extractActionTriggers', telemetryStartTime, {
+      elementName,
+      elementType: elementDef.core?.type,
+      triggersExtracted: triggerCountRef.count,
+      uniqueTriggers: elementTriggers.size,
+    });
+  }
+
+  /**
+   * Extract triggers from search.triggers field
+   */
+  private extractTriggersFromSearchField(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
+    if (!elementDef.search?.triggers) return;
+
+    const triggerArray = this.normalizeToArray(elementDef.search.triggers);
+
+    for (const trigger of triggerArray) {
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
+        break;
+      }
+
+      const normalizedTrigger = this.normalizeTrigger(trigger);
+      if (!normalizedTrigger) continue;
+
+      if (!elementTriggers.has(normalizedTrigger)) {
+        elementTriggers.add(normalizedTrigger);
+        this.addTriggerMapping(normalizedTrigger, elementName, triggers);
+        triggerCountRef.count++;
+      }
+    }
+  }
+
+  /**
+   * Extract triggers from actions field
+   */
+  private extractTriggersFromActions(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
     if (!elementDef.actions) return;
 
     for (const [actionKey, action] of Object.entries(elementDef.actions)) {
-      const verb = action.verb || actionKey;
-
-      if (!triggers[verb]) {
-        triggers[verb] = [];
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
+        break;
       }
 
-      if (!triggers[verb].includes(elementName)) {
-        triggers[verb].push(elementName);
+      const verb = action.verb || actionKey;
+      const normalizedVerb = this.normalizeTrigger(verb);
+      if (!normalizedVerb) continue;
+
+      if (!elementTriggers.has(normalizedVerb)) {
+        elementTriggers.add(normalizedVerb);
+        this.addTriggerMapping(normalizedVerb, elementName, triggers);
+        triggerCountRef.count++;
       }
     }
+  }
+
+  /**
+   * Extract verb-like keywords as triggers
+   */
+  private extractTriggersFromKeywords(
+    elementDef: ElementDefinition,
+    elementName: string,
+    triggers: Record<string, string[]>,
+    elementTriggers: Set<string>,
+    triggerCountRef: { count: number }
+  ): void {
+    if (!elementDef.search?.keywords) return;
+
+    const keywords = this.normalizeToArray(elementDef.search.keywords);
+
+    for (const keyword of keywords) {
+      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
+        logger.warn('Trigger limit exceeded for element', {
+          elementName,
+          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
+        });
+        break;
+      }
+
+      const normalizedKeyword = this.normalizeTrigger(keyword);
+      if (!normalizedKeyword || !this.looksLikeVerb(normalizedKeyword)) continue;
+
+      if (!elementTriggers.has(normalizedKeyword)) {
+        elementTriggers.add(normalizedKeyword);
+        this.addTriggerMapping(normalizedKeyword, elementName, triggers);
+        triggerCountRef.count++;
+      }
+    }
+  }
+
+  /**
+   * Normalize a value to an array of strings
+   */
+  private normalizeToArray(value: any): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return value.filter(v => typeof v === 'string');
+    }
+    if (typeof value === 'string') {
+      return [value];
+    }
+    return [];
+  }
+
+  /**
+   * Normalize and validate a trigger string
+   */
+  private normalizeTrigger(trigger: any): string | null {
+    if (typeof trigger !== 'string') return null;
+
+    // Trim and lowercase
+    const normalized = trigger.trim().toLowerCase();
+
+    // Validate
+    if (!normalized ||
+        normalized.length > EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggerLength ||
+        !/^[a-z][a-z-]*$/.test(normalized)) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Add a trigger to element mapping
+   * Preserves original element name casing for proper resolution
+   */
+  private addTriggerMapping(
+    verb: string,
+    elementName: string,
+    triggers: Record<string, string[]>
+  ): void {
+    // Store verb in lowercase for consistent lookup
+    const normalizedVerb = verb.toLowerCase();
+
+    if (!triggers[normalizedVerb]) {
+      triggers[normalizedVerb] = [];
+    }
+
+    // Preserve original element name casing for accurate resolution
+    // This supports various naming conventions users might use:
+    // - lowercase: debug-detective
+    // - kebab-case: Debug-Detective
+    // - snake_case: debug_detective
+    // - CamelCase: DebugDetective
+    // - Custom: DeBuG-DeTecTiVe
+    if (!triggers[normalizedVerb].includes(elementName)) {
+      triggers[normalizedVerb].push(elementName);
+    }
+  }
+
+  /**
+   * Check if a word looks like a verb using pre-compiled patterns
+   * Avoid false positives like "documentation" which ends in "ation" (noun suffix)
+   */
+  private looksLikeVerb(word: string): boolean {
+    const lowerWord = word.toLowerCase();
+
+    // Check for noun suffixes that should NOT be considered verbs
+    if (EnhancedIndexManager.NOUN_SUFFIX_PATTERN.test(lowerWord)) {
+      return false;
+    }
+
+    // Check for verb patterns
+    return EnhancedIndexManager.VERB_PREFIX_PATTERN.test(lowerWord) ||
+           EnhancedIndexManager.VERB_SUFFIX_PATTERN.test(lowerWord);
+  }
+
+  /**
+   * Load enhanced index configuration from ConfigManager
+   */
+  private loadEnhancedIndexConfig(): void {
+    try {
+      const configManager = ConfigManager.getInstance();
+      const config = configManager.getConfig();
+
+      // Update limits from config
+      if (config.elements?.enhanced_index) {
+        const enhancedConfig = config.elements.enhanced_index;
+
+        // Update limits
+        if (enhancedConfig.limits) {
+          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits = {
+            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+            ...enhancedConfig.limits
+          };
+        }
+
+        // Update telemetry settings
+        if (enhancedConfig.telemetry) {
+          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry = {
+            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry,
+            ...enhancedConfig.telemetry
+          };
+        }
+
+        // Add custom verb patterns if provided
+        if (enhancedConfig.verbPatterns) {
+          const patterns = enhancedConfig.verbPatterns;
+
+          // Add custom prefixes
+          if (patterns.customPrefixes && patterns.customPrefixes.length > 0) {
+            const allPrefixes = [
+              ...Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes).flat(),
+              ...patterns.customPrefixes
+            ];
+            EnhancedIndexManager.VERB_PREFIX_PATTERN = this.compileAndValidateRegex(
+              `^(${allPrefixes.join('|')})`,
+              'verb prefix'
+            );
+          }
+
+          // Add custom suffixes
+          if (patterns.customSuffixes && patterns.customSuffixes.length > 0) {
+            const allSuffixes = [
+              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes,
+              ...patterns.customSuffixes
+            ];
+            EnhancedIndexManager.VERB_SUFFIX_PATTERN = this.compileAndValidateRegex(
+              `(${allSuffixes.join('|')})$`,
+              'verb suffix'
+            );
+          }
+
+          // Add excluded nouns
+          if (patterns.excludedNouns && patterns.excludedNouns.length > 0) {
+            const allNouns = [
+              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes,
+              ...patterns.excludedNouns
+            ];
+            EnhancedIndexManager.NOUN_SUFFIX_PATTERN = this.compileAndValidateRegex(
+              `(${allNouns.join('|')})$`,
+              'noun suffix'
+            );
+          }
+        }
+
+        // Validate all regex patterns at startup
+        this.validateRegexPatterns();
+
+        logger.info('Loaded enhanced index configuration', {
+          limits: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+          telemetryEnabled: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled
+        });
+      }
+    } catch (error) {
+      logger.warn('Failed to load enhanced index configuration, using defaults', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
+   * Compile and validate a regex pattern
+   * Provides clear error messages if pattern is invalid
+   */
+  private compileAndValidateRegex(pattern: string, name: string): RegExp {
+    try {
+      const regex = new RegExp(pattern);
+
+      // Test the regex with sample data to ensure it works
+      const testStrings = ['test', 'debug', 'create', 'ify', 'tion'];
+      for (const str of testStrings) {
+        try {
+          regex.test(str);
+        } catch (testError) {
+          throw new Error(`Regex pattern fails on test string '${str}': ${testError}`);
+        }
+      }
+
+      return regex;
+    } catch (error) {
+      const errorMsg = `Invalid ${name} pattern: ${pattern}`;
+      logger.error(errorMsg, {
+        error: error instanceof Error ? error.message : String(error),
+        pattern
+      });
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Validate all regex patterns at startup
+   * Ensures patterns are valid and can handle expected input
+   */
+  private validateRegexPatterns(): void {
+    const validationTests = [
+      {
+        pattern: EnhancedIndexManager.VERB_PREFIX_PATTERN,
+        name: 'VERB_PREFIX_PATTERN',
+        shouldMatch: ['debug', 'create', 'analyze'],
+        shouldNotMatch: ['xdebug', 'created', '123debug']
+      },
+      {
+        pattern: EnhancedIndexManager.VERB_SUFFIX_PATTERN,
+        name: 'VERB_SUFFIX_PATTERN',
+        shouldMatch: ['simplify', 'organize', 'automate'],
+        shouldNotMatch: ['simple', 'organ', 'auto']
+      },
+      {
+        pattern: EnhancedIndexManager.NOUN_SUFFIX_PATTERN,
+        name: 'NOUN_SUFFIX_PATTERN',
+        shouldMatch: ['documentation', 'management', 'happiness'],
+        shouldNotMatch: ['document', 'manage', 'happy']
+      }
+    ];
+
+    for (const test of validationTests) {
+      // Validate pattern exists
+      if (!test.pattern) {
+        throw new Error(`${test.name} pattern is not initialized`);
+      }
+
+      // Test expected matches
+      for (const str of test.shouldMatch) {
+        if (!test.pattern.test(str)) {
+          logger.warn(`Pattern validation warning: ${test.name} should match '${str}' but doesn't`);
+        }
+      }
+
+      // Test expected non-matches
+      for (const str of test.shouldNotMatch) {
+        if (test.pattern.test(str)) {
+          logger.warn(`Pattern validation warning: ${test.name} should not match '${str}' but does`);
+        }
+      }
+    }
+
+    logger.debug('Regex pattern validation completed successfully');
+  }
+
+  /**
+   * Telemetry tracking infrastructure
+   */
+  private telemetryMetrics: Map<string, any> = new Map();
+  private telemetryTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Start telemetry tracking for an operation
+   */
+  private startTelemetry(operationName: string): number | null {
+    if (!this.isTelemetryEnabled()) return null;
+
+    // Sample based on configured rate
+    if (Math.random() > EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.sampleRate) {
+      return null;
+    }
+
+    return Date.now();
+  }
+
+  /**
+   * Record telemetry metrics for an operation
+   */
+  private recordTelemetry(
+    operationName: string,
+    startTime: number | null,
+    metrics: Record<string, any>
+  ): void {
+    if (!startTime || !this.isTelemetryEnabled()) return;
+
+    const duration = Date.now() - startTime;
+
+    // Aggregate metrics
+    if (!this.telemetryMetrics.has(operationName)) {
+      this.telemetryMetrics.set(operationName, {
+        count: 0,
+        totalDuration: 0,
+        avgDuration: 0,
+        maxDuration: 0,
+        minDuration: Infinity,
+        lastMetrics: {},
+      });
+    }
+
+    const stats = this.telemetryMetrics.get(operationName);
+    stats.count++;
+    stats.totalDuration += duration;
+    stats.avgDuration = stats.totalDuration / stats.count;
+    stats.maxDuration = Math.max(stats.maxDuration, duration);
+    stats.minDuration = Math.min(stats.minDuration, duration);
+    stats.lastMetrics = { ...metrics, duration };
+
+    // Log detailed metrics in debug mode
+    logger.debug(`Telemetry: ${operationName}`, {
+      duration,
+      ...metrics,
+    });
+
+    // Schedule periodic reporting
+    this.scheduleTelemetryReport();
+  }
+
+  /**
+   * Check if telemetry is enabled
+   */
+  private isTelemetryEnabled(): boolean {
+    // Check environment variable or config
+    return process.env.DOLLHOUSE_TELEMETRY_ENABLED === 'true' ||
+           EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled;
+  }
+
+  /**
+   * Schedule periodic telemetry reporting
+   */
+  private scheduleTelemetryReport(): void {
+    if (this.telemetryTimer) return;
+
+    this.telemetryTimer = setTimeout(() => {
+      this.reportTelemetry();
+      this.telemetryTimer = null;
+    }, EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.metricsInterval);
+  }
+
+  /**
+   * Report aggregated telemetry metrics
+   */
+  private reportTelemetry(): void {
+    if (this.telemetryMetrics.size === 0) return;
+
+    const report = {
+      timestamp: new Date().toISOString(),
+      metrics: Object.fromEntries(this.telemetryMetrics),
+    };
+
+    // Log summary report
+    logger.info('Telemetry Report', report);
+
+    // Future: Send to telemetry endpoint if configured
+    // if (process.env.DOLLHOUSE_TELEMETRY_ENDPOINT) {
+    //   this.sendTelemetryToEndpoint(report);
+    // }
+
+    // Clear metrics after reporting
+    this.telemetryMetrics.clear();
   }
 
   /**

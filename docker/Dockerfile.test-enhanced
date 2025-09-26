@@ -1,0 +1,72 @@
+# Test Dockerfile for Enhanced Capability Index
+# This builds from develop branch and sets up for MCP testing
+
+FROM node:24-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy everything from current directory (develop branch)
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install all dependencies (including dev for testing)
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+COPY data/ ./data/
+COPY scripts/ ./scripts/
+
+# Build the application
+RUN npm run build
+
+# Create test user and directories
+RUN useradd -m -s /bin/bash testuser && \
+    mkdir -p /home/testuser/.dollhouse/portfolio && \
+    mkdir -p /home/testuser/.dollhouse/portfolio/personas && \
+    mkdir -p /home/testuser/.dollhouse/portfolio/skills && \
+    mkdir -p /home/testuser/.dollhouse/portfolio/templates && \
+    mkdir -p /home/testuser/.dollhouse/portfolio/agents && \
+    mkdir -p /home/testuser/.dollhouse/portfolio/memories && \
+    chown -R testuser:testuser /home/testuser
+
+# Copy test data
+COPY --chown=testuser:testuser docker/test-data/ /home/testuser/.dollhouse/portfolio/
+
+# Set environment for MCP
+ENV NODE_ENV=production
+ENV DOLLHOUSE_PORTFOLIO_PATH=/home/testuser/.dollhouse/portfolio
+ENV MCP_SERVER_PORT=3000
+
+# Switch to test user
+USER testuser
+WORKDIR /home/testuser
+
+# Create MCP server configuration
+RUN echo '{\
+  "mcpServers": {\
+    "dollhousemcp": {\
+      "command": "node",\
+      "args": ["/app/dist/index.js"],\
+      "env": {\
+        "DOLLHOUSE_PORTFOLIO_PATH": "/home/testuser/.dollhouse/portfolio"\
+      }\
+    }\
+  }\
+}' > /home/testuser/mcp-config.json
+
+# Expose MCP port
+EXPOSE 3000
+
+# Start the MCP server
+CMD ["node", "/app/dist/index.js"]
