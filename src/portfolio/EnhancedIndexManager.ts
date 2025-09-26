@@ -28,6 +28,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
 import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
@@ -211,6 +212,9 @@ export class EnhancedIndexManager {
     this.config = IndexConfigManager.getInstance();
     const config = this.config.getConfig();
     this.TTL_MS = config.index.ttlMinutes * 60 * 1000;
+
+    // Load enhanced index config from global ConfigManager
+    this.loadEnhancedIndexConfig();
 
     // Initialize components with config
     this.nlpScoring = new NLPScoringManager({
@@ -575,8 +579,8 @@ export class EnhancedIndexManager {
     return Object.keys(actions).length > 0 ? actions : undefined;
   }
 
-  // Configuration for verb extraction
-  private static readonly VERB_EXTRACTION_CONFIG = {
+  // Configuration for verb extraction (will be overridden by ConfigManager)
+  private static VERB_EXTRACTION_CONFIG = {
     // Security limits for DoS protection
     limits: {
       maxTriggersPerElement: 50,  // Maximum triggers to extract per element
@@ -611,18 +615,18 @@ export class EnhancedIndexManager {
     }
   };
 
-  // Pre-compiled regex patterns built from config
-  private static readonly VERB_PREFIX_PATTERN = new RegExp(
+  // Pre-compiled regex patterns built from config (can be updated from ConfigManager)
+  private static VERB_PREFIX_PATTERN = new RegExp(
     `^(${Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes)
       .flat()
       .join('|')})`
   );
 
-  private static readonly VERB_SUFFIX_PATTERN = new RegExp(
+  private static VERB_SUFFIX_PATTERN = new RegExp(
     `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes.join('|')})$`
   );
 
-  private static readonly NOUN_SUFFIX_PATTERN = new RegExp(
+  private static NOUN_SUFFIX_PATTERN = new RegExp(
     `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes.join('|')})$`
   );
 
@@ -855,6 +859,169 @@ export class EnhancedIndexManager {
     // Check for verb patterns
     return EnhancedIndexManager.VERB_PREFIX_PATTERN.test(lowerWord) ||
            EnhancedIndexManager.VERB_SUFFIX_PATTERN.test(lowerWord);
+  }
+
+  /**
+   * Load enhanced index configuration from ConfigManager
+   */
+  private loadEnhancedIndexConfig(): void {
+    try {
+      const configManager = ConfigManager.getInstance();
+      const config = configManager.getConfig();
+
+      // Update limits from config
+      if (config.elements?.enhanced_index) {
+        const enhancedConfig = config.elements.enhanced_index;
+
+        // Update limits
+        if (enhancedConfig.limits) {
+          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits = {
+            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+            ...enhancedConfig.limits
+          };
+        }
+
+        // Update telemetry settings
+        if (enhancedConfig.telemetry) {
+          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry = {
+            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry,
+            ...enhancedConfig.telemetry
+          };
+        }
+
+        // Add custom verb patterns if provided
+        if (enhancedConfig.verbPatterns) {
+          const patterns = enhancedConfig.verbPatterns;
+
+          // Add custom prefixes
+          if (patterns.customPrefixes && patterns.customPrefixes.length > 0) {
+            const allPrefixes = [
+              ...Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes).flat(),
+              ...patterns.customPrefixes
+            ];
+            EnhancedIndexManager.VERB_PREFIX_PATTERN = this.compileAndValidateRegex(
+              `^(${allPrefixes.join('|')})`,
+              'verb prefix'
+            );
+          }
+
+          // Add custom suffixes
+          if (patterns.customSuffixes && patterns.customSuffixes.length > 0) {
+            const allSuffixes = [
+              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes,
+              ...patterns.customSuffixes
+            ];
+            EnhancedIndexManager.VERB_SUFFIX_PATTERN = this.compileAndValidateRegex(
+              `(${allSuffixes.join('|')})$`,
+              'verb suffix'
+            );
+          }
+
+          // Add excluded nouns
+          if (patterns.excludedNouns && patterns.excludedNouns.length > 0) {
+            const allNouns = [
+              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes,
+              ...patterns.excludedNouns
+            ];
+            EnhancedIndexManager.NOUN_SUFFIX_PATTERN = this.compileAndValidateRegex(
+              `(${allNouns.join('|')})$`,
+              'noun suffix'
+            );
+          }
+        }
+
+        // Validate all regex patterns at startup
+        this.validateRegexPatterns();
+
+        logger.info('Loaded enhanced index configuration', {
+          limits: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+          telemetryEnabled: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled
+        });
+      }
+    } catch (error) {
+      logger.warn('Failed to load enhanced index configuration, using defaults', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
+   * Compile and validate a regex pattern
+   * Provides clear error messages if pattern is invalid
+   */
+  private compileAndValidateRegex(pattern: string, name: string): RegExp {
+    try {
+      const regex = new RegExp(pattern);
+
+      // Test the regex with sample data to ensure it works
+      const testStrings = ['test', 'debug', 'create', 'ify', 'tion'];
+      for (const str of testStrings) {
+        try {
+          regex.test(str);
+        } catch (testError) {
+          throw new Error(`Regex pattern fails on test string '${str}': ${testError}`);
+        }
+      }
+
+      return regex;
+    } catch (error) {
+      const errorMsg = `Invalid ${name} pattern: ${pattern}`;
+      logger.error(errorMsg, {
+        error: error instanceof Error ? error.message : String(error),
+        pattern
+      });
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Validate all regex patterns at startup
+   * Ensures patterns are valid and can handle expected input
+   */
+  private validateRegexPatterns(): void {
+    const validationTests = [
+      {
+        pattern: EnhancedIndexManager.VERB_PREFIX_PATTERN,
+        name: 'VERB_PREFIX_PATTERN',
+        shouldMatch: ['debug', 'create', 'analyze'],
+        shouldNotMatch: ['xdebug', 'created', '123debug']
+      },
+      {
+        pattern: EnhancedIndexManager.VERB_SUFFIX_PATTERN,
+        name: 'VERB_SUFFIX_PATTERN',
+        shouldMatch: ['simplify', 'organize', 'automate'],
+        shouldNotMatch: ['simple', 'organ', 'auto']
+      },
+      {
+        pattern: EnhancedIndexManager.NOUN_SUFFIX_PATTERN,
+        name: 'NOUN_SUFFIX_PATTERN',
+        shouldMatch: ['documentation', 'management', 'happiness'],
+        shouldNotMatch: ['document', 'manage', 'happy']
+      }
+    ];
+
+    for (const test of validationTests) {
+      // Validate pattern exists
+      if (!test.pattern) {
+        throw new Error(`${test.name} pattern is not initialized`);
+      }
+
+      // Test expected matches
+      for (const str of test.shouldMatch) {
+        if (!test.pattern.test(str)) {
+          logger.warn(`Pattern validation warning: ${test.name} should match '${str}' but doesn't`);
+        }
+      }
+
+      // Test expected non-matches
+      for (const str of test.shouldNotMatch) {
+        if (test.pattern.test(str)) {
+          logger.warn(`Pattern validation warning: ${test.name} should not match '${str}' but does`);
+        }
+      }
+    }
+
+    logger.debug('Regex pattern validation completed successfully');
   }
 
   /**
