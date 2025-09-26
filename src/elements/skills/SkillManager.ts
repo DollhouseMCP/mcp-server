@@ -27,6 +27,10 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 
+// Validation constants for skill triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 export class SkillManager implements IElementManager<Skill> {
   private portfolioManager: PortfolioManager;
   private skillsDir: string;
@@ -69,11 +73,20 @@ export class SkillManager implements IElementManager<Skill> {
       
       // Parse markdown with frontmatter
       const parsed = matter(content);
-      
+
       // SECURITY FIX #3: Use SecureYamlParser for metadata validation
       // This prevents YAML injection attacks
       const metadata = parsed.data as SkillMetadata;
-      
+
+      // FIX #1121: Extract and validate triggers for Enhanced Index support
+      // Following pattern from MemoryManager (PR #1133)
+      if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
+        metadata.triggers = parsed.data.triggers
+          .map((trigger: string) => sanitizeInput(String(trigger), 50)) // MAX_TRIGGER_LENGTH = 50
+          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) // TRIGGER_VALIDATION_REGEX
+          .slice(0, 20); // Limit to 20 triggers max
+      }
+
       // Create skill instance
       const skill = new Skill(metadata, parsed.content);
       
@@ -131,7 +144,13 @@ export class SkillManager implements IElementManager<Skill> {
     // Clean metadata to remove undefined values that would break YAML serialization
     const cleanMetadata = Object.entries(element.metadata).reduce((acc, [key, value]) => {
       if (value !== undefined) {
-        acc[key] = value;
+        // FIX #1121: Ensure triggers array is preserved in saved metadata
+        // Empty arrays are valid and should be kept
+        if (key === 'triggers' && Array.isArray(value)) {
+          acc[key] = value;
+        } else if (value !== undefined) {
+          acc[key] = value;
+        }
       }
       return acc;
     }, {} as any);
