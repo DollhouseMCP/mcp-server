@@ -2,6 +2,7 @@ import { describe, it, expect } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import { runInGitHubActions } from '../utils/test-environment.js';
 
 /**
  * Workflow Validation Tests - Issue #92
@@ -235,13 +236,10 @@ describe('GitHub Actions Workflow Validation', () => {
       // 2. Proper Node.js version
       // 3. Access to test fixtures
       
-      if (process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true') {
+      runInGitHubActions('workflow environment configuration', () => {
         // In GitHub Actions CI, these should be set by the workflow
         expect(process.env.GITHUB_ACTIONS).toBe('true');
-      } else if (process.env.CI === 'true' && !process.env.GITHUB_ACTIONS) {
-        // Skip GitHub-specific checks when in other CI environments
-        console.log('⏭️  Skipping GitHub Actions specific checks - not in GitHub Actions environment');
-      }
+      });
     });
   });
 

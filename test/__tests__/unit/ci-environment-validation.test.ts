@@ -10,6 +10,13 @@ import { describe, expect, it, beforeAll } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import {
+  shouldValidateGitHubEnvironment,
+  isNonGitHubCI,
+  getSkipMessage,
+  validateGitHubActionsVariables,
+  runInGitHubActions
+} from '../../utils/test-environment.js';
 
 // Extend process.env type to include TEST_PERSONAS_DIR
 declare global {
@@ -45,15 +52,11 @@ describe('CI Environment Validation', () => {
     });
 
     it('should have TEST_PERSONAS_DIR set in CI', () => {
-      // Only check in GitHub Actions CI where it's actually set
-      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
+      runInGitHubActions('TEST_PERSONAS_DIR validation', () => {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
         expect(process.env.TEST_PERSONAS_DIR).toMatch(/test-personas/);
-      } else if (isCI && !process.env.GITHUB_ACTIONS) {
-        // Skip when not in GitHub Actions
-        console.log('⏭️  Skipping TEST_PERSONAS_DIR check - not in GitHub Actions');
-      }
+      });
     });
 
     it('should have valid TEST_PERSONAS_DIR path format', () => {
@@ -210,16 +213,13 @@ describe('CI Environment Validation', () => {
 
   describe('GitHub Actions Integration', () => {
     it('should have GitHub-specific environment variables in CI', () => {
-      // Only check for GitHub-specific variables when actually in GitHub Actions
-      if (isCI && process.env.GITHUB_ACTIONS) {
-        expect(process.env.GITHUB_WORKFLOW).toBeDefined();
-        expect(process.env.GITHUB_RUN_ID).toBeDefined();
-        expect(process.env.GITHUB_RUN_NUMBER).toBeDefined();
-        expect(process.env.RUNNER_OS).toBeDefined();
-      } else if (isCI && !process.env.GITHUB_ACTIONS) {
-        // Skip this test when in CI but not GitHub Actions
-        console.log('⏭️  Skipping GitHub Actions specific checks - not in GitHub Actions environment');
-      }
+      runInGitHubActions('GitHub Actions specific variables', () => {
+        const validation = validateGitHubActionsVariables();
+        expect(validation.valid).toBe(true);
+        if (!validation.valid) {
+          console.error('Missing GitHub Actions variables:', validation.missing);
+        }
+      });
     });
 
     it('should match runner OS with Node.js platform', () => {
@@ -239,8 +239,7 @@ describe('CI Environment Validation', () => {
 
   describe('Integration Test Requirements', () => {
     it('should provide TEST_PERSONAS_DIR to integration tests', () => {
-      // Only check in GitHub Actions where TEST_PERSONAS_DIR is set
-      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
+      runInGitHubActions('TEST_PERSONAS_DIR integration test availability', () => {
         // This verifies that our integration tests will have access
         // to the required environment variable
         const integrationTestEnv = {
@@ -249,9 +248,7 @@ describe('CI Environment Validation', () => {
         };
 
         expect(integrationTestEnv.TEST_PERSONAS_DIR).toBeDefined();
-      } else if (isCI && !process.env.GITHUB_ACTIONS) {
-        console.log('⏭️  Skipping TEST_PERSONAS_DIR integration test check - not in GitHub Actions');
-      }
+      });
     });
 
     it('should maintain TEST_PERSONAS_DIR across test suites', () => {

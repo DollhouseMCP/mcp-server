@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
+import { runInGitHubActions } from '../utils/test-environment.js';
 
 /**
  * CI Environment Tests - Issue #92
@@ -23,17 +24,16 @@ describe('CI Environment Tests', () => {
 
   describe('Environment Variable Validation', () => {
     it('should have TEST_PERSONAS_DIR set in CI environment', () => {
-      // Only check in GitHub Actions where it's actually set
-      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
+      runInGitHubActions('TEST_PERSONAS_DIR environment validation', () => {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
         // Use path.isAbsolute for cross-platform compatibility
         const testPersonasDir = process.env.TEST_PERSONAS_DIR!;
         const isAbsolutePath = path.isAbsolute(testPersonasDir);
         expect(isAbsolutePath).toBe(true);
-      } else if (isCI && !process.env.GITHUB_ACTIONS) {
-        console.log('⏭️  Skipping TEST_PERSONAS_DIR check - not in GitHub Actions');
-      } else {
+      });
+
+      if (!isCI) {
         // In local development, it might not be set
         expect(true).toBe(true);
       }
@@ -122,16 +122,12 @@ describe('CI Environment Tests', () => {
     });
 
     it('should have appropriate CI environment variables', () => {
-      // Only check GitHub Actions specific variables when actually in GitHub Actions
-      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
+      runInGitHubActions('GitHub Actions environment variables', () => {
         // GitHub Actions specific
         expect(process.env.GITHUB_ACTIONS).toBe('true');
         expect(process.env.RUNNER_OS).toBeDefined();
         expect(process.env.GITHUB_WORKSPACE).toBeDefined();
-      } else if (isCI && !process.env.GITHUB_ACTIONS) {
-        // Skip GitHub-specific checks when in other CI environments
-        console.log('⏭️  Skipping GitHub Actions specific checks - not in GitHub Actions environment');
-      }
+      });
     });
   });
 
