@@ -83,7 +83,8 @@ export abstract class BaseElement implements IElement {
     this.version = metadata.version || '1.0.0';
     
     // Initialize metadata with defaults
-    this.metadata = {
+    // FIX #1124: Build metadata object with known fields first
+    const baseMetadata: any = {
       name: metadata.name || 'Unnamed Element',
       description: metadata.description || '',
       author: metadata.author,
@@ -94,6 +95,14 @@ export abstract class BaseElement implements IElement {
       dependencies: metadata.dependencies || [],
       custom: metadata.custom || {}
     };
+
+    // Selectively preserve additional string array fields like triggers
+    // This avoids spreading non-serializable objects that break YAML serialization
+    if ('triggers' in metadata && Array.isArray((metadata as any).triggers)) {
+      baseMetadata.triggers = (metadata as any).triggers;
+    }
+
+    this.metadata = baseMetadata;
     
     // Initialize optional features
     this.references = [];

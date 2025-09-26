@@ -742,6 +742,12 @@ export class MemoryManager implements IElementManager<Memory> {
       tags: Array.isArray(metadataSource.tags) ?
         metadataSource.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
+      // FIX #1124: Extract triggers for Enhanced Index support
+      triggers: Array.isArray(metadataSource.triggers) ?
+        metadataSource.triggers
+          .map((trigger: string) => sanitizeInput(trigger, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
+          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) : // Only allow alphanumeric + hyphens/underscores
+        [],
       storageBackend: metadataSource.storage_backend || metadataSource.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
       retentionDays: metadataSource.retention_policy?.default ?
         this.parseRetentionDays(metadataSource.retention_policy.default) :

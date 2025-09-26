@@ -28,6 +28,18 @@ import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 
+/**
+ * Maximum length for individual trigger words used in Enhanced Index
+ * @constant {number}
+ */
+const MAX_TRIGGER_LENGTH = 50;
+
+/**
+ * Validation pattern for trigger words - allows alphanumeric characters, hyphens, and underscores
+ * @constant {RegExp}
+ */
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 // Initialize DOMPurify with JSDOM
 const window = new JSDOM('').window;
 const purify = DOMPurify(window as any);
@@ -74,6 +86,8 @@ export interface MemoryMetadata extends IElementMetadata {
   enableContentIndex?: boolean;
   maxTermsPerEntry?: number;
   minTermLength?: number;
+  // Trigger words for Enhanced Index (Issue #1124)
+  triggers?: string[];
 }
 
 export interface MemoryEntry {
@@ -155,14 +169,20 @@ export class Memory extends BaseElement implements IElement {
     // SECURITY FIX: Sanitize all inputs during construction
     const sanitizedMetadata = {
       ...metadata,
-      name: metadata.name ? 
-        sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : 
+      name: metadata.name ?
+        sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) :
         'Unnamed Memory',
-      description: metadata.description ? 
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : 
-        undefined
+      description: metadata.description ?
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) :
+        undefined,
+      // FIX #1124: Preserve triggers for Enhanced Index
+      triggers: Array.isArray(metadata.triggers) ?
+        metadata.triggers
+          .map(t => sanitizeInput(t, MAX_TRIGGER_LENGTH))
+          .filter(t => t && TRIGGER_VALIDATION_REGEX.test(t)) : // Only allow valid trigger patterns
+        []
     };
-    
+
     super(ElementType.MEMORY, sanitizedMetadata);
     
     // Initialize memory-specific properties with defaults
