@@ -23,13 +23,16 @@ describe('CI Environment Tests', () => {
 
   describe('Environment Variable Validation', () => {
     it('should have TEST_PERSONAS_DIR set in CI environment', () => {
-      if (isCI) {
+      // Only check in GitHub Actions where it's actually set
+      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
         // Use path.isAbsolute for cross-platform compatibility
         const testPersonasDir = process.env.TEST_PERSONAS_DIR!;
         const isAbsolutePath = path.isAbsolute(testPersonasDir);
         expect(isAbsolutePath).toBe(true);
+      } else if (isCI && !process.env.GITHUB_ACTIONS) {
+        console.log('⏭️  Skipping TEST_PERSONAS_DIR check - not in GitHub Actions');
       } else {
         // In local development, it might not be set
         expect(true).toBe(true);

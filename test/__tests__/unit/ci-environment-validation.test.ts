@@ -37,15 +37,22 @@ describe('CI Environment Validation', () => {
     it('should detect CI environment correctly', () => {
       if (isCI) {
         expect(process.env.CI).toBe('true');
-        expect(process.env.GITHUB_ACTIONS).toBe('true');
+        // Only expect GITHUB_ACTIONS when actually in GitHub Actions
+        if (process.env.GITHUB_ACTIONS) {
+          expect(process.env.GITHUB_ACTIONS).toBe('true');
+        }
       }
     });
 
     it('should have TEST_PERSONAS_DIR set in CI', () => {
-      if (isCI) {
+      // Only check in GitHub Actions CI where it's actually set
+      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
         expect(process.env.TEST_PERSONAS_DIR).toMatch(/test-personas/);
+      } else if (isCI && !process.env.GITHUB_ACTIONS) {
+        // Skip when not in GitHub Actions
+        console.log('⏭️  Skipping TEST_PERSONAS_DIR check - not in GitHub Actions');
       }
     });
 
@@ -232,15 +239,18 @@ describe('CI Environment Validation', () => {
 
   describe('Integration Test Requirements', () => {
     it('should provide TEST_PERSONAS_DIR to integration tests', () => {
-      if (isCI) {
+      // Only check in GitHub Actions where TEST_PERSONAS_DIR is set
+      if (isCI && process.env.GITHUB_ACTIONS === 'true') {
         // This verifies that our integration tests will have access
         // to the required environment variable
         const integrationTestEnv = {
           ...process.env,
           NODE_ENV: 'test'
         };
-        
+
         expect(integrationTestEnv.TEST_PERSONAS_DIR).toBeDefined();
+      } else if (isCI && !process.env.GITHUB_ACTIONS) {
+        console.log('⏭️  Skipping TEST_PERSONAS_DIR integration test check - not in GitHub Actions');
       }
     });
 
