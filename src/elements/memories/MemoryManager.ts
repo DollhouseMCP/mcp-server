@@ -746,7 +746,7 @@ export class MemoryManager implements IElementManager<Memory> {
       triggers: Array.isArray(metadataSource.triggers) ?
         metadataSource.triggers
           .map((trigger: string) => sanitizeInput(trigger, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
-          .filter(trigger => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) : // Only allow alphanumeric + hyphens/underscores
+          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) : // Only allow alphanumeric + hyphens/underscores
         [],
       storageBackend: metadataSource.storage_backend || metadataSource.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
       retentionDays: metadataSource.retention_policy?.default ?
