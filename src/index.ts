@@ -3911,7 +3911,7 @@ export class DollhouseMCPServer implements IToolHandler {
               /^0[0-7]+$/.test(value) ||                 // Octal numbers
               /^0x[0-9a-fA-F]+$/.test(value) ||         // Hexadecimal
               /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) || // Scientific notation
-              /^\s|\s$/.test(value) ||                   // Leading/trailing whitespace
+              /(^\s)|(\s$)/.test(value) ||                   // Leading/trailing whitespace
               /[:#@!&*\|>[\]{}]/.test(value) ||         // Special YAML characters
               value === '' ||                             // Empty string
               value.includes('\n') ||                    // Multiline

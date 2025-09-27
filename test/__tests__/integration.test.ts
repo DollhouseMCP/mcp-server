@@ -51,7 +51,19 @@ describe('Cross-Platform Integration Tests', () => {
         it('should accept valid paths', () => {
           paths.valid.forEach(inputPath => {
             expect(() => {
-              const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -75,7 +87,19 @@ describe('Cross-Platform Integration Tests', () => {
         it('should reject dangerous paths', () => {
           paths.dangerous.forEach(inputPath => {
             expect(() => {
-              const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -88,7 +112,19 @@ describe('Cross-Platform Integration Tests', () => {
         it('should reject system paths', () => {
           paths.invalid.forEach(inputPath => {
             expect(() => {
-              const normalized = inputPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for absolute paths or path traversal
               if (inputPath.startsWith('/') || normalized.includes('..') || inputPath.includes('C:\\') || inputPath.includes('System') || inputPath.includes('etc')) {
@@ -110,10 +146,21 @@ describe('Cross-Platform Integration Tests', () => {
       ];
 
       testPaths.forEach(inputPath => {
-        const normalized = inputPath
-          .replace(/\\/g, '/') // Convert backslashes to forward slashes
-          .replace(/^\/+|\/+$/g, '') // Remove leading/trailing slashes
-          .replace(/\/+/g, '/'); // Collapse multiple slashes
+        // Convert backslashes to forward slashes (using replaceAll to satisfy SonarCloud)
+        let normalized = inputPath.replaceAll('\\', '/');
+
+        // Remove leading/trailing slashes using loops to avoid ReDoS false positives
+        while (normalized.startsWith('/')) {
+          normalized = normalized.slice(1);
+        }
+        while (normalized.endsWith('/')) {
+          normalized = normalized.slice(0, -1);
+        }
+
+        // Collapse multiple slashes (loop to avoid regex warning)
+        while (normalized.includes('//')) {
+          normalized = normalized.replace('//', '/');
+        }
 
         expect(normalized).toBe('personas/creative/writer.md');
       });
