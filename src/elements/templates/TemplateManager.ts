@@ -27,6 +27,10 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 
+// Validation constants for template triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 export class TemplateManager implements IElementManager<Template> {
   private portfolioManager: PortfolioManager;
   private templatesDir: string;
@@ -421,9 +425,18 @@ export class TemplateManager implements IElementManager<Template> {
     if (Array.isArray(data.tags)) {
       metadata.tags = data.tags.map((tag: any) => sanitizeInput(String(tag), 50));
     }
-    
+
     if (Array.isArray(data.includes)) {
       metadata.includes = data.includes.map((inc: any) => sanitizeInput(String(inc), 200));
+    }
+
+    // FIX #1122: Extract and validate triggers for Enhanced Index support
+    // Following pattern from SkillManager (PR #1136) and MemoryManager (PR #1133)
+    if (data.triggers && Array.isArray(data.triggers)) {
+      metadata.triggers = data.triggers
+        .map((trigger: any) => sanitizeInput(String(trigger), MAX_TRIGGER_LENGTH))
+        .filter((trigger: string) => trigger && TRIGGER_VALIDATION_REGEX.test(trigger))
+        .slice(0, 20); // Limit to 20 triggers max
     }
     
     // Copy safe fields
@@ -484,7 +497,8 @@ export class TemplateManager implements IElementManager<Template> {
       usage_count: metadata.usage_count,
       last_used: metadata.last_used,
       variables: metadata.variables,
-      examples: metadata.examples
+      examples: metadata.examples,
+      triggers: metadata.triggers  // FIX #1122: Preserve triggers when saving
     };
     
     // Remove undefined values

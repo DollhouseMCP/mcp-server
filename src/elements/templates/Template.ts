@@ -32,6 +32,7 @@ export interface TemplateMetadata extends IElementMetadata {
   usage_count?: number;          // Track popularity
   last_used?: string;            // ISO date string
   examples?: TemplateExample[];   // Usage examples
+  triggers?: string[];            // Action verbs that trigger this template (e.g., "create", "generate", "draft")
 }
 
 export interface TemplateVariable {
