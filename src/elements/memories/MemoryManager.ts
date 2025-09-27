@@ -764,16 +764,18 @@ export class MemoryManager implements IElementManager<Memory> {
       const rejectedTriggers: string[] = [];
       const rawTriggers = metadataSource.triggers.slice(0, 20); // Limit to 20 triggers max
 
-      rawTriggers.forEach((raw: any) => {
+      for (const raw of rawTriggers) {
         const sanitized = sanitizeInput(String(raw), MEMORY_CONSTANTS.MAX_TAG_LENGTH);
-        if (!sanitized) {
-          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-        } else if (!/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
-          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        if (sanitized) {
+          if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
+            validTriggers.push(sanitized);
+          } else {
+            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+          }
         } else {
-          validTriggers.push(sanitized);
+          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
         }
-      });
+      }
 
       metadata.triggers = validTriggers;
 

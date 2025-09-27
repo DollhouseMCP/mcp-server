@@ -122,16 +122,18 @@ export class PersonaLoader {
         const originalCount = metadata.triggers.length;
         const rawTriggers = metadata.triggers.slice(0, MAX_TRIGGERS);
 
-        rawTriggers.forEach((raw: any) => {
+        for (const raw of rawTriggers) {
           const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
-          if (!sanitized) {
-            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-          } else if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
-            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+          if (sanitized) {
+            if (TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+              validTriggers.push(sanitized);
+            } else {
+              rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+            }
           } else {
-            validTriggers.push(sanitized);
+            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
           }
-        });
+        }
 
         metadata.triggers = validTriggers;
 

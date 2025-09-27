@@ -88,16 +88,18 @@ export class SkillManager implements IElementManager<Skill> {
         const rejectedTriggers: string[] = [];
         const rawTriggers = parsed.data.triggers.slice(0, 20); // Limit to 20 triggers max
 
-        rawTriggers.forEach((raw: any) => {
+        for (const raw of rawTriggers) {
           const sanitized = sanitizeInput(String(raw), 50); // MAX_TRIGGER_LENGTH = 50
-          if (!sanitized) {
-            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-          } else if (!/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // TRIGGER_VALIDATION_REGEX
-            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+          if (sanitized) {
+            if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // TRIGGER_VALIDATION_REGEX
+              validTriggers.push(sanitized);
+            } else {
+              rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+            }
           } else {
-            validTriggers.push(sanitized);
+            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
           }
-        });
+        }
 
         metadata.triggers = validTriggers;
 
