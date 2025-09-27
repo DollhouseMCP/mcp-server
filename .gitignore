@@ -84,3 +84,8 @@ docs/QA/qa-test-results-*.json
 docs/QA/qa-direct-test-results-*.json
 docs/QA/qa-github-integration-*.json
 docs/QA/agent-reports/*-Results.json
+
+# SonarCloud analysis files
+sonarcloud-issues.json
+sonarcloud-analysis.json
+.scannerwork/
