@@ -80,6 +80,9 @@ export class SkillManager implements IElementManager<Skill> {
 
       // FIX #1121: Extract and validate triggers for Enhanced Index support
       // Enhanced trigger validation logging for Issue #1139
+      // NOTE: Trigger validation is intentionally element-specific.
+      // Skills may need dots (v2.0), special chars (c++), or command patterns.
+      // Different from Personas (names), Memories (dates), Templates (paths).
       if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
         const validTriggers: string[] = [];
         const rejectedTriggers: string[] = [];

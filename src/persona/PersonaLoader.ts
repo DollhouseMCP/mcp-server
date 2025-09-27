@@ -15,6 +15,15 @@ import { FileLockManager } from '../security/fileLockManager.js';
 import { sanitizeInput } from '../security/InputValidator.js';
 
 // Trigger validation constants
+// NOTE: These are intentionally NOT shared across element types.
+// Each element type has domain-specific requirements:
+// - Personas: Character names, aliases, multi-word triggers
+// - Skills: Technical terms, version numbers, command patterns
+// - Memories: Date-based, semantic, natural language triggers
+// - Templates: Format indicators, hierarchical paths
+// - Agents: Goal-oriented, role-based, mention patterns
+// Future element types will likely have unique validation needs.
+// Premature abstraction would limit flexibility.
 const MAX_TRIGGER_LENGTH = 50;
 const MAX_TRIGGERS = 20;
 const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;

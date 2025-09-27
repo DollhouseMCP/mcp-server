@@ -756,6 +756,9 @@ export class MemoryManager implements IElementManager<Memory> {
     };
 
     // Enhanced trigger validation and logging
+    // NOTE: Memory triggers may evolve to support date patterns (2024-Q3),
+    // semantic markers (recall-context), or natural language phrases.
+    // Kept separate from Skills (technical) and Personas (character names).
     if (Array.isArray(metadataSource.triggers)) {
       const validTriggers: string[] = [];
       const rejectedTriggers: string[] = [];
