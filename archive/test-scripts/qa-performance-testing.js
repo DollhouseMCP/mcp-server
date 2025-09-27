@@ -137,7 +137,11 @@ class PerformanceTestingAgent {
     const toolDiscoveryStart = performance.now();
     const tools = await this.client.listTools();
     const toolDiscoveryTime = performance.now() - toolDiscoveryStart;
-    
+
+    // Store tool discovery time in metrics
+    this.results.performanceMetrics.toolDiscoveryTime = toolDiscoveryTime;
+    console.log(`📋 Discovered ${tools.length} tools (${toolDiscoveryTime.toFixed(2)}ms)\n`);
+
     // ACCURACY FIX (SECURE-3): Use only existing tools for benchmarking
     // Previously tested non-existent tools causing inflated failure rates
     const allBenchmarkTools = [
@@ -495,6 +499,7 @@ class PerformanceTestingAgent {
 - **Overall Success Rate**: ${metrics.overallSuccessRate?.toFixed(1)}%
 - **Tools Tested**: ${metrics.totalToolsTested}
 - **Connection Time**: ${metrics.connectionTime?.toFixed(2)}ms
+- **Tool Discovery Time**: ${metrics.toolDiscoveryTime?.toFixed(2)}ms
 
 ## Performance Benchmarks
 

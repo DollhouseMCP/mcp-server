@@ -156,10 +156,10 @@ export class GitHubRateLimiter {
 
               const result = await apiCall();
               resolve(result);
-            
-            // Log successful API usage for quota tracking
-            this.logApiUsage(operation, 'success');
-            
+
+              // Log successful API usage for quota tracking
+              this.logApiUsage(operation, 'success');
+
             } catch (error) {
               // Check if this is a rate limit error from GitHub
               if (this.isGitHubRateLimitError(error)) {
@@ -168,7 +168,10 @@ export class GitHubRateLimiter {
               reject(error);
               this.logApiUsage(operation, 'error', error);
             }
-          })();
+          })().catch((err) => {
+            // Catch any synchronous errors from the IIFE itself
+            reject(err);
+          });
         },
         reject
       };
