@@ -14,7 +14,7 @@ import { BaseElement } from '../BaseElement.js';
 import { IElement, IElementMetadata, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
-import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
@@ -28,6 +28,7 @@ export interface SkillMetadata extends IElementMetadata {
   examples?: SkillExample[];      // Usage examples
   certification?: string;         // External certification or validation
   proficiency_level?: number;     // 1-100 proficiency level
+  triggers?: string[];            // Action verbs that trigger this skill (e.g., "analyze", "validate", "optimize")
 }
 
 export interface SkillParameter {

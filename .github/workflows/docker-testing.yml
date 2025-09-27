@@ -640,7 +640,6 @@ jobs:
         with:
           fetch-depth: 1
 
-
       - name: Test MINIMAL Docker Compose (hello world test)
         shell: bash
         run: |

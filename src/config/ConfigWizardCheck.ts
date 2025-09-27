@@ -82,14 +82,22 @@ export class ConfigWizardCheck {
     if (!lastSeenVersion) {
       return false; // Don't show update to very old users who haven't seen versioning yet
     }
-    
+
     // DEPLOYMENT NOTE: Update this logic when you want to trigger the wizard
     // Examples:
     // - For emergency notifications: return true;
     // - For major features: return this.currentVersion >= '1.8.0' && lastSeenVersion < '1.8.0';
     // - For breaking changes: return this.currentVersion.startsWith('2.') && lastSeenVersion.startsWith('1.');
-    
-    // Currently: Don't trigger update wizard (can be changed in any release)
+
+    // Check for major version changes (e.g., 1.x.x to 2.x.x)
+    const currentMajor = this.currentVersion.split('.')[0];
+    const lastSeenMajor = lastSeenVersion.split('.')[0];
+    if (currentMajor !== lastSeenMajor) {
+      return true;
+    }
+
+    // For now, don't trigger for minor/patch updates
+    // This can be enhanced to check for specific feature versions
     return false;
   }
 

@@ -27,6 +27,10 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 
+// Validation constants for skill triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 export class SkillManager implements IElementManager<Skill> {
   private portfolioManager: PortfolioManager;
   private skillsDir: string;
@@ -35,6 +39,57 @@ export class SkillManager implements IElementManager<Skill> {
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
     this.skillsDir = this.portfolioManager.getElementDir(ElementType.SKILL);
+  }
+
+  /**
+   * Validates and processes triggers for a skill
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], skillName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const rawTriggers = triggers.slice(0, 20); // Limit to 20 triggers max
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
+      if (sanitized) {
+        if (TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Skill "${skillName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          skillName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (triggers.length > 20) {
+      logger.warn(
+        `Skill "${skillName}": Trigger limit exceeded`,
+        {
+          skillName,
+          providedCount: triggers.length,
+          limit: 20,
+          truncated: triggers.length - 20
+        }
+      );
+    }
+
+    return validTriggers;
   }
 
   /**
@@ -69,11 +124,23 @@ export class SkillManager implements IElementManager<Skill> {
       
       // Parse markdown with frontmatter
       const parsed = matter(content);
-      
+
       // SECURITY FIX #3: Use SecureYamlParser for metadata validation
       // This prevents YAML injection attacks
       const metadata = parsed.data as SkillMetadata;
-      
+
+      // FIX #1121: Extract and validate triggers for Enhanced Index support
+      // Enhanced trigger validation logging for Issue #1139
+      // NOTE: Trigger validation is intentionally element-specific.
+      // Skills may need dots (v2.0), special chars (c++), or command patterns.
+      // Different from Personas (names), Memories (dates), Templates (paths).
+      if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
+        metadata.triggers = this.validateAndProcessTriggers(
+          parsed.data.triggers,
+          metadata.name || 'unknown'
+        );
+      }
+
       // Create skill instance
       const skill = new Skill(metadata, parsed.content);
       
@@ -131,7 +198,13 @@ export class SkillManager implements IElementManager<Skill> {
     // Clean metadata to remove undefined values that would break YAML serialization
     const cleanMetadata = Object.entries(element.metadata).reduce((acc, [key, value]) => {
       if (value !== undefined) {
-        acc[key] = value;
+        // FIX #1121: Ensure triggers array is preserved in saved metadata
+        // Empty arrays are valid and should be kept
+        if (key === 'triggers' && Array.isArray(value)) {
+          acc[key] = value;
+        } else if (value !== undefined) {
+          acc[key] = value;
+        }
       }
       return acc;
     }, {} as any);

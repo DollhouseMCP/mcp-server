@@ -1,0 +1,1199 @@
+{
+  "timestamp": "2025-09-21T17:57:21.440Z",
+  "variants": {
+    "minimal": {
+      "name": "Minimal (Hierarchy + Tools Only)",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n"
+    },
+    "element-capabilities": {
+      "name": "With Element Capabilities",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nELEMENT_CAPABILITIES:\n  memories:\n    PROVIDE: Contextual information on topics\n    PERSIST: Information across sessions\n    AUGMENT: Current context with history\n\n  personas:\n    ALTER: Behavioral patterns\n    PROVIDE: Specialized expertise\n    SHAPE: Response style\n\n  skills:\n    PROVIDE: Specific capabilities\n    EXECUTE: Defined procedures\n    ENHANCE: Task performance\n"
+    },
+    "action-verbs": {
+      "name": "Action-Oriented",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nACTIONS:\n  NEED_INFO → CHECK memories\n  NEED_DEBUG → FIND debug skills/personas\n  NEED_SECURITY → SEARCH local only\n  REMEMBER → CREATE/UPDATE memory\n  ACTIVATE → LOAD element into context\n"
+    },
+    "intent-mapping": {
+      "name": "Intent to Capability Mapping",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nINTENT_MAPPING:\n  \"information about X\" → memories\n  \"help debugging\" → debug skills/personas\n  \"security analysis\" → local security tools\n  \"git workflow\" → collection best practices\n  \"remember this\" → create/update memory\n"
+    },
+    "workflow-hints": {
+      "name": "With Workflow Hints",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nWORKFLOW_HINTS:\n  For information: Check active memories first\n  For debugging: Look for debug personas/skills\n  For security: Stay local, don't search collection\n  For memory updates: Edit if exists, create if new\n"
+    },
+    "explicit-process": {
+      "name": "Explicit Process Instructions",
+      "content": "# DollhouseMCP Capability Index\n\nALWAYS follow this process:\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nPROCESS:\n  1. Identify user intent\n  2. Check element search hierarchy\n  3. Use appropriate tool capability\n  4. Activate if found, create if missing\n"
+    },
+    "nested-structure": {
+      "name": "Nested Hierarchical",
+      "content": "# DollhouseMCP Capability Index\n\n\nELEMENT_SEARCH_HIERARCHY:\n  DEFAULT ORDER (when location unspecified):\n    1. Active (already loaded) - 0 tokens\n    2. Local (~/.dollhouse/portfolio) - 50 tokens\n    3. GitHub (user's portfolio) - 100 tokens\n    4. Collection (community library) - 150 tokens\n\n  OVERRIDE: User intent always takes precedence\n    - \"search the collection for...\" → Go directly to collection\n    - \"check my GitHub for...\" → Go directly to GitHub portfolio\n    - \"look in my local...\" → Go directly to local portfolio\n    - \"is there an active...\" → Check only active elements\n\n\n\nTOOL_CAPABILITIES:\n  search_portfolio: FINDS elements in local storage\n  search_collection: FINDS elements in community library\n  portfolio_element_manager: MANAGES GitHub portfolio sync\n  get_active_elements: CHECKS what's currently loaded\n  activate_element: LOADS element into context\n  create_element: CREATES new element\n  edit_element: MODIFIES existing element\n  list_elements: LISTS available elements by type\n  validate_element: VERIFIES element correctness\n\n\nCAPABILITY_STRUCTURE:\n  information:\n    sources:\n      memories: contextual data\n      personas: expertise\n    tools: [get_active_elements, search_portfolio]\n\n  debugging:\n    sources:\n      skills: debug procedures\n      personas: debug expertise\n    tools: [search_portfolio, search_collection]\n"
+    },
+    "control": {
+      "name": "Control (No Index)",
+      "content": "# DollhouseMCP\n\nYou have access to DollhouseMCP tools for managing AI customization elements.\n"
+    }
+  },
+  "queries": [
+    {
+      "query": "I need help debugging this error in my code",
+      "expectedWorkflow": [
+        "check active",
+        "search local",
+        "search github",
+        "search collection"
+      ],
+      "expectedTool": "search_portfolio or search_collection",
+      "expectedElement": "debug skill or persona"
+    },
+    {
+      "query": "Remember that the API endpoint changed to /v2/users",
+      "expectedWorkflow": [
+        "check active memories",
+        "create/update memory"
+      ],
+      "expectedTool": "edit_element or create_element",
+      "expectedElement": "memory"
+    },
+    {
+      "query": "I need a security analysis for this code",
+      "expectedWorkflow": [
+        "check active",
+        "search local only"
+      ],
+      "expectedTool": "search_portfolio",
+      "expectedElement": "security skill"
+    },
+    {
+      "query": "Find me a git workflow helper",
+      "expectedWorkflow": [
+        "search github",
+        "search collection"
+      ],
+      "expectedTool": "portfolio_element_manager or search_collection",
+      "expectedElement": "git skill or agent"
+    },
+    {
+      "query": "What personas do I have available?",
+      "expectedWorkflow": [
+        "list all tiers"
+      ],
+      "expectedTool": "list_elements",
+      "expectedElement": "personas"
+    },
+    {
+      "query": "Search the collection for a creative writing persona",
+      "expectedWorkflow": [
+        "search collection directly"
+      ],
+      "expectedTool": "search_collection",
+      "expectedElement": "creative persona"
+    },
+    {
+      "query": "Check my GitHub portfolio for test automation tools",
+      "expectedWorkflow": [
+        "search github directly"
+      ],
+      "expectedTool": "portfolio_element_manager",
+      "expectedElement": "test skill"
+    },
+    {
+      "query": "Is there an active memory about our testing strategy?",
+      "expectedWorkflow": [
+        "check active only"
+      ],
+      "expectedTool": "get_active_elements",
+      "expectedElement": "testing memory"
+    }
+  ],
+  "results": [
+    {
+      "variant": "Minimal (Hierarchy + Tools Only)",
+      "variantKey": "minimal",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3260.5,
+      "details": [
+        {
+          "testId": "minimal_1758477168233_a7f753eb",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3238,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "minimal_1758477172473_f9555b84",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3247,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "minimal_1758477176722_29dfdd05",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3247,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "minimal_1758477180972_a19b65aa",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3255,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "minimal_1758477185229_27461efe",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3266,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "minimal_1758477189497_72fe24ec",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3268,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "minimal_1758477193768_cd93bc87",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3299,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "minimal_1758477198069_8f4fc3f8",
+          "variant": "Minimal (Hierarchy + Tools Only)",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3264,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "With Element Capabilities",
+      "variantKey": "element-capabilities",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3258.875,
+      "details": [
+        {
+          "testId": "element-capabilities_1758477202337_ddb4d511",
+          "variant": "With Element Capabilities",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3250,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "element-capabilities_1758477206588_b9d54228",
+          "variant": "With Element Capabilities",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3263,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "element-capabilities_1758477210852_eb6a84eb",
+          "variant": "With Element Capabilities",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3248,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "element-capabilities_1758477215104_6bc7919e",
+          "variant": "With Element Capabilities",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3254,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "element-capabilities_1758477219359_269fc20b",
+          "variant": "With Element Capabilities",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3267,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "element-capabilities_1758477223628_44b94187",
+          "variant": "With Element Capabilities",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3278,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "element-capabilities_1758477227908_9f808cc7",
+          "variant": "With Element Capabilities",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3257,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "element-capabilities_1758477232167_f7f923b7",
+          "variant": "With Element Capabilities",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3254,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "Action-Oriented",
+      "variantKey": "action-verbs",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3270.25,
+      "details": [
+        {
+          "testId": "action-verbs_1758477236423_e18e8c17",
+          "variant": "Action-Oriented",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3259,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "action-verbs_1758477240684_f637fb2e",
+          "variant": "Action-Oriented",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3291,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "action-verbs_1758477244978_9918f2a6",
+          "variant": "Action-Oriented",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3274,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "action-verbs_1758477249253_55d6e8e8",
+          "variant": "Action-Oriented",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3251,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "action-verbs_1758477253506_c1ceae7f",
+          "variant": "Action-Oriented",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3260,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "action-verbs_1758477257768_6274d5bf",
+          "variant": "Action-Oriented",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3277,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "action-verbs_1758477262047_3fbbc619",
+          "variant": "Action-Oriented",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3274,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "action-verbs_1758477266323_64f52839",
+          "variant": "Action-Oriented",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3276,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "Intent to Capability Mapping",
+      "variantKey": "intent-mapping",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3262.25,
+      "details": [
+        {
+          "testId": "intent-mapping_1758477270601_1d5347a3",
+          "variant": "Intent to Capability Mapping",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3239,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "intent-mapping_1758477274841_072b8374",
+          "variant": "Intent to Capability Mapping",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3269,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "intent-mapping_1758477279113_31939c18",
+          "variant": "Intent to Capability Mapping",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3249,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "intent-mapping_1758477283363_eb392989",
+          "variant": "Intent to Capability Mapping",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3243,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "intent-mapping_1758477287608_452dd533",
+          "variant": "Intent to Capability Mapping",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3274,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "intent-mapping_1758477291885_749328b8",
+          "variant": "Intent to Capability Mapping",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3272,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "intent-mapping_1758477296160_7e9bc3c8",
+          "variant": "Intent to Capability Mapping",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3268,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "intent-mapping_1758477300430_adab3e18",
+          "variant": "Intent to Capability Mapping",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3284,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "With Workflow Hints",
+      "variantKey": "workflow-hints",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3269.125,
+      "details": [
+        {
+          "testId": "workflow-hints_1758477304716_f8fcf563",
+          "variant": "With Workflow Hints",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3263,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "workflow-hints_1758477308980_cb16e16a",
+          "variant": "With Workflow Hints",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3289,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "workflow-hints_1758477313271_a6479d15",
+          "variant": "With Workflow Hints",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3285,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "workflow-hints_1758477317558_3d71a267",
+          "variant": "With Workflow Hints",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3266,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "workflow-hints_1758477321825_60495f79",
+          "variant": "With Workflow Hints",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3303,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "workflow-hints_1758477326130_5da6fa53",
+          "variant": "With Workflow Hints",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3247,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "workflow-hints_1758477330384_f2083d04",
+          "variant": "With Workflow Hints",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3249,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "workflow-hints_1758477334635_3956eeda",
+          "variant": "With Workflow Hints",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3251,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "Explicit Process Instructions",
+      "variantKey": "explicit-process",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3267.75,
+      "details": [
+        {
+          "testId": "explicit-process_1758477338888_7eefcd7c",
+          "variant": "Explicit Process Instructions",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3281,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "explicit-process_1758477343171_c2b30b8a",
+          "variant": "Explicit Process Instructions",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3284,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "explicit-process_1758477347457_e3ccf86a",
+          "variant": "Explicit Process Instructions",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3266,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "explicit-process_1758477351725_6e429c8a",
+          "variant": "Explicit Process Instructions",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3264,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "explicit-process_1758477355990_8f168adc",
+          "variant": "Explicit Process Instructions",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3287,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "explicit-process_1758477360278_c11b4af3",
+          "variant": "Explicit Process Instructions",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3265,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "explicit-process_1758477364545_ee7dffb6",
+          "variant": "Explicit Process Instructions",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3243,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "explicit-process_1758477368791_9a39c6be",
+          "variant": "Explicit Process Instructions",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3252,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "Nested Hierarchical",
+      "variantKey": "nested-structure",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3273.25,
+      "details": [
+        {
+          "testId": "nested-structure_1758477373045_a7633bb1",
+          "variant": "Nested Hierarchical",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3265,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "nested-structure_1758477377317_af9a8de1",
+          "variant": "Nested Hierarchical",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3272,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "nested-structure_1758477381591_0f1173b3",
+          "variant": "Nested Hierarchical",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3268,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "nested-structure_1758477385862_ad220d4a",
+          "variant": "Nested Hierarchical",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3295,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "nested-structure_1758477390159_cfe5d809",
+          "variant": "Nested Hierarchical",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3281,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "nested-structure_1758477394441_2d62460d",
+          "variant": "Nested Hierarchical",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3258,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "nested-structure_1758477398702_2581554c",
+          "variant": "Nested Hierarchical",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3269,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "nested-structure_1758477402974_6e5c746d",
+          "variant": "Nested Hierarchical",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3278,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    },
+    {
+      "variant": "Control (No Index)",
+      "variantKey": "control",
+      "correctCount": 0,
+      "indexUsage": 0,
+      "hierarchyUsage": 0,
+      "avgDuration": 3269.625,
+      "details": [
+        {
+          "testId": "control_1758477407254_ddab0a63",
+          "variant": "Control (No Index)",
+          "query": "I need help debugging this error in my code",
+          "expectedWorkflow": [
+            "check active",
+            "search local",
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3278,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need help debugging this error in my code\n---\nProcessing: I need help debugging this error in my code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution"
+        },
+        {
+          "testId": "control_1758477411534_c4057e0a",
+          "variant": "Control (No Index)",
+          "query": "Remember that the API endpoint changed to /v2/users",
+          "expectedWorkflow": [
+            "check active memories",
+            "create/update memory"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "edit_element or create_element",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3264,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Remember that the API endpoint changed to /v2/users\n---\nProcessing: Remember that the API endpoint changed to /v2/users\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "control_1758477415800_ae04fe5d",
+          "variant": "Control (No Index)",
+          "query": "I need a security analysis for this code",
+          "expectedWorkflow": [
+            "check active",
+            "search local only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_portfolio",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3269,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: I need a security analysis for this code\n---\nProcessing: I need a security analysis for this code\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:1"
+        },
+        {
+          "testId": "control_1758477420072_ce26eba7",
+          "variant": "Control (No Index)",
+          "query": "Find me a git workflow helper",
+          "expectedWorkflow": [
+            "search github",
+            "search collection"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager or search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3289,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Find me a git workflow helper\n---\nProcessing: Find me a git workflow helper\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [eval]-wrappe"
+        },
+        {
+          "testId": "control_1758477424364_cae52200",
+          "variant": "Control (No Index)",
+          "query": "What personas do I have available?",
+          "expectedWorkflow": [
+            "list all tiers"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "list_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3244,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: What personas do I have available?\n---\nProcessing: What personas do I have available?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/process/execution:451:12\n    at [ev"
+        },
+        {
+          "testId": "control_1758477428615_aa790e03",
+          "variant": "Control (No Index)",
+          "query": "Search the collection for a creative writing persona",
+          "expectedWorkflow": [
+            "search collection directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "search_collection",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3268,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Search the collection for a creative writing persona\n---\nProcessing: Search the collection for a creative writing persona\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal"
+        },
+        {
+          "testId": "control_1758477432887_08d96206",
+          "variant": "Control (No Index)",
+          "query": "Check my GitHub portfolio for test automation tools",
+          "expectedWorkflow": [
+            "search github directly"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "portfolio_element_manager",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3264,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Check my GitHub portfolio for test automation tools\n---\nProcessing: Check my GitHub portfolio for test automation tools\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:internal/p"
+        },
+        {
+          "testId": "control_1758477437155_4e73d9b3",
+          "variant": "Control (No Index)",
+          "query": "Is there an active memory about our testing strategy?",
+          "expectedWorkflow": [
+            "check active only"
+          ],
+          "observedWorkflow": [],
+          "expectedTool": "get_active_elements",
+          "mentionsIndex": false,
+          "usesHierarchy": false,
+          "correctTool": false,
+          "duration": 3281,
+          "output": "\n> @dollhousemcp/mcp-server@1.9.8 start\n> node dist/index.js\n\nQuery: Is there an active memory about our testing strategy?\n---\nProcessing: Is there an active memory about our testing strategy?\nnode:fs:440\n    return binding.readFileUtf8(path, stringToFlags(options.flag));\n                   ^\n\nError: EACCES: permission denied, open '/root/.dollhouse/CLAUDE.md'\n    at Object.readFileSync (node:fs:440:20)\n    at [eval]:6:31\n    at runScriptInThisContext (node:internal/vm:219:10)\n    at node:intern"
+        }
+      ]
+    }
+  ]
+}

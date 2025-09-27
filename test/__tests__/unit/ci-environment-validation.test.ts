@@ -10,6 +10,13 @@ import { describe, expect, it, beforeAll } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import {
+  shouldValidateGitHubEnvironment,
+  isNonGitHubCI,
+  getSkipMessage,
+  validateGitHubActionsVariables,
+  runInGitHubActions
+} from '../../utils/test-environment.js';
 
 // Extend process.env type to include TEST_PERSONAS_DIR
 declare global {
@@ -37,16 +44,19 @@ describe('CI Environment Validation', () => {
     it('should detect CI environment correctly', () => {
       if (isCI) {
         expect(process.env.CI).toBe('true');
-        expect(process.env.GITHUB_ACTIONS).toBe('true');
+        // Only expect GITHUB_ACTIONS when actually in GitHub Actions
+        if (process.env.GITHUB_ACTIONS) {
+          expect(process.env.GITHUB_ACTIONS).toBe('true');
+        }
       }
     });
 
     it('should have TEST_PERSONAS_DIR set in CI', () => {
-      if (isCI) {
+      runInGitHubActions('TEST_PERSONAS_DIR validation', () => {
         expect(process.env.TEST_PERSONAS_DIR).toBeDefined();
         expect(process.env.TEST_PERSONAS_DIR).not.toBe('');
         expect(process.env.TEST_PERSONAS_DIR).toMatch(/test-personas/);
-      }
+      });
     });
 
     it('should have valid TEST_PERSONAS_DIR path format', () => {
@@ -203,12 +213,13 @@ describe('CI Environment Validation', () => {
 
   describe('GitHub Actions Integration', () => {
     it('should have GitHub-specific environment variables in CI', () => {
-      if (isCI) {
-        expect(process.env.GITHUB_WORKFLOW).toBeDefined();
-        expect(process.env.GITHUB_RUN_ID).toBeDefined();
-        expect(process.env.GITHUB_RUN_NUMBER).toBeDefined();
-        expect(process.env.RUNNER_OS).toBeDefined();
-      }
+      runInGitHubActions('GitHub Actions specific variables', () => {
+        const validation = validateGitHubActionsVariables();
+        expect(validation.valid).toBe(true);
+        if (!validation.valid) {
+          console.error('Missing GitHub Actions variables:', validation.missing);
+        }
+      });
     });
 
     it('should match runner OS with Node.js platform', () => {
@@ -228,16 +239,16 @@ describe('CI Environment Validation', () => {
 
   describe('Integration Test Requirements', () => {
     it('should provide TEST_PERSONAS_DIR to integration tests', () => {
-      if (isCI) {
+      runInGitHubActions('TEST_PERSONAS_DIR integration test availability', () => {
         // This verifies that our integration tests will have access
         // to the required environment variable
         const integrationTestEnv = {
           ...process.env,
           NODE_ENV: 'test'
         };
-        
+
         expect(integrationTestEnv.TEST_PERSONAS_DIR).toBeDefined();
-      }
+      });
     });
 
     it('should maintain TEST_PERSONAS_DIR across test suites', () => {

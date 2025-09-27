@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-09-21T14:04:39-04:00",
+  "best_variant": "explicit",
+  "best_score": 100,
+  "token_reduction": "97%",
+  "variants_tested": 5,
+  "results_directory": "/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/test/experiments/capability-index-validation-1758477879"
+}

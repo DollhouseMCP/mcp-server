@@ -1,5 +1,93 @@
 # Changelog
 
+## [1.9.10] - 2025-09-27
+
+### Added
+- **Enhanced Capability Index** - Major new feature for intelligent element discovery
+  - **NLP Scoring System** (PR #1091)
+    - Jaccard similarity and Shannon entropy scoring
+    - Advanced sampling algorithm for performance
+    - Extensible Enhanced Index Manager architecture
+    - Verb-based action triggers for natural language queries
+
+  - **Cross-Element Relationships** (PR #1093)
+    - GraphRAG-style relationship mapping between elements
+    - Automatic discovery of element dependencies and connections
+
+  - **Comprehensive Trigger Extraction** - Extended to all element types
+    - Memory elements trigger extraction (PR #1133, Issue #1124)
+    - Skills elements trigger extraction (PR #1136, Issue #1121)
+    - Template elements trigger extraction (PR #1137, Issue #1122)
+    - Agent elements trigger extraction (PR #1138, Issue #1123)
+    - Comprehensive trigger extraction documentation (PR #1135)
+
+### Fixed
+- **Enhanced Index Stability**
+  - Fixed verb extraction with comprehensive configuration support (PR #1125)
+  - Fixed undefined metadata handling in EnhancedIndexManager (PR #1110)
+  - Fixed loadIndex error and Docker Hub rate limits (PR #1107)
+  - Improved type safety in relationship parsing (PR #1106, Issue #1103)
+  - Fixed caching issues and added error boundaries (PR #1098)
+  - Enhanced trigger validation for Skills and Memories (PR #1140, Issue #1139)
+
+- **Test Infrastructure**
+  - Fixed Extended Node compatibility test failures (PR #1141, Issue #1142)
+  - Fixed CI test failures in IndexConfig and EnhancedIndexManager (PR #1115)
+  - Fixed CI environment tests for GitHub Actions (PR #1114)
+  - Fixed Extended Node test failures with Node 22+ (PR #1111)
+  - Removed dangerous restore-keys from cache configuration (PR #1109)
+  - Added test isolation to prevent file system pollution (PR #1094, #1095)
+  - Added memory trigger tests to ESM ignore list (PR #1134)
+  - Skip ESM-incompatible tests in CI (PR #1130)
+
+- **Code Quality**
+  - Standardized element ID parsing logic (PR #1104, Issue #1099)
+  - Moved magic numbers to configuration (PR #1105, Issue #1100)
+  - Fixed broken README badge links (PR #1079)
+
+### Improved
+- **Performance**: Enhanced Index now includes batching, caching, and memory cleanup mechanisms
+- **Security**: Added validation for configuration changes with audit logging
+- **Documentation**: Added CHANGELOG_PROCESS.md and restored lost session documentation (PR #1082, #1077)
+
+### Technical Details
+- The Enhanced Capability Index provides intelligent element discovery using NLP techniques
+- All element types now support trigger extraction for improved searchability
+- Comprehensive test coverage improvements and CI reliability fixes
+- Node 22+ compatibility fully verified and tested
+
+## [1.9.9] - 2025-09-22
+
+### Added
+- **Security Utilities Module** (PR #1072)
+  - New `src/utils/securityUtils.ts` with reusable security patterns
+  - Prototype pollution protection functions
+  - Safe object creation with Object.create(null)
+  - Secure property setting with Object.defineProperty()
+
+- **Memory Auto-Repair** (PR #1070)
+  - Automatic repair of corrupted memory timestamps during read operations
+  - No migration needed - repairs happen transparently
+  - Enhanced sorting operations with defensive timestamp conversions
+
+### Fixed
+- **Memory Timestamp Crashes** (PR #1070)
+  - Fixed toISOString() errors when memory entries have string timestamps (#1069)
+  - Added comprehensive timestamp validation with detailed error reporting
+
+- **Security Badge Link** (PR #1071, #1075)
+  - Fixed broken security badge link in README pointing to docs/SECURITY.md
+  - Badge now correctly points to SECURITY.md at repository root
+
+- **Prototype Pollution False Positives** (PR #1072)
+  - Added CodeQL suppressions for false positive alerts (#202-#205)
+  - Implemented belt-and-suspenders protection to satisfy code scanners
+
+### Security
+- Added comprehensive prototype pollution protection across ConfigManager
+- Proper CodeQL suppressions for validated false positives
+- Enhanced input validation and sanitization
+
 ## [1.9.8] - 2025-09-20
 
 ### Added

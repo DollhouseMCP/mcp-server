@@ -74,4 +74,10 @@ export interface IToolHandler {
   // New unified config and sync handlers
   handleConfigOperation(options: any): Promise<any>;
   handleSyncOperation(options: any): Promise<any>;
+
+  // Enhanced Index tools
+  findSimilarElements(options: {elementName: string; elementType?: string; limit: number; threshold: number}): Promise<any>;
+  getElementRelationships(options: {elementName: string; elementType?: string; relationshipTypes?: string[]}): Promise<any>;
+  searchByVerb(options: {verb: string; limit: number}): Promise<any>;
+  getRelationshipStats(): Promise<any>;
 }

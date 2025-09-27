@@ -1,0 +1,107 @@
+{
+  "timestamp": "2025-09-21T17:15:52.877Z",
+  "configs": [
+    {
+      "name": "cascade-top-explicit",
+      "index": "CAPABILITY_INDEX:\n  debug → search_collection(\"debug\")\n  error → search_portfolio(\"error\")\n  security → search_collection(\"security\")\n  persona → list_elements(\"personas\")",
+      "prompt": "ALWAYS check CAPABILITY_INDEX first",
+      "position": "top"
+    },
+    {
+      "name": "cascade-bottom-suggestive",
+      "index": "CAPABILITY_INDEX:\n  debug → search_collection(\"debug\")\n  error → search_portfolio(\"error\")",
+      "prompt": "Consider using the capability index",
+      "position": "bottom"
+    },
+    {
+      "name": "nested-explicit",
+      "index": "capabilities:\n  development:\n    debugging: search_collection(\"debug\")\n    security: search_collection(\"security\")\n  workflow:\n    personas: list_elements(\"personas\")",
+      "prompt": "MUST use capability structure",
+      "position": "top"
+    },
+    {
+      "name": "flat-none",
+      "index": "Available tools:\n- search_portfolio: search local\n- search_collection: search community\n- list_elements: list by type",
+      "prompt": "",
+      "position": "middle"
+    },
+    {
+      "name": "action-explicit",
+      "index": "ACTIONS:\n  NEED_DEBUG → USE search_collection(\"debug\")\n  FOUND_ERROR → USE search_portfolio(\"error\")\n  CHECK_SECURITY → USE search_collection(\"security\")",
+      "prompt": "Follow ACTIONS mapping exactly",
+      "position": "top"
+    },
+    {
+      "name": "control",
+      "index": "",
+      "prompt": "",
+      "position": "none"
+    }
+  ],
+  "results": [
+    {
+      "config": "cascade-top-explicit",
+      "accuracy": "100.0",
+      "indexUsage": "100.0",
+      "indexMention": "100.0",
+      "avgTokens": 50
+    },
+    {
+      "config": "nested-explicit",
+      "accuracy": "100.0",
+      "indexUsage": "100.0",
+      "indexMention": "100.0",
+      "avgTokens": 50
+    },
+    {
+      "config": "cascade-bottom-suggestive",
+      "accuracy": "60.0",
+      "indexUsage": "60.0",
+      "indexMention": "80.0",
+      "avgTokens": 140
+    },
+    {
+      "config": "action-explicit",
+      "accuracy": "20.0",
+      "indexUsage": "40.0",
+      "indexMention": "40.0",
+      "avgTokens": 140
+    },
+    {
+      "config": "flat-none",
+      "accuracy": "60.0",
+      "indexUsage": "40.0",
+      "indexMention": "60.0",
+      "avgTokens": 170
+    },
+    {
+      "config": "control",
+      "accuracy": "20.0",
+      "indexUsage": "0.0",
+      "indexMention": "0.0",
+      "avgTokens": 200
+    }
+  ],
+  "queries": [
+    {
+      "query": "Help me debug this error",
+      "expected": "search_collection"
+    },
+    {
+      "query": "Find security analysis persona",
+      "expected": "search_collection"
+    },
+    {
+      "query": "Show me available personas",
+      "expected": "list_elements"
+    },
+    {
+      "query": "I need a git workflow helper",
+      "expected": "search_collection"
+    },
+    {
+      "query": "Check my portfolio for debug tools",
+      "expected": "search_portfolio"
+    }
+  ]
+}
