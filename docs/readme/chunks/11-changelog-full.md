@@ -1,5 +1,36 @@
 ## 🏷️ Version History
 
+### v1.9.10 - September 27, 2025
+
+**Enhanced Capability Index & Security**: Complete trigger extraction system and SonarCloud integration
+
+#### ✨ Major Features
+- **Enhanced Capability Index System** - NLP scoring with Jaccard similarity and Shannon entropy
+- **Cross-Element Relationships** - GraphRAG-style relationship mapping
+- **Complete Trigger Extraction** - All element types now support trigger extraction
+- **SonarCloud Integration** - Quality gate PASSING with 0% duplication
+
+#### 🔒 Security Improvements
+- Fixed 16 SonarCloud BLOCKER issues
+- GitHub Actions command injection vulnerabilities resolved
+- Full SHA pinning for all Actions
+- PATH manipulation vulnerability fixed
+
+#### 🛠️ Improvements
+- Extended Node compatibility fixes
+- Enhanced Index stability improvements
+- Type-safe relationship parsing
+- Docker Hub rate limit mitigation
+- Test isolation and CI improvements
+
+#### 📊 Statistics
+- 34 Pull Requests merged
+- Test Coverage: 98.17%
+- Security Hotspots: 100% reviewed
+- Code Duplication: 0% on new code
+
+---
+
 ### v1.9.9 - September 22, 2025
 
 **Security & Stability**: Prototype pollution protection and memory timestamp fixes
