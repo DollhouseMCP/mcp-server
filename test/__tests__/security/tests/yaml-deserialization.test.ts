@@ -169,7 +169,7 @@ malicious_field: !!js/function "alert()"
       const inputs = [
         { input: 'Normal text', expected: 'Normal text' },
         { input: '<script>alert("XSS")</script>', expected: 'scriptalert("XSS")/script' },
-        { input: 'Text\x00with\x00nulls', expected: 'Textwithnulls' },
+        { input: 'Text\u0000with\u0000nulls', expected: 'Textwithnulls' },
         { input: 'Line1\nLine2\rLine3', expected: 'Line1 Line2 Line3' },
         { input: '  Trimmed  ', expected: 'Trimmed' }
       ];
@@ -177,7 +177,7 @@ malicious_field: !!js/function "alert()"
       for (const { input, expected } of inputs) {
         const sanitized = input
           .replace(/[<>]/g, '')
-          .replace(/\x00/g, '')
+          .replace(/\u0000/g, '')
           .replace(/[\r\n]/g, ' ')
           .trim();
         

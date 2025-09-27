@@ -59,17 +59,17 @@ describe('Path Traversal Security Tests', () => {
     
     test('should detect null byte injection', () => {
       const nullBytePaths = [
-        'safe.txt\x00.pdf',
-        'personas/user.md\x00.exe',
+        'safe.txt\u0000.pdf',
+        'personas/user.md\u0000.exe',
         'file.md\0../../etc/passwd'
       ];
       
       for (const nullPath of nullBytePaths) {
-        expect(nullPath).toMatch(/\x00/);
+        expect(nullPath).toMatch(/\u0000/);
         
         // After sanitization, null bytes should be removed
-        const sanitized = nullPath.replace(/\x00/g, '');
-        expect(sanitized).not.toMatch(/\x00/);
+        const sanitized = nullPath.replace(/\u0000/g, '');
+        expect(sanitized).not.toMatch(/\u0000/);
       }
     });
   });
@@ -126,7 +126,7 @@ describe('Path Traversal Security Tests', () => {
         '.htaccess',
         'persona.php',
         'shell.sh',
-        'persona\x00.md'
+        'persona\u0000.md'
       ];
       
       const filenameRegex = /^[a-zA-Z0-9\-_.]+\.md$/;
