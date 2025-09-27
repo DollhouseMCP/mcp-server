@@ -89,7 +89,8 @@ export class UnicodeValidator {
    */
   private static readonly SCRIPT_PATTERNS = {
     LATIN: /[\u0000-\u007F\u00A0-\u00FF\u0100-\u017F\u0180-\u024F]/,
-    CYRILLIC: /[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F]/,
+    // Use alternation to avoid SonarCloud thinking \u052F\u2DE0 is a combined character
+    CYRILLIC: /(?:[\u0400-\u04FF]|[\u0500-\u052F]|[\u2DE0-\u2DFF]|[\uA640-\uA69F])/,
     GREEK: /[\u0370-\u03FF\u1F00-\u1FFF]/,
     ARABIC: /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/,
     HEBREW: /[\u0590-\u05FF\uFB1D-\uFB4F]/,

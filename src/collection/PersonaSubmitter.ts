@@ -177,7 +177,7 @@ export class PersonaSubmitter {
    */
   private serializeMetadata(metadata: any): string {
     return Object.entries(metadata)
-      .map(([key, value]) => `${key}: ${Array.isArray(value) ? JSON.stringify(value) : JSON.stringify(value)}`)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
       .join('\n');
   }
 

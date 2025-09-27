@@ -134,8 +134,9 @@ class PerformanceTestingAgent {
       }
     });
     
+    const toolDiscoveryStart = performance.now();
     const tools = await this.client.listTools();
-    const toolDiscoveryTime = performance.now() - performance.now();
+    const toolDiscoveryTime = performance.now() - toolDiscoveryStart;
     
     // ACCURACY FIX (SECURE-3): Use only existing tools for benchmarking
     // Previously tested non-existent tools causing inflated failure rates

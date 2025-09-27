@@ -144,28 +144,31 @@ export class GitHubRateLimiter {
         operation,
         priority,
         timestamp: Date.now(),
-        resolve: async (value) => {
-          try {
-            logger.debug('Executing GitHub API request', {
-              operation,
-              requestId,
-              queueWaitTime: Date.now() - request.timestamp
-            });
-            
-            const result = await apiCall();
-            resolve(result);
+        resolve: (value) => {
+          // Wrap in async IIFE to handle async operations without returning a Promise
+          (async () => {
+            try {
+              logger.debug('Executing GitHub API request', {
+                operation,
+                requestId,
+                queueWaitTime: Date.now() - request.timestamp
+              });
+
+              const result = await apiCall();
+              resolve(result);
             
             // Log successful API usage for quota tracking
             this.logApiUsage(operation, 'success');
             
-          } catch (error) {
-            // Check if this is a rate limit error from GitHub
-            if (this.isGitHubRateLimitError(error)) {
-              this.handleGitHubRateLimit(error);
+            } catch (error) {
+              // Check if this is a rate limit error from GitHub
+              if (this.isGitHubRateLimitError(error)) {
+                this.handleGitHubRateLimit(error);
+              }
+              reject(error);
+              this.logApiUsage(operation, 'error', error);
             }
-            reject(error);
-            this.logApiUsage(operation, 'error', error);
-          }
+          })();
         },
         reject
       };
