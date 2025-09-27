@@ -23,7 +23,7 @@ const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
 const OCTAL_IP_REGEX = /^0[0-7]{8,11}$/;
 const FILENAME_DANGEROUS_REGEX = /[\/\\:*?"<>|]/g;
 const FILENAME_LEADING_DOTS_REGEX = /^\.+/;
-// Regex to trim leading/trailing slashes (e.g., "/path/" → "path")
+// Regex to trim leading/trailing slashes (e.g., "/path/" -> "path")
 const PATH_NORMALIZE_REGEX = /(^\/{1,100})|(\/{1,100}$)/g;
 const PATH_MULTIPLE_SLASHES_REGEX = /\/{1,100}/g;
 const URL_PLUS_DECODE_REGEX = /\+/g;

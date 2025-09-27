@@ -106,7 +106,7 @@ export class PortfolioDownloader {
             const key = line.substring(0, colonIndex).trim();
             const value = line.substring(colonIndex + 1).trim();
             
-            // Remove quotes if present (e.g., "value" → value, 'value' → value)
+            // Remove quotes if present (e.g., "value" -> value, 'value' -> value)
             const cleanValue = value.replace(/(^["'])|(['"]$)/g, '');
             
             // Try to parse as JSON for arrays/objects, otherwise use as string
