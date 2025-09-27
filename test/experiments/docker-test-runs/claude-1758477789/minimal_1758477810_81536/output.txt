@@ -1,0 +1,8 @@
+🐳 Docker Claude Code Testing Environment
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 DollhouseMCP: v1.9.8
+🤖 Claude Code: Configured to use DollhouseMCP
+📁 Portfolio: /app/portfolio
+💾 Cache: /app/cache
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/bin/bash: line 1: I: command not found

@@ -1,0 +1,9 @@
+{
+  "variant": "minimal",
+  "has_hierarchy": true,
+  "has_tools": true,
+  "has_explicit": false,
+  "has_hints": false,
+  "line_count":       13,
+  "score": 70
+}

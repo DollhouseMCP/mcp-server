@@ -27,6 +27,10 @@ const STATE_FILE_EXTENSION = '.state.yaml';
 const MAX_FILE_SIZE = 100 * 1024; // 100KB
 const MAX_YAML_SIZE = 64 * 1024; // 64KB for frontmatter
 
+// Validation constants for agent triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 // Element creation result interface
 interface ElementCreationResult {
   success: boolean;
@@ -531,6 +535,38 @@ export class AgentManager implements IElementManager<Agent> {
       throw new Error(`Invalid element type: expected '${ElementType.AGENT}', got '${typedMetadata.type}'`);
     }
 
+    // FIX #1123: Extract and validate triggers for Enhanced Index support
+    // Following pattern from TemplateManager (PR #1137), SkillManager (PR #1136) and MemoryManager (PR #1133)
+    if (typedMetadata.triggers && Array.isArray(typedMetadata.triggers)) {
+      const { validTriggers, rejectedTriggers } = this.validateTriggers(typedMetadata.triggers);
+
+      // Log warnings for rejected triggers to aid debugging
+      if (rejectedTriggers.length > 0) {
+        logger.warn(
+          `Agent "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+          {
+            agentName: metadata.name,
+            rejectedTriggers,
+            acceptedCount: validTriggers.length
+          }
+        );
+      }
+
+      // Apply limit and warn if exceeded
+      if (validTriggers.length > 20) {
+        logger.warn(
+          `Agent "${metadata.name || 'unknown'}": Trigger count exceeds limit (${validTriggers.length} > 20), truncating`,
+          {
+            agentName: metadata.name,
+            totalTriggers: validTriggers.length,
+            truncatedTriggers: validTriggers.slice(20)
+          }
+        );
+      }
+
+      metadata.triggers = validTriggers.slice(0, 20);
+    }
+
     return {
       metadata,
       content: body.trim()
@@ -551,10 +587,11 @@ export class AgentManager implements IElementManager<Agent> {
       description: agent.metadata.description,
       decisionFramework: agent.extensions?.decisionFramework,
       riskTolerance: agent.extensions?.riskTolerance,
-      learningEnabled: agent.extensions?.learningEnabled !== undefined ? 
+      learningEnabled: agent.extensions?.learningEnabled !== undefined ?
         String(agent.extensions.learningEnabled) : undefined,
       maxConcurrentGoals: (agent.metadata as AgentMetadata).maxConcurrentGoals,
-      specializations: agent.extensions?.specializations
+      specializations: agent.extensions?.specializations,
+      triggers: (agent.metadata as AgentMetadata).triggers  // FIX #1123: Preserve triggers when saving
     };
 
     // Remove undefined values
@@ -697,6 +734,36 @@ export class AgentManager implements IElementManager<Agent> {
       await this.saveAgentState(name, element.getState());
       element.markStatePersisted();
     }
+  }
+
+  /**
+   * Validate triggers array and return valid and rejected triggers
+   * Extracted to reduce cognitive complexity
+   */
+  private validateTriggers(triggers: any[]): { validTriggers: string[], rejectedTriggers: string[] } {
+    const sanitizedTriggers = triggers.map((trigger: any) => ({
+      raw: trigger,
+      sanitized: sanitizeInput(String(trigger), MAX_TRIGGER_LENGTH)
+    }));
+
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+
+    for (const { raw, sanitized } of sanitizedTriggers) {
+      if (!sanitized) {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+        continue;
+      }
+
+      if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+        rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        continue;
+      }
+
+      validTriggers.push(sanitized);
+    }
+
+    return { validTriggers, rejectedTriggers };
   }
 
   /**

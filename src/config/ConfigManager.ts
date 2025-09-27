@@ -82,6 +82,30 @@ export interface CollectionConfig {
   add_attribution: boolean;
 }
 
+export interface EnhancedIndexConfig {
+  enabled: boolean;
+  limits: {
+    maxTriggersPerElement: number;
+    maxTriggerLength: number;
+    maxKeywordsToCheck: number;
+  };
+  telemetry: {
+    enabled: boolean;
+    sampleRate: number;
+    metricsInterval: number;
+  };
+  verbPatterns?: {
+    customPrefixes?: string[];
+    customSuffixes?: string[];
+    excludedNouns?: string[];
+  };
+  backgroundAnalysis?: {
+    enabled: boolean;
+    scanInterval: number;
+    maxConcurrentScans: number;
+  };
+}
+
 export interface ElementsConfig {
   auto_activate: {
     personas?: string[];
@@ -92,6 +116,7 @@ export interface ElementsConfig {
     ensembles?: string[];
   };
   default_element_dir: string;
+  enhanced_index?: EnhancedIndexConfig;
 }
 
 export interface DisplayConfig {
@@ -269,7 +294,20 @@ export class ConfigManager {
       },
       elements: {
         auto_activate: {},
-        default_element_dir: path.join(os.homedir(), '.dollhouse', 'portfolio')
+        default_element_dir: path.join(os.homedir(), '.dollhouse', 'portfolio'),
+        enhanced_index: {
+          enabled: true,
+          limits: {
+            maxTriggersPerElement: 50,
+            maxTriggerLength: 50,
+            maxKeywordsToCheck: 100
+          },
+          telemetry: {
+            enabled: false,  // Opt-in only
+            sampleRate: 0.1,
+            metricsInterval: 60000
+          }
+        }
       },
       display: {
         persona_indicators: {

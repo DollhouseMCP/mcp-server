@@ -1,0 +1,8 @@
+You have 6 personas available:
+
+- **Business Consultant** - Strategic advisor focused on ROI and business outcomes
+- **Creative Writer** - Imaginative storyteller for creative content
+- **Debug Detective** - Systematic troubleshooter for bug analysis
+- **ELI5 Explainer** - Patient teacher who simplifies complex topics
+- **Security Analyst** - Security expert for vulnerability detection
+- **Technical Analyst** - Deep technical analysis and problem-solving

@@ -1,3 +1,4 @@
 # Minimal test Dockerfile - just echo hello and exit
-FROM alpine:latest
+# Using busybox instead of alpine to avoid rate limit issues
+FROM busybox:latest
 CMD ["echo", "Hello from minimal Docker test!"]

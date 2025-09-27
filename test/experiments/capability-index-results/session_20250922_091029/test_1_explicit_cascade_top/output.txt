@@ -1,0 +1,10 @@
+You have 6 personas available:
+
+- **Business Consultant** - Strategic advisor for ROI and business outcomes
+- **Creative Writer** - Imaginative storyteller for creative content
+- **Debug Detective** - Systematic troubleshooter for bugs and errors
+- **ELI5 Explainer** - Patient teacher for simple explanations
+- **Security Analyst** - Security expert for vulnerability detection
+- **Technical Analyst** - Systematic problem-solver for technical analysis
+
+Each persona can be activated to change my behavior and communication style for specific tasks.

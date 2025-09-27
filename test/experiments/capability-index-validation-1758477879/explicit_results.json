@@ -1,0 +1,9 @@
+{
+  "variant": "explicit",
+  "has_hierarchy": true,
+  "has_tools": true,
+  "has_explicit": true,
+  "has_hints": true,
+  "line_count":       36,
+  "score": 100
+}

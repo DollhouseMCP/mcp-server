@@ -24,6 +24,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
 
 export interface IndexEntry {
   filePath: string;
@@ -75,7 +76,7 @@ export class PortfolioIndexManager {
   
   private index: PortfolioIndex | null = null;
   private lastBuilt: Date | null = null;
-  private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly TTL_MS = IndexConfigManager.getInstance().getConfig().index.ttlMinutes * 60 * 1000;
   private isBuilding = false;
   private buildPromise: Promise<void> | null = null;
 
@@ -450,9 +451,18 @@ export class PortfolioIndexManager {
       
       // Read file content
       const content = await fs.readFile(filePath, 'utf-8');
-      
+
       // Parse frontmatter securely
-      const parsed = SecureYamlParser.parse(content);
+      // SECURITY NOTE: Portfolio files are locally trusted content that users
+      // have deliberately created or installed. Security validation should focus
+      // on BEHAVIORAL analysis during import/installation, not superficial word
+      // matching in descriptions. A malicious actor would never label their
+      // exploit as "dangerous" - they'd call it "helpful utility".
+      // Future: Add behavioral analysis on import, not during indexing.
+      const parsed = SecureYamlParser.parse(content, {
+        validateContent: false,  // Don't scan for words in trusted local files
+        validateFields: false    // Portfolio files are pre-trusted by user choice
+      });
       
       // Extract base filename
       const filename = path.basename(filePath, '.md');

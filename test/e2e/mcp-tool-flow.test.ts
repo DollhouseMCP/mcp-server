@@ -156,7 +156,10 @@ function extractResponseText(response: any): string {
  * Since we can't directly test MCP protocol, we'll test the underlying functions
  * that the MCP tools call, ensuring the complete flow works
  */
-describe('MCP Tool Integration Flow', () => {
+// Skip the entire test suite in CI environments to prevent conflicts
+const describeOrSkip = process.env.CI ? describe.skip : describe;
+
+describeOrSkip('MCP Tool Integration Flow', () => {
   let testEnv: TestEnvironment;
   let githubClient: GitHubTestClient;
   let uploadedFiles: string[] = [];

@@ -12,11 +12,26 @@ import { SecurityError } from '../errors/SecurityError.js';
 import { logger } from '../utils/logger.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import { sanitizeInput } from '../security/InputValidator.js';
+
+// Trigger validation constants
+// NOTE: These are intentionally NOT shared across element types.
+// Each element type has domain-specific requirements:
+// - Personas: Character names, aliases, multi-word triggers
+// - Skills: Technical terms, version numbers, command patterns
+// - Memories: Date-based, semantic, natural language triggers
+// - Templates: Format indicators, hierarchical paths
+// - Agents: Goal-oriented, role-based, mention patterns
+// Future element types will likely have unique validation needs.
+// Premature abstraction would limit flexibility.
+const MAX_TRIGGER_LENGTH = 50;
+const MAX_TRIGGERS = 20;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
 
 export class PersonaLoader {
   private personasDir: string;
   private portfolioManager: PortfolioManager;
-  
+
   constructor(personasDir?: string) {
     // Use PortfolioManager for new portfolio structure
     this.portfolioManager = PortfolioManager.getInstance();
@@ -24,7 +39,59 @@ export class PersonaLoader {
     // Otherwise use the portfolio personas directory
     this.personasDir = personasDir || this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
-  
+
+  /**
+   * Validates and processes triggers for a persona
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], personaName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const originalCount = triggers.length;
+    const rawTriggers = triggers.slice(0, MAX_TRIGGERS);
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
+      if (sanitized) {
+        if (TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Persona "${personaName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          personaName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (originalCount > MAX_TRIGGERS) {
+      logger.warn(
+        `Persona "${personaName}": Trigger limit exceeded`,
+        {
+          personaName,
+          providedCount: originalCount,
+          limit: MAX_TRIGGERS,
+          truncated: originalCount - MAX_TRIGGERS
+        }
+      );
+    }
+
+    return validTriggers;
+  }
+
   /**
    * Load all personas from the personas directory
    */
@@ -99,7 +166,15 @@ export class PersonaLoader {
       
       // Set default values for metadata fields
       this.setDefaultMetadata(metadata);
-      
+
+      // Enhanced trigger validation and logging for Issue #1139
+      if (metadata.triggers && Array.isArray(metadata.triggers)) {
+        metadata.triggers = this.validateAndProcessTriggers(
+          metadata.triggers,
+          metadata.name
+        );
+      }
+
       const persona: Persona = {
         metadata,
         content,

@@ -14,6 +14,7 @@ import { getConfigToolsV2 } from './tools/ConfigToolsV2.js';
 import { getAuthTools } from './tools/AuthTools.js';
 import { getPortfolioTools } from './tools/PortfolioTools.js';
 import { getBuildInfoTools } from './tools/BuildInfoTools.js';
+import { getEnhancedIndexTools } from './tools/EnhancedIndexTools.js';
 import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -76,7 +77,10 @@ export class ServerSetup {
     
     // Register build info tools
     this.toolRegistry.registerMany(getBuildInfoTools(instance));
-    
+
+    // Register Enhanced Index tools (semantic search and relationships)
+    this.toolRegistry.registerMany(getEnhancedIndexTools(instance));
+
     // Invalidate cache since tools have changed
     this.toolCache.invalidateToolList();
     logger.debug('ToolDiscoveryCache: Cache invalidated due to tool registration');

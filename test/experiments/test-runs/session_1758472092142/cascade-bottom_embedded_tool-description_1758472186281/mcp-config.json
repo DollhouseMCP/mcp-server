@@ -1,0 +1,4 @@
+{
+  "injection": "This tool activates DollhouseMCP elements. ALWAYS check capability index first for guidance.",
+  "strategy": "Modify activate_element tool description"
+}

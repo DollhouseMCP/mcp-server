@@ -1,0 +1,272 @@
+[
+  {
+    "variation": "cascade-top",
+    "name": "Cascade at Top",
+    "hypothesis": "Best performance - triggers in high attention zone",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "cascade-top",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 462,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-top",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 242,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-top",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 252,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-top",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 245,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-top",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 239,
+        "exitCode": 1
+      }
+    ]
+  },
+  {
+    "variation": "cascade-bottom",
+    "name": "Cascade at Bottom",
+    "hypothesis": "Worse - triggers in low attention zone",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "cascade-bottom",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 251,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-bottom",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 257,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-bottom",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 272,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-bottom",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 266,
+        "exitCode": 1
+      },
+      {
+        "variation": "cascade-bottom",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 284,
+        "exitCode": 1
+      }
+    ]
+  },
+  {
+    "variation": "nested",
+    "name": "Nested Structure",
+    "hypothesis": "Poor - requires traversal",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "nested",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 263,
+        "exitCode": 1
+      },
+      {
+        "variation": "nested",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 269,
+        "exitCode": 1
+      },
+      {
+        "variation": "nested",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 262,
+        "exitCode": 1
+      },
+      {
+        "variation": "nested",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 261,
+        "exitCode": 1
+      },
+      {
+        "variation": "nested",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 270,
+        "exitCode": 1
+      }
+    ]
+  },
+  {
+    "variation": "flat",
+    "name": "Flat List",
+    "hypothesis": "Moderate - simple but verbose",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "flat",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 256,
+        "exitCode": 1
+      },
+      {
+        "variation": "flat",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 255,
+        "exitCode": 1
+      },
+      {
+        "variation": "flat",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 262,
+        "exitCode": 1
+      },
+      {
+        "variation": "flat",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 264,
+        "exitCode": 1
+      },
+      {
+        "variation": "flat",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 280,
+        "exitCode": 1
+      }
+    ]
+  },
+  {
+    "variation": "action-verbs",
+    "name": "Action Verbs",
+    "hypothesis": "Better - action language",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "action-verbs",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 259,
+        "exitCode": 1
+      },
+      {
+        "variation": "action-verbs",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 264,
+        "exitCode": 1
+      },
+      {
+        "variation": "action-verbs",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 277,
+        "exitCode": 1
+      },
+      {
+        "variation": "action-verbs",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 280,
+        "exitCode": 1
+      },
+      {
+        "variation": "action-verbs",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 258,
+        "exitCode": 1
+      }
+    ]
+  },
+  {
+    "variation": "control",
+    "name": "Control (No Structure)",
+    "hypothesis": "Worst - no guidance",
+    "accuracy": 0,
+    "correct": 0,
+    "total": 5,
+    "tests": [
+      {
+        "variation": "control",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 250,
+        "exitCode": 1
+      },
+      {
+        "variation": "control",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 243,
+        "exitCode": 1
+      },
+      {
+        "variation": "control",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 257,
+        "exitCode": 1
+      },
+      {
+        "variation": "control",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 260,
+        "exitCode": 1
+      },
+      {
+        "variation": "control",
+        "error": "Failed to parse output",
+        "output": "",
+        "duration": 275,
+        "exitCode": 1
+      }
+    ]
+  }
+]

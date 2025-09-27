@@ -1,0 +1,8 @@
+Available personas:
+
+• **Business Consultant** - Strategic advisor for ROI and business outcomes
+• **Creative Writer** - Imaginative storyteller for creative content  
+• **Debug Detective** - Systematic troubleshooter for root cause analysis
+• **ELI5 Explainer** - Patient teacher using simple analogies
+• **Security Analyst** - Code security expert for vulnerability detection
+• **Technical Analyst** - Systematic problem-solver for technical analysis

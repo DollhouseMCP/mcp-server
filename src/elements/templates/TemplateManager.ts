@@ -27,6 +27,10 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 
+// Validation constants for template triggers
+const MAX_TRIGGER_LENGTH = 50;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+
 export class TemplateManager implements IElementManager<Template> {
   private portfolioManager: PortfolioManager;
   private templatesDir: string;
@@ -421,9 +425,59 @@ export class TemplateManager implements IElementManager<Template> {
     if (Array.isArray(data.tags)) {
       metadata.tags = data.tags.map((tag: any) => sanitizeInput(String(tag), 50));
     }
-    
+
     if (Array.isArray(data.includes)) {
       metadata.includes = data.includes.map((inc: any) => sanitizeInput(String(inc), 200));
+    }
+
+    // FIX #1122: Extract and validate triggers for Enhanced Index support
+    // Following pattern from SkillManager (PR #1136) and MemoryManager (PR #1133)
+    if (data.triggers && Array.isArray(data.triggers)) {
+      const rawTriggers = data.triggers;
+      const sanitizedTriggers = rawTriggers.map((trigger: any) => ({
+        raw: trigger,
+        sanitized: sanitizeInput(String(trigger), MAX_TRIGGER_LENGTH)
+      }));
+
+      // Filter valid triggers and track rejected ones
+      const validTriggers: string[] = [];
+      const rejectedTriggers: string[] = [];
+
+      for (const { raw, sanitized } of sanitizedTriggers) {
+        if (!sanitized) {
+          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+        } else if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        } else {
+          validTriggers.push(sanitized);
+        }
+      }
+
+      // Log warnings for rejected triggers to aid debugging
+      if (rejectedTriggers.length > 0) {
+        logger.warn(
+          `Template "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+          {
+            templateName: metadata.name,
+            rejectedTriggers,
+            acceptedCount: validTriggers.length
+          }
+        );
+      }
+
+      // Apply limit and warn if exceeded
+      if (validTriggers.length > 20) {
+        logger.warn(
+          `Template "${metadata.name || 'unknown'}": Trigger count exceeds limit (${validTriggers.length} > 20), truncating`,
+          {
+            templateName: metadata.name,
+            totalTriggers: validTriggers.length,
+            truncatedTriggers: validTriggers.slice(20)
+          }
+        );
+      }
+
+      metadata.triggers = validTriggers.slice(0, 20);
     }
     
     // Copy safe fields
@@ -484,7 +538,8 @@ export class TemplateManager implements IElementManager<Template> {
       usage_count: metadata.usage_count,
       last_used: metadata.last_used,
       variables: metadata.variables,
-      examples: metadata.examples
+      examples: metadata.examples,
+      triggers: metadata.triggers  // FIX #1122: Preserve triggers when saving
     };
     
     // Remove undefined values

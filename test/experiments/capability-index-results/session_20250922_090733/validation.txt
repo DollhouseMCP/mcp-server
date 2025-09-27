@@ -1,0 +1,9 @@
+✅ API authentication configured
+🐳 Docker Claude Code Testing Environment
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 DollhouseMCP: v1.9.8
+🤖 Claude Code: Configured with apiKeyHelper
+📁 Portfolio: /app/portfolio
+💾 Cache: /app/cache
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Error: Input must be provided either through stdin or as a prompt argument when using --print

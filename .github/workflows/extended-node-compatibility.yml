@@ -76,9 +76,8 @@ jobs:
             build/
             *.tsbuildinfo
           key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package.json', 'package-lock.json') }}
-          restore-keys: |
-            typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
-            typescript-build-${{ runner.os }}-
+          # REMOVED restore-keys to prevent using stale caches with old compiled code
+          # This ensures we always rebuild when source files change
 
       - name: Install dependencies
         run: npm ci
@@ -94,9 +93,8 @@ jobs:
             test/coverage/
             node_modules/.cache/jest/
           key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('test/__tests__/**/*.ts', 'test/jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
-          restore-keys: |
-            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
-            jest-cache-${{ runner.os }}-
+          # REMOVED restore-keys for consistency with TypeScript cache fix
+          # Jest cache can also become stale and cause test failures
 
       - name: Run test suite
         run: npm test
