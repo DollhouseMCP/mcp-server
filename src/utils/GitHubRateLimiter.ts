@@ -144,28 +144,36 @@ export class GitHubRateLimiter {
         operation,
         priority,
         timestamp: Date.now(),
-        resolve: async (value) => {
-          try {
-            logger.debug('Executing GitHub API request', {
-              operation,
-              requestId,
-              queueWaitTime: Date.now() - request.timestamp
-            });
-            
-            const result = await apiCall();
-            resolve(result);
-            
-            // Log successful API usage for quota tracking
-            this.logApiUsage(operation, 'success');
-            
-          } catch (error) {
-            // Check if this is a rate limit error from GitHub
-            if (this.isGitHubRateLimitError(error)) {
-              this.handleGitHubRateLimit(error);
+        resolve: () => {
+          // Wrap in async IIFE to handle async operations without returning a Promise
+          (async () => {
+            try {
+              logger.debug('Executing GitHub API request', {
+                operation,
+                requestId,
+                queueWaitTime: Date.now() - request.timestamp
+              });
+
+              const result = await apiCall();
+              resolve(result);
+
+              // Log successful API usage for quota tracking
+              this.logApiUsage(operation, 'success');
+
+            } catch (error) {
+              // Check if this is a rate limit error from GitHub
+              if (this.isGitHubRateLimitError(error)) {
+                this.handleGitHubRateLimit(error);
+              }
+              // Ensure rejection reason is an Error object
+              reject(error instanceof Error ? error : new Error(String(error)));
+              this.logApiUsage(operation, 'error', error);
             }
-            reject(error);
-            this.logApiUsage(operation, 'error', error);
-          }
+          })().catch((err) => {
+            // Catch any synchronous errors from the IIFE itself
+            // Ensure the rejection reason is an Error object
+            reject(err instanceof Error ? err : new Error(String(err)));
+          });
         },
         reject
       };
