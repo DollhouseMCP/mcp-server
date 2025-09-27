@@ -39,9 +39,11 @@ jobs:
       
       - name: Validate version format
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if ! echo "${{ inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
-            echo "❌ Invalid version format: ${{ inputs.version }}"
+          if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
+            echo "❌ Invalid version format: $VERSION"
             echo "Version must follow semantic versioning (e.g., 1.6.5 or 1.6.5-beta.1)"
             exit 1
           fi
@@ -56,10 +58,10 @@ jobs:
       
       - name: Check if version is newer
         shell: bash
+        env:
+          CURRENT: ${{ steps.current_version.outputs.current }}
+          NEW: ${{ inputs.version }}
         run: |
-          CURRENT="${{ steps.current_version.outputs.current }}"
-          NEW="${{ inputs.version }}"
-          
           # Simple version comparison (works for most cases)
           if [ "$CURRENT" = "$NEW" ]; then
             echo "⚠️ Version $NEW is the same as current version"
