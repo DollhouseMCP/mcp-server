@@ -98,9 +98,9 @@ export class IndexConfigManager {
       maxRelationshipComparisons: 100,
       similarityBatchSize: 50,
       similarityThreshold: 0.5,
-      defaultSimilarityThreshold: 0.3,
-      defaultSimilarLimit: 5,
-      defaultVerbSearchLimit: 10,
+      defaultSimilarityThreshold: 0.5,
+      defaultSimilarLimit: 10,
+      defaultVerbSearchLimit: 20,
       parallelProcessing: true,
       circuitBreakerTimeoutMs: 5000
     },
