@@ -249,14 +249,8 @@ describe('Persona Lifecycle Integration', () => {
       try {
         // Make the file read-only (simulate permission error)
         // On Windows, we need to handle permissions differently
-        const isWindows = process.platform === 'win32';
-        
-        if (isWindows) {
-          // On Windows, use fs.constants.S_IRUSR | fs.constants.S_IRGRP | fs.constants.S_IROTH
-          await fs.chmod(filePath, 0o444);
-        } else {
-          await fs.chmod(filePath, 0o444);
-        }
+        // Set file to read-only (same for all platforms)
+        await fs.chmod(filePath, 0o444);
         
         // Try to edit (should fail gracefully)
         const result = await testServer.personaManager.editPersona(
