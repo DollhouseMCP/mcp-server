@@ -60,7 +60,10 @@ describe('Cross-Platform Integration Tests', () => {
               while (normalized.endsWith('/')) {
                 normalized = normalized.slice(0, -1);
               }
-              normalized = normalized.replace(/\/+/g, '/');
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -93,7 +96,10 @@ describe('Cross-Platform Integration Tests', () => {
               while (normalized.endsWith('/')) {
                 normalized = normalized.slice(0, -1);
               }
-              normalized = normalized.replace(/\/+/g, '/');
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -115,7 +121,10 @@ describe('Cross-Platform Integration Tests', () => {
               while (normalized.endsWith('/')) {
                 normalized = normalized.slice(0, -1);
               }
-              normalized = normalized.replace(/\/+/g, '/');
+              // Collapse multiple slashes (loop to avoid regex warning)
+              while (normalized.includes('//')) {
+                normalized = normalized.replace('//', '/');
+              }
               
               // Check for absolute paths or path traversal
               if (inputPath.startsWith('/') || normalized.includes('..') || inputPath.includes('C:\\') || inputPath.includes('System') || inputPath.includes('etc')) {
@@ -137,8 +146,8 @@ describe('Cross-Platform Integration Tests', () => {
       ];
 
       testPaths.forEach(inputPath => {
-        // Convert backslashes to forward slashes
-        let normalized = inputPath.replace(/\\/g, '/');
+        // Convert backslashes to forward slashes (using replaceAll to satisfy SonarCloud)
+        let normalized = inputPath.replaceAll('\\', '/');
 
         // Remove leading/trailing slashes using loops to avoid ReDoS false positives
         while (normalized.startsWith('/')) {
@@ -148,8 +157,10 @@ describe('Cross-Platform Integration Tests', () => {
           normalized = normalized.slice(0, -1);
         }
 
-        // Collapse multiple slashes
-        normalized = normalized.replace(/\/+/g, '/');
+        // Collapse multiple slashes (loop to avoid regex warning)
+        while (normalized.includes('//')) {
+          normalized = normalized.replace('//', '/');
+        }
 
         expect(normalized).toBe('personas/creative/writer.md');
       });
