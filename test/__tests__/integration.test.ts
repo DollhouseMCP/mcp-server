@@ -52,7 +52,15 @@ describe('Cross-Platform Integration Tests', () => {
           paths.valid.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              normalized = normalized.replace(/\/+/g, '/');
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -77,7 +85,15 @@ describe('Cross-Platform Integration Tests', () => {
           paths.dangerous.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              normalized = normalized.replace(/\/+/g, '/');
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -91,7 +107,15 @@ describe('Cross-Platform Integration Tests', () => {
           paths.invalid.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
+              // Using while loops to avoid SonarCloud ReDoS false positives in test code
+              let normalized = inputPath;
+              while (normalized.startsWith('/')) {
+                normalized = normalized.slice(1);
+              }
+              while (normalized.endsWith('/')) {
+                normalized = normalized.slice(0, -1);
+              }
+              normalized = normalized.replace(/\/+/g, '/');
               
               // Check for absolute paths or path traversal
               if (inputPath.startsWith('/') || normalized.includes('..') || inputPath.includes('C:\\') || inputPath.includes('System') || inputPath.includes('etc')) {
@@ -113,10 +137,19 @@ describe('Cross-Platform Integration Tests', () => {
       ];
 
       testPaths.forEach(inputPath => {
-        const normalized = inputPath
-          .replace(/\\/g, '/') // Convert backslashes to forward slashes
-          .replace(/^\/+/g, '').replace(/\/+$/g, '') // Remove leading/trailing slashes (split to avoid ReDoS)
-          .replace(/\/+/g, '/'); // Collapse multiple slashes
+        // Convert backslashes to forward slashes
+        let normalized = inputPath.replace(/\\/g, '/');
+
+        // Remove leading/trailing slashes using loops to avoid ReDoS false positives
+        while (normalized.startsWith('/')) {
+          normalized = normalized.slice(1);
+        }
+        while (normalized.endsWith('/')) {
+          normalized = normalized.slice(0, -1);
+        }
+
+        // Collapse multiple slashes
+        normalized = normalized.replace(/\/+/g, '/');
 
         expect(normalized).toBe('personas/creative/writer.md');
       });
