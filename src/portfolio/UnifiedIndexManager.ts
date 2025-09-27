@@ -1251,9 +1251,8 @@ export class UnifiedIndexManager {
     try {
       // Check local index
       const localIndex = await this.localIndexManager.getIndex();
-      if (localIndex?.entries) {
-        for (const [key] of localIndex.entries) {
-          const name = key.split(':')[1]; // Extract name from type:name format
+      if (localIndex?.byName) {
+        for (const [name] of localIndex.byName) {
           if (name) {
             if (!elementSources.has(name)) {
               elementSources.set(name, new Set());
