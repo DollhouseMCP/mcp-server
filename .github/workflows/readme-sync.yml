@@ -65,8 +65,9 @@ jobs:
       - name: Check if this is an auto-commit
         id: check_auto_commit
         shell: bash
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
           if [[ "$COMMIT_MSG" == *"Auto-sync README files"* ]] || [[ "$COMMIT_MSG" == *"chore: Auto-sync README"* ]]; then
             echo "Skipping auto-generated commit to prevent infinite loop"
             echo "skip=true" >> $GITHUB_OUTPUT

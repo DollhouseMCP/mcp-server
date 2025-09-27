@@ -26,13 +26,13 @@ jobs:
       
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: '20.x'
           cache: 'npm'
@@ -138,33 +138,43 @@ jobs:
       - name: Direct commit (no PR)
         if: '!inputs.create_pr'
         shell: bash
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+          OLD_VERSION: ${{ steps.current_version.outputs.current }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
+
           git add -A
-          git commit -m "chore: bump version to ${{ inputs.version }}
-          
-          Updates version from ${{ steps.current_version.outputs.current }} to ${{ inputs.version }}
-          
-          ${{ inputs.release_notes }}"
-          
-          git push origin ${{ github.ref }}
+
+          # Create commit message safely using environment variables
+          printf "chore: bump version to %s\n\nUpdates version from %s to %s\n\n%s" \
+            "${NEW_VERSION}" "${OLD_VERSION}" "${NEW_VERSION}" "${RELEASE_NOTES}" | \
+            git commit -F -
+          git push origin "${GITHUB_REF}"
           
       - name: Summary
         shell: bash
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+          OLD_VERSION: ${{ steps.current_version.outputs.current }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          CREATE_PR: ${{ inputs.create_pr }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
           echo "## ✅ Version Update Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Previous version**: ${{ steps.current_version.outputs.current }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **New version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.create_pr }}" = "true" ]; then
-            echo "- **Pull Request**: Created on branch \`chore/update-version-${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous version**: ${OLD_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **New version**: ${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          if [ "${CREATE_PR}" = "true" ]; then
+            echo "- **Pull Request**: Created on branch \`chore/update-version-${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **Committed to**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Committed to**: ${GITHUB_REF}" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ inputs.release_notes }}" ]; then
+          if [ -n "${RELEASE_NOTES}" ]; then
             echo "### Release Notes" >> $GITHUB_STEP_SUMMARY
-            echo "${{ inputs.release_notes }}" >> $GITHUB_STEP_SUMMARY
+            echo "${RELEASE_NOTES}" >> $GITHUB_STEP_SUMMARY
           fi
