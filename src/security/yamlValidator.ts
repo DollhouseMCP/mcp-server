@@ -175,7 +175,7 @@ export class YamlValidator {
     
     // Remove null bytes and normalize whitespace
     sanitized = sanitized
-      .replace(/\x00/g, '')          // Remove null bytes
+      .replace(/\u0000/g, '')          // Remove null bytes
       .replace(/[\r\n]+/g, ' ')      // Replace newlines with spaces
       .trim();
     
