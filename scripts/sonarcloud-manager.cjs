@@ -20,7 +20,8 @@ const SONARCLOUD_HOST = 'sonarcloud.io';
 // Get token from macOS Keychain
 function getToken() {
   try {
-    const token = execSync('security find-generic-password -s "sonar_token2" -w 2>/dev/null', {
+    // Use full path to security command to avoid PATH manipulation
+    const token = execSync('/usr/bin/security find-generic-password -s "sonar_token2" -w 2>/dev/null', {
       encoding: 'utf-8'
     }).trim();
     return token;
