@@ -18,6 +18,7 @@ import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -743,11 +744,8 @@ export class MemoryManager implements IElementManager<Memory> {
         metadataSource.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
       // FIX #1124: Extract triggers for Enhanced Index support
-      triggers: Array.isArray(metadataSource.triggers) ?
-        metadataSource.triggers
-          .map((trigger: string) => sanitizeInput(trigger, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
-          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) : // Only allow alphanumeric + hyphens/underscores
-        [],
+      // Enhanced trigger validation logging for Issue #1139
+      triggers: [],  // Will be set below with enhanced logging
       storageBackend: metadataSource.storage_backend || metadataSource.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
       retentionDays: metadataSource.retention_policy?.default ?
         this.parseRetentionDays(metadataSource.retention_policy.default) :
@@ -756,6 +754,51 @@ export class MemoryManager implements IElementManager<Memory> {
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     };
+
+    // Enhanced trigger validation and logging
+    if (Array.isArray(metadataSource.triggers)) {
+      const validTriggers: string[] = [];
+      const rejectedTriggers: string[] = [];
+      const rawTriggers = metadataSource.triggers.slice(0, 20); // Limit to 20 triggers max
+
+      rawTriggers.forEach((raw: any) => {
+        const sanitized = sanitizeInput(String(raw), MEMORY_CONSTANTS.MAX_TAG_LENGTH);
+        if (!sanitized) {
+          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+        } else if (!/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        } else {
+          validTriggers.push(sanitized);
+        }
+      });
+
+      metadata.triggers = validTriggers;
+
+      // Enhanced logging for debugging
+      if (rejectedTriggers.length > 0) {
+        logger.warn(
+          `Memory "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+          {
+            memoryName: metadata.name || 'unknown',
+            rejectedTriggers,
+            acceptedCount: validTriggers.length
+          }
+        );
+      }
+
+      // Warn if trigger limit was exceeded
+      if (metadataSource.triggers.length > 20) {
+        logger.warn(
+          `Memory "${metadata.name || 'unknown'}": Trigger limit exceeded`,
+          {
+            memoryName: metadata.name || 'unknown',
+            providedCount: metadataSource.triggers.length,
+            limit: 20,
+            truncated: metadataSource.triggers.length - 20
+          }
+        );
+      }
+    }
 
     // Extract content (if any)
     const content = parsed.content || '';

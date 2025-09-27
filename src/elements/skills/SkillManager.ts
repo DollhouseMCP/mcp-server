@@ -79,12 +79,49 @@ export class SkillManager implements IElementManager<Skill> {
       const metadata = parsed.data as SkillMetadata;
 
       // FIX #1121: Extract and validate triggers for Enhanced Index support
-      // Following pattern from MemoryManager (PR #1133)
+      // Enhanced trigger validation logging for Issue #1139
       if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
-        metadata.triggers = parsed.data.triggers
-          .map((trigger: string) => sanitizeInput(String(trigger), 50)) // MAX_TRIGGER_LENGTH = 50
-          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) // TRIGGER_VALIDATION_REGEX
-          .slice(0, 20); // Limit to 20 triggers max
+        const validTriggers: string[] = [];
+        const rejectedTriggers: string[] = [];
+        const rawTriggers = parsed.data.triggers.slice(0, 20); // Limit to 20 triggers max
+
+        rawTriggers.forEach((raw: any) => {
+          const sanitized = sanitizeInput(String(raw), 50); // MAX_TRIGGER_LENGTH = 50
+          if (!sanitized) {
+            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+          } else if (!/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // TRIGGER_VALIDATION_REGEX
+            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+          } else {
+            validTriggers.push(sanitized);
+          }
+        });
+
+        metadata.triggers = validTriggers;
+
+        // Enhanced logging for debugging
+        if (rejectedTriggers.length > 0) {
+          logger.warn(
+            `Skill "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+            {
+              skillName: metadata.name || 'unknown',
+              rejectedTriggers,
+              acceptedCount: validTriggers.length
+            }
+          );
+        }
+
+        // Warn if trigger limit was exceeded
+        if (parsed.data.triggers.length > 20) {
+          logger.warn(
+            `Skill "${metadata.name || 'unknown'}": Trigger limit exceeded`,
+            {
+              skillName: metadata.name || 'unknown',
+              providedCount: parsed.data.triggers.length,
+              limit: 20,
+              truncated: parsed.data.triggers.length - 20
+            }
+          );
+        }
       }
 
       // Create skill instance
