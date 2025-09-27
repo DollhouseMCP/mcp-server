@@ -144,7 +144,7 @@ export class GitHubRateLimiter {
         operation,
         priority,
         timestamp: Date.now(),
-        resolve: (value) => {
+        resolve: () => {
           // Wrap in async IIFE to handle async operations without returning a Promise
           (async () => {
             try {
