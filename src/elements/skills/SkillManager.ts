@@ -42,6 +42,57 @@ export class SkillManager implements IElementManager<Skill> {
   }
 
   /**
+   * Validates and processes triggers for a skill
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], skillName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const rawTriggers = triggers.slice(0, 20); // Limit to 20 triggers max
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
+      if (sanitized) {
+        if (TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Skill "${skillName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          skillName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (triggers.length > 20) {
+      logger.warn(
+        `Skill "${skillName}": Trigger limit exceeded`,
+        {
+          skillName,
+          providedCount: triggers.length,
+          limit: 20,
+          truncated: triggers.length - 20
+        }
+      );
+    }
+
+    return validTriggers;
+  }
+
+  /**
    * Load a skill from file
    * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
    * to prevent race conditions and ensure atomic file operations
@@ -84,49 +135,10 @@ export class SkillManager implements IElementManager<Skill> {
       // Skills may need dots (v2.0), special chars (c++), or command patterns.
       // Different from Personas (names), Memories (dates), Templates (paths).
       if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
-        const validTriggers: string[] = [];
-        const rejectedTriggers: string[] = [];
-        const rawTriggers = parsed.data.triggers.slice(0, 20); // Limit to 20 triggers max
-
-        for (const raw of rawTriggers) {
-          const sanitized = sanitizeInput(String(raw), 50); // MAX_TRIGGER_LENGTH = 50
-          if (sanitized) {
-            if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // TRIGGER_VALIDATION_REGEX
-              validTriggers.push(sanitized);
-            } else {
-              rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
-            }
-          } else {
-            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-          }
-        }
-
-        metadata.triggers = validTriggers;
-
-        // Enhanced logging for debugging
-        if (rejectedTriggers.length > 0) {
-          logger.warn(
-            `Skill "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
-            {
-              skillName: metadata.name || 'unknown',
-              rejectedTriggers,
-              acceptedCount: validTriggers.length
-            }
-          );
-        }
-
-        // Warn if trigger limit was exceeded
-        if (parsed.data.triggers.length > 20) {
-          logger.warn(
-            `Skill "${metadata.name || 'unknown'}": Trigger limit exceeded`,
-            {
-              skillName: metadata.name || 'unknown',
-              providedCount: parsed.data.triggers.length,
-              limit: 20,
-              truncated: parsed.data.triggers.length - 20
-            }
-          );
-        }
+        metadata.triggers = this.validateAndProcessTriggers(
+          parsed.data.triggers,
+          metadata.name || 'unknown'
+        );
       }
 
       // Create skill instance

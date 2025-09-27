@@ -51,7 +51,58 @@ export class MemoryManager implements IElementManager<Memory> {
     this.portfolioManager = PortfolioManager.getInstance();
     this.memoriesDir = this.portfolioManager.getElementDir(ElementType.MEMORY);
   }
-  
+
+  /**
+   * Validates and processes triggers for a memory
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], memoryName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const rawTriggers = triggers.slice(0, 20); // Limit to 20 triggers max
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MEMORY_CONSTANTS.MAX_TAG_LENGTH);
+      if (sanitized) {
+        if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Memory "${memoryName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          memoryName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (triggers.length > 20) {
+      logger.warn(
+        `Memory "${memoryName}": Trigger limit exceeded`,
+        {
+          memoryName,
+          providedCount: triggers.length,
+          limit: 20,
+          truncated: triggers.length - 20
+        }
+      );
+    }
+
+    return validTriggers;
+  }
+
   /**
    * Load a memory from file
    * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
@@ -760,49 +811,10 @@ export class MemoryManager implements IElementManager<Memory> {
     // semantic markers (recall-context), or natural language phrases.
     // Kept separate from Skills (technical) and Personas (character names).
     if (Array.isArray(metadataSource.triggers)) {
-      const validTriggers: string[] = [];
-      const rejectedTriggers: string[] = [];
-      const rawTriggers = metadataSource.triggers.slice(0, 20); // Limit to 20 triggers max
-
-      for (const raw of rawTriggers) {
-        const sanitized = sanitizeInput(String(raw), MEMORY_CONSTANTS.MAX_TAG_LENGTH);
-        if (sanitized) {
-          if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
-            validTriggers.push(sanitized);
-          } else {
-            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
-          }
-        } else {
-          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-        }
-      }
-
-      metadata.triggers = validTriggers;
-
-      // Enhanced logging for debugging
-      if (rejectedTriggers.length > 0) {
-        logger.warn(
-          `Memory "${metadata.name || 'unknown'}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
-          {
-            memoryName: metadata.name || 'unknown',
-            rejectedTriggers,
-            acceptedCount: validTriggers.length
-          }
-        );
-      }
-
-      // Warn if trigger limit was exceeded
-      if (metadataSource.triggers.length > 20) {
-        logger.warn(
-          `Memory "${metadata.name || 'unknown'}": Trigger limit exceeded`,
-          {
-            memoryName: metadata.name || 'unknown',
-            providedCount: metadataSource.triggers.length,
-            limit: 20,
-            truncated: metadataSource.triggers.length - 20
-          }
-        );
-      }
+      metadata.triggers = this.validateAndProcessTriggers(
+        metadataSource.triggers,
+        metadata.name || 'unknown'
+      );
     }
 
     // Extract content (if any)
