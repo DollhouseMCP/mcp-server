@@ -20,6 +20,9 @@ src/generated/
 .env.production.local
 test/e2e/.env.test.local
 
+# Scripts with credentials (should use environment variables)
+scripts/validation/run-sync-test-with-pat.sh
+
 # IDE files
 .vscode/
 .idea/

@@ -3,8 +3,15 @@
 echo "🧪 Running Sync Test with Personal Access Token"
 echo "================================================"
 
-# The PAT from earlier in the session - it was working!
-PAT="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"
+# Use environment variable for PAT - never hardcode tokens!
+# Export GITHUB_TEST_TOKEN before running this script
+PAT="${GITHUB_TEST_TOKEN:-}"
+
+if [ -z "$PAT" ]; then
+  echo "❌ Error: GITHUB_TEST_TOKEN environment variable not set"
+  echo "Usage: GITHUB_TEST_TOKEN=ghp_your_token_here ./run-sync-test-with-pat.sh"
+  exit 1
+fi
 
 docker run --rm -i \
   --env-file docker/test-environment.env \
