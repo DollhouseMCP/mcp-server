@@ -514,8 +514,8 @@ describe('InputValidator - Security Edge Cases', () => {
           lateTimings.push(Number(process.hrtime.bigint() - lateStart));
         }
         
-        const avgEarly = earlyTimings.reduce((a, b) => a + b) / earlyTimings.length;
-        const avgLate = lateTimings.reduce((a, b) => a + b) / lateTimings.length;
+        const avgEarly = earlyTimings.reduce((a, b) => a + b, 0) / earlyTimings.length;
+        const avgLate = lateTimings.reduce((a, b) => a + b, 0) / lateTimings.length;
         const positionVariance = Math.abs(avgEarly - avgLate) / Math.max(avgEarly, avgLate);
         
         // Check if this run passes the 1.0 variance threshold
