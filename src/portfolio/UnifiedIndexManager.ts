@@ -1243,13 +1243,9 @@ export class UnifiedIndexManager {
    * Calculate duplicates count across all sources
    */
   private async calculateDuplicatesCount(): Promise<number> {
-    try {
-      // This is a placeholder - actual implementation would need optimization
-      // For now, return 0 to avoid the expensive operation during stats calculation
-      return 0;
-    } catch {
-      return 0;
-    }
+    // This is a placeholder - actual implementation would need optimization
+    // For now, return 0 to avoid the expensive operation during stats calculation
+    return 0;
   }
 
   /**

@@ -261,8 +261,9 @@ export class PerformanceMonitor {
     }
 
     const current = this.memorySnapshots[this.memorySnapshots.length - 1];
-    const peak = this.memorySnapshots.reduce((max, snapshot) => 
-      snapshot.heapUsed > max.heapUsed ? snapshot : max
+    const peak = this.memorySnapshots.reduce((max, snapshot) =>
+      snapshot.heapUsed > max.heapUsed ? snapshot : max,
+      this.memorySnapshots[0]
     );
 
     const totalHeap = this.memorySnapshots.reduce((sum, snapshot) => sum + snapshot.heapUsed, 0);
