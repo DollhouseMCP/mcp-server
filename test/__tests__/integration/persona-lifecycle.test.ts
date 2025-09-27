@@ -289,7 +289,8 @@ describe('Persona Lifecycle Integration', () => {
             if (process.platform === 'win32') {
               console.log('Warning: Could not restore file permissions on Windows:', error.message);
             } else {
-              throw error;
+              // Don't throw in finally block - it masks the original error
+              console.error('Error restoring file permissions:', error.message);
             }
           }
         }
