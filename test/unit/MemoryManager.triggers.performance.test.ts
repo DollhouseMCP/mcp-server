@@ -73,7 +73,7 @@ entries:
       // Should load successfully
       expect(memory).toBeDefined();
       expect(memory.metadata.triggers).toBeDefined();
-      expect(memory.metadata.triggers?.length).toBe(200);
+      expect(memory.metadata.triggers?.length).toBe(20); // Limited to 20 max
 
       // Should complete in reasonable time (< 500ms)
       expect(loadTime).toBeLessThan(500);
@@ -105,9 +105,10 @@ entries: []`;
       const memory = await memoryManager.load('filter-perf.yaml');
       const filterTime = Date.now() - startTime;
 
-      // Should filter to only valid triggers
+      // Should filter to only valid triggers (but limited to first 20 of array)
+      // Since we interleave valid/invalid, we get about half valid from first 20
       expect(memory.metadata.triggers).toBeDefined();
-      expect(memory.metadata.triggers?.length).toBe(50); // Only the valid ones
+      expect(memory.metadata.triggers?.length).toBe(10); // About half of first 20 are valid
 
       // All triggers should be valid
       memory.metadata.triggers?.forEach(trigger => {

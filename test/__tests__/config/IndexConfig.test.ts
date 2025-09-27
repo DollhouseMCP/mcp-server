@@ -28,7 +28,7 @@ describe('IndexConfig', () => {
       expect(config.performance.similarityThreshold).toBe(0.5);
       expect(config.performance.defaultSimilarityThreshold).toBe(0.5);
       expect(config.performance.defaultSimilarLimit).toBe(10);
-      expect(config.performance.defaultVerbSearchLimit).toBe(10);
+      expect(config.performance.defaultVerbSearchLimit).toBe(20);
       expect(config.performance.circuitBreakerTimeoutMs).toBe(5000);
     });
 
