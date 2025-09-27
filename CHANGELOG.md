@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.9.10] - 2025-09-27
+
+### 🚀 Major Features
+
+#### Enhanced Capability Index System
+- **NLP Scoring Implementation** (PR #1091) - Jaccard similarity and Shannon entropy for intelligent element discovery
+- **Cross-Element Relationships** (PR #1093) - GraphRAG-style relationship mapping between elements
+- **Comprehensive Trigger Extraction**:
+  - Memory elements trigger extraction with usage metrics (PR #1124, #1133)
+  - Skills elements trigger extraction (PR #1136)
+  - Templates trigger extraction (PR #1137)
+  - Agents trigger extraction (PR #1138)
+  - Enhanced verb extraction from persona triggers (PR #1125)
+
+### 🔒 Security & Quality
+
+#### SonarCloud Integration (PR #1143)
+- Fixed all 16 BLOCKER issues:
+  - 13 GitHub Actions command injection vulnerabilities
+  - 2 "always returns same value" code smells
+  - 1 false positive GitHub token (documentation example)
+- Achieved 0% code duplication (was 4%)
+- Quality Gate: PASSING
+
+### 🛠️ Bug Fixes & Improvements
+
+#### Enhanced Index Stability
+- Type-safe relationship parsing improvements (PR #1106)
+- Defensive checks for undefined metadata (PR #1110)
+- Fixed undefined access in loadIndex (PR #1107)
+- Standardized element ID parsing logic (PR #1104)
+- Moved magic numbers to configuration (PR #1105)
+- Enhanced trigger validation logging for Skills and Memories (PR #1139)
+
+#### CI/CD & Testing Infrastructure
+- Extended Node compatibility test fixes (PR #1111)
+- Fixed CI environment tests for GitHub Actions detection (PR #1114)
+- Resolved CI test failures in IndexConfig and EnhancedIndexManager (PR #1115)
+- Removed dangerous restore-keys from Extended Node cache (PR #1109)
+- Docker Hub rate limit mitigation (PR #1107)
+- Added test isolation to prevent file system pollution (PR #1095)
+- Fixed ESM-incompatible tests (PR #1134)
+- Removed incorrect jest mocks from Enhanced Index tests (PR #1094)
+- Fixed Enhanced Index integration and security validation (PR #1098)
+
+### 📚 Documentation
+- Comprehensive trigger extraction documentation (PR #1135)
+- Added CHANGELOG_PROCESS.md documentation (PR #1077)
+- Restored lost session documentation files (PR #1082)
+- Fixed broken README badge links (PR #1075, #1079)
+
+### 📊 Statistics
+- **34 Pull Requests** merged since v1.9.9
+- **Test Coverage**: 98.17%
+- **Security Hotspots**: 100% reviewed
+- **Code Duplication**: 0% on new code
+
 ## [1.9.9] - 2025-09-22
 
 ### Added
