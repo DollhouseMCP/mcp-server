@@ -6,6 +6,8 @@
  */
 
 import { IndexConfigManager } from '../../../src/portfolio/config/IndexConfig.js';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 describe('IndexConfig', () => {
   let configManager: IndexConfigManager;
@@ -13,6 +15,20 @@ describe('IndexConfig', () => {
   beforeEach(() => {
     // Reset singleton for tests
     (IndexConfigManager as any).instance = null;
+
+    // CRITICAL: Clear any saved config file to ensure tests use defaults
+    // This prevents local config from affecting test results
+    const configPath = path.join(
+      process.env.HOME || '',
+      '.dollhouse',
+      'portfolio',
+      '.config',
+      'index-config.json'
+    );
+    if (fs.existsSync(configPath)) {
+      fs.unlinkSync(configPath);
+    }
+
     configManager = IndexConfigManager.getInstance();
   });
 
