@@ -264,7 +264,18 @@ export class RelationshipManager {
     }
 
     // Combine text from various fields for analysis
-    const text = this.getElementText(element);
+    let text = this.getElementText(element);
+
+    // FIX: Prevent ReDoS attacks by limiting input length
+    const MAX_TEXT_LENGTH = 50000; // 50KB limit
+    if (text.length > MAX_TEXT_LENGTH) {
+      logger.warn('Content too large for relationship extraction, truncating', {
+        originalLength: text.length,
+        elementId,
+        truncatedTo: MAX_TEXT_LENGTH
+      });
+      text = text.substring(0, MAX_TEXT_LENGTH);
+    }
 
     // Apply patterns to discover relationships
     const patterns = [...this.defaultPatterns, ...(this.config.customPatterns || [])];

@@ -129,8 +129,11 @@ jobs:
       - name: Summary
         if: always()
         shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           echo "### Branch Protection Summary"
-          echo "- PR from: ${{ github.head_ref }}"
-          echo "- PR to: ${{ github.base_ref }}"
+          echo "- PR from: ${HEAD_REF}"
+          echo "- PR to: ${BASE_REF}"
           echo "- Status: See checks above"

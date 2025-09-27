@@ -966,7 +966,12 @@ export class EnhancedIndexManager {
       const testStrings = ['test', 'debug', 'create', 'ify', 'tion'];
       for (const str of testStrings) {
         try {
-          regex.test(str);
+          // Execute test to validate regex pattern (result not needed, just checking for errors)
+          void regex.test(str);
+          // Reset lastIndex for global regexes to ensure consistent behavior
+          if (regex.global) {
+            regex.lastIndex = 0;
+          }
         } catch (testError) {
           throw new Error(`Regex pattern fails on test string '${str}': ${testError}`);
         }

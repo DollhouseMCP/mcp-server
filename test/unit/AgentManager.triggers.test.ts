@@ -5,7 +5,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { AgentManager } from '../../src/elements/agents/AgentManager.js';
-import { Agent } from '../../src/elements/agents/Agent.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import { ElementType } from '../../src/portfolio/types.js';

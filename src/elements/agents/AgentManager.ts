@@ -538,25 +538,7 @@ export class AgentManager implements IElementManager<Agent> {
     // FIX #1123: Extract and validate triggers for Enhanced Index support
     // Following pattern from TemplateManager (PR #1137), SkillManager (PR #1136) and MemoryManager (PR #1133)
     if (typedMetadata.triggers && Array.isArray(typedMetadata.triggers)) {
-      const rawTriggers = typedMetadata.triggers;
-      const sanitizedTriggers = rawTriggers.map((trigger: any) => ({
-        raw: trigger,
-        sanitized: sanitizeInput(String(trigger), MAX_TRIGGER_LENGTH)
-      }));
-
-      // Filter valid triggers and track rejected ones
-      const validTriggers: string[] = [];
-      const rejectedTriggers: string[] = [];
-
-      for (const { raw, sanitized } of sanitizedTriggers) {
-        if (!sanitized) {
-          rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
-        } else if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
-          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
-        } else {
-          validTriggers.push(sanitized);
-        }
-      }
+      const { validTriggers, rejectedTriggers } = this.validateTriggers(typedMetadata.triggers);
 
       // Log warnings for rejected triggers to aid debugging
       if (rejectedTriggers.length > 0) {
@@ -752,6 +734,36 @@ export class AgentManager implements IElementManager<Agent> {
       await this.saveAgentState(name, element.getState());
       element.markStatePersisted();
     }
+  }
+
+  /**
+   * Validate triggers array and return valid and rejected triggers
+   * Extracted to reduce cognitive complexity
+   */
+  private validateTriggers(triggers: any[]): { validTriggers: string[], rejectedTriggers: string[] } {
+    const sanitizedTriggers = triggers.map((trigger: any) => ({
+      raw: trigger,
+      sanitized: sanitizeInput(String(trigger), MAX_TRIGGER_LENGTH)
+    }));
+
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+
+    for (const { raw, sanitized } of sanitizedTriggers) {
+      if (!sanitized) {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+        continue;
+      }
+
+      if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+        rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        continue;
+      }
+
+      validTriggers.push(sanitized);
+    }
+
+    return { validTriggers, rejectedTriggers };
   }
 
   /**

@@ -324,11 +324,9 @@ export class GitHubPortfolioIndexer {
     
     // GraphQL endpoint not yet implemented with PortfolioRepoManager
     // For now, just throw to fall back to REST
-    throw new Error('GraphQL not yet implemented for portfolio operations');
-    
     // Note: This is a simplified GraphQL implementation
     // In a real implementation, you would send POST request with query and variables
-    throw new Error('GraphQL implementation not yet complete');
+    throw new Error('GraphQL not yet implemented for portfolio operations');
   }
 
   /**

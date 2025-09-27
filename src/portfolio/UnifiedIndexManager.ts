@@ -1241,15 +1241,74 @@ export class UnifiedIndexManager {
   
   /**
    * Calculate duplicates count across all sources
+   *
+   * Identifies elements that exist in multiple sources (local, GitHub, collection)
    */
   private async calculateDuplicatesCount(): Promise<number> {
+    // Track duplicates using a map of element names to sources
+    const elementSources = new Map<string, Set<string>>();
+
     try {
-      // This is a placeholder - actual implementation would need optimization
-      // For now, return 0 to avoid the expensive operation during stats calculation
-      return 0;
-    } catch {
+      // Check local index
+      const localIndex = await this.localIndexManager.getIndex();
+      if (localIndex?.byName) {
+        for (const [name] of localIndex.byName) {
+          if (name) {
+            if (!elementSources.has(name)) {
+              elementSources.set(name, new Set());
+            }
+            elementSources.get(name)!.add('local');
+          }
+        }
+      }
+
+      // Check GitHub index
+      const githubIndex = await this.githubIndexer.getIndex();
+      if (githubIndex?.elements) {
+        for (const [, entries] of githubIndex.elements) {
+          for (const entry of entries) {
+            const name = entry.name;
+            if (name) {
+              if (!elementSources.has(name)) {
+                elementSources.set(name, new Set());
+              }
+              elementSources.get(name)!.add('github');
+            }
+          }
+        }
+      }
+
+      // Check collection index
+      const collectionIndex = await this.collectionIndexCache.getIndex();
+      if (collectionIndex?.index) {
+        for (const elementType in collectionIndex.index) {
+          const entries = collectionIndex.index[elementType];
+          for (const entry of entries) {
+            const name = entry.name;
+            if (name) {
+              if (!elementSources.has(name)) {
+                elementSources.set(name, new Set());
+              }
+              elementSources.get(name)!.add('collection');
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // Log error but don't fail
+      logger.debug('Error calculating duplicates count', error);
       return 0;
     }
+
+    // Count elements that appear in more than one source
+    let duplicateCount = 0;
+    for (const sources of elementSources.values()) {
+      if (sources.size > 1) {
+        duplicateCount++;
+      }
+    }
+
+    return duplicateCount;
   }
 
   /**
