@@ -165,12 +165,14 @@ export class GitHubRateLimiter {
               if (this.isGitHubRateLimitError(error)) {
                 this.handleGitHubRateLimit(error);
               }
-              reject(error);
+              // Ensure rejection reason is an Error object
+              reject(error instanceof Error ? error : new Error(String(error)));
               this.logApiUsage(operation, 'error', error);
             }
           })().catch((err) => {
             // Catch any synchronous errors from the IIFE itself
-            reject(err);
+            // Ensure the rejection reason is an Error object
+            reject(err instanceof Error ? err : new Error(String(err)));
           });
         },
         reject
