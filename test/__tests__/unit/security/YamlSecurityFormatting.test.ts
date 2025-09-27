@@ -80,7 +80,7 @@ describe('YAML Security Formatting Tests - Unit', () => {
             /^0[0-7]+$/.test(value) ||
             /^0x[0-9a-fA-F]+$/.test(value) ||
             /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) ||
-            /(^\s)|(\s$)/.test(value) ||
+            /(^\s)|(\s$)/.test(value) ||                   // Leading/trailing whitespace
             /[:#@!&*\|>[\]{}]/.test(value) ||
             value === '' ||
             value.includes('\n') ||

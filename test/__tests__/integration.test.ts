@@ -51,6 +51,7 @@ describe('Cross-Platform Integration Tests', () => {
         it('should accept valid paths', () => {
           paths.valid.forEach(inputPath => {
             expect(() => {
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
               const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
               
               // Check for path traversal attempts
@@ -75,6 +76,7 @@ describe('Cross-Platform Integration Tests', () => {
         it('should reject dangerous paths', () => {
           paths.dangerous.forEach(inputPath => {
             expect(() => {
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
               const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
               
               // Check for path traversal attempts
@@ -88,6 +90,7 @@ describe('Cross-Platform Integration Tests', () => {
         it('should reject system paths', () => {
           paths.invalid.forEach(inputPath => {
             expect(() => {
+              // Normalize path: trim leading/trailing slashes, collapse multiple slashes
               const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
               
               // Check for absolute paths or path traversal
