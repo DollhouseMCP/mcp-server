@@ -52,7 +52,7 @@ describe('Cross-Platform Integration Tests', () => {
           paths.valid.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
+              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -77,7 +77,7 @@ describe('Cross-Platform Integration Tests', () => {
           paths.dangerous.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
+              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
               
               // Check for path traversal attempts
               if (normalized.includes('..') || normalized.includes('./') || normalized.includes('/.')) {
@@ -91,7 +91,7 @@ describe('Cross-Platform Integration Tests', () => {
           paths.invalid.forEach(inputPath => {
             expect(() => {
               // Normalize path: trim leading/trailing slashes, collapse multiple slashes
-              const normalized = inputPath.replace(/(^\/+)|(\/+$)/g, '').replace(/\/+/g, '/');
+              const normalized = inputPath.replace(/^\/+/g, '').replace(/\/+$/g, '').replace(/\/+/g, '/');
               
               // Check for absolute paths or path traversal
               if (inputPath.startsWith('/') || normalized.includes('..') || inputPath.includes('C:\\') || inputPath.includes('System') || inputPath.includes('etc')) {
@@ -115,7 +115,7 @@ describe('Cross-Platform Integration Tests', () => {
       testPaths.forEach(inputPath => {
         const normalized = inputPath
           .replace(/\\/g, '/') // Convert backslashes to forward slashes
-          .replace(/(^\/+)|(\/+$)/g, '') // Remove leading/trailing slashes
+          .replace(/^\/+/g, '').replace(/\/+$/g, '') // Remove leading/trailing slashes (split to avoid ReDoS)
           .replace(/\/+/g, '/'); // Collapse multiple slashes
 
         expect(normalized).toBe('personas/creative/writer.md');
