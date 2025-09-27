@@ -12,6 +12,12 @@ import { SecurityError } from '../errors/SecurityError.js';
 import { logger } from '../utils/logger.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import { sanitizeInput } from '../security/InputValidator.js';
+
+// Trigger validation constants
+const MAX_TRIGGER_LENGTH = 50;
+const MAX_TRIGGERS = 20;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
 
 export class PersonaLoader {
   private personasDir: string;
@@ -99,7 +105,53 @@ export class PersonaLoader {
       
       // Set default values for metadata fields
       this.setDefaultMetadata(metadata);
-      
+
+      // Enhanced trigger validation and logging for Issue #1139
+      if (metadata.triggers && Array.isArray(metadata.triggers)) {
+        const validTriggers: string[] = [];
+        const rejectedTriggers: string[] = [];
+        const originalCount = metadata.triggers.length;
+        const rawTriggers = metadata.triggers.slice(0, MAX_TRIGGERS);
+
+        rawTriggers.forEach((raw: any) => {
+          const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
+          if (!sanitized) {
+            rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+          } else if (!TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+            rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+          } else {
+            validTriggers.push(sanitized);
+          }
+        });
+
+        metadata.triggers = validTriggers;
+
+        // Enhanced logging for debugging
+        if (rejectedTriggers.length > 0) {
+          logger.warn(
+            `Persona "${metadata.name}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+            {
+              personaName: metadata.name,
+              rejectedTriggers,
+              acceptedCount: validTriggers.length
+            }
+          );
+        }
+
+        // Warn if trigger limit was exceeded
+        if (originalCount > MAX_TRIGGERS) {
+          logger.warn(
+            `Persona "${metadata.name}": Trigger limit exceeded`,
+            {
+              personaName: metadata.name,
+              providedCount: originalCount,
+              limit: MAX_TRIGGERS,
+              truncated: originalCount - MAX_TRIGGERS
+            }
+          );
+        }
+      }
+
       const persona: Persona = {
         metadata,
         content,
