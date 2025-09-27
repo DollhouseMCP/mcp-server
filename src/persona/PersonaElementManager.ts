@@ -379,7 +379,7 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
     const safeName = persona.metadata.name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
+      .replace(/(^-+)|(-+$)/g, '');
     
     return `${safeName}.md`;
   }

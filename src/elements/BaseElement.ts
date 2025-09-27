@@ -127,7 +127,7 @@ export abstract class BaseElement implements IElement {
     const nameSlug = name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
+      .replace(/(^-)|(-$)/g, '');
     const timestamp = Date.now();
     
     return `${typeSlug}_${nameSlug}_${timestamp}`;

@@ -1954,7 +1954,7 @@ ${elementContent}
         const normalizedName = name.toLowerCase()
           .replace(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
           .replace(/-+/g, '-')         // Replace multiple dashes with single dash
-          .replace(/^-|-$/g, '');      // Remove leading/trailing dashes
+          .replace(/(^-)|(-$)/g, '');      // Remove leading/trailing dashes
           
         if (normalizedName !== name.toLowerCase()) {
           logger.debug('Trying normalized name search', { 
