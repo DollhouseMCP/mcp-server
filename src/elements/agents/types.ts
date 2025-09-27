@@ -93,6 +93,13 @@ export interface AgentMetadata extends IElementMetadata {
   learningEnabled?: boolean;
   maxConcurrentGoals?: number;
   ruleEngineConfig?: any; // Partial<RuleEngineConfig> - using any to avoid circular dependency
+
+  /**
+   * Action verbs that trigger this agent (e.g., "automate", "orchestrate", "delegate")
+   * Used by Enhanced Capability Index for intelligent agent suggestions
+   * @since v1.9.10
+   */
+  triggers?: string[];
 }
 
 /**
