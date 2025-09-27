@@ -6,8 +6,8 @@
  */
 
 import { IndexConfigManager } from '../../../src/portfolio/config/IndexConfig.js';
-import * as path from 'path';
-import * as fs from 'fs';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 describe('IndexConfig', () => {
   let configManager: IndexConfigManager;
