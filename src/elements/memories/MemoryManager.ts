@@ -18,6 +18,7 @@ import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -50,7 +51,58 @@ export class MemoryManager implements IElementManager<Memory> {
     this.portfolioManager = PortfolioManager.getInstance();
     this.memoriesDir = this.portfolioManager.getElementDir(ElementType.MEMORY);
   }
-  
+
+  /**
+   * Validates and processes triggers for a memory
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], memoryName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const rawTriggers = triggers.slice(0, 20); // Limit to 20 triggers max
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MEMORY_CONSTANTS.MAX_TAG_LENGTH);
+      if (sanitized) {
+        if (/^[a-zA-Z0-9\-_]+$/.test(sanitized)) { // Only allow alphanumeric + hyphens/underscores
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Memory "${memoryName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          memoryName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (triggers.length > 20) {
+      logger.warn(
+        `Memory "${memoryName}": Trigger limit exceeded`,
+        {
+          memoryName,
+          providedCount: triggers.length,
+          limit: 20,
+          truncated: triggers.length - 20
+        }
+      );
+    }
+
+    return validTriggers;
+  }
+
   /**
    * Load a memory from file
    * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
@@ -743,11 +795,8 @@ export class MemoryManager implements IElementManager<Memory> {
         metadataSource.tags.map((tag: string) => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH)) :
         [],
       // FIX #1124: Extract triggers for Enhanced Index support
-      triggers: Array.isArray(metadataSource.triggers) ?
-        metadataSource.triggers
-          .map((trigger: string) => sanitizeInput(trigger, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
-          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) : // Only allow alphanumeric + hyphens/underscores
-        [],
+      // Enhanced trigger validation logging for Issue #1139
+      triggers: [],  // Will be set below with enhanced logging
       storageBackend: metadataSource.storage_backend || metadataSource.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND,
       retentionDays: metadataSource.retention_policy?.default ?
         this.parseRetentionDays(metadataSource.retention_policy.default) :
@@ -756,6 +805,17 @@ export class MemoryManager implements IElementManager<Memory> {
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     };
+
+    // Enhanced trigger validation and logging
+    // NOTE: Memory triggers may evolve to support date patterns (2024-Q3),
+    // semantic markers (recall-context), or natural language phrases.
+    // Kept separate from Skills (technical) and Personas (character names).
+    if (Array.isArray(metadataSource.triggers)) {
+      metadata.triggers = this.validateAndProcessTriggers(
+        metadataSource.triggers,
+        metadata.name || 'unknown'
+      );
+    }
 
     // Extract content (if any)
     const content = parsed.content || '';

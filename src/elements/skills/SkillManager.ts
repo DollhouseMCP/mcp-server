@@ -42,6 +42,57 @@ export class SkillManager implements IElementManager<Skill> {
   }
 
   /**
+   * Validates and processes triggers for a skill
+   * Extracted method to reduce cognitive complexity (SonarCloud)
+   * @private
+   */
+  private validateAndProcessTriggers(triggers: any[], skillName: string): string[] {
+    const validTriggers: string[] = [];
+    const rejectedTriggers: string[] = [];
+    const rawTriggers = triggers.slice(0, 20); // Limit to 20 triggers max
+
+    for (const raw of rawTriggers) {
+      const sanitized = sanitizeInput(String(raw), MAX_TRIGGER_LENGTH);
+      if (sanitized) {
+        if (TRIGGER_VALIDATION_REGEX.test(sanitized)) {
+          validTriggers.push(sanitized);
+        } else {
+          rejectedTriggers.push(`"${sanitized}" (invalid format - must be alphanumeric with hyphens/underscores only)`);
+        }
+      } else {
+        rejectedTriggers.push(`"${raw}" (empty after sanitization)`);
+      }
+    }
+
+    // Enhanced logging for debugging
+    if (rejectedTriggers.length > 0) {
+      logger.warn(
+        `Skill "${skillName}": Rejected ${rejectedTriggers.length} invalid trigger(s)`,
+        {
+          skillName,
+          rejectedTriggers,
+          acceptedCount: validTriggers.length
+        }
+      );
+    }
+
+    // Warn if trigger limit was exceeded
+    if (triggers.length > 20) {
+      logger.warn(
+        `Skill "${skillName}": Trigger limit exceeded`,
+        {
+          skillName,
+          providedCount: triggers.length,
+          limit: 20,
+          truncated: triggers.length - 20
+        }
+      );
+    }
+
+    return validTriggers;
+  }
+
+  /**
    * Load a skill from file
    * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
    * to prevent race conditions and ensure atomic file operations
@@ -79,12 +130,15 @@ export class SkillManager implements IElementManager<Skill> {
       const metadata = parsed.data as SkillMetadata;
 
       // FIX #1121: Extract and validate triggers for Enhanced Index support
-      // Following pattern from MemoryManager (PR #1133)
+      // Enhanced trigger validation logging for Issue #1139
+      // NOTE: Trigger validation is intentionally element-specific.
+      // Skills may need dots (v2.0), special chars (c++), or command patterns.
+      // Different from Personas (names), Memories (dates), Templates (paths).
       if (parsed.data.triggers && Array.isArray(parsed.data.triggers)) {
-        metadata.triggers = parsed.data.triggers
-          .map((trigger: string) => sanitizeInput(String(trigger), 50)) // MAX_TRIGGER_LENGTH = 50
-          .filter((trigger: string) => trigger && /^[a-zA-Z0-9\-_]+$/.test(trigger)) // TRIGGER_VALIDATION_REGEX
-          .slice(0, 20); // Limit to 20 triggers max
+        metadata.triggers = this.validateAndProcessTriggers(
+          parsed.data.triggers,
+          metadata.name || 'unknown'
+        );
       }
 
       // Create skill instance
