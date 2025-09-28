@@ -44,11 +44,43 @@ export class GitHubRateLimiter {
   private processing = false;
   private lastRateLimitInfo?: GitHubRateLimitInfo;
   private isAuthenticated = false;
+  private initialized = false;
+  private initializationPromise?: Promise<void>;
 
   constructor() {
-    // Initialize with conservative limits - will update based on auth status
-    this.updateLimitsForAuthStatus();
+    // FIX (SonarCloud S7059): Removed async operations from constructor
+    // Previously: Called async updateLimitsForAuthStatus() directly
+    // Now: Using lazy initialization pattern - async work deferred to first use
+
+    // Initialize with conservative defaults synchronously
+    this.rateLimiter = new RateLimiter({
+      maxRequests: Math.floor(GITHUB_API_RATE_LIMITS.UNAUTHENTICATED_LIMIT * GITHUB_API_RATE_LIMITS.BUFFER_PERCENTAGE),
+      windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
+      minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
+    });
+
+    // Setup periodic check immediately (synchronous)
     this.setupPeriodicStatusCheck();
+  }
+
+  /**
+   * Ensure rate limiter is initialized with proper auth status
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+
+    // Prevent multiple concurrent initializations
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = this.updateLimitsForAuthStatus()
+      .finally(() => {
+        this.initialized = true;
+        this.initializationPromise = undefined;
+      });
+
+    return this.initializationPromise;
   }
 
   /**
@@ -136,7 +168,7 @@ export class GitHubRateLimiter {
       operation = normalizedOperation.normalizedContent;
     }
     
-    const requestId = `${operation}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const requestId = `${operation}-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     
     return new Promise<T>((resolve, reject) => {
       const request: GitHubApiRequest = {
@@ -221,6 +253,9 @@ export class GitHubRateLimiter {
     this.processing = true;
 
     try {
+      // Ensure initialization before processing
+      await this.ensureInitialized();
+
       while (this.requestQueue.length > 0) {
         // Update auth status periodically
         if (Math.random() < 0.1) { // 10% chance
