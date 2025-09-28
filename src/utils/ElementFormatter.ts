@@ -22,6 +22,15 @@ import { ElementType } from '../portfolio/types.js';
 // Security: Maximum file size for processing (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+// Security: Audit logging for security operations
+const auditLog = (operation: string, details: any) => {
+  logger.info('[SECURITY AUDIT]', {
+    operation,
+    timestamp: new Date().toISOString(),
+    ...details
+  });
+};
+
 export interface ElementFormatterOptions {
   /** Whether to create backup files before formatting */
   backup?: boolean;
@@ -58,9 +67,50 @@ export class ElementFormatter {
   }
 
   /**
+   * Validate YAML content for security
+   *
+   * FIX: HIGH PRIORITY - Validates YAML content before processing
+   */
+  private validateYamlContent(content: any): boolean {
+    // Check for dangerous content patterns
+    const contentStr = JSON.stringify(content);
+
+    // Check for potential code execution patterns
+    if (contentStr.includes('!!js/') || contentStr.includes('!!python/')) {
+      auditLog('YAML_VALIDATION_BLOCKED', {
+        reason: 'Detected code execution tags',
+        pattern: '!!js/ or !!python/'
+      });
+      return false;
+    }
+
+    // Check for suspicious patterns
+    if (contentStr.includes('eval(') || contentStr.includes('exec(')) {
+      auditLog('YAML_VALIDATION_BLOCKED', {
+        reason: 'Detected eval/exec patterns'
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Normalize Unicode in user input
+   *
+   * FIX: MEDIUM PRIORITY - Normalizes Unicode to prevent homograph attacks
+   */
+  private normalizeUnicode(input: string): string {
+    // Use NFC (Canonical Decomposition, followed by Canonical Composition)
+    return input.normalize('NFC');
+  }
+
+  /**
    * Format a single element file
    */
   async formatFile(filePath: string): Promise<FormatterResult> {
+    // FIX: MEDIUM - Normalize Unicode in file path
+    filePath = this.normalizeUnicode(filePath);
     const result: FormatterResult = {
       success: false,
       filePath,
@@ -78,7 +128,16 @@ export class ElementFormatter {
       }
 
       // Read the file
-      const content = await fs.readFile(filePath, 'utf-8');
+      let content = await fs.readFile(filePath, 'utf-8');
+
+      // FIX: MEDIUM - Normalize Unicode in content
+      content = this.normalizeUnicode(content);
+
+      auditLog('FILE_READ', {
+        filePath,
+        size: stats.size,
+        operation: 'format'
+      });
 
       // Detect element type from path
       const elementType = this.detectElementType(filePath);
@@ -95,7 +154,19 @@ export class ElementFormatter {
       if (this.options.validate) {
         try {
           // Security: Use FAILSAFE_SCHEMA to prevent code execution
-          yaml.load(formatted, { schema: yaml.FAILSAFE_SCHEMA });
+          const parsedYaml = yaml.load(formatted, { schema: yaml.FAILSAFE_SCHEMA });
+
+          // FIX: HIGH - Validate YAML content for security
+          if (!this.validateYamlContent(parsedYaml)) {
+            result.issues.push('YAML content failed security validation');
+            result.success = false;
+            auditLog('YAML_SECURITY_VALIDATION_FAILED', {
+              filePath,
+              reason: 'Content contains prohibited patterns'
+            });
+            return result;
+          }
+
           result.fixed.push('YAML validation passed');
         } catch (error) {
           result.issues.push(`YAML validation failed: ${error}`);
@@ -110,11 +181,24 @@ export class ElementFormatter {
         await fs.copyFile(filePath, backupPath);
         result.backupPath = backupPath;
         result.fixed.push(`Created backup at ${backupPath}`);
+
+        // FIX: LOW - Audit log backup creation
+        auditLog('BACKUP_CREATED', {
+          originalFile: filePath,
+          backupFile: backupPath
+        });
       }
 
       // Write formatted content
       const outputPath = this.getOutputPath(filePath);
       await fs.writeFile(outputPath, formatted, 'utf-8');
+
+      // FIX: LOW - Audit log successful format operation
+      auditLog('FILE_FORMATTED', {
+        inputPath: filePath,
+        outputPath,
+        backup: result.backupPath || 'none'
+      });
 
       result.success = true;
       result.fixed.push(`Formatted file written to ${outputPath}`);
@@ -252,13 +336,25 @@ export class ElementFormatter {
    */
   private async formatMemory(content: string, result: FormatterResult): Promise<string> {
     try {
-      // Parse existing YAML with SAFE_SCHEMA to prevent code execution
+      // Parse existing YAML with FAILSAFE_SCHEMA to prevent code execution
       const data = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA }) as any;
+
+      // FIX: HIGH - Validate parsed YAML content
+      if (!this.validateYamlContent(data)) {
+        result.issues.push('YAML content contains prohibited patterns');
+        auditLog('MEMORY_YAML_VALIDATION_FAILED', {
+          reason: 'Dangerous patterns detected in memory YAML'
+        });
+        return content; // Return original if validation fails
+      }
 
       // Check for malformed structure
       if (data.entries && Array.isArray(data.entries)) {
         for (const entry of data.entries) {
           if (typeof entry.content === 'string') {
+            // FIX: MEDIUM - Normalize Unicode in entry content
+            entry.content = this.normalizeUnicode(entry.content);
+
             // Check if metadata is embedded in content
             if (entry.content.includes('---\n') || entry.content.includes('---\\n')) {
               result.issues.push('Found embedded metadata in content');
@@ -324,8 +420,17 @@ export class ElementFormatter {
 
       const [, frontmatterStr, body] = match;
 
-      // Parse frontmatter with SAFE_SCHEMA
+      // Parse frontmatter with FAILSAFE_SCHEMA
       const frontmatter = yaml.load(frontmatterStr, { schema: yaml.FAILSAFE_SCHEMA }) as any;
+
+      // FIX: HIGH - Validate frontmatter content
+      if (!this.validateYamlContent(frontmatter)) {
+        result.issues.push('Frontmatter contains prohibited patterns');
+        auditLog('FRONTMATTER_VALIDATION_FAILED', {
+          reason: 'Dangerous patterns in frontmatter'
+        });
+        return content;
+      }
 
       // Clean frontmatter
       if (frontmatter.content && typeof frontmatter.content === 'string') {
@@ -389,8 +494,17 @@ export class ElementFormatter {
     const cleanContent = unescaped.slice(endPos + endMarker.length).trim();
 
     try {
-      // Security: Use SAFE_SCHEMA to prevent code execution
+      // Security: Use FAILSAFE_SCHEMA to prevent code execution
       const metadata = yaml.load(metadataStr, { schema: yaml.FAILSAFE_SCHEMA });
+
+      // FIX: HIGH - Validate extracted metadata
+      if (!this.validateYamlContent(metadata)) {
+        auditLog('METADATA_VALIDATION_FAILED', {
+          reason: 'Dangerous patterns in extracted metadata'
+        });
+        return { metadata: null, content };
+      }
+
       return { metadata, content: cleanContent };
     } catch {
       // If YAML parsing fails, return as-is
@@ -437,12 +551,19 @@ export class ElementFormatter {
 
     if (this.options.outputDir) {
       // Security: Validate output directory to prevent path traversal
-      const filename = path.basename(filePath);
+      // FIX: MEDIUM - Normalize Unicode in filename
+      const filename = this.normalizeUnicode(path.basename(filePath));
       const safePath = path.resolve(this.options.outputDir, filename);
       const expectedDir = path.resolve(this.options.outputDir);
 
       // Ensure the resolved path is within the expected directory
       if (!safePath.startsWith(expectedDir)) {
+        // FIX: LOW - Audit log security operations
+        auditLog('PATH_TRAVERSAL_BLOCKED', {
+          attemptedPath: filename,
+          expectedDir,
+          resolvedPath: safePath
+        });
         throw new Error(`Path traversal attempt detected: ${filename}`);
       }
 
