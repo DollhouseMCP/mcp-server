@@ -122,7 +122,7 @@ export class ElementFormatter {
   /**
    * Validate file size
    */
-  private async validateFileSize(filePath: string, result: FormatterResult): Promise<any | null> {
+  private async validateFileSize(filePath: string, result: FormatterResult): Promise<any> {
     const stats = await fs.stat(filePath);
     if (stats.size > this.options.maxFileSize) {
       result.error = `File size (${stats.size} bytes) exceeds maximum allowed (${this.options.maxFileSize} bytes)`;
@@ -441,8 +441,7 @@ export class ElementFormatter {
     if (extracted.metadata) {
       Object.assign(data, extracted.metadata);
       entry.content = this.unescapeNewlines(extracted.content);
-      result.fixed.push('Extracted embedded metadata to top level');
-      result.fixed.push('Unescaped newlines in content');
+      result.fixed.push('Extracted embedded metadata to top level', 'Unescaped newlines in content');
     }
   }
 

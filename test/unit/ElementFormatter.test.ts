@@ -64,7 +64,7 @@ entries:
       const formatted = await fs.readFile(formattedPath, 'utf-8');
       expect(formatted).toContain('Line 1\n');
       expect(formatted).toContain('Line 2\n');
-      expect(formatted).not.toContain('\\n');
+      expect(formatted).not.toContain(String.raw`\n`);
     });
 
     it('should extract embedded metadata from content', async () => {
@@ -93,7 +93,7 @@ entries:
       expect(formatted).toContain('version: 1.0.0');
       expect(formatted).toContain('retention: permanent');
       expect(formatted).toContain('SonarCloud Rules Reference');
-      expect(formatted).not.toContain('---\\n');
+      expect(formatted).not.toContain(String.raw`---\n`);
     });
 
     it('should handle memories without issues gracefully', async () => {
@@ -149,7 +149,7 @@ content: Line 1\\nLine 2\\n
       expect(formatted).toContain('Line 1');
       expect(formatted).toContain('Line 2');
       expect(formatted).toContain('# Test Persona');
-      expect(formatted).not.toContain('\\n');
+      expect(formatted).not.toContain(String.raw`\n`);
     });
 
     it('should handle files without frontmatter', async () => {
@@ -308,7 +308,7 @@ No frontmatter here, just content.`;
       await fs.writeFile(testFile, 'test', 'utf-8');
 
       // Skip permission test on Windows as it doesn't work the same way
-      if ((global as any).process?.platform === 'win32') {
+      if ((globalThis as any).process?.platform === 'win32') {
         return;
       }
 
@@ -472,14 +472,16 @@ tags:
       await fs.writeFile(validFile, validContent, 'utf-8');
       files.push(validFile);
 
-      // Non-existent file
-      files.push(path.join(tempDir, 'non-existent.yaml'));
-
-      // Invalid YAML
+      // Non-existent file and invalid YAML
       const invalidContent = `{{{invalid`;
       const invalidFile = path.join(tempDir, 'invalid.yaml');
       await fs.writeFile(invalidFile, invalidContent, 'utf-8');
-      files.push(invalidFile);
+
+      // Add both files at once
+      files.push(
+        path.join(tempDir, 'non-existent.yaml'),
+        invalidFile
+      );
 
       const results = await formatter.formatFiles(files);
 
