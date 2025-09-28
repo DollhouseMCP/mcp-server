@@ -22,6 +22,7 @@ import chalk from 'chalk';
 import { ElementFormatter, FormatterResult } from '../utils/ElementFormatter.js';
 import { ElementType } from '../portfolio/types.js';
 import { PortfolioManager } from '../portfolio/PortfolioManager.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 const program = new Command();
 
@@ -38,6 +39,13 @@ program
   .option('--dry-run', 'Show what would be formatted without changes', false)
   .action(async (files: string[], options) => {
     try {
+      // FIX: LOW - Add SecurityMonitor audit logging for CLI operations
+      SecurityMonitor.logSecurityEvent({
+        type: 'FILE_COPIED',
+        severity: 'LOW',
+        source: 'format-element CLI',
+        details: `Starting format operation: ${options.all ? 'all elements' : files.length + ' files'}`
+      });
       const formatter = new ElementFormatter({
         backup: options.backup,
         inPlace: options.inPlace,

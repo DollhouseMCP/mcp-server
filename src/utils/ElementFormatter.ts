@@ -18,18 +18,13 @@ import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 // Security: Maximum file size for processing (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-// Security: Audit logging for security operations
-const auditLog = (operation: string, details: any) => {
-  logger.info('[SECURITY AUDIT]', {
-    operation,
-    timestamp: new Date().toISOString(),
-    ...details
-  });
-};
+// Note: Direct auditLog removed - using SecurityMonitor directly for all audit logging
 
 export interface ElementFormatterOptions {
   /** Whether to create backup files before formatting */
@@ -66,34 +61,7 @@ export class ElementFormatter {
     };
   }
 
-  /**
-   * Validate YAML content for security
-   *
-   * FIX: HIGH PRIORITY - Validates YAML content before processing
-   */
-  private validateYamlContent(content: any): boolean {
-    // Check for dangerous content patterns
-    const contentStr = JSON.stringify(content);
-
-    // Check for potential code execution patterns
-    if (contentStr.includes('!!js/') || contentStr.includes('!!python/')) {
-      auditLog('YAML_VALIDATION_BLOCKED', {
-        reason: 'Detected code execution tags',
-        pattern: '!!js/ or !!python/'
-      });
-      return false;
-    }
-
-    // Check for suspicious patterns
-    if (contentStr.includes('eval(') || contentStr.includes('exec(')) {
-      auditLog('YAML_VALIDATION_BLOCKED', {
-        reason: 'Detected eval/exec patterns'
-      });
-      return false;
-    }
-
-    return true;
-  }
+  // Note: validateYamlContent removed - SecureYamlParser handles all validation internally
 
   /**
    * Normalize Unicode in user input
@@ -133,10 +101,12 @@ export class ElementFormatter {
       // FIX: MEDIUM - Normalize Unicode in content
       content = this.normalizeUnicode(content);
 
-      auditLog('FILE_READ', {
-        filePath,
-        size: stats.size,
-        operation: 'format'
+      // Log file operation for security audit
+      SecurityMonitor.logSecurityEvent({
+        type: 'FILE_COPIED',
+        severity: 'LOW',
+        source: 'ElementFormatter',
+        details: `Processing file: ${filePath} (${stats.size} bytes)`
       });
 
       // Detect element type from path
@@ -153,24 +123,31 @@ export class ElementFormatter {
       // Validate if requested
       if (this.options.validate) {
         try {
-          // Security: Use FAILSAFE_SCHEMA to prevent code execution
-          const parsedYaml = yaml.load(formatted, { schema: yaml.FAILSAFE_SCHEMA });
+          // FIX: HIGH - Use SecureYamlParser instead of direct yaml.load
+          // For pure YAML (memories), we need to wrap in frontmatter format for SecureYamlParser
+          const yamlToValidate = elementType === ElementType.MEMORY
+            ? `---\n${formatted}\n---\n`
+            : formatted;
 
-          // FIX: HIGH - Validate YAML content for security
-          if (!this.validateYamlContent(parsedYaml)) {
-            result.issues.push('YAML content failed security validation');
-            result.success = false;
-            auditLog('YAML_SECURITY_VALIDATION_FAILED', {
-              filePath,
-              reason: 'Content contains prohibited patterns'
-            });
-            return result;
-          }
+          // SecureYamlParser handles validation internally
+          SecureYamlParser.parse(yamlToValidate, {
+            validateContent: true,
+            validateFields: false // Don't validate fields for generic elements
+          });
 
           result.fixed.push('YAML validation passed');
         } catch (error) {
           result.issues.push(`YAML validation failed: ${error}`);
           result.success = false;
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_PARSING_WARNING',
+            severity: 'MEDIUM',
+            source: 'ElementFormatter',
+            details: `YAML validation failed for ${filePath}`,
+            additionalData: {
+              error: error instanceof Error ? error.message : String(error)
+            }
+          });
           return result;
         }
       }
@@ -182,10 +159,16 @@ export class ElementFormatter {
         result.backupPath = backupPath;
         result.fixed.push(`Created backup at ${backupPath}`);
 
-        // FIX: LOW - Audit log backup creation
-        auditLog('BACKUP_CREATED', {
-          originalFile: filePath,
-          backupFile: backupPath
+        // FIX: LOW - Use SecurityMonitor for backup audit logging
+        SecurityMonitor.logSecurityEvent({
+          type: 'FILE_COPIED',
+          severity: 'LOW',
+          source: 'ElementFormatter',
+          details: `Backup created: ${backupPath}`,
+          additionalData: {
+            originalFile: filePath,
+            backupFile: backupPath
+          }
         });
       }
 
@@ -193,11 +176,17 @@ export class ElementFormatter {
       const outputPath = this.getOutputPath(filePath);
       await fs.writeFile(outputPath, formatted, 'utf-8');
 
-      // FIX: LOW - Audit log successful format operation
-      auditLog('FILE_FORMATTED', {
-        inputPath: filePath,
-        outputPath,
-        backup: result.backupPath || 'none'
+      // FIX: LOW - Use SecurityMonitor for audit logging
+      SecurityMonitor.logSecurityEvent({
+        type: 'FILE_COPIED',
+        severity: 'LOW',
+        source: 'ElementFormatter',
+        details: `File formatted successfully: ${outputPath}`,
+        additionalData: {
+          inputPath: filePath,
+          outputPath,
+          backup: result.backupPath || 'none'
+        }
       });
 
       result.success = true;
@@ -336,17 +325,14 @@ export class ElementFormatter {
    */
   private async formatMemory(content: string, result: FormatterResult): Promise<string> {
     try {
-      // Parse existing YAML with FAILSAFE_SCHEMA to prevent code execution
-      const data = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA }) as any;
-
-      // FIX: HIGH - Validate parsed YAML content
-      if (!this.validateYamlContent(data)) {
-        result.issues.push('YAML content contains prohibited patterns');
-        auditLog('MEMORY_YAML_VALIDATION_FAILED', {
-          reason: 'Dangerous patterns detected in memory YAML'
-        });
-        return content; // Return original if validation fails
-      }
+      // FIX: HIGH - Use SecureYamlParser for safe parsing
+      // Wrap pure YAML in frontmatter format for SecureYamlParser
+      const wrappedContent = `---\n${content}\n---\n`;
+      const parsed = SecureYamlParser.parse(wrappedContent, {
+        validateContent: true,
+        validateFields: false
+      });
+      const data = parsed.data as any;
 
       // Check for malformed structure
       if (data.entries && Array.isArray(data.entries)) {
@@ -420,17 +406,13 @@ export class ElementFormatter {
 
       const [, frontmatterStr, body] = match;
 
-      // Parse frontmatter with FAILSAFE_SCHEMA
-      const frontmatter = yaml.load(frontmatterStr, { schema: yaml.FAILSAFE_SCHEMA }) as any;
-
-      // FIX: HIGH - Validate frontmatter content
-      if (!this.validateYamlContent(frontmatter)) {
-        result.issues.push('Frontmatter contains prohibited patterns');
-        auditLog('FRONTMATTER_VALIDATION_FAILED', {
-          reason: 'Dangerous patterns in frontmatter'
-        });
-        return content;
-      }
+      // FIX: HIGH - Use SecureYamlParser for frontmatter
+      const tempDoc = `---\n${frontmatterStr}\n---\n`;
+      const parsed = SecureYamlParser.parse(tempDoc, {
+        validateContent: true,
+        validateFields: false
+      });
+      const frontmatter = parsed.data as any;
 
       // Clean frontmatter
       if (frontmatter.content && typeof frontmatter.content === 'string') {
@@ -494,16 +476,13 @@ export class ElementFormatter {
     const cleanContent = unescaped.slice(endPos + endMarker.length).trim();
 
     try {
-      // Security: Use FAILSAFE_SCHEMA to prevent code execution
-      const metadata = yaml.load(metadataStr, { schema: yaml.FAILSAFE_SCHEMA });
-
-      // FIX: HIGH - Validate extracted metadata
-      if (!this.validateYamlContent(metadata)) {
-        auditLog('METADATA_VALIDATION_FAILED', {
-          reason: 'Dangerous patterns in extracted metadata'
-        });
-        return { metadata: null, content };
-      }
+      // FIX: HIGH - Use SecureYamlParser for metadata extraction
+      const tempDoc = `---\n${metadataStr}\n---\n`;
+      const parsed = SecureYamlParser.parse(tempDoc, {
+        validateContent: true,
+        validateFields: false
+      });
+      const metadata = parsed.data;
 
       return { metadata, content: cleanContent };
     } catch {
@@ -558,11 +537,17 @@ export class ElementFormatter {
 
       // Ensure the resolved path is within the expected directory
       if (!safePath.startsWith(expectedDir)) {
-        // FIX: LOW - Audit log security operations
-        auditLog('PATH_TRAVERSAL_BLOCKED', {
-          attemptedPath: filename,
-          expectedDir,
-          resolvedPath: safePath
+        // FIX: LOW - Use SecurityMonitor for audit logging
+        SecurityMonitor.logSecurityEvent({
+          type: 'PATH_TRAVERSAL_ATTEMPT',
+          severity: 'HIGH',
+          source: 'ElementFormatter',
+          details: `Path traversal blocked: ${filename}`,
+          additionalData: {
+            attemptedPath: filename,
+            expectedDir,
+            resolvedPath: safePath
+          }
         });
         throw new Error(`Path traversal attempt detected: ${filename}`);
       }
