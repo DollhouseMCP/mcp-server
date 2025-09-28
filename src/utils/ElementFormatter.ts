@@ -316,25 +316,45 @@ export class ElementFormatter {
 
   /**
    * Extract embedded metadata from content string
+   *
+   * FIX: Security hotspot - Replaced regex vulnerable to catastrophic backtracking
+   * with a linear-time string parsing approach to prevent ReDoS attacks
    */
   private extractEmbeddedMetadata(content: string): { metadata: any; content: string } {
     // Handle both actual newlines and escaped newlines
     const unescaped = content.replace(/\\n/g, '\n');
 
-    // Try to extract frontmatter-style metadata
-    const match = unescaped.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+    // Use indexOf for linear-time parsing instead of regex to prevent ReDoS
+    const startMarker = '---';
+    const endMarker = '\n---\n';
 
-    if (match) {
-      const [, metadataStr, cleanContent] = match;
-      try {
-        const metadata = yaml.load(metadataStr);
-        return { metadata, content: cleanContent.trim() };
-      } catch {
-        // If YAML parsing fails, return as-is
-      }
+    // Check if content starts with frontmatter marker
+    if (!unescaped.startsWith(startMarker)) {
+      return { metadata: null, content };
     }
 
-    return { metadata: null, content };
+    // Find the starting position after first marker
+    const startPos = startMarker.length;
+
+    // Look for the end marker
+    const endPos = unescaped.indexOf(endMarker, startPos);
+
+    if (endPos === -1) {
+      // No closing marker found
+      return { metadata: null, content };
+    }
+
+    // Extract metadata and content sections
+    const metadataStr = unescaped.slice(startPos, endPos).trim();
+    const cleanContent = unescaped.slice(endPos + endMarker.length).trim();
+
+    try {
+      const metadata = yaml.load(metadataStr);
+      return { metadata, content: cleanContent };
+    } catch {
+      // If YAML parsing fails, return as-is
+      return { metadata: null, content };
+    }
   }
 
   /**
@@ -354,7 +374,7 @@ export class ElementFormatter {
   private detectElementType(filePath: string): ElementType {
     const normalizedPath = filePath.replace(/\\/g, '/');
 
-    for (const [key, value] of Object.entries(ElementType)) {
+    for (const [, value] of Object.entries(ElementType)) {
       if (normalizedPath.includes(`/${value}/`)) {
         return value as ElementType;
       }
