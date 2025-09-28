@@ -251,12 +251,8 @@ function updateFile(filePath, config) {
           // Replace only first occurrence
           content = content.replace(update.pattern, update.replacement);
         } else {
-          // Standard replacement
-          if (typeof update.replacement === 'function') {
-            content = content.replace(update.pattern, update.replacement);
-          } else {
-            content = content.replace(update.pattern, update.replacement);
-          }
+          // Standard replacement (works for both function and string replacements)
+          content = content.replace(update.pattern, update.replacement);
         }
       }
     } else if (config.pattern) {

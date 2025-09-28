@@ -107,7 +107,7 @@ export function validateSearchQuery(query: string, maxLength: number = 1000): bo
   
   // Check for potential injection patterns (basic validation)
   const dangerousPatterns = [
-    /[\x00-\x1F\x7F]/,  // Control characters
+    /[\u0000-\u001F\u007F]/,  // Control characters
     /[<>]/,             // Potential HTML/XML injection
   ];
   

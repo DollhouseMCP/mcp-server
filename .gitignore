@@ -91,4 +91,7 @@ docs/QA/agent-reports/*-Results.json
 # SonarCloud analysis files
 sonarcloud-issues.json
 sonarcloud-analysis.json
+sonarcloud_issues_summary.json
+temp_sonar.json
+*.sonar.json
 .scannerwork/

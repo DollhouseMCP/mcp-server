@@ -731,8 +731,8 @@ export class SubmitToPortfolioTool {
         /\.\./,                    // Path traversal
         /\/\.\./,                  // Unix path traversal
         /\\\.\./,                  // Windows path traversal
-        /\x00/,                    // Null bytes
-        /[\x01-\x1f\x7f-\x9f]/,    // Control characters
+        /\u0000/,                    // Null bytes
+        /[\u0001-\u001f\u007f-\u009f]/,    // Control characters
         /[<>:"|?*]/,               // Invalid filename characters on Windows
         /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i, // Reserved Windows names
         /^\./,                     // Hidden files (starting with dot)
@@ -793,7 +793,7 @@ export class SubmitToPortfolioTool {
       let normalizedPath: string;
       try {
         // Remove null bytes and normalize
-        const cleanPath = filePath.replace(/\x00/g, '');
+        const cleanPath = filePath.replace(/\u0000/g, '');
         normalizedPath = path.normalize(cleanPath);
         
         // Check if path is within the portfolio directory
@@ -1954,7 +1954,7 @@ ${elementContent}
         const normalizedName = name.toLowerCase()
           .replace(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
           .replace(/-+/g, '-')         // Replace multiple dashes with single dash
-          .replace(/^-|-$/g, '');      // Remove leading/trailing dashes
+          .replace(/(^-)|(-$)/g, '');      // Remove leading/trailing dashes
           
         if (normalizedName !== name.toLowerCase()) {
           logger.debug('Trying normalized name search', { 

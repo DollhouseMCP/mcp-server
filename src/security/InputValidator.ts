@@ -11,7 +11,7 @@ import { ValidationErrorCodes } from '../utils/errorCodes.js';
 
 // Pre-compiled regex patterns for better performance
 // These patterns are used repeatedly and benefit from pre-compilation
-const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/g;
+const CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g;
 const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
 const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
 const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
@@ -23,7 +23,8 @@ const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
 const OCTAL_IP_REGEX = /^0[0-7]{8,11}$/;
 const FILENAME_DANGEROUS_REGEX = /[\/\\:*?"<>|]/g;
 const FILENAME_LEADING_DOTS_REGEX = /^\.+/;
-const PATH_NORMALIZE_REGEX = /^\/{1,100}|\/{1,100}$/g;
+// Regex to trim leading/trailing slashes (e.g., "/path/" -> "path")
+const PATH_NORMALIZE_REGEX = /(^\/{1,100})|(\/{1,100}$)/g;
 const PATH_MULTIPLE_SLASHES_REGEX = /\/{1,100}/g;
 const URL_PLUS_DECODE_REGEX = /\+/g;
 

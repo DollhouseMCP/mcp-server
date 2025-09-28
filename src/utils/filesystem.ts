@@ -35,7 +35,7 @@ export function generateUniqueId(personaName: string, author?: string): string {
     .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
     .join('')
     .substring(0, 100) // Limit after transformation to preserve structure
-    .replace(/^-+|-+$/g, '') // Only trim leading/trailing hyphens
+    .replace(/(^-+)|(-+$)/g, '') // Only trim leading/trailing hyphens
     .replace(/-{2,}/g, '-'); // Collapse multiple hyphens
   const whoMadeIt = author || generateAnonymousId();
   
