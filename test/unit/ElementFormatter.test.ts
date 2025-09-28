@@ -306,18 +306,29 @@ No frontmatter here, just content.`;
     it('should handle permission denied errors', async () => {
       const testFile = path.join(tempDir, 'no-permission.yaml');
       await fs.writeFile(testFile, 'test', 'utf-8');
-      await fs.chmod(testFile, 0o000); // Remove all permissions
 
-      const result = await formatter.formatFile(testFile);
-
-      expect(result.success).toBe(false);
-      if ((global as any).process?.platform !== 'win32') { // Permission tests don't work on Windows
-        expect(result.error).toContain('EACCES');
-        expect(result.issues.length).toBe(0); // Issues array is empty on EACCES
+      // Skip permission test on Windows as it doesn't work the same way
+      if ((global as any).process?.platform === 'win32') {
+        return;
       }
 
-      // Restore permissions for cleanup
-      await fs.chmod(testFile, 0o644);
+      try {
+        // Remove all permissions - this is safe in a test temp directory
+        await fs.chmod(testFile, 0o000);
+
+        const result = await formatter.formatFile(testFile);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('EACCES');
+        expect(result.issues.length).toBe(0); // Issues array is empty on EACCES
+      } finally {
+        // Always restore permissions for cleanup - use safer 0o600 (owner read/write only)
+        try {
+          await fs.chmod(testFile, 0o600);
+        } catch {
+          // Ignore cleanup errors in test
+        }
+      }
     });
 
     it('should handle YAML parse errors gracefully', async () => {
