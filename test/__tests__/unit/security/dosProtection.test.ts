@@ -198,7 +198,10 @@ describe('DOSProtection', () => {
     });
 
     it('should block dangerous patterns', () => {
-      const dangerous = /(.+)+$/;
+      // NOSONAR - Intentionally vulnerable regex pattern for testing DOS protection
+      // This pattern is used to verify our security features correctly detect and block
+      // catastrophic backtracking patterns. It's contained within DOSProtection wrapper.
+      const dangerous = /(.+)+$/; // NOSONAR
       const input = 'aaaaaaaaaa';
       expect(DOSProtection.safeReplace(input, dangerous, 'x'))
         .toBe(input); // Returns original on danger
@@ -310,7 +313,10 @@ describe('Performance Tests (Reviewer Recommendation)', () => {
 
   it('should detect timeout for complex patterns', () => {
     // This tests that we properly detect and handle slow patterns
-    const complexPattern = /^(([a-z])+.)+$/;
+    // NOSONAR - Intentionally complex regex pattern for testing timeout detection
+    // This pattern is vulnerable to super-linear runtime but is safely contained
+    // within SafeRegex.test() which enforces timeouts and prevents actual DOS.
+    const complexPattern = /^(([a-z])+.)+$/; // NOSONAR
     const testInput = 'abcdefghijklmnopqrstuvwxyz'.repeat(10);
 
     const start = Date.now();
