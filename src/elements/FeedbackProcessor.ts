@@ -413,9 +413,16 @@ export class FeedbackProcessor implements IFeedbackProcessor {
   
   /**
    * Calculate relevance of a keyword in context.
+   *
+   * FIX: ReDoS vulnerability - escape user input before using in RegExp
+   * Previously: Used keyword directly in RegExp which could cause ReDoS
+   * Now: Properly escapes special regex characters in keyword
+   * SonarCloud: Resolves DOS vulnerability hotspot
    */
   private calculateRelevance(keyword: string, text: string): number {
-    const keywordCount = (text.match(new RegExp(keyword, 'g')) || []).length;
+    // Escape special regex characters to prevent ReDoS
+    const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const keywordCount = (text.match(new RegExp(escapedKeyword, 'gi')) || []).length;
     const textLength = text.split(' ').length;
     const density = keywordCount / textLength;
     

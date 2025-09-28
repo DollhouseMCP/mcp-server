@@ -160,13 +160,34 @@ export class FileOperations {
   
   /**
    * Check if a file/directory should be excluded
+   *
+   * FIX: ReDoS vulnerability - replaced unsafe glob-to-regex conversion
+   * Previously: Used pattern.replace with .* which could cause catastrophic backtracking
+   * Now: Uses safe glob matching with proper escaping and bounded patterns
+   * SonarCloud: Resolves DOS vulnerability hotspot
    */
   private static shouldExclude(name: string, patterns: string[]): boolean {
+    // Input validation to prevent DOS
+    if (name.length > 1000) {
+      return false; // Reject overly long inputs
+    }
+
     for (const pattern of patterns) {
       if (pattern.includes('*')) {
-        // Simple glob support
-        const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-        if (regex.test(name)) return true;
+        // Safe glob support - prevent ReDoS
+        // Escape special regex chars except *
+        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        // Replace * with [^/]* (match anything except path separator)
+        // This prevents catastrophic backtracking
+        const safePattern = escaped.replace(/\*/g, '[^/]*');
+
+        try {
+          const regex = new RegExp('^' + safePattern + '$');
+          if (regex.test(name)) return true;
+        } catch {
+          // Invalid pattern - skip it
+          continue;
+        }
       } else if (name === pattern) {
         return true;
       }
