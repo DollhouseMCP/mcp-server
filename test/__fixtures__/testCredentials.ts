@@ -10,6 +10,8 @@
  * @sonarcloud-suppress typescript:S6418 - Hardcoded secrets for testing
  */
 
+import { randomInt } from 'node:crypto';
+
 // NOSONAR - These are intentional mock credentials for testing
 // security:audit:suppress - All credentials in this file are fake test values
 export const TEST_CREDENTIALS = {
@@ -63,9 +65,16 @@ export function getTestCredential(key: keyof typeof TEST_CREDENTIALS): string {
 /**
  * Generate a unique test token for isolation
  * Ensures each test has its own unique fake token
+ *
+ * FIX: Use crypto.randomInt() instead of Math.random() for security compliance
+ * Previously: Used Math.random() which is predictable
+ * Now: Uses crypto.randomInt() for cryptographically secure randomness
+ * SonarCloud: Resolves "Make sure using this pseudorandom number generator is safe" hotspot
  */
 export function generateTestToken(prefix = 'test'): string {
   const timestamp = Date.now();
-  const random = Math.floor(Math.random() * 10000);
+  // Use crypto.randomInt() for secure random generation (0-9999)
+  // This provides cryptographically secure randomness even for test tokens
+  const random = randomInt(0, 10000);
   return `${prefix}_FAKE_${timestamp}_${random}_NOT_REAL`;
 }
