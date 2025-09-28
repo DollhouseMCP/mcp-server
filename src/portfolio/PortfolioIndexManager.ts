@@ -420,8 +420,12 @@ export class PortfolioIndexManager {
 
             for (const dateFolder of dateFolders) {
               const folderPath = path.join(elementDir, dateFolder);
-              const folderFiles = await fs.readdir(folderPath);
-              const yamlFiles = folderFiles.filter(file => file.endsWith('.yaml'));
+              const folderEntries = await fs.readdir(folderPath, { withFileTypes: true });
+
+              // Process direct YAML files in date folder
+              const yamlFiles = folderEntries
+                .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
+                .map(entry => entry.name);
 
               for (const file of yamlFiles) {
                 try {
@@ -437,6 +441,54 @@ export class PortfolioIndexManager {
                   logger.warn(`Failed to index memory file: ${dateFolder}/${file}`, {
                     error: error instanceof Error ? error.message : String(error)
                   });
+                }
+              }
+
+              // FIX #1188: Process subdirectories for sharded memories
+              // Large memories are stored as shards in named subdirectories
+              const subDirs = folderEntries
+                .filter(entry => entry.isDirectory())
+                .map(entry => entry.name);
+
+              for (const subDir of subDirs) {
+                const subDirPath = path.join(folderPath, subDir);
+                const shardFiles = await fs.readdir(subDirPath);
+                const shardYamlFiles = shardFiles.filter(file => file.endsWith('.yaml'));
+
+                // For sharded memories, look for metadata.yaml or the main file
+                // If not found, use the first shard as representative
+                let metadataFile = shardYamlFiles.find(f => f === 'metadata.yaml') ||
+                                   shardYamlFiles.find(f => f === `${subDir}.yaml`) ||
+                                   shardYamlFiles[0];
+
+                if (metadataFile) {
+                  try {
+                    const filePath = path.join(subDirPath, metadataFile);
+                    const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                    if (entry) {
+                      // Mark as sharded memory in metadata
+                      entry.metadata.keywords = entry.metadata.keywords || [];
+                      if (!entry.metadata.keywords.includes('sharded')) {
+                        entry.metadata.keywords.push('sharded');
+                      }
+
+                      // Store shard count info
+                      (entry as any).shardInfo = {
+                        shardCount: shardYamlFiles.length,
+                        shardDir: path.join(dateFolder, subDir)
+                      };
+
+                      this.addToIndex(newIndex, entry);
+                      processedFiles++;
+                      totalFiles++;
+                    }
+                  } catch (error) {
+                    logger.warn(`Failed to index sharded memory: ${dateFolder}/${subDir}`, {
+                      error: error instanceof Error ? error.message : String(error),
+                      metadataFile
+                    });
+                  }
                 }
               }
             }

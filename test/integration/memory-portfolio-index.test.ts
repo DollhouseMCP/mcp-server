@@ -58,6 +58,41 @@ tags:
       legacyMemoryYAML
     );
 
+    // Create a sharded memory in a subdirectory
+    const shardedMemoryDir = path.join(dateFolder, 'large-sharded-memory');
+    await fs.mkdir(shardedMemoryDir, { recursive: true });
+
+    // Create metadata file for sharded memory
+    const shardedMetadataYAML = `metadata:
+  name: large-sharded-memory
+  description: Large memory stored in shards
+  version: 1.0.0
+  tags:
+    - large
+    - sharded
+  triggers:
+    - process
+    - analyze
+shardInfo:
+  totalShards: 3
+  maxShardSize: 1048576`;
+
+    await fs.writeFile(
+      path.join(shardedMemoryDir, 'metadata.yaml'),
+      shardedMetadataYAML
+    );
+
+    // Create a couple of shard files
+    await fs.writeFile(
+      path.join(shardedMemoryDir, 'shard-001.yaml'),
+      'entries:\n  - content: First shard content'
+    );
+
+    await fs.writeFile(
+      path.join(shardedMemoryDir, 'shard-002.yaml'),
+      'entries:\n  - content: Second shard content'
+    );
+
     // Reset singleton instance for clean test
     (PortfolioIndexManager as any).instance = null;
     indexManager = PortfolioIndexManager.getInstance();
@@ -89,8 +124,8 @@ tags:
     console.log('Found memories count:', memories.length);
     console.log('Memory names:', memories.map(m => m.metadata.name));
 
-    // Should find both memories
-    expect(memories.length).toBeGreaterThanOrEqual(2);
+    // Should find all three memories (test, legacy, sharded)
+    expect(memories.length).toBeGreaterThanOrEqual(3);
 
     // Find our test memory
     const testMemory = memories.find(m => m.metadata.name === 'test-memory-index');
@@ -134,5 +169,28 @@ tags:
     );
 
     expect(memoryWithRecall).toBeDefined();
+  });
+
+  it('should index sharded memories from subdirectories', async () => {
+    const index = await indexManager.getIndex();
+    const memories = index.byType.get(ElementType.MEMORY) || [];
+
+    // Find the sharded memory
+    const shardedMemory = memories.find(m => m.metadata.name === 'large-sharded-memory');
+
+    console.log('Sharded memory found:', shardedMemory?.metadata.name);
+    console.log('Shard info:', (shardedMemory as any)?.shardInfo);
+
+    expect(shardedMemory).toBeDefined();
+    expect(shardedMemory?.metadata.description).toBe('Large memory stored in shards');
+    expect(shardedMemory?.metadata.tags).toContain('large');
+    expect(shardedMemory?.metadata.tags).toContain('sharded');
+    expect(shardedMemory?.metadata.keywords).toContain('sharded'); // Auto-added by indexer
+
+    // Verify shard info was stored
+    const shardInfo = (shardedMemory as any)?.shardInfo;
+    expect(shardInfo).toBeDefined();
+    expect(shardInfo?.shardCount).toBe(3); // metadata.yaml + 2 shard files
+    expect(shardInfo?.shardDir).toBe('2025-09-28/large-sharded-memory');
   });
 });
