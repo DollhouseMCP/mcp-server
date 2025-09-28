@@ -275,6 +275,8 @@ describe('Persona Lifecycle Integration', () => {
       }
 
       // Always attempt cleanup using test utility
+      // SECURITY: 0o644 is safe for test files (read for all, write for owner)
+      // This is test-only code in a temporary test directory
       await restoreFilePermissions(filePath, 0o644);
 
       // Now handle any test errors after cleanup is complete

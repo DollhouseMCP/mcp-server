@@ -15,10 +15,18 @@ export interface PermissionTestResult {
 /**
  * Helper to safely restore file permissions after a test
  * Handles platform differences and missing files gracefully
+ *
+ * @param filePath - Path to the file
+ * @param originalMode - Permissions to restore (default: 0o600 - owner read/write only)
+ *
+ * Security Note (SonarCloud S2612):
+ * - Default 0o600 is restrictive (owner-only access)
+ * - For test files, broader permissions like 0o644 are acceptable
+ * - This is test-only code, not production
  */
 export async function restoreFilePermissions(
   filePath: string,
-  originalMode: number = 0o644
+  originalMode: number = 0o600  // SECURITY: More restrictive default (owner-only)
 ): Promise<void> {
   try {
     await fs.chmod(filePath, originalMode);
@@ -73,12 +81,20 @@ export function shouldSkipPermissionTest(error: any): PermissionTestResult {
 /**
  * Execute a test with file permission changes and automatic cleanup
  * Ensures permissions are always restored, even if test fails
+ *
+ * @param filePath - Path to the file to modify
+ * @param testMode - Temporary permissions for the test
+ * @param testFn - Test function to execute
+ * @param originalMode - Permissions to restore after test (default: 0o600)
+ *
+ * Security Note: Default 0o600 is restrictive. For test scenarios,
+ * broader permissions can be explicitly passed when needed.
  */
 export async function withPermissionChange(
   filePath: string,
   testMode: number,
   testFn: () => Promise<void>,
-  originalMode: number = 0o644
+  originalMode: number = 0o600  // SECURITY: Restrictive default
 ): Promise<void> {
   let testError: Error | null = null;
   let testPassed = false;
