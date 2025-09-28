@@ -3,7 +3,7 @@
  * Provides consistent patterns for permission-based tests across platforms
  */
 
-import * as fs from 'fs/promises';
+import * as fs from 'node:fs/promises';
 import { logger } from '../../../../src/utils/logger.js';
 
 export interface PermissionTestResult {

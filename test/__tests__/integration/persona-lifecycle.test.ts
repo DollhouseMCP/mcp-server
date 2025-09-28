@@ -246,7 +246,7 @@ describe('Persona Lifecycle Integration', () => {
       );
       
       const filePath = path.join(personasDir, 'error-sample.md');
-      const { promises: fs } = await import('fs');
+      const { promises: fs } = await import('node:fs');
       
       // FIX (SonarCloud S1143): Refactored to avoid throw statement with finally block
       // The pattern of throw before finally can mask errors and make debugging difficult
@@ -290,7 +290,7 @@ describe('Persona Lifecycle Integration', () => {
     
     it('should recover from corrupted persona files', async () => {
       // Create a corrupted file with invalid YAML that will cause parsing errors
-      const { promises: fs } = await import('fs');
+      const { promises: fs } = await import('node:fs');
       const corruptedPath = path.join(personasDir, 'corrupted.md');
       
       // This will cause gray-matter to fail parsing due to invalid YAML syntax
