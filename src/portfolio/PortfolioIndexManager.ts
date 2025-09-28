@@ -45,6 +45,15 @@ export interface IndexEntry {
   filename: string; // Base filename without extension
 }
 
+// Extended interface for sharded memory entries
+export interface ShardedMemoryIndexEntry extends IndexEntry {
+  shardInfo: {
+    shardCount: number;
+    shardDir: string;
+    metadataFile: string;
+  };
+}
+
 export interface PortfolioIndex {
   byName: Map<string, IndexEntry>;
   byFilename: Map<string, IndexEntry>;
@@ -73,15 +82,64 @@ export interface SearchResult {
 export class PortfolioIndexManager {
   private static instance: PortfolioIndexManager | null = null;
   private static instanceLock = false;
-  
+
   private index: PortfolioIndex | null = null;
   private lastBuilt: Date | null = null;
   private readonly TTL_MS = IndexConfigManager.getInstance().getConfig().index.ttlMinutes * 60 * 1000;
   private isBuilding = false;
   private buildPromise: Promise<void> | null = null;
 
+  // Retry configuration for file operations
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY_MS = 100;
+
   private constructor() {
     logger.debug('PortfolioIndexManager created');
+  }
+
+  /**
+   * Retry wrapper for file system operations
+   * Handles transient file system errors with exponential backoff
+   */
+  private async retryFileOperation<T>(
+    operation: () => Promise<T>,
+    context: string,
+    retries: number = this.MAX_RETRIES
+  ): Promise<T | null> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        const isLastAttempt = attempt === retries;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        // Check if error is retryable (transient file system errors)
+        const isRetryable = errorMessage.includes('EBUSY') ||
+                           errorMessage.includes('EAGAIN') ||
+                           errorMessage.includes('ENOENT') ||
+                           errorMessage.includes('ETIMEDOUT');
+
+        if (isLastAttempt || !isRetryable) {
+          logger.warn(`File operation failed after ${attempt} attempts: ${context}`, {
+            error: errorMessage,
+            attempt,
+            context
+          });
+          return null;
+        }
+
+        // Exponential backoff
+        const delay = this.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.debug(`Retrying file operation: ${context}`, {
+          attempt,
+          nextDelay: delay,
+          error: errorMessage
+        });
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    return null;
   }
 
   public static getInstance(): PortfolioIndexManager {
@@ -407,8 +465,12 @@ export class PortfolioIndexManager {
                   totalFiles++;
                 }
               } catch (error) {
-                logger.warn(`Failed to index memory file: ${file}`, {
-                  error: error instanceof Error ? error.message : String(error)
+                logger.warn(`Failed to index root memory file`, {
+                  file,
+                  path: path.join(elementDir, file),
+                  location: 'root',
+                  error: error instanceof Error ? error.message : String(error),
+                  errorType: error instanceof Error ? error.constructor.name : typeof error
                 });
               }
             }
@@ -438,8 +500,13 @@ export class PortfolioIndexManager {
                     totalFiles++;
                   }
                 } catch (error) {
-                  logger.warn(`Failed to index memory file: ${dateFolder}/${file}`, {
-                    error: error instanceof Error ? error.message : String(error)
+                  logger.warn(`Failed to index date folder memory file`, {
+                    file,
+                    path: path.join(folderPath, file),
+                    dateFolder,
+                    location: 'date-folder',
+                    error: error instanceof Error ? error.message : String(error),
+                    errorType: error instanceof Error ? error.constructor.name : typeof error
                   });
                 }
               }
@@ -473,20 +540,31 @@ export class PortfolioIndexManager {
                         entry.metadata.keywords.push('sharded');
                       }
 
-                      // Store shard count info
-                      (entry as any).shardInfo = {
-                        shardCount: shardYamlFiles.length,
-                        shardDir: path.join(dateFolder, subDir)
+                      // Create properly typed sharded entry
+                      const shardedEntry: ShardedMemoryIndexEntry = {
+                        ...entry,
+                        shardInfo: {
+                          shardCount: shardYamlFiles.length,
+                          shardDir: path.join(dateFolder, subDir),
+                          metadataFile: metadataFile
+                        }
                       };
 
-                      this.addToIndex(newIndex, entry);
+                      this.addToIndex(newIndex, shardedEntry);
                       processedFiles++;
                       totalFiles++;
                     }
                   } catch (error) {
-                    logger.warn(`Failed to index sharded memory: ${dateFolder}/${subDir}`, {
+                    logger.warn(`Failed to index sharded memory`, {
+                      subDir,
+                      dateFolder,
+                      path: path.join(subDirPath, metadataFile),
+                      metadataFile,
+                      shardCount: shardYamlFiles.length,
+                      location: 'sharded-subdirectory',
                       error: error instanceof Error ? error.message : String(error),
-                      metadataFile
+                      errorType: error instanceof Error ? error.constructor.name : typeof error,
+                      shardFiles: shardYamlFiles.slice(0, 5) // Log first 5 shard files for context
                     });
                   }
                 }

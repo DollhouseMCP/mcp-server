@@ -171,6 +171,78 @@ shardInfo:
     expect(memoryWithRecall).toBeDefined();
   });
 
+  it('should handle empty memory files gracefully', async () => {
+    // Create an empty memory file
+    const emptyMemoryPath = path.join(tempDir, '.dollhouse', 'portfolio', 'memories', '2025-09-28', 'empty-memory.yaml');
+    await fs.writeFile(emptyMemoryPath, '');
+
+    // Rebuild index
+    await indexManager.rebuildIndex();
+    const index = await indexManager.getIndex();
+    const memories = index.byType.get(ElementType.MEMORY) || [];
+
+    // Should still index other memories even if one is empty
+    expect(memories.length).toBeGreaterThan(0);
+
+    // Empty file should not crash the indexer
+    const emptyMemory = memories.find(m => m.metadata.name === 'empty-memory');
+    // It might create a default entry or skip it entirely - both are acceptable
+    if (emptyMemory) {
+      expect(emptyMemory.metadata.name).toBeDefined();
+    }
+  });
+
+  it('should handle malformed YAML gracefully', async () => {
+    // Create a malformed YAML file
+    const malformedPath = path.join(tempDir, '.dollhouse', 'portfolio', 'memories', '2025-09-28', 'malformed.yaml');
+    await fs.writeFile(malformedPath, `
+name: malformed memory
+tags: [unclosed bracket
+description: "Unclosed quote
+    `);
+
+    // Rebuild index - should not crash
+    await indexManager.rebuildIndex();
+    const index = await indexManager.getIndex();
+    const memories = index.byType.get(ElementType.MEMORY) || [];
+
+    // Other memories should still be indexed
+    expect(memories.length).toBeGreaterThan(0);
+
+    // Malformed file should not appear in index
+    const malformedMemory = memories.find(m => m.metadata.name === 'malformed memory');
+    expect(malformedMemory).toBeUndefined();
+  });
+
+  it('should handle mixed metadata structures', async () => {
+    // Create memory with metadata at different levels
+    const mixedPath = path.join(tempDir, '.dollhouse', 'portfolio', 'memories', '2025-09-28', 'mixed-metadata.yaml');
+    await fs.writeFile(mixedPath, `
+# Top-level metadata (legacy style)
+name: mixed-metadata-memory
+description: Memory with mixed structure
+tags:
+  - mixed
+  - structure
+
+# Also has metadata key (newer style)
+metadata:
+  version: 2.0.0
+  author: test-author
+
+entries:
+  - content: Test content
+    `);
+
+    await indexManager.rebuildIndex();
+
+    const mixedMemory = await indexManager.findByName('mixed-metadata-memory');
+    expect(mixedMemory).toBeDefined();
+    expect(mixedMemory?.metadata.description).toBe('Memory with mixed structure');
+    // Should prefer the metadata block for version
+    expect(mixedMemory?.metadata.version).toBe('2.0.0');
+  });
+
   it('should index sharded memories from subdirectories', async () => {
     const index = await indexManager.getIndex();
     const memories = index.byType.get(ElementType.MEMORY) || [];
