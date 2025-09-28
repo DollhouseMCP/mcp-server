@@ -279,7 +279,9 @@ export class GitHubRateLimiter {
 
       while (this.requestQueue.length > 0) {
         // Update auth status periodically
-        if (Math.random() < 0.1) { // 10% chance
+        // Use crypto for consistency, though this is not security-sensitive
+        const shouldUpdate = randomBytes(1)[0] < 26; // ~10% chance (26/256)
+        if (shouldUpdate) {
           await this.updateLimitsForAuthStatus();
         }
 
