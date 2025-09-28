@@ -282,7 +282,7 @@ export class DefaultElementProvider {
       }
       
       // SECURITY: Reject null bytes and other dangerous characters
-      if (normalizedPath.includes('\0') || normalizedPath.includes('\x00')) {
+      if (normalizedPath.includes('\0') || normalizedPath.includes('\x00')) { // NOSONAR - Null byte detection for security
         logger.warn(`[DefaultElementProvider] Null byte in path blocked: ${filePath}`);
         return false;
       }
