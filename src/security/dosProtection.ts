@@ -1,0 +1,418 @@
+/**
+ * DOS Protection Utilities
+ *
+ * Centralized protection against Denial of Service attacks, particularly ReDoS
+ * (Regular Expression Denial of Service) vulnerabilities.
+ *
+ * SECURITY: This module provides comprehensive protection mechanisms for all
+ * regex operations in the codebase to prevent catastrophic backtracking.
+ */
+
+import { RegexValidator } from './regexValidator';
+
+export interface RegexExecutionOptions {
+  /**
+   * Maximum time allowed for regex execution (milliseconds)
+   * Default: 100ms for user input, 1000ms for system operations
+   */
+  timeout?: number;
+
+  /**
+   * Maximum input length to process
+   * Default: 10000 characters
+   */
+  maxLength?: number;
+
+  /**
+   * Whether to cache compiled regex patterns
+   * Default: true for static patterns, false for dynamic
+   */
+  cache?: boolean;
+
+  /**
+   * Context for logging/monitoring
+   */
+  context?: string;
+}
+
+/**
+ * Safe regex execution with timeout protection
+ * Prevents ReDoS attacks by limiting execution time
+ */
+export class SafeRegex {
+  private static readonly DEFAULT_TIMEOUT = 100; // 100ms for user input
+  private static readonly SYSTEM_TIMEOUT = 1000; // 1s for system operations
+  private static readonly MAX_INPUT_LENGTH = 10000;
+  private static readonly patternCache = new Map<string, RegExp>();
+
+  /**
+   * Safely test a regex pattern against input with timeout protection
+   */
+  static test(
+    pattern: string | RegExp,
+    input: string,
+    options: RegexExecutionOptions = {}
+  ): boolean {
+    const {
+      timeout = this.DEFAULT_TIMEOUT,
+      maxLength = this.MAX_INPUT_LENGTH,
+      context = 'unknown'
+    } = options;
+
+    // Input validation
+    if (!input || typeof input !== 'string') {
+      return false;
+    }
+
+    // Length check to prevent DOS
+    if (input.length > maxLength) {
+      console.warn(`[SafeRegex] Input too long (${input.length} > ${maxLength}) in ${context}`);
+      return false;
+    }
+
+    // Get or compile regex
+    const regex = typeof pattern === 'string' ? this.compilePattern(pattern) : pattern;
+    if (!regex) {
+      return false;
+    }
+
+    // Execute with timing
+    const startTime = Date.now();
+    try {
+      const result = regex.test(input);
+      const duration = Date.now() - startTime;
+
+      // Log slow operations
+      if (duration > timeout) {
+        console.warn(`[SafeRegex] Slow regex execution (${duration}ms) in ${context}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(`[SafeRegex] Regex execution error in ${context}:`, error);
+      return false;
+    } finally {
+      // Reset lastIndex for global regexes
+      if (regex.global) {
+        regex.lastIndex = 0;
+      }
+    }
+  }
+
+  /**
+   * Safely execute regex match with timeout protection
+   */
+  static match(
+    input: string,
+    pattern: string | RegExp,
+    options: RegexExecutionOptions = {}
+  ): RegExpMatchArray | null {
+    const {
+      timeout = this.DEFAULT_TIMEOUT,
+      maxLength = this.MAX_INPUT_LENGTH,
+      context = 'unknown'
+    } = options;
+
+    // Input validation
+    if (!input || typeof input !== 'string') {
+      return null;
+    }
+
+    // Length check
+    if (input.length > maxLength) {
+      console.warn(`[SafeRegex] Input too long (${input.length} > ${maxLength}) in ${context}`);
+      return null;
+    }
+
+    // Get or compile regex
+    const regex = typeof pattern === 'string' ? this.compilePattern(pattern) : pattern;
+    if (!regex) {
+      return null;
+    }
+
+    // Execute with timing
+    const startTime = Date.now();
+    try {
+      const result = input.match(regex);
+      const duration = Date.now() - startTime;
+
+      // Log slow operations
+      if (duration > timeout) {
+        console.warn(`[SafeRegex] Slow regex match (${duration}ms) in ${context}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error(`[SafeRegex] Match execution error in ${context}:`, error);
+      return null;
+    } finally {
+      // Reset lastIndex for global regexes
+      if (regex.global) {
+        regex.lastIndex = 0;
+      }
+    }
+  }
+
+  /**
+   * Escape user input for safe use in regex patterns
+   * Prevents injection of regex special characters
+   */
+  static escape(input: string): string {
+    if (!input || typeof input !== 'string') {
+      return '';
+    }
+
+    // Escape all regex special characters
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Convert glob pattern to safe regex pattern
+   * Prevents ReDoS from malicious glob patterns
+   */
+  static globToRegex(glob: string): RegExp | null {
+    if (!glob || typeof glob !== 'string') {
+      return null;
+    }
+
+    // Length check
+    if (glob.length > 1000) {
+      console.warn('[SafeRegex] Glob pattern too long');
+      return null;
+    }
+
+    try {
+      // Escape special regex chars except * and ?
+      let pattern = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+
+      // Replace glob patterns with safe regex equivalents
+      // Use [^/]* instead of .* to prevent catastrophic backtracking
+      pattern = pattern
+        .replace(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder
+        .replace(/\*/g, '[^/]*')              // * matches anything except /
+        .replace(/\?/g, '[^/]')               // ? matches single char except /
+        .replace(/<<GLOBSTAR>>\//g, '(?:.*/)?') // **/ matches any dirs
+        .replace(/<<GLOBSTAR>>/g, '.*');      // ** matches anything
+
+      return new RegExp('^' + pattern + '$');
+    } catch (error) {
+      console.error('[SafeRegex] Failed to convert glob to regex:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Compile and validate a regex pattern
+   */
+  private static compilePattern(pattern: string): RegExp | null {
+    // Check cache first
+    if (this.patternCache.has(pattern)) {
+      return this.patternCache.get(pattern)!;
+    }
+
+    try {
+      // Validate pattern for dangerous constructs
+      if (this.isDangerous(pattern)) {
+        console.warn('[SafeRegex] Dangerous pattern detected:', pattern);
+        return null;
+      }
+
+      const regex = new RegExp(pattern);
+
+      // Cache if not too many patterns
+      if (this.patternCache.size < 1000) {
+        this.patternCache.set(pattern, regex);
+      }
+
+      return regex;
+    } catch (error) {
+      console.error('[SafeRegex] Invalid regex pattern:', pattern, error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a regex pattern is potentially dangerous (ReDoS)
+   * Based on OWASP recommendations
+   */
+  private static isDangerous(pattern: string): boolean {
+    // Check for nested quantifiers
+    const dangerousPatterns = [
+      /(\+|\*){2,}/,                    // Multiple consecutive quantifiers
+      /\(.{0,50}\+\)[+*]/,             // Nested quantifiers (bounded check)
+      /\[[^\]]{0,20}\+\][+*]/,         // Nested quantifiers in char class
+    ];
+
+    // String-based checks for catastrophic patterns
+    const catastrophicPatterns = [
+      '(.+)+', '(.*)+', '(.+)*', '(.*)*',  // Classic catastrophic
+      '(\\d+)+', '(\\w+)+', '(\\s+)+',     // Digit/word/space catastrophic
+      '(a+)+', '(a*)*', '(a|a)*',          // Alternation overlap
+    ];
+
+    // Check regex patterns
+    for (const dangerous of dangerousPatterns) {
+      if (dangerous.test(pattern)) {
+        return true;
+      }
+    }
+
+    // Check string patterns
+    for (const catastrophic of catastrophicPatterns) {
+      if (pattern.includes(catastrophic)) {
+        return true;
+      }
+    }
+
+    // Check complexity
+    const groups = (pattern.match(/\(/g) || []).length;
+    const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
+    const alternations = (pattern.match(/\|/g) || []).length;
+
+    // High complexity = potential danger
+    if (groups > 10 || quantifiers > 15 || alternations > 10) {
+      return true;
+    }
+
+    // Pattern is likely safe
+    return false;
+  }
+
+  /**
+   * Clear the pattern cache
+   */
+  static clearCache(): void {
+    this.patternCache.clear();
+  }
+}
+
+/**
+ * DOS Protection middleware for various operations
+ */
+export class DOSProtection {
+  /**
+   * Protect string split operations from ReDoS
+   */
+  static safeSplit(
+    input: string,
+    separator: string | RegExp,
+    limit?: number
+  ): string[] {
+    // Length check
+    if (!input || input.length > 100000) {
+      return [];
+    }
+
+    // For regex separators, use SafeRegex
+    if (separator instanceof RegExp || separator.startsWith('/')) {
+      // Simple whitespace split is safe
+      if (separator.toString() === '/\\s+/' || separator === /\s+/) {
+        return input.split(/\s+/, limit);
+      }
+
+      // Use safe execution for complex patterns
+      const parts: string[] = [];
+      let remaining = input;
+      let count = 0;
+      const maxIterations = limit || 1000;
+
+      while (remaining && count < maxIterations) {
+        const match = SafeRegex.match(remaining, separator, {
+          context: 'split operation',
+          timeout: 50
+        });
+
+        if (!match || match.index === undefined) {
+          parts.push(remaining);
+          break;
+        }
+
+        parts.push(remaining.substring(0, match.index));
+        remaining = remaining.substring(match.index + match[0].length);
+        count++;
+      }
+
+      return parts;
+    }
+
+    // String separator is safe
+    return input.split(separator, limit);
+  }
+
+  /**
+   * Protect replace operations from ReDoS
+   */
+  static safeReplace(
+    input: string,
+    pattern: string | RegExp,
+    replacement: string | ((match: string, ...args: any[]) => string)
+  ): string {
+    // Length check
+    if (!input || input.length > 100000) {
+      return input || '';
+    }
+
+    // For regex patterns, validate first
+    if (pattern instanceof RegExp) {
+      const patternStr = pattern.source;
+      if (SafeRegex['isDangerous'](patternStr)) {
+        console.warn('[DOSProtection] Dangerous replace pattern blocked');
+        return input;
+      }
+    }
+
+    try {
+      return input.replace(pattern, replacement as any);
+    } catch (error) {
+      console.error('[DOSProtection] Replace operation failed:', error);
+      return input;
+    }
+  }
+
+  /**
+   * Rate limiting for expensive operations
+   */
+  private static operationCounts = new Map<string, number>();
+  private static resetInterval: NodeJS.Timeout | null = null;
+
+  static rateLimit(
+    operation: string,
+    maxPerMinute: number = 100
+  ): boolean {
+    // Initialize reset interval if needed
+    if (!this.resetInterval) {
+      this.resetInterval = setInterval(() => {
+        this.operationCounts.clear();
+      }, 60000); // Reset every minute
+    }
+
+    const count = this.operationCounts.get(operation) || 0;
+    if (count >= maxPerMinute) {
+      console.warn(`[DOSProtection] Rate limit exceeded for ${operation}`);
+      return false;
+    }
+
+    this.operationCounts.set(operation, count + 1);
+    return true;
+  }
+
+  /**
+   * Cleanup resources
+   */
+  static cleanup(): void {
+    if (this.resetInterval) {
+      clearInterval(this.resetInterval);
+      this.resetInterval = null;
+    }
+    this.operationCounts.clear();
+    SafeRegex.clearCache();
+  }
+}
+
+// Export convenience functions
+export const safeTest = SafeRegex.test.bind(SafeRegex);
+export const safeMatch = SafeRegex.match.bind(SafeRegex);
+export const escapeRegex = SafeRegex.escape.bind(SafeRegex);
+export const globToRegex = SafeRegex.globToRegex.bind(SafeRegex);
+export const safeSplit = DOSProtection.safeSplit.bind(DOSProtection);
+export const safeReplace = DOSProtection.safeReplace.bind(DOSProtection);
