@@ -15,6 +15,7 @@ import { TokenManager } from '../security/tokenManager.js';
 import { logger } from './logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { randomBytes } from 'crypto';
 
 export interface GitHubRateLimitInfo {
   limit: number;
@@ -67,16 +68,27 @@ export class GitHubRateLimiter {
    * Ensure rate limiter is initialized with proper auth status
    */
   private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return;
-
-    // Prevent multiple concurrent initializations
+    // FIX: Check promise first to address potential race condition
     if (this.initializationPromise) {
       return this.initializationPromise;
     }
 
+    if (this.initialized) return;
+
+    // Prevent multiple concurrent initializations
     this.initializationPromise = this.updateLimitsForAuthStatus()
-      .finally(() => {
+      .then(() => {
+        // FIX: Only set initialized to true on success
         this.initialized = true;
+      })
+      .catch((error) => {
+        // FIX: Better error recovery - don't mark as initialized on failure
+        logger.warn('Failed to initialize with auth status, using defaults', { error });
+        // Don't set initialized to true, allow retry on next call
+        // Re-throw to maintain promise chain behavior
+        throw error;
+      })
+      .finally(() => {
         this.initializationPromise = undefined;
       });
 
@@ -168,7 +180,10 @@ export class GitHubRateLimiter {
       operation = normalizedOperation.normalizedContent;
     }
     
-    const requestId = `${operation}-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    // FIX: Use crypto.randomBytes instead of Math.random() for secure ID generation
+    // SonarCloud: Math.random() is not cryptographically secure
+    const randomPart = randomBytes(6).toString('hex');
+    const requestId = `${operation}-${Date.now()}-${randomPart}`;
     
     return new Promise<T>((resolve, reject) => {
       const request: GitHubApiRequest = {
@@ -254,7 +269,13 @@ export class GitHubRateLimiter {
 
     try {
       // Ensure initialization before processing
-      await this.ensureInitialized();
+      // If initialization fails, we continue with default rate limiter
+      try {
+        await this.ensureInitialized();
+      } catch (initError) {
+        // Initialization failed but we have fallback defaults, continue processing
+        logger.debug('Continuing with default rate limits after init failure', { error: initError });
+      }
 
       while (this.requestQueue.length > 0) {
         // Update auth status periodically
