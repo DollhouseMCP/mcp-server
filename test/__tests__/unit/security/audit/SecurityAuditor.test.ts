@@ -7,6 +7,7 @@ import type { SecurityAuditConfig } from '../../../../../src/security/audit/type
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { VULNERABLE_PATTERNS } from '../../../../__fixtures__/testCredentials.js';
 
 describe('SecurityAuditor', () => {
   let tempDir: string;
@@ -87,8 +88,8 @@ describe('SecurityAuditor', () => {
 
     test('should detect hardcoded secrets', async () => {
       const vulnerableCode = `
-        const apiKey = "sk-1234567890abcdef1234567890abcdef";
-        const password = "super_secret_password_123";
+        const apiKey = "${VULNERABLE_PATTERNS.REALISTIC_API_KEY}";
+        const password = "${VULNERABLE_PATTERNS.REALISTIC_PASSWORD}";
       `;
       
       await fs.writeFile(
@@ -243,7 +244,7 @@ describe('SecurityAuditor', () => {
 
   describe('Build Failure Logic', () => {
     test('should fail build on critical findings', async () => {
-      const code = `const password = "hardcoded_password_123";`;
+      const code = `const password = "${VULNERABLE_PATTERNS.HARDCODED_SECRET}";`;
       await fs.writeFile(path.join(tempDir, 'critical.js'), code);
       
       await expect(auditor.audit(tempDir)).rejects.toThrow(/Security audit failed/);
