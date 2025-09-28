@@ -28,7 +28,7 @@ export class PathValidator {
     }
 
     // Remove any null bytes
-    const cleanPath = userPath.replace(/\u0000/g, '');
+    const cleanPath = userPath.replace(/\u0000/g, ''); // NOSONAR - Removing null bytes for security
     
     // Normalize and resolve path
     const normalizedPath = path.normalize(cleanPath);
