@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.9.11] - 2025-09-28
+
+### Fixed
+- **SonarCloud Quality Improvements**
+  - Resolved S1143 violation: unsafe throw in finally block (PR #1162)
+  - Fixed async constructor pattern in GitHubRateLimiter (PR #1161)
+  - Addressed remaining test file reliability issues (PR #1158)
+  - Removed SonarCloud analysis artifacts from tracking (PR #1157)
+  - Fixed remaining source file bugs (PR #1156)
+  - Resolved regex precedence and ReDoS vulnerabilities (PR #1155)
+  - Fixed control character literal usage (PR #1154)
+  - Fixed unsafe throw in finally blocks (PR #1153)
+  - Removed hardcoded token from validation script (PR #1152)
+
+### Security
+- Fixed command injection vulnerabilities in GitHub Actions workflows (Issue #1149)
+- Resolved ReDoS vulnerabilities in RelationshipManager by replacing regex with string methods (Issue #1144)
+
+### Improved
+- **Test Utilities**: Extracted reusable permission test helpers for cross-platform compatibility
+- **Code Quality**: Achieved 82% reduction in SonarCloud reliability bugs (from 55 to 10)
+- **Security Posture**: All critical and high severity security issues resolved
+
 ## [1.9.10] - 2025-09-27
 
 ### Added
