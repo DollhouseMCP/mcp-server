@@ -348,8 +348,11 @@ export class DOSProtection {
     replacement: string | ((match: string, ...args: any[]) => string)
   ): string {
     // Length check
-    if (!input || input.length > 100000) {
-      return input || '';
+    if (!input) {
+      return '';
+    }
+    if (input.length > 100000) {
+      return '';  // Return empty string for overly long input
     }
 
     // For regex patterns, validate first
