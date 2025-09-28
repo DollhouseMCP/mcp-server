@@ -141,16 +141,34 @@ export class GitHubRateLimiter {
     }
   }
 
+  private statusCheckInterval?: NodeJS.Timeout;
+
   /**
    * Setup periodic check for rate limit status
+   * FIX: Store interval reference to allow cleanup in tests
    */
   private setupPeriodicStatusCheck(): void {
+    // Clear any existing interval
+    if (this.statusCheckInterval) {
+      clearInterval(this.statusCheckInterval);
+    }
+
     // Check auth status every 5 minutes
-    setInterval(() => {
+    this.statusCheckInterval = setInterval(() => {
       this.updateLimitsForAuthStatus().catch(error => {
         logger.warn('Periodic auth status check failed', { error });
       });
     }, 5 * 60 * 1000);
+  }
+
+  /**
+   * Cleanup method for tests
+   */
+  public cleanup(): void {
+    if (this.statusCheckInterval) {
+      clearInterval(this.statusCheckInterval);
+      this.statusCheckInterval = undefined;
+    }
   }
 
   /**
