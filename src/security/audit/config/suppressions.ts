@@ -98,6 +98,16 @@ export const suppressions: Suppression[] = [
     reason: 'Test files use fake tokens and secrets for testing security features'
   },
   {
+    rule: 'OWASP-A01-001',
+    file: 'test/__fixtures__/**/*',
+    reason: 'Test fixtures contain intentional mock credentials clearly marked as FAKE/TEST/NOT_REAL'
+  },
+  {
+    rule: '*',
+    file: 'test/__fixtures__/testCredentials.ts',
+    reason: 'Centralized test credentials file with intentionally fake values for testing'
+  },
+  {
     rule: 'CWE-89-001',
     file: '__tests__/**/*',
     reason: 'Test files contain SQL injection patterns for security testing'
