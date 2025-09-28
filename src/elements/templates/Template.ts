@@ -507,25 +507,48 @@ export class Template extends BaseElement implements IElement {
    */
   private isDangerousRegex(pattern: string): boolean {
     // Check for nested quantifiers which can cause exponential backtracking
+    // SECURITY FIX: Use safe, specific patterns to detect dangerous regex constructs
+    // Previously: Used [^)]* patterns that could cause ReDoS in detection itself
+    // Now: Use safer, bounded character classes and specific string checks
     const dangerousPatterns = [
-      /(\+|\*){2,}/,           // Multiple quantifiers
-      /\([^)]*\+\)[+*]/,       // Quantified groups with quantifiers inside
-      /\[[^\]]*\+\][+*]/,      // Quantified character classes with quantifiers
-      /(\\[dws])\1{2,}/,       // Repeated character classes
-      /\(\?\<[!=][^)]+\)/,     // Complex lookbehinds
+      /(\+|\*){2,}/,                    // Multiple consecutive quantifiers
+      /\(.{0,50}\+\)[+*]/,             // Quantified groups with quantifiers inside (bounded)
+      /\[[^\]]{0,20}\+\][+*]/,         // Quantified character classes with quantifiers (bounded)
+      /(\\[dws])\1{2,}/,               // Repeated character classes
+      /\(\?\<[!=][^)]{0,30}\)/,        // Complex lookbehinds (bounded)
+    ];
+
+    // String-based checks for common catastrophic patterns (safer than regex)
+    const dangerousStringPatterns = [
+      '(.+)+',    // (.+)+ catastrophic backtracking
+      '(.*)++',   // (.*)++
+      '(.*)*',    // (.*)* catastrophic backtracking
+      '(.+)*',    // (.+)*
+      '(a+)+',    // (a+)+ type patterns
+      '(a*)*',    // (a*)* type patterns
+      '(a|a)*',   // Overlapping alternation
+      '(a|b)*+',  // Possessive quantifiers with alternation
     ];
     
+    // Check regex-based dangerous patterns
     for (const dangerous of dangerousPatterns) {
       if (dangerous.test(pattern)) {
         return true;
       }
     }
-    
+
+    // Check string-based dangerous patterns (safer than complex regex)
+    for (const dangerousString of dangerousStringPatterns) {
+      if (pattern.includes(dangerousString)) {
+        return true;
+      }
+    }
+
     // Check for excessive backtracking potential
-    // Count groups and quantifiers
+    // Count groups and quantifiers (using safe, simple regex)
     const groups = (pattern.match(/\(/g) || []).length;
     const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
-    
+
     // If there are many groups and quantifiers, it's potentially dangerous
     if (groups > 5 && quantifiers > 5) {
       return true;
