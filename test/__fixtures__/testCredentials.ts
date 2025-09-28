@@ -70,11 +70,17 @@ export function getTestCredential(key: keyof typeof TEST_CREDENTIALS): string {
  * Previously: Used Math.random() which is predictable
  * Now: Uses crypto.randomInt() for cryptographically secure randomness
  * SonarCloud: Resolves "Make sure using this pseudorandom number generator is safe" hotspot
+ *
+ * @param prefix - Optional prefix for the token (defaults to 'test_dollhouse')
+ * @returns A unique fake test token string
  */
-export function generateTestToken(prefix = 'test'): string {
-  const timestamp = Date.now();
+export function generateTestToken(prefix = 'test_dollhouse'): string {
+  const timestamp: number = Date.now();
   // Use crypto.randomInt() for secure random generation (0-9999)
   // This provides cryptographically secure randomness even for test tokens
-  const random = randomInt(0, 10000);
+  const random: number = randomInt(0, 10000);
+
+  // Use more specific prefix to avoid potential conflicts with real tokens
+  // Format: prefix_FAKE_timestamp_random_NOT_REAL
   return `${prefix}_FAKE_${timestamp}_${random}_NOT_REAL`;
 }
