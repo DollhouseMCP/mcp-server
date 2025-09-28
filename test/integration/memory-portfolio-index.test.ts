@@ -6,9 +6,9 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { PortfolioIndexManager } from '../../src/portfolio/PortfolioIndexManager.js';
 import { ElementType } from '../../src/portfolio/types.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 describe('PortfolioIndexManager Memory Indexing (Issue #1188)', () => {
   let tempDir: string;

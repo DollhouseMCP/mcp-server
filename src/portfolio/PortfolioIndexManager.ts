@@ -635,7 +635,7 @@ export class PortfolioIndexManager {
 
       // Build metadata with memory-specific defaults
       const metadata = {
-        name: metadataSource.name || filename.replace(/-/g, ' '),
+        name: metadataSource.name || filename.replaceAll('-', ' '),
         description: metadataSource.description || 'Memory element',
         version: metadataSource.version || '1.0.0',
         author: metadataSource.author,
