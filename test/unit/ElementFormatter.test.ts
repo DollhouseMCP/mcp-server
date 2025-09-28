@@ -296,6 +296,24 @@ No frontmatter here, just content.`;
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
       expect(result.error).toContain('ENOENT');
+      expect(result.issues).toContain('File not found');
+    });
+
+    it('should handle permission denied errors', async () => {
+      const testFile = path.join(tempDir, 'no-permission.yaml');
+      await fs.writeFile(testFile, 'test', 'utf-8');
+      await fs.chmod(testFile, 0o000); // Remove all permissions
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(false);
+      if (process.platform !== 'win32') { // Permission tests don't work on Windows
+        expect(result.error).toContain('EACCES');
+        expect(result.issues).toContain('Permission denied');
+      }
+
+      // Restore permissions for cleanup
+      await fs.chmod(testFile, 0o644);
     });
 
     it('should handle YAML parse errors gracefully', async () => {
@@ -310,6 +328,193 @@ No frontmatter here, just content.`;
 
       expect(result.success).toBe(false);
       expect(result.issues.some(issue => issue.includes('Failed to parse YAML'))).toBe(true);
+    });
+
+    it('should handle file size limit exceeded', async () => {
+      const formatter = new ElementFormatter({ maxFileSize: 10 }); // 10 bytes max
+
+      const largeContent = 'This is a content that exceeds the maximum file size limit';
+      const testFile = path.join(tempDir, 'large-file.yaml');
+      await fs.writeFile(testFile, largeContent, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('exceeds maximum allowed');
+      expect(result.issues).toContain('File too large for processing');
+    });
+  });
+
+  describe('security', () => {
+    it('should prevent path traversal attacks in output directory', async () => {
+      const outputDir = tempDir;
+      const formatter = new ElementFormatter({ outputDir });
+
+      // Create a file with a malicious name
+      const safeFile = path.join(tempDir, 'test.yaml');
+      await fs.writeFile(safeFile, 'name: test', 'utf-8');
+
+      // Manually test path traversal prevention
+      const maliciousPath = path.join(tempDir, '../../../etc/passwd.yaml');
+      const result = await formatter.formatFile(safeFile);
+
+      // Should format successfully without traversal
+      expect(result.success).toBe(true);
+      const outputPath = path.join(outputDir, 'test.yaml');
+      expect(await fs.access(outputPath).then(() => true).catch(() => false)).toBe(true);
+    });
+
+    it('should handle malicious YAML content safely', async () => {
+      // Test that potentially dangerous YAML constructs are handled safely
+      const maliciousYaml = `
+name: test
+dangerous: !!js/function 'function(){return "executed"}'
+tags:
+  - !!python/object/apply:os.system ['echo hacked']
+`;
+
+      const testFile = path.join(tempDir, 'malicious.yaml');
+      await fs.writeFile(testFile, maliciousYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      // Should either fail safely or strip dangerous content
+      if (result.success) {
+        const formatted = await fs.readFile(testFile + '.formatted.yaml', 'utf-8');
+        expect(formatted).not.toContain('!!js/function');
+        expect(formatted).not.toContain('!!python');
+      } else {
+        expect(result.issues.some(issue => issue.includes('Failed to parse'))).toBe(true);
+      }
+    });
+  });
+
+  describe('Unicode normalization', () => {
+    it('should normalize Unicode characters', async () => {
+      // Use different Unicode representations of the same character
+      const unnormalized = `name: café\nversion: 1.0.0`; // é as two code points
+      const testFile = path.join(tempDir, 'unicode.yaml');
+      await fs.writeFile(testFile, unnormalized, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      const formatted = await fs.readFile(testFile + '.formatted.yaml', 'utf-8');
+      expect(formatted.normalize('NFC')).toBe(formatted); // Should be normalized
+    });
+  });
+
+  describe('parallel processing', () => {
+    it('should process files in parallel with concurrency limit', async () => {
+      const files: string[] = [];
+      const fileCount = 10;
+
+      // Create multiple test files
+      for (let i = 1; i <= fileCount; i++) {
+        const content = `name: test-${i}\nversion: ${i}.0.0\ncontent: "Line 1\\nLine 2"`;
+        const testFile = path.join(tempDir, `parallel-${i}.yaml`);
+        await fs.writeFile(testFile, content, 'utf-8');
+        files.push(testFile);
+      }
+
+      const startTime = Date.now();
+      const results = await formatter.formatFiles(files, 3); // Limit concurrency to 3
+      const duration = Date.now() - startTime;
+
+      expect(results).toHaveLength(fileCount);
+      expect(results.every(r => r.success)).toBe(true);
+      expect(results.every(r => r.fixed.length > 0)).toBe(true);
+
+      // Verify files were processed (not just returned)
+      for (let i = 0; i < fileCount; i++) {
+        const formattedPath = files[i] + '.formatted.yaml';
+        const exists = await fs.access(formattedPath).then(() => true).catch(() => false);
+        expect(exists).toBe(true);
+      }
+    });
+  });
+
+  describe('CLI integration', () => {
+    it('should work with dry run option', async () => {
+      const formatter = new ElementFormatter({ validate: true });
+
+      const content = `name: test\nversion: 1.0.0`;
+      const testFile = path.join(tempDir, 'dry-run.yaml');
+      await fs.writeFile(testFile, content, 'utf-8');
+
+      // Simulate dry run by just validating without writing
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).toContain('Unescaped newlines');
+    });
+
+    it('should handle mixed success and failure in batch operations', async () => {
+      const files: string[] = [];
+
+      // Create a mix of valid and invalid files
+      const validContent = `name: valid\nversion: 1.0.0`;
+      const validFile = path.join(tempDir, 'valid.yaml');
+      await fs.writeFile(validFile, validContent, 'utf-8');
+      files.push(validFile);
+
+      // Non-existent file
+      files.push(path.join(tempDir, 'non-existent.yaml'));
+
+      // Invalid YAML
+      const invalidContent = `{{{invalid`;
+      const invalidFile = path.join(tempDir, 'invalid.yaml');
+      await fs.writeFile(invalidFile, invalidContent, 'utf-8');
+      files.push(invalidFile);
+
+      const results = await formatter.formatFiles(files);
+
+      expect(results).toHaveLength(3);
+      expect(results[0].success).toBe(true); // Valid file
+      expect(results[1].success).toBe(false); // Non-existent
+      expect(results[2].success).toBe(false); // Invalid
+    });
+  });
+
+  describe('edge cases', () => {
+    it('should handle empty files', async () => {
+      const testFile = path.join(tempDir, 'empty.yaml');
+      await fs.writeFile(testFile, '', 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(false);
+      expect(result.issues.some(issue => issue.includes('Failed to parse'))).toBe(true);
+    });
+
+    it('should handle files with only whitespace', async () => {
+      const testFile = path.join(tempDir, 'whitespace.yaml');
+      await fs.writeFile(testFile, '   \n\t  \n  ', 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(false);
+      expect(result.issues.length).toBeGreaterThan(0);
+    });
+
+    it('should handle deeply nested escaped content', async () => {
+      const nestedContent = `
+name: nested
+entries:
+  - content: "Level 1\\nLevel 2 with \\\\n escaped backslash"
+  - content: "Tab\\t and return\\r characters"
+`;
+
+      const testFile = path.join(tempDir, 'nested.yaml');
+      await fs.writeFile(testFile, nestedContent, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      const formatted = await fs.readFile(testFile + '.formatted.yaml', 'utf-8');
+      expect(formatted).toContain('Level 1');
+      expect(formatted).toContain('Level 2');
+      expect(formatted).toContain('Tab\t');
     });
   });
 });

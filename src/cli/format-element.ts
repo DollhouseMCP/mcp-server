@@ -39,77 +39,11 @@ program
   .option('--dry-run', 'Show what would be formatted without changes', false)
   .action(async (files: string[], options) => {
     try {
-      // FIX: LOW - Add SecurityMonitor audit logging for CLI operations
-      SecurityMonitor.logSecurityEvent({
-        type: 'FILE_COPIED',
-        severity: 'LOW',
-        source: 'format-element CLI',
-        details: `Starting format operation: ${options.all ? 'all elements' : files.length + ' files'}`
-      });
-      const formatter = new ElementFormatter({
-        backup: options.backup,
-        inPlace: options.inPlace,
-        validate: options.validate,
-        outputDir: options.outputDir
-      });
-
-      let results: FormatterResult[] = [];
-
-      if (options.all) {
-        // Format all elements
-        console.log(chalk.blue('Formatting all portfolio elements...'));
-        const portfolioManager = PortfolioManager.getInstance();
-
-        for (const elementType of Object.values(ElementType)) {
-          console.log(chalk.gray(`\nFormatting ${elementType}...`));
-          const elementDir = portfolioManager.getElementDir(elementType);
-          const parentDir = path.dirname(elementDir);
-          const typeResults = await formatter.formatElementType(elementType, parentDir);
-          results.push(...typeResults);
-        }
-
-      } else if (options.type) {
-        // Format specific element type
-        const elementType = options.type as ElementType;
-        if (!Object.values(ElementType).includes(elementType)) {
-          console.error(chalk.red(`Invalid element type: ${options.type}`));
-          console.log('Valid types:', Object.values(ElementType).join(', '));
-          process.exit(1);
-        }
-
-        console.log(chalk.blue(`Formatting all ${elementType} elements...`));
-        const portfolioManager = PortfolioManager.getInstance();
-        const elementDir = portfolioManager.getElementDir(elementType);
-        const parentDir = path.dirname(elementDir);
-        results = await formatter.formatElementType(elementType, parentDir);
-
-      } else if (files.length > 0) {
-        // Format specific files
-        console.log(chalk.blue(`Formatting ${files.length} file(s)...`));
-
-        if (options.dryRun) {
-          // Dry run - just analyze
-          for (const file of files) {
-            console.log(chalk.gray(`Would format: ${file}`));
-          }
-          return;
-        }
-
-        results = await formatter.formatFiles(files);
-
-      } else {
-        // No input specified
-        console.error(chalk.red('No files specified. Use --help for usage.'));
-        process.exit(1);
-      }
-
-      // Display results
+      logCliOperation(files, options);
+      const formatter = createFormatter(options);
+      const results = await processFormatOperation(files, options, formatter);
       displayResults(results, options.dryRun);
-
-      // Exit with appropriate code
-      const hasErrors = results.some(r => !r.success);
-      process.exit(hasErrors ? 1 : 0);
-
+      exitWithCode(results);
     } catch (error) {
       console.error(chalk.red('Failed to format elements:'), error);
       process.exit(1);
@@ -117,54 +51,225 @@ program
   });
 
 /**
+ * Log CLI operation for audit
+ */
+function logCliOperation(files: string[], options: any): void {
+  SecurityMonitor.logSecurityEvent({
+    type: 'FILE_COPIED',
+    severity: 'LOW',
+    source: 'format-element CLI',
+    details: `Starting format operation: ${options.all ? 'all elements' : files.length + ' files'}`
+  });
+}
+
+/**
+ * Create formatter with options
+ */
+function createFormatter(options: any): ElementFormatter {
+  return new ElementFormatter({
+    backup: options.backup,
+    inPlace: options.inPlace,
+    validate: options.validate,
+    outputDir: options.outputDir
+  });
+}
+
+/**
+ * Process format operation based on options
+ */
+async function processFormatOperation(
+  files: string[],
+  options: any,
+  formatter: ElementFormatter
+): Promise<FormatterResult[]> {
+  if (options.all) {
+    return formatAllElements(formatter);
+  } else if (options.type) {
+    return formatElementType(options.type, formatter);
+  } else if (files.length > 0) {
+    return formatSpecificFiles(files, options, formatter);
+  } else {
+    console.error(chalk.red('No files specified. Use --help for usage.'));
+    process.exit(1);
+  }
+}
+
+/**
+ * Format all elements in portfolio
+ */
+async function formatAllElements(formatter: ElementFormatter): Promise<FormatterResult[]> {
+  console.log(chalk.blue('Formatting all portfolio elements...'));
+  const portfolioManager = PortfolioManager.getInstance();
+  const results: FormatterResult[] = [];
+
+  for (const elementType of Object.values(ElementType)) {
+    console.log(chalk.gray(`\nFormatting ${elementType}...`));
+    const elementDir = portfolioManager.getElementDir(elementType);
+    const parentDir = path.dirname(elementDir);
+    const typeResults = await formatter.formatElementType(elementType, parentDir);
+    results.push(...typeResults);
+  }
+
+  return results;
+}
+
+/**
+ * Format specific element type
+ */
+async function formatElementType(
+  type: string,
+  formatter: ElementFormatter
+): Promise<FormatterResult[]> {
+  const elementType = type as ElementType;
+  if (!Object.values(ElementType).includes(elementType)) {
+    console.error(chalk.red(`Invalid element type: ${type}`));
+    console.log('Valid types:', Object.values(ElementType).join(', '));
+    process.exit(1);
+  }
+
+  console.log(chalk.blue(`Formatting all ${elementType} elements...`));
+  const portfolioManager = PortfolioManager.getInstance();
+  const elementDir = portfolioManager.getElementDir(elementType);
+  const parentDir = path.dirname(elementDir);
+  return formatter.formatElementType(elementType, parentDir);
+}
+
+/**
+ * Format specific files
+ */
+async function formatSpecificFiles(
+  files: string[],
+  options: any,
+  formatter: ElementFormatter
+): Promise<FormatterResult[]> {
+  console.log(chalk.blue(`Formatting ${files.length} file(s)...`));
+
+  if (options.dryRun) {
+    for (const file of files) {
+      console.log(chalk.gray(`Would format: ${file}`));
+    }
+    return [];
+  }
+
+  return formatter.formatFiles(files);
+}
+
+/**
+ * Exit with appropriate code based on results
+ */
+function exitWithCode(results: FormatterResult[]): void {
+  const hasErrors = results.some(r => !r.success);
+  process.exit(hasErrors ? 1 : 0);
+}
+
+/**
  * Display formatting results
+ * Refactored to reduce cognitive complexity
  */
 function displayResults(results: FormatterResult[], dryRun: boolean): void {
+  const { successful, failed } = categorizeResults(results);
+
+  displayResultsSummary(successful, failed);
+  displayResultsDetails(results, failed.length);
+  displayStatsSummary(results, dryRun);
+}
+
+/**
+ * Categorize results into successful and failed
+ */
+function categorizeResults(results: FormatterResult[]): { successful: FormatterResult[]; failed: FormatterResult[] } {
   const successful = results.filter(r => r.success);
   const failed = results.filter(r => !r.success);
+  return { successful, failed };
+}
 
+/**
+ * Display results summary
+ */
+function displayResultsSummary(successful: FormatterResult[], failed: FormatterResult[]): void {
   console.log('\n' + chalk.bold('Formatting Results:'));
   console.log(chalk.green(`✓ ${successful.length} file(s) formatted successfully`));
 
   if (failed.length > 0) {
     console.log(chalk.red(`✗ ${failed.length} file(s) failed`));
   }
+}
 
-  // Show details for each result
-  if (results.length <= 10 || failed.length > 0) {
-    console.log('\n' + chalk.bold('Details:'));
-
-    for (const result of results) {
-      const icon = result.success ? chalk.green('✓') : chalk.red('✗');
-      const fileName = path.basename(result.filePath);
-
-      console.log(`\n${icon} ${chalk.cyan(fileName)}`);
-
-      if (result.issues.length > 0) {
-        console.log(chalk.yellow('  Issues found:'));
-        for (const issue of result.issues) {
-          console.log(chalk.yellow(`    - ${issue}`));
-        }
-      }
-
-      if (result.fixed.length > 0) {
-        console.log(chalk.green('  Fixed:'));
-        for (const fix of result.fixed) {
-          console.log(chalk.green(`    - ${fix}`));
-        }
-      }
-
-      if (result.error) {
-        console.log(chalk.red(`  Error: ${result.error}`));
-      }
-
-      if (result.backupPath) {
-        console.log(chalk.gray(`  Backup: ${result.backupPath}`));
-      }
-    }
+/**
+ * Display detailed results
+ */
+function displayResultsDetails(results: FormatterResult[], failedCount: number): void {
+  if (results.length > 10 && failedCount === 0) {
+    return; // Skip details for large successful batches
   }
 
-  // Summary stats
+  console.log('\n' + chalk.bold('Details:'));
+  for (const result of results) {
+    displaySingleResult(result);
+  }
+}
+
+/**
+ * Display a single result
+ */
+function displaySingleResult(result: FormatterResult): void {
+  const icon = result.success ? chalk.green('✓') : chalk.red('✗');
+  const fileName = path.basename(result.filePath);
+
+  console.log(`\n${icon} ${chalk.cyan(fileName)}`);
+
+  displayResultIssues(result);
+  displayResultFixes(result);
+  displayResultError(result);
+  displayResultBackup(result);
+}
+
+/**
+ * Display result issues
+ */
+function displayResultIssues(result: FormatterResult): void {
+  if (result.issues.length === 0) return;
+
+  console.log(chalk.yellow('  Issues found:'));
+  for (const issue of result.issues) {
+    console.log(chalk.yellow(`    - ${issue}`));
+  }
+}
+
+/**
+ * Display result fixes
+ */
+function displayResultFixes(result: FormatterResult): void {
+  if (result.fixed.length === 0) return;
+
+  console.log(chalk.green('  Fixed:'));
+  for (const fix of result.fixed) {
+    console.log(chalk.green(`    - ${fix}`));
+  }
+}
+
+/**
+ * Display result error
+ */
+function displayResultError(result: FormatterResult): void {
+  if (result.error) {
+    console.log(chalk.red(`  Error: ${result.error}`));
+  }
+}
+
+/**
+ * Display result backup path
+ */
+function displayResultBackup(result: FormatterResult): void {
+  if (result.backupPath) {
+    console.log(chalk.gray(`  Backup: ${result.backupPath}`));
+  }
+}
+
+/**
+ * Display statistics summary
+ */
+function displayStatsSummary(results: FormatterResult[], dryRun: boolean): void {
   console.log('\n' + chalk.bold('Summary:'));
   const totalIssues = results.reduce((sum, r) => sum + r.issues.length, 0);
   const totalFixes = results.reduce((sum, r) => sum + r.fixed.length, 0);

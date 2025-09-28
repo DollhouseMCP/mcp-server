@@ -75,6 +75,7 @@ export class ElementFormatter {
 
   /**
    * Format a single element file
+   * Refactored to reduce cognitive complexity by extracting methods
    */
   async formatFile(filePath: string): Promise<FormatterResult> {
     // FIX: MEDIUM - Normalize Unicode in file path
@@ -87,136 +88,181 @@ export class ElementFormatter {
     };
 
     try {
-      // Security: Check file size before reading
-      const stats = await fs.stat(filePath);
-      if (stats.size > this.options.maxFileSize) {
-        result.error = `File size (${stats.size} bytes) exceeds maximum allowed (${this.options.maxFileSize} bytes)`;
-        result.issues.push('File too large for processing');
+      // Check file size
+      const stats = await this.validateFileSize(filePath, result);
+      if (stats === null) return result;
+
+      // Read and normalize content
+      const content = await this.readAndNormalizeFile(filePath, stats);
+
+      // Format content
+      const formatted = await this.formatContent(filePath, content, result);
+
+      // Validate if needed
+      if (!await this.validateFormattedContent(formatted, filePath, result)) {
         return result;
       }
 
-      // Read the file
-      let content = await fs.readFile(filePath, 'utf-8');
-
-      // FIX: MEDIUM - Normalize Unicode in content
-      content = this.normalizeUnicode(content);
-
-      // Log file operation for security audit
-      SecurityMonitor.logSecurityEvent({
-        type: 'FILE_COPIED',
-        severity: 'LOW',
-        source: 'ElementFormatter',
-        details: `Processing file: ${filePath} (${stats.size} bytes)`
-      });
-
-      // Detect element type from path
-      const elementType = this.detectElementType(filePath);
-
-      // Format based on type
-      let formatted: string;
-      if (elementType === ElementType.MEMORY) {
-        formatted = await this.formatMemory(content, result);
-      } else {
-        formatted = await this.formatStandardElement(content, result);
-      }
-
-      // Validate if requested
-      if (this.options.validate) {
-        try {
-          // FIX: HIGH - Use SecureYamlParser instead of direct yaml.load
-          // For pure YAML (memories), we need to wrap in frontmatter format for SecureYamlParser
-          const yamlToValidate = elementType === ElementType.MEMORY
-            ? `---\n${formatted}\n---\n`
-            : formatted;
-
-          // SecureYamlParser handles validation internally
-          SecureYamlParser.parse(yamlToValidate, {
-            validateContent: true,
-            validateFields: false // Don't validate fields for generic elements
-          });
-
-          result.fixed.push('YAML validation passed');
-        } catch (error) {
-          result.issues.push(`YAML validation failed: ${error}`);
-          result.success = false;
-          SecurityMonitor.logSecurityEvent({
-            type: 'YAML_PARSING_WARNING',
-            severity: 'MEDIUM',
-            source: 'ElementFormatter',
-            details: `YAML validation failed for ${filePath}`,
-            additionalData: {
-              error: error instanceof Error ? error.message : String(error)
-            }
-          });
-          return result;
-        }
-      }
-
-      // Create backup if requested (works independently of inPlace)
-      if (this.options.backup) {
-        const backupPath = filePath + '.backup';
-        await fs.copyFile(filePath, backupPath);
-        result.backupPath = backupPath;
-        result.fixed.push(`Created backup at ${backupPath}`);
-
-        // FIX: LOW - Use SecurityMonitor for backup audit logging
-        SecurityMonitor.logSecurityEvent({
-          type: 'FILE_COPIED',
-          severity: 'LOW',
-          source: 'ElementFormatter',
-          details: `Backup created: ${backupPath}`,
-          additionalData: {
-            originalFile: filePath,
-            backupFile: backupPath
-          }
-        });
-      }
+      // Create backup if requested
+      await this.createBackupIfNeeded(filePath, result);
 
       // Write formatted content
-      const outputPath = this.getOutputPath(filePath);
-      await fs.writeFile(outputPath, formatted, 'utf-8');
-
-      // FIX: LOW - Use SecurityMonitor for audit logging
-      SecurityMonitor.logSecurityEvent({
-        type: 'FILE_COPIED',
-        severity: 'LOW',
-        source: 'ElementFormatter',
-        details: `File formatted successfully: ${outputPath}`,
-        additionalData: {
-          inputPath: filePath,
-          outputPath,
-          backup: result.backupPath || 'none'
-        }
-      });
+      await this.writeFormattedFile(filePath, formatted, result);
 
       result.success = true;
-      result.fixed.push(`Formatted file written to ${outputPath}`);
+      result.fixed.push(`Formatted file written to ${this.getOutputPath(filePath)}`);
 
     } catch (error) {
-      // Improved error handling with specific error types
-      if (error instanceof Error) {
-        result.error = error.message;
-
-        // Provide specific error context
-        if (error.message.includes('ENOENT')) {
-          result.issues.push('File not found');
-        } else if (error.message.includes('EACCES')) {
-          result.issues.push('Permission denied');
-        } else if (error.message.includes('Path traversal')) {
-          result.issues.push('Security: Path traversal attempt blocked');
-        }
-      } else {
-        result.error = String(error);
-      }
-
-      logger.error('Failed to format file', {
-        filePath,
-        error: result.error,
-        errorType: error instanceof Error ? error.constructor.name : typeof error
-      });
+      this.handleFormatError(error, result, filePath);
     }
 
     return result;
+  }
+
+  /**
+   * Validate file size
+   */
+  private async validateFileSize(filePath: string, result: FormatterResult): Promise<any | null> {
+    const stats = await fs.stat(filePath);
+    if (stats.size > this.options.maxFileSize) {
+      result.error = `File size (${stats.size} bytes) exceeds maximum allowed (${this.options.maxFileSize} bytes)`;
+      result.issues.push('File too large for processing');
+      return null;
+    }
+    return stats;
+  }
+
+  /**
+   * Read and normalize file content
+   */
+  private async readAndNormalizeFile(filePath: string, stats: any): Promise<string> {
+    let content = await fs.readFile(filePath, 'utf-8');
+    content = this.normalizeUnicode(content);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_COPIED',
+      severity: 'LOW',
+      source: 'ElementFormatter',
+      details: `Processing file: ${filePath} (${stats.size} bytes)`
+    });
+
+    return content;
+  }
+
+  /**
+   * Format content based on element type
+   */
+  private async formatContent(filePath: string, content: string, result: FormatterResult): Promise<string> {
+    const elementType = this.detectElementType(filePath);
+
+    if (elementType === ElementType.MEMORY) {
+      return await this.formatMemory(content, result);
+    } else {
+      return await this.formatStandardElement(content, result);
+    }
+  }
+
+  /**
+   * Validate formatted content if validation is enabled
+   */
+  private async validateFormattedContent(formatted: string, filePath: string, result: FormatterResult): Promise<boolean> {
+    if (!this.options.validate) return true;
+
+    try {
+      const elementType = this.detectElementType(filePath);
+      const yamlToValidate = elementType === ElementType.MEMORY
+        ? `---\n${formatted}\n---\n`
+        : formatted;
+
+      SecureYamlParser.parse(yamlToValidate, {
+        validateContent: true,
+        validateFields: false
+      });
+
+      result.fixed.push('YAML validation passed');
+      return true;
+    } catch (error) {
+      result.issues.push(`YAML validation failed: ${error}`);
+      result.success = false;
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_PARSING_WARNING',
+        severity: 'MEDIUM',
+        source: 'ElementFormatter',
+        details: `YAML validation failed for ${filePath}`,
+        additionalData: {
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Create backup if requested
+   */
+  private async createBackupIfNeeded(filePath: string, result: FormatterResult): Promise<void> {
+    if (!this.options.backup) return;
+
+    const backupPath = filePath + '.backup';
+    await fs.copyFile(filePath, backupPath);
+    result.backupPath = backupPath;
+    result.fixed.push(`Created backup at ${backupPath}`);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_COPIED',
+      severity: 'LOW',
+      source: 'ElementFormatter',
+      details: `Backup created: ${backupPath}`,
+      additionalData: {
+        originalFile: filePath,
+        backupFile: backupPath
+      }
+    });
+  }
+
+  /**
+   * Write formatted content to file
+   */
+  private async writeFormattedFile(filePath: string, formatted: string, result: FormatterResult): Promise<void> {
+    const outputPath = this.getOutputPath(filePath);
+    await fs.writeFile(outputPath, formatted, 'utf-8');
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'FILE_COPIED',
+      severity: 'LOW',
+      source: 'ElementFormatter',
+      details: `File formatted successfully: ${outputPath}`,
+      additionalData: {
+        inputPath: filePath,
+        outputPath,
+        backup: result.backupPath || 'none'
+      }
+    });
+  }
+
+  /**
+   * Handle formatting errors
+   */
+  private handleFormatError(error: unknown, result: FormatterResult, filePath: string): void {
+    if (error instanceof Error) {
+      result.error = error.message;
+
+      if (error.message.includes('ENOENT')) {
+        result.issues.push('File not found');
+      } else if (error.message.includes('EACCES')) {
+        result.issues.push('Permission denied');
+      } else if (error.message.includes('Path traversal')) {
+        result.issues.push('Security: Path traversal attempt blocked');
+      }
+    } else {
+      result.error = String(error);
+    }
+
+    logger.error('Failed to format file', {
+      filePath,
+      error: result.error,
+      errorType: error instanceof Error ? error.constructor.name : typeof error
+    });
   }
 
   /**
@@ -279,8 +325,10 @@ export class ElementFormatter {
       }
 
       // Process date folders
+      // Use RegExp.test() directly as per SonarCloud S6594
+      const datePattern = /^\d{4}-\d{2}-\d{2}$/;
       const dateFolders = entries.filter(e =>
-        e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name)
+        e.isDirectory() && datePattern.test(e.name)
       );
 
       for (const folder of dateFolders) {
@@ -322,73 +370,114 @@ export class ElementFormatter {
 
   /**
    * Format a memory YAML file
+   * Refactored to reduce cognitive complexity
    */
   private async formatMemory(content: string, result: FormatterResult): Promise<string> {
     try {
-      // FIX: HIGH - Use SecureYamlParser for safe parsing
-      // Wrap pure YAML in frontmatter format for SecureYamlParser
-      const wrappedContent = `---\n${content}\n---\n`;
-      const parsed = SecureYamlParser.parse(wrappedContent, {
-        validateContent: true,
-        validateFields: false
-      });
-      const data = parsed.data as any;
+      const data = await this.parseMemoryContent(content);
 
-      // Check for malformed structure
+      // Process entries if they exist
       if (data.entries && Array.isArray(data.entries)) {
-        for (const entry of data.entries) {
-          if (typeof entry.content === 'string') {
-            // FIX: MEDIUM - Normalize Unicode in entry content
-            entry.content = this.normalizeUnicode(entry.content);
-
-            // Check if metadata is embedded in content
-            if (entry.content.includes('---\n') || entry.content.includes('---\\n')) {
-              result.issues.push('Found embedded metadata in content');
-
-              // Extract metadata from content
-              const extracted = this.extractEmbeddedMetadata(entry.content);
-              if (extracted.metadata) {
-                // Merge extracted metadata to top level
-                Object.assign(data, extracted.metadata);
-                // Clean the content
-                entry.content = this.unescapeNewlines(extracted.content);
-                result.fixed.push('Extracted embedded metadata to top level');
-                result.fixed.push('Unescaped newlines in content');
-              }
-            } else {
-              // Just unescape newlines
-              const original = entry.content;
-              entry.content = this.unescapeNewlines(entry.content);
-              if (original !== entry.content) {
-                result.fixed.push('Unescaped newlines in content');
-              }
-            }
-          }
-        }
+        await this.processMemoryEntries(data.entries, data, result);
       }
 
       // Ensure proper structure
-      if (!data.name && data.entries?.[0]?.id) {
-        data.name = data.entries[0].id;
-        result.fixed.push('Added name field from entry ID');
-      }
+      this.ensureMemoryStructure(data, result);
 
       // Format as clean YAML
-      const formatted = yaml.dump(data, {
-        lineWidth: 120,
-        noRefs: true,
-        sortKeys: false,
-        quotingType: '"',
-        forceQuotes: false
-      });
-
-      return formatted;
+      return this.formatAsYaml(data);
 
     } catch (error) {
       result.issues.push(`Failed to parse YAML: ${error}`);
-      // Return original content if we can't parse it
-      return content;
+      return content; // Return original content if we can't parse it
     }
+  }
+
+  /**
+   * Parse memory content using SecureYamlParser
+   */
+  private async parseMemoryContent(content: string): Promise<any> {
+    const wrappedContent = `---\n${content}\n---\n`;
+    const parsed = SecureYamlParser.parse(wrappedContent, {
+      validateContent: true,
+      validateFields: false
+    });
+    return parsed.data;
+  }
+
+  /**
+   * Process memory entries to fix issues
+   */
+  private async processMemoryEntries(entries: any[], data: any, result: FormatterResult): Promise<void> {
+    for (const entry of entries) {
+      if (typeof entry.content !== 'string') continue;
+
+      // Normalize Unicode
+      entry.content = this.normalizeUnicode(entry.content);
+
+      // Handle embedded metadata
+      if (this.hasEmbeddedMetadata(entry.content)) {
+        this.handleEmbeddedMetadata(entry, data, result);
+      } else {
+        this.unescapeEntryContent(entry, result);
+      }
+    }
+  }
+
+  /**
+   * Check if content has embedded metadata
+   */
+  private hasEmbeddedMetadata(content: string): boolean {
+    return content.includes('---\n') || content.includes('---\\n');
+  }
+
+  /**
+   * Handle embedded metadata extraction
+   */
+  private handleEmbeddedMetadata(entry: any, data: any, result: FormatterResult): void {
+    result.issues.push('Found embedded metadata in content');
+    const extracted = this.extractEmbeddedMetadata(entry.content);
+
+    if (extracted.metadata) {
+      Object.assign(data, extracted.metadata);
+      entry.content = this.unescapeNewlines(extracted.content);
+      result.fixed.push('Extracted embedded metadata to top level');
+      result.fixed.push('Unescaped newlines in content');
+    }
+  }
+
+  /**
+   * Unescape entry content
+   */
+  private unescapeEntryContent(entry: any, result: FormatterResult): void {
+    const original = entry.content;
+    entry.content = this.unescapeNewlines(entry.content);
+    if (original !== entry.content) {
+      result.fixed.push('Unescaped newlines in content');
+    }
+  }
+
+  /**
+   * Ensure memory has proper structure
+   */
+  private ensureMemoryStructure(data: any, result: FormatterResult): void {
+    if (!data.name && data.entries?.[0]?.id) {
+      data.name = data.entries[0].id;
+      result.fixed.push('Added name field from entry ID');
+    }
+  }
+
+  /**
+   * Format data as clean YAML
+   */
+  private formatAsYaml(data: any): string {
+    return yaml.dump(data, {
+      lineWidth: 120,
+      noRefs: true,
+      sortKeys: false,
+      quotingType: '"',
+      forceQuotes: false
+    });
   }
 
   /**
@@ -396,8 +485,9 @@ export class ElementFormatter {
    */
   private async formatStandardElement(content: string, result: FormatterResult): Promise<string> {
     try {
-      // Split frontmatter and content
-      const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+      // Split frontmatter and content using RegExp.exec() as per SonarCloud S6594
+      const frontmatterRegex = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+      const match = frontmatterRegex.exec(content);
 
       if (!match) {
         result.issues.push('No frontmatter found');
@@ -449,7 +539,8 @@ export class ElementFormatter {
    */
   private extractEmbeddedMetadata(content: string): { metadata: any; content: string } {
     // Handle both actual newlines and escaped newlines
-    const unescaped = content.replace(/\\n/g, '\n');
+    // Using replaceAll as per SonarCloud S7781
+    const unescaped = content.replaceAll('\\n', '\n');
 
     // Use indexOf for linear-time parsing instead of regex to prevent ReDoS
     const startMarker = '---';
@@ -493,20 +584,22 @@ export class ElementFormatter {
 
   /**
    * Unescape newline characters
+   * Using replaceAll as per SonarCloud S7781
    */
   private unescapeNewlines(text: string): string {
     return text
-      .replace(/\\n/g, '\n')
-      .replace(/\\r/g, '\r')
-      .replace(/\\t/g, '\t')
-      .replace(/\\\\/g, '\\');
+      .replaceAll('\\n', '\n')
+      .replaceAll('\\r', '\r')
+      .replaceAll('\\t', '\t')
+      .replaceAll('\\\\', '\\');
   }
 
   /**
    * Detect element type from file path
    */
   private detectElementType(filePath: string): ElementType {
-    const normalizedPath = filePath.replace(/\\/g, '/');
+    // Using replaceAll as per SonarCloud S7781
+    const normalizedPath = filePath.replaceAll('\\', '/');
 
     for (const [, value] of Object.entries(ElementType)) {
       if (normalizedPath.includes(`/${value}/`)) {
