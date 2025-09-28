@@ -8,7 +8,12 @@
  * regex operations in the codebase to prevent catastrophic backtracking.
  */
 
-import { RegexValidator } from './regexValidator';
+// Constants for timeouts and limits (Reviewer recommendation: Extract constants)
+const REGEX_TIMEOUT_MS = 100;          // Default timeout for user input regex
+const SYSTEM_TIMEOUT_MS = 1000;        // Timeout for system operations
+const MAX_INPUT_LENGTH = 10000;        // Maximum input length to process
+const MAX_PATTERN_CACHE_SIZE = 1000;   // Maximum patterns to cache
+const RATE_LIMIT_RESET_MS = 60000;     // Reset rate limits every minute
 
 export interface RegexExecutionOptions {
   /**
@@ -40,9 +45,6 @@ export interface RegexExecutionOptions {
  * Prevents ReDoS attacks by limiting execution time
  */
 export class SafeRegex {
-  private static readonly DEFAULT_TIMEOUT = 100; // 100ms for user input
-  private static readonly SYSTEM_TIMEOUT = 1000; // 1s for system operations
-  private static readonly MAX_INPUT_LENGTH = 10000;
   private static readonly patternCache = new Map<string, RegExp>();
 
   /**
@@ -54,8 +56,8 @@ export class SafeRegex {
     options: RegexExecutionOptions = {}
   ): boolean {
     const {
-      timeout = this.DEFAULT_TIMEOUT,
-      maxLength = this.MAX_INPUT_LENGTH,
+      timeout = REGEX_TIMEOUT_MS,
+      maxLength = MAX_INPUT_LENGTH,
       context = 'unknown'
     } = options;
 
@@ -108,8 +110,8 @@ export class SafeRegex {
     options: RegexExecutionOptions = {}
   ): RegExpMatchArray | null {
     const {
-      timeout = this.DEFAULT_TIMEOUT,
-      maxLength = this.MAX_INPUT_LENGTH,
+      timeout = REGEX_TIMEOUT_MS,
+      maxLength = MAX_INPUT_LENGTH,
       context = 'unknown'
     } = options;
 
@@ -220,7 +222,7 @@ export class SafeRegex {
       const regex = new RegExp(pattern);
 
       // Cache if not too many patterns
-      if (this.patternCache.size < 1000) {
+      if (this.patternCache.size < MAX_PATTERN_CACHE_SIZE) {
         this.patternCache.set(pattern, regex);
       }
 
@@ -232,50 +234,72 @@ export class SafeRegex {
   }
 
   /**
-   * Check if a regex pattern is potentially dangerous (ReDoS)
-   * Based on OWASP recommendations
+   * Check for nested quantifiers in pattern
+   * Reviewer recommendation: Break down complex functions
    */
-  private static isDangerous(pattern: string): boolean {
-    // Check for nested quantifiers
-    const dangerousPatterns = [
-      /(\+|\*){2,}/,                    // Multiple consecutive quantifiers
+  private static hasNestedQuantifiers(pattern: string): boolean {
+    const nestedPatterns = [
+      /[+*]{2,}/,                       // Multiple consecutive quantifiers
       /\(.{0,50}\+\)[+*]/,             // Nested quantifiers (bounded check)
       /\[[^\]]{0,20}\+\][+*]/,         // Nested quantifiers in char class
     ];
 
-    // String-based checks for catastrophic patterns
-    const catastrophicPatterns = [
-      '(.+)+', '(.*)+', '(.+)*', '(.*)*',  // Classic catastrophic
-      '(\\d+)+', '(\\w+)+', '(\\s+)+',     // Digit/word/space catastrophic
-      '(a+)+', '(a*)*', '(a|a)*',          // Alternation overlap
-    ];
-
-    // Check regex patterns
-    for (const dangerous of dangerousPatterns) {
+    for (const dangerous of nestedPatterns) {
       if (dangerous.test(pattern)) {
         return true;
       }
     }
 
-    // Check string patterns
+    // String-based checks for catastrophic patterns (safer)
+    const catastrophicPatterns = [
+      '(.+)+', '(.*)+', '(.+)*', '(.*)*',  // Classic catastrophic
+      '(\\d+)+', '(\\w+)+', '(\\s+)+',     // Digit/word/space catastrophic
+      '(a+)+', '(a*)*',                    // Simple catastrophic
+    ];
+
     for (const catastrophic of catastrophicPatterns) {
       if (pattern.includes(catastrophic)) {
         return true;
       }
     }
 
-    // Check complexity
-    const groups = (pattern.match(/\(/g) || []).length;
-    const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
-    const alternations = (pattern.match(/\|/g) || []).length;
+    return false;
+  }
 
-    // High complexity = potential danger
-    if (groups > 10 || quantifiers > 15 || alternations > 10) {
+  /**
+   * Check for complex alternation patterns that can cause backtracking
+   */
+  private static hasComplexAlternation(pattern: string): boolean {
+    // Check for overlapping alternation
+    if (pattern.includes('(a|a)*') || pattern.includes('(a|ab)*')) {
       return true;
     }
 
-    // Pattern is likely safe
-    return false;
+    // Count alternations
+    const alternations = (pattern.match(/\|/g) || []).length;
+    return alternations > 10;
+  }
+
+  /**
+   * Check if pattern complexity exceeds safe thresholds
+   */
+  private static exceedsComplexityThreshold(pattern: string): boolean {
+    const groups = (pattern.match(/\(/g) || []).length;
+    const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
+
+    // High complexity = potential danger
+    return groups > 10 || quantifiers > 15;
+  }
+
+  /**
+   * Check if a regex pattern is potentially dangerous (ReDoS)
+   * Based on OWASP recommendations
+   * Refactored for clarity (Reviewer recommendation)
+   */
+  private static isDangerous(pattern: string): boolean {
+    return this.hasNestedQuantifiers(pattern) ||
+           this.hasComplexAlternation(pattern) ||
+           this.exceedsComplexityThreshold(pattern);
   }
 
   /**
@@ -375,7 +399,7 @@ export class DOSProtection {
   /**
    * Rate limiting for expensive operations
    */
-  private static operationCounts = new Map<string, number>();
+  private static readonly operationCounts = new Map<string, number>();
   private static resetInterval: NodeJS.Timeout | null = null;
 
   static rateLimit(
@@ -383,11 +407,9 @@ export class DOSProtection {
     maxPerMinute: number = 100
   ): boolean {
     // Initialize reset interval if needed
-    if (!this.resetInterval) {
-      this.resetInterval = setInterval(() => {
-        this.operationCounts.clear();
-      }, 60000); // Reset every minute
-    }
+    this.resetInterval ??= setInterval(() => {
+      this.operationCounts.clear();
+    }, RATE_LIMIT_RESET_MS);
 
     const count = this.operationCounts.get(operation) || 0;
     if (count >= maxPerMinute) {
