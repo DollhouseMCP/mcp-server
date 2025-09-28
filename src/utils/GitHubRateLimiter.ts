@@ -15,7 +15,7 @@ import { TokenManager } from '../security/tokenManager.js';
 import { logger } from './logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { randomBytes } from 'crypto';
+import { randomBytes } from 'node:crypto';
 
 export interface GitHubRateLimitInfo {
   limit: number;
