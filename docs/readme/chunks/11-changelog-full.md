@@ -1,5 +1,28 @@
 ## 🏷️ Version History
 
+### v1.9.11 - September 28, 2025
+
+**SonarCloud Quality & Security**: Major code quality improvements and security fixes
+
+#### 🔒 Security Fixes
+- Fixed command injection vulnerabilities in GitHub Actions workflows (#1149)
+- Resolved ReDoS vulnerabilities in RelationshipManager (#1144)
+- All critical and high severity issues resolved
+
+#### 🛠️ Quality Improvements
+- **82% reduction in SonarCloud reliability bugs** (from 55 to 10)
+- Fixed unsafe throw in finally blocks (S1143)
+- Fixed async constructor patterns
+- Resolved regex precedence issues
+- Fixed control character usage
+- Removed hardcoded tokens
+
+#### 📊 Statistics
+- 11 Pull Requests merged for quality fixes
+- Quality Gate: PASSING
+- Security: All critical issues resolved
+- Test Coverage: >96% maintained
+
 ### v1.9.10 - September 27, 2025
 
 **Enhanced Capability Index & Security**: Complete trigger extraction system and SonarCloud integration
