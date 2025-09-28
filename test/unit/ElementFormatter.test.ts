@@ -1,0 +1,315 @@
+/**
+ * Unit tests for ElementFormatter
+ *
+ * Tests the element formatting/cleaning functionality
+ * for fixing malformed DollhouseMCP elements
+ */
+
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { ElementFormatter } from '../../src/utils/ElementFormatter.js';
+import { ElementType } from '../../src/portfolio/types.js';
+
+// Mock the logger
+jest.mock('../../src/utils/logger.js', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn()
+  }
+}));
+
+describe('ElementFormatter', () => {
+  let tempDir: string;
+  let formatter: ElementFormatter;
+
+  beforeEach(async () => {
+    // Create temp directory for tests
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'formatter-test-'));
+    formatter = new ElementFormatter();
+  });
+
+  afterEach(async () => {
+    // Clean up temp directory
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  describe('formatMemory', () => {
+    it('should unescape newlines in memory content', async () => {
+      const malformedYaml = `name: test-memory
+description: Test memory
+version: 1.0.0
+entries:
+  - id: entry-1
+    timestamp: 2025-09-28T12:00:00Z
+    content: Line 1\\nLine 2\\nLine 3\\n\\nParagraph 2`;
+
+      const testFile = path.join(tempDir, 'test-memory.yaml');
+      await fs.writeFile(testFile, malformedYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).toContain('Unescaped newlines in content');
+
+      // Check the formatted content
+      const formatted = await fs.readFile(testFile + '.formatted.yaml', 'utf-8');
+      expect(formatted).toContain('Line 1\n');
+      expect(formatted).toContain('Line 2\n');
+      expect(formatted).not.toContain('\\n');
+    });
+
+    it('should extract embedded metadata from content', async () => {
+      const malformedYaml = `entries:
+  - content: >-
+      ---\\n
+      version: 1.0.0\\n
+      retention: permanent\\n
+      tags: [sonarcloud, reference, rules]\\n
+      ---\\n
+      # SonarCloud Rules Reference\\n\\n
+      Content here with\\nescaped newlines`;
+
+      const testFile = path.join(tempDir, 'malformed-memory.yaml');
+      await fs.writeFile(testFile, malformedYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).toContain('Extracted embedded metadata to top level');
+      expect(result.fixed).toContain('Unescaped newlines in content');
+
+      // Check the formatted content
+      const formatted = await fs.readFile(testFile + '.formatted.yaml', 'utf-8');
+      expect(formatted).toContain('version: 1.0.0');
+      expect(formatted).toContain('retention: permanent');
+      expect(formatted).toContain('SonarCloud Rules Reference');
+      expect(formatted).not.toContain('---\\n');
+    });
+
+    it('should handle memories without issues gracefully', async () => {
+      const validYaml = `name: valid-memory
+description: A properly formatted memory
+version: 1.0.0
+retention: 30
+tags:
+  - test
+  - valid
+entries:
+  - id: entry-1
+    timestamp: 2025-09-28T12:00:00Z
+    content: |
+      This is properly formatted content
+      with real line breaks
+      and no issues`;
+
+      const testFile = path.join(tempDir, 'valid-memory.yaml');
+      await fs.writeFile(testFile, validYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.issues).toHaveLength(0);
+      expect(result.fixed).toContain('YAML validation passed');
+    });
+  });
+
+  describe('formatStandardElement', () => {
+    it('should format markdown files with frontmatter', async () => {
+      const malformedMd = `---
+name: test-persona
+version: 1.0.0
+description: Test persona with escaped newlines
+content: Line 1\\nLine 2\\n
+---
+
+# Test Persona\\n\\nContent with\\nescaped newlines`;
+
+      const testFile = path.join(tempDir, 'test-persona.md');
+      await fs.writeFile(testFile, malformedMd, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).toContain('Unescaped newlines in frontmatter content');
+      expect(result.fixed).toContain('Unescaped newlines in body');
+
+      // Check the formatted content
+      const formatted = await fs.readFile(testFile + '.formatted.md', 'utf-8');
+      expect(formatted).toContain('Line 1');
+      expect(formatted).toContain('Line 2');
+      expect(formatted).toContain('# Test Persona');
+      expect(formatted).not.toContain('\\n');
+    });
+
+    it('should handle files without frontmatter', async () => {
+      const noFrontmatter = `# Just Content
+
+No frontmatter here, just content.`;
+
+      const testFile = path.join(tempDir, 'no-frontmatter.md');
+      await fs.writeFile(testFile, noFrontmatter, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.issues).toContain('No frontmatter found');
+    });
+  });
+
+  describe('options', () => {
+    it('should format in place when inPlace option is true', async () => {
+      const formatter = new ElementFormatter({ inPlace: true, backup: true });
+
+      const content = `name: test\\nversion: 1.0.0`;
+      const testFile = path.join(tempDir, 'in-place.yaml');
+      await fs.writeFile(testFile, content, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.backupPath).toBe(testFile + '.backup');
+
+      // Check backup was created
+      const backupExists = await fs.access(result.backupPath!).then(() => true).catch(() => false);
+      expect(backupExists).toBe(true);
+
+      // Check original file was modified
+      const modified = await fs.readFile(testFile, 'utf-8');
+      expect(modified).not.toContain('\\n');
+    });
+
+    it('should use custom output directory when specified', async () => {
+      const outputDir = path.join(tempDir, 'output');
+      await fs.mkdir(outputDir);
+
+      const formatter = new ElementFormatter({ outputDir });
+
+      const content = `name: test`;
+      const testFile = path.join(tempDir, 'test.yaml');
+      await fs.writeFile(testFile, content, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+
+      // Check file was created in output directory
+      const outputFile = path.join(outputDir, 'test.yaml');
+      const outputExists = await fs.access(outputFile).then(() => true).catch(() => false);
+      expect(outputExists).toBe(true);
+    });
+
+    it('should skip validation when validate option is false', async () => {
+      const formatter = new ElementFormatter({ validate: false });
+
+      // Invalid YAML that would fail validation
+      const invalidYaml = `name: test
+  invalid: indentation
+    more: problems`;
+
+      const testFile = path.join(tempDir, 'invalid.yaml');
+      await fs.writeFile(testFile, invalidYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      // Should still succeed without validation
+      expect(result.success).toBe(true);
+      expect(result.fixed).not.toContain('YAML validation passed');
+    });
+  });
+
+  describe('formatFiles', () => {
+    it('should format multiple files', async () => {
+      const files: string[] = [];
+
+      // Create multiple test files
+      for (let i = 1; i <= 3; i++) {
+        const content = `name: test-${i}\\nversion: ${i}.0.0`;
+        const testFile = path.join(tempDir, `test-${i}.yaml`);
+        await fs.writeFile(testFile, content, 'utf-8');
+        files.push(testFile);
+      }
+
+      const results = await formatter.formatFiles(files);
+
+      expect(results).toHaveLength(3);
+      expect(results.every(r => r.success)).toBe(true);
+    });
+  });
+
+  describe('formatElementType', () => {
+    it('should format all memories in date folders', async () => {
+      // Create memory directory structure
+      const memoryDir = path.join(tempDir, ElementType.MEMORY);
+      await fs.mkdir(memoryDir);
+
+      // Create date folder
+      const dateFolder = path.join(memoryDir, '2025-09-28');
+      await fs.mkdir(dateFolder);
+
+      // Add test memories
+      const memory1 = `name: memory-1\\ncontent: "Test\\nmemory"`;
+      await fs.writeFile(path.join(dateFolder, 'memory-1.yaml'), memory1, 'utf-8');
+
+      const memory2 = `name: memory-2\\ncontent: "Another\\ntest"`;
+      await fs.writeFile(path.join(dateFolder, 'memory-2.yaml'), memory2, 'utf-8');
+
+      const results = await formatter.formatElementType(ElementType.MEMORY, tempDir);
+
+      expect(results).toHaveLength(2);
+      expect(results.every(r => r.success)).toBe(true);
+      expect(results.every(r => r.fixed.length > 0)).toBe(true);
+    });
+
+    it('should format all standard elements', async () => {
+      // Create personas directory
+      const personaDir = path.join(tempDir, ElementType.PERSONA);
+      await fs.mkdir(personaDir);
+
+      // Add test personas
+      const persona1 = `---\nname: persona-1\\nversion: 1.0.0\n---\n# Persona 1`;
+      await fs.writeFile(path.join(personaDir, 'persona-1.md'), persona1, 'utf-8');
+
+      const persona2 = `---\nname: persona-2\\nversion: 2.0.0\n---\n# Persona 2`;
+      await fs.writeFile(path.join(personaDir, 'persona-2.md'), persona2, 'utf-8');
+
+      const results = await formatter.formatElementType(ElementType.PERSONA, tempDir);
+
+      expect(results).toHaveLength(2);
+      expect(results.every(r => r.success)).toBe(true);
+    });
+  });
+
+  describe('error handling', () => {
+    it('should handle file read errors gracefully', async () => {
+      const nonExistentFile = path.join(tempDir, 'does-not-exist.yaml');
+
+      const result = await formatter.formatFile(nonExistentFile);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.error).toContain('ENOENT');
+    });
+
+    it('should handle YAML parse errors gracefully', async () => {
+      const formatter = new ElementFormatter({ validate: true });
+
+      // Completely invalid YAML
+      const invalidYaml = `{{{not valid yaml at all:::`;
+      const testFile = path.join(tempDir, 'invalid.yaml');
+      await fs.writeFile(testFile, invalidYaml, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(false);
+      expect(result.issues.some(issue => issue.includes('Failed to parse YAML'))).toBe(true);
+    });
+  });
+});
