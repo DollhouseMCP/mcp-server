@@ -19,6 +19,9 @@ import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 
+// Security: Maximum file size for processing (10MB)
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
 export interface ElementFormatterOptions {
   /** Whether to create backup files before formatting */
   backup?: boolean;
@@ -28,6 +31,8 @@ export interface ElementFormatterOptions {
   validate?: boolean;
   /** Custom output directory for formatted files */
   outputDir?: string;
+  /** Maximum file size to process (bytes) */
+  maxFileSize?: number;
 }
 
 export interface FormatterResult {
@@ -40,14 +45,15 @@ export interface FormatterResult {
 }
 
 export class ElementFormatter {
-  private options: Required<ElementFormatterOptions>;
+  private readonly options: Required<ElementFormatterOptions>;
 
   constructor(options: ElementFormatterOptions = {}) {
     this.options = {
       backup: options.backup ?? true,
       inPlace: options.inPlace ?? false,
       validate: options.validate ?? true,
-      outputDir: options.outputDir ?? ''
+      outputDir: options.outputDir ?? '',
+      maxFileSize: options.maxFileSize ?? MAX_FILE_SIZE
     };
   }
 
@@ -63,6 +69,14 @@ export class ElementFormatter {
     };
 
     try {
+      // Security: Check file size before reading
+      const stats = await fs.stat(filePath);
+      if (stats.size > this.options.maxFileSize) {
+        result.error = `File size (${stats.size} bytes) exceeds maximum allowed (${this.options.maxFileSize} bytes)`;
+        result.issues.push('File too large for processing');
+        return result;
+      }
+
       // Read the file
       const content = await fs.readFile(filePath, 'utf-8');
 
@@ -80,7 +94,8 @@ export class ElementFormatter {
       // Validate if requested
       if (this.options.validate) {
         try {
-          yaml.load(formatted);
+          // Security: Use FAILSAFE_SCHEMA to prevent code execution
+          yaml.load(formatted, { schema: yaml.FAILSAFE_SCHEMA });
           result.fixed.push('YAML validation passed');
         } catch (error) {
           result.issues.push(`YAML validation failed: ${error}`);
@@ -89,8 +104,8 @@ export class ElementFormatter {
         }
       }
 
-      // Create backup if requested
-      if (this.options.backup && this.options.inPlace) {
+      // Create backup if requested (works independently of inPlace)
+      if (this.options.backup) {
         const backupPath = filePath + '.backup';
         await fs.copyFile(filePath, backupPath);
         result.backupPath = backupPath;
@@ -105,8 +120,27 @@ export class ElementFormatter {
       result.fixed.push(`Formatted file written to ${outputPath}`);
 
     } catch (error) {
-      result.error = error instanceof Error ? error.message : String(error);
-      logger.error('Failed to format file', { filePath, error: result.error });
+      // Improved error handling with specific error types
+      if (error instanceof Error) {
+        result.error = error.message;
+
+        // Provide specific error context
+        if (error.message.includes('ENOENT')) {
+          result.issues.push('File not found');
+        } else if (error.message.includes('EACCES')) {
+          result.issues.push('Permission denied');
+        } else if (error.message.includes('Path traversal')) {
+          result.issues.push('Security: Path traversal attempt blocked');
+        }
+      } else {
+        result.error = String(error);
+      }
+
+      logger.error('Failed to format file', {
+        filePath,
+        error: result.error,
+        errorType: error instanceof Error ? error.constructor.name : typeof error
+      });
     }
 
     return result;
@@ -114,13 +148,19 @@ export class ElementFormatter {
 
   /**
    * Format multiple files
+   *
+   * FIX: Added parallel processing with concurrency limit for better performance
    */
-  async formatFiles(filePaths: string[]): Promise<FormatterResult[]> {
+  async formatFiles(filePaths: string[], concurrencyLimit = 5): Promise<FormatterResult[]> {
     const results: FormatterResult[] = [];
 
-    for (const filePath of filePaths) {
-      const result = await this.formatFile(filePath);
-      results.push(result);
+    // Process files in batches for controlled parallelism
+    for (let i = 0; i < filePaths.length; i += concurrencyLimit) {
+      const batch = filePaths.slice(i, i + concurrencyLimit);
+      const batchResults = await Promise.all(
+        batch.map(filePath => this.formatFile(filePath))
+      );
+      results.push(...batchResults);
     }
 
     return results;
@@ -212,8 +252,8 @@ export class ElementFormatter {
    */
   private async formatMemory(content: string, result: FormatterResult): Promise<string> {
     try {
-      // Parse existing YAML
-      const data = yaml.load(content) as any;
+      // Parse existing YAML with SAFE_SCHEMA to prevent code execution
+      const data = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA }) as any;
 
       // Check for malformed structure
       if (data.entries && Array.isArray(data.entries)) {
@@ -284,8 +324,8 @@ export class ElementFormatter {
 
       const [, frontmatterStr, body] = match;
 
-      // Parse frontmatter
-      const frontmatter = yaml.load(frontmatterStr) as any;
+      // Parse frontmatter with SAFE_SCHEMA
+      const frontmatter = yaml.load(frontmatterStr, { schema: yaml.FAILSAFE_SCHEMA }) as any;
 
       // Clean frontmatter
       if (frontmatter.content && typeof frontmatter.content === 'string') {
@@ -349,7 +389,8 @@ export class ElementFormatter {
     const cleanContent = unescaped.slice(endPos + endMarker.length).trim();
 
     try {
-      const metadata = yaml.load(metadataStr);
+      // Security: Use SAFE_SCHEMA to prevent code execution
+      const metadata = yaml.load(metadataStr, { schema: yaml.FAILSAFE_SCHEMA });
       return { metadata, content: cleanContent };
     } catch {
       // If YAML parsing fails, return as-is
@@ -386,6 +427,8 @@ export class ElementFormatter {
 
   /**
    * Get output path for formatted file
+   *
+   * FIX: Added path traversal protection to prevent directory escape attacks
    */
   private getOutputPath(filePath: string): string {
     if (this.options.inPlace) {
@@ -393,8 +436,17 @@ export class ElementFormatter {
     }
 
     if (this.options.outputDir) {
+      // Security: Validate output directory to prevent path traversal
       const filename = path.basename(filePath);
-      return path.join(this.options.outputDir, filename);
+      const safePath = path.resolve(this.options.outputDir, filename);
+      const expectedDir = path.resolve(this.options.outputDir);
+
+      // Ensure the resolved path is within the expected directory
+      if (!safePath.startsWith(expectedDir)) {
+        throw new Error(`Path traversal attempt detected: ${filename}`);
+      }
+
+      return safePath;
     }
 
     // Default: add .formatted before extension
