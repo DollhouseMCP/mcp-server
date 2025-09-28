@@ -45,6 +45,15 @@ export interface IndexEntry {
   filename: string; // Base filename without extension
 }
 
+// Extended interface for sharded memory entries
+export interface ShardedMemoryIndexEntry extends IndexEntry {
+  shardInfo: {
+    shardCount: number;
+    shardDir: string;
+    metadataFile: string;
+  };
+}
+
 export interface PortfolioIndex {
   byName: Map<string, IndexEntry>;
   byFilename: Map<string, IndexEntry>;
@@ -73,15 +82,64 @@ export interface SearchResult {
 export class PortfolioIndexManager {
   private static instance: PortfolioIndexManager | null = null;
   private static instanceLock = false;
-  
+
   private index: PortfolioIndex | null = null;
   private lastBuilt: Date | null = null;
   private readonly TTL_MS = IndexConfigManager.getInstance().getConfig().index.ttlMinutes * 60 * 1000;
   private isBuilding = false;
   private buildPromise: Promise<void> | null = null;
 
+  // Retry configuration for file operations
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY_MS = 100;
+
   private constructor() {
     logger.debug('PortfolioIndexManager created');
+  }
+
+  /**
+   * Retry wrapper for file system operations
+   * Handles transient file system errors with exponential backoff
+   */
+  private async retryFileOperation<T>(
+    operation: () => Promise<T>,
+    context: string,
+    retries: number = this.MAX_RETRIES
+  ): Promise<T | null> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        const isLastAttempt = attempt === retries;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        // Check if error is retryable (transient file system errors)
+        const isRetryable = errorMessage.includes('EBUSY') ||
+                           errorMessage.includes('EAGAIN') ||
+                           errorMessage.includes('ENOENT') ||
+                           errorMessage.includes('ETIMEDOUT');
+
+        if (isLastAttempt || !isRetryable) {
+          logger.warn(`File operation failed after ${attempt} attempts: ${context}`, {
+            error: errorMessage,
+            attempt,
+            context
+          });
+          return null;
+        }
+
+        // Exponential backoff
+        const delay = this.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.debug(`Retrying file operation: ${context}`, {
+          attempt,
+          nextDelay: delay,
+          error: errorMessage
+        });
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    return null;
   }
 
   public static getInstance(): PortfolioIndexManager {
@@ -377,7 +435,7 @@ export class PortfolioIndexManager {
       for (const elementType of Object.values(ElementType)) {
         try {
           const elementDir = portfolioManager.getElementDir(elementType);
-          
+
           // Check if directory exists
           try {
             await fs.access(elementDir);
@@ -385,25 +443,154 @@ export class PortfolioIndexManager {
             logger.debug(`Element directory doesn't exist: ${elementDir}`);
             continue;
           }
-          
-          const files = await fs.readdir(elementDir);
-          const mdFiles = files.filter(file => file.endsWith('.md'));
-          totalFiles += mdFiles.length;
-          
-          for (const file of mdFiles) {
-            try {
-              const filePath = path.join(elementDir, file);
-              const entry = await this.createIndexEntry(filePath, elementType);
-              
-              if (entry) {
-                this.addToIndex(newIndex, entry);
-                processedFiles++;
+
+          // FIX #1188: Special handling for memories - scan .yaml files in date folders
+          if (elementType === ElementType.MEMORY) {
+            // Memories are stored in date folders (YYYY-MM-DD) as .yaml files
+            const entries = await fs.readdir(elementDir, { withFileTypes: true });
+
+            // First process any root .yaml files (legacy/backup)
+            const rootYamlFiles = entries
+              .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
+              .map(entry => entry.name);
+
+            for (const file of rootYamlFiles) {
+              try {
+                const filePath = path.join(elementDir, file);
+                const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                if (entry) {
+                  this.addToIndex(newIndex, entry);
+                  processedFiles++;
+                  totalFiles++;
+                }
+              } catch (error) {
+                logger.warn(`Failed to index root memory file`, {
+                  file,
+                  path: path.join(elementDir, file),
+                  location: 'root',
+                  error: error instanceof Error ? error.message : String(error),
+                  errorType: error instanceof Error ? error.constructor.name : typeof error
+                });
               }
-            } catch (error) {
-              logger.warn(`Failed to index file: ${file}`, {
-                elementType,
-                error: error instanceof Error ? error.message : String(error)
-              });
+            }
+
+            // Then process date folders
+            const dateFolders = entries
+              .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+              .map(entry => entry.name);
+
+            for (const dateFolder of dateFolders) {
+              const folderPath = path.join(elementDir, dateFolder);
+              const folderEntries = await fs.readdir(folderPath, { withFileTypes: true });
+
+              // Process direct YAML files in date folder
+              const yamlFiles = folderEntries
+                .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
+                .map(entry => entry.name);
+
+              for (const file of yamlFiles) {
+                try {
+                  const filePath = path.join(folderPath, file);
+                  const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                  if (entry) {
+                    this.addToIndex(newIndex, entry);
+                    processedFiles++;
+                    totalFiles++;
+                  }
+                } catch (error) {
+                  logger.warn(`Failed to index date folder memory file`, {
+                    file,
+                    path: path.join(folderPath, file),
+                    dateFolder,
+                    location: 'date-folder',
+                    error: error instanceof Error ? error.message : String(error),
+                    errorType: error instanceof Error ? error.constructor.name : typeof error
+                  });
+                }
+              }
+
+              // FIX #1188: Process subdirectories for sharded memories
+              // Large memories are stored as shards in named subdirectories
+              const subDirs = folderEntries
+                .filter(entry => entry.isDirectory())
+                .map(entry => entry.name);
+
+              for (const subDir of subDirs) {
+                const subDirPath = path.join(folderPath, subDir);
+                const shardFiles = await fs.readdir(subDirPath);
+                const shardYamlFiles = shardFiles.filter(file => file.endsWith('.yaml'));
+
+                // For sharded memories, look for metadata.yaml or the main file
+                // If not found, use the first shard as representative
+                let metadataFile = shardYamlFiles.find(f => f === 'metadata.yaml') ||
+                                   shardYamlFiles.find(f => f === `${subDir}.yaml`) ||
+                                   shardYamlFiles[0];
+
+                if (metadataFile) {
+                  try {
+                    const filePath = path.join(subDirPath, metadataFile);
+                    const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                    if (entry) {
+                      // Mark as sharded memory in metadata
+                      entry.metadata.keywords = entry.metadata.keywords || [];
+                      if (!entry.metadata.keywords.includes('sharded')) {
+                        entry.metadata.keywords.push('sharded');
+                      }
+
+                      // Create properly typed sharded entry
+                      const shardedEntry: ShardedMemoryIndexEntry = {
+                        ...entry,
+                        shardInfo: {
+                          shardCount: shardYamlFiles.length,
+                          shardDir: path.join(dateFolder, subDir),
+                          metadataFile: metadataFile
+                        }
+                      };
+
+                      this.addToIndex(newIndex, shardedEntry);
+                      processedFiles++;
+                      totalFiles++;
+                    }
+                  } catch (error) {
+                    logger.warn(`Failed to index sharded memory`, {
+                      subDir,
+                      dateFolder,
+                      path: path.join(subDirPath, metadataFile),
+                      metadataFile,
+                      shardCount: shardYamlFiles.length,
+                      location: 'sharded-subdirectory',
+                      error: error instanceof Error ? error.message : String(error),
+                      errorType: error instanceof Error ? error.constructor.name : typeof error,
+                      shardFiles: shardYamlFiles.slice(0, 5) // Log first 5 shard files for context
+                    });
+                  }
+                }
+              }
+            }
+          } else {
+            // Standard handling for other element types (.md files in root)
+            const files = await fs.readdir(elementDir);
+            const mdFiles = files.filter(file => file.endsWith('.md'));
+            totalFiles += mdFiles.length;
+
+            for (const file of mdFiles) {
+              try {
+                const filePath = path.join(elementDir, file);
+                const entry = await this.createIndexEntry(filePath, elementType);
+
+                if (entry) {
+                  this.addToIndex(newIndex, entry);
+                  processedFiles++;
+                }
+              } catch (error) {
+                logger.warn(`Failed to index file: ${file}`, {
+                  elementType,
+                  error: error instanceof Error ? error.message : String(error)
+                });
+              }
             }
           }
         } catch (error) {
@@ -493,6 +680,63 @@ export class PortfolioIndexManager {
       
     } catch (error) {
       logger.debug(`Failed to create index entry for: ${filePath}`, {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Create an index entry from a memory YAML file
+   * FIX #1188: Special handling for memory files with different structure
+   */
+  private async createMemoryIndexEntry(filePath: string, elementType: ElementType): Promise<IndexEntry | null> {
+    try {
+      // Get file stats
+      const stats = await fs.stat(filePath);
+
+      // Read file content
+      const content = await fs.readFile(filePath, 'utf-8');
+
+      // Parse YAML directly (memories are pure YAML, not markdown with frontmatter)
+      const parsed = SecureYamlParser.parse(content, {
+        validateContent: false,  // Trust local files
+        validateFields: false
+      });
+
+      // Extract base filename
+      const filename = path.basename(filePath, '.yaml');
+
+      // Memory files can have metadata at top level OR nested under 'metadata' key
+      // Some may have metadata embedded in entries (malformed but common)
+      const metadataSource = parsed.data.metadata || parsed.data;
+
+      // Build metadata with memory-specific defaults
+      const metadata = {
+        name: metadataSource.name || filename.replaceAll('-', ' '),
+        description: metadataSource.description || 'Memory element',
+        version: metadataSource.version || '1.0.0',
+        author: metadataSource.author,
+        tags: Array.isArray(metadataSource.tags) ? metadataSource.tags : [],
+        keywords: Array.isArray(metadataSource.keywords) ? metadataSource.keywords : [],
+        triggers: Array.isArray(metadataSource.triggers) ? metadataSource.triggers : [],
+        category: metadataSource.category,
+        created: metadataSource.created || metadataSource.created_date,
+        updated: metadataSource.updated || metadataSource.updated_date || metadataSource.modified
+      };
+
+      const entry: IndexEntry = {
+        filePath,
+        elementType,
+        metadata,
+        lastModified: stats.mtime,
+        filename
+      };
+
+      return entry;
+
+    } catch (error) {
+      logger.debug(`Failed to create memory index entry for: ${filePath}`, {
         error: error instanceof Error ? error.message : String(error)
       });
       return null;
