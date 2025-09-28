@@ -377,7 +377,7 @@ export class PortfolioIndexManager {
       for (const elementType of Object.values(ElementType)) {
         try {
           const elementDir = portfolioManager.getElementDir(elementType);
-          
+
           // Check if directory exists
           try {
             await fs.access(elementDir);
@@ -385,25 +385,82 @@ export class PortfolioIndexManager {
             logger.debug(`Element directory doesn't exist: ${elementDir}`);
             continue;
           }
-          
-          const files = await fs.readdir(elementDir);
-          const mdFiles = files.filter(file => file.endsWith('.md'));
-          totalFiles += mdFiles.length;
-          
-          for (const file of mdFiles) {
-            try {
-              const filePath = path.join(elementDir, file);
-              const entry = await this.createIndexEntry(filePath, elementType);
-              
-              if (entry) {
-                this.addToIndex(newIndex, entry);
-                processedFiles++;
+
+          // FIX #1188: Special handling for memories - scan .yaml files in date folders
+          if (elementType === ElementType.MEMORY) {
+            // Memories are stored in date folders (YYYY-MM-DD) as .yaml files
+            const entries = await fs.readdir(elementDir, { withFileTypes: true });
+
+            // First process any root .yaml files (legacy/backup)
+            const rootYamlFiles = entries
+              .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
+              .map(entry => entry.name);
+
+            for (const file of rootYamlFiles) {
+              try {
+                const filePath = path.join(elementDir, file);
+                const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                if (entry) {
+                  this.addToIndex(newIndex, entry);
+                  processedFiles++;
+                  totalFiles++;
+                }
+              } catch (error) {
+                logger.warn(`Failed to index memory file: ${file}`, {
+                  error: error instanceof Error ? error.message : String(error)
+                });
               }
-            } catch (error) {
-              logger.warn(`Failed to index file: ${file}`, {
-                elementType,
-                error: error instanceof Error ? error.message : String(error)
-              });
+            }
+
+            // Then process date folders
+            const dateFolders = entries
+              .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+              .map(entry => entry.name);
+
+            for (const dateFolder of dateFolders) {
+              const folderPath = path.join(elementDir, dateFolder);
+              const folderFiles = await fs.readdir(folderPath);
+              const yamlFiles = folderFiles.filter(file => file.endsWith('.yaml'));
+
+              for (const file of yamlFiles) {
+                try {
+                  const filePath = path.join(folderPath, file);
+                  const entry = await this.createMemoryIndexEntry(filePath, elementType);
+
+                  if (entry) {
+                    this.addToIndex(newIndex, entry);
+                    processedFiles++;
+                    totalFiles++;
+                  }
+                } catch (error) {
+                  logger.warn(`Failed to index memory file: ${dateFolder}/${file}`, {
+                    error: error instanceof Error ? error.message : String(error)
+                  });
+                }
+              }
+            }
+          } else {
+            // Standard handling for other element types (.md files in root)
+            const files = await fs.readdir(elementDir);
+            const mdFiles = files.filter(file => file.endsWith('.md'));
+            totalFiles += mdFiles.length;
+
+            for (const file of mdFiles) {
+              try {
+                const filePath = path.join(elementDir, file);
+                const entry = await this.createIndexEntry(filePath, elementType);
+
+                if (entry) {
+                  this.addToIndex(newIndex, entry);
+                  processedFiles++;
+                }
+              } catch (error) {
+                logger.warn(`Failed to index file: ${file}`, {
+                  elementType,
+                  error: error instanceof Error ? error.message : String(error)
+                });
+              }
             }
           }
         } catch (error) {
@@ -493,6 +550,63 @@ export class PortfolioIndexManager {
       
     } catch (error) {
       logger.debug(`Failed to create index entry for: ${filePath}`, {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Create an index entry from a memory YAML file
+   * FIX #1188: Special handling for memory files with different structure
+   */
+  private async createMemoryIndexEntry(filePath: string, elementType: ElementType): Promise<IndexEntry | null> {
+    try {
+      // Get file stats
+      const stats = await fs.stat(filePath);
+
+      // Read file content
+      const content = await fs.readFile(filePath, 'utf-8');
+
+      // Parse YAML directly (memories are pure YAML, not markdown with frontmatter)
+      const parsed = SecureYamlParser.parse(content, {
+        validateContent: false,  // Trust local files
+        validateFields: false
+      });
+
+      // Extract base filename
+      const filename = path.basename(filePath, '.yaml');
+
+      // Memory files can have metadata at top level OR nested under 'metadata' key
+      // Some may have metadata embedded in entries (malformed but common)
+      const metadataSource = parsed.data.metadata || parsed.data;
+
+      // Build metadata with memory-specific defaults
+      const metadata = {
+        name: metadataSource.name || filename.replace(/-/g, ' '),
+        description: metadataSource.description || 'Memory element',
+        version: metadataSource.version || '1.0.0',
+        author: metadataSource.author,
+        tags: Array.isArray(metadataSource.tags) ? metadataSource.tags : [],
+        keywords: Array.isArray(metadataSource.keywords) ? metadataSource.keywords : [],
+        triggers: Array.isArray(metadataSource.triggers) ? metadataSource.triggers : [],
+        category: metadataSource.category,
+        created: metadataSource.created || metadataSource.created_date,
+        updated: metadataSource.updated || metadataSource.updated_date || metadataSource.modified
+      };
+
+      const entry: IndexEntry = {
+        filePath,
+        elementType,
+        metadata,
+        lastModified: stats.mtime,
+        filename
+      };
+
+      return entry;
+
+    } catch (error) {
+      logger.debug(`Failed to create memory index entry for: ${filePath}`, {
         error: error instanceof Error ? error.message : String(error)
       });
       return null;
