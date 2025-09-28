@@ -37,6 +37,22 @@ jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
 // Import after mocks are set up
 const { GitHubRateLimiter } = await import('../../../../src/utils/GitHubRateLimiter.js');
 
+// Helper functions to reduce nesting depth
+const createRandomBytesForId = (callCount: number) => {
+  return Buffer.from(`${callCount}234567890ab`.slice(0, 12), 'hex');
+};
+
+const createMockRandomBytes = (callCount: { value: number }) => (size: number) => {
+  if (size === 6) {
+    callCount.value++;
+    return createRandomBytesForId(callCount.value);
+  }
+  return Buffer.from([25]);
+};
+
+const createDelayedApiCall = (data: any, delay: number) => () =>
+  new Promise(resolve => setTimeout(() => resolve(data), delay));
+
 describe('GitHubRateLimiter', () => {
   let rateLimiter: GitHubRateLimiter;
 
@@ -202,14 +218,8 @@ describe('GitHubRateLimiter', () => {
 
     it('should generate unique request IDs with crypto', async () => {
       // Mock different random values for each call
-      let callCount = 0;
-      mockRandomBytes.mockImplementation((size: number) => {
-        if (size === 6) {
-          callCount++;
-          return Buffer.from(`${callCount}234567890ab`.slice(0, 12), 'hex');
-        }
-        return Buffer.from([25]);
-      });
+      const callCount = { value: 0 };
+      mockRandomBytes.mockImplementation(createMockRandomBytes(callCount));
 
       const apiCall = jest.fn().mockResolvedValue({ data: 'test' });
 
@@ -231,8 +241,8 @@ describe('GitHubRateLimiter', () => {
 
   describe('Periodic auth status updates', () => {
     it('should use crypto.randomBytes for periodic update decision', async () => {
-      const apiCall = jest.fn().mockImplementation(() =>
-        new Promise(resolve => setTimeout(() => resolve({ data: 'test' }), 100))
+      const apiCall = jest.fn().mockImplementation(
+        createDelayedApiCall({ data: 'test' }, 100)
       );
 
       // Mock to return value < 26 (will trigger update)
