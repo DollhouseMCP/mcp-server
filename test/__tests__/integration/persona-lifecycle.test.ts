@@ -13,6 +13,8 @@ import {
 } from './helpers/file-utils.js';
 import { TEST_PERSONAS, createTestPersona } from './helpers/test-fixtures.js';
 import * as path from 'path';
+import { restoreFilePermissions, shouldSkipPermissionTest } from './test-utils/permissionTestHelper.js';
+import { logger } from '../../../src/utils/logger.js';
 
 describe('Persona Lifecycle Integration', () => {
   let testServer: TestServer;
@@ -244,56 +246,53 @@ describe('Persona Lifecycle Integration', () => {
       );
       
       const filePath = path.join(personasDir, 'error-sample.md');
-      const fs = await import('fs/promises');
+      const { promises: fs } = await import('node:fs');
       
+      // FIX (SonarCloud S1143): Refactored to avoid throw statement with finally block
+      // The pattern of throw before finally can mask errors and make debugging difficult
+      let testPassed = false;
+      let testError: any = null;
+
       try {
         // Make the file read-only (simulate permission error)
         // On Windows, we need to handle permissions differently
         // Set file to read-only (same for all platforms)
         await fs.chmod(filePath, 0o444);
-        
+
         // Try to edit (should fail gracefully)
         const result = await testServer.personaManager.editPersona(
           'Error Test',
           'description',
           'Updated description'
         );
-        
+
         expect(result.success).toBe(false);
         expect(result.message).toContain('Failed to edit persona');
+        testPassed = true;
       } catch (chmodError: any) {
-        // If chmod fails (common on Windows), skip this test
-        if (chmodError.code === 'ENOENT') {
-          console.log('File permission test skipped - file does not exist');
+        // Store the error for later handling
+        testError = chmodError;
+      }
+
+      // Always attempt cleanup using test utility
+      // SECURITY: 0o644 is safe for test files (read for all, write for owner)
+      // This is test-only code in a temporary test directory
+      await restoreFilePermissions(filePath, 0o644);
+
+      // Now handle any test errors after cleanup is complete
+      if (!testPassed && testError) {
+        const skipResult = shouldSkipPermissionTest(testError);
+        if (skipResult.skipped) {
+          logger.info(`File permission test skipped - ${skipResult.reason}`);
           return;
         }
-        if (process.platform === 'win32' && (chmodError.code === 'EPERM' || chmodError.code === 'EACCES')) {
-          console.log('File permission test skipped - chmod not supported on Windows');
-          return;
-        }
-        throw chmodError;
-      } finally {
-        // ALWAYS restore permissions for cleanup (if file still exists)
-        try {
-          await fs.chmod(filePath, 0o644);
-        } catch (error: any) {
-          // File may not exist anymore, ignore ENOENT errors
-          if (error.code !== 'ENOENT') {
-            // On Windows, permission restoration might fail - log but don't throw
-            if (process.platform === 'win32') {
-              console.log('Warning: Could not restore file permissions on Windows:', error.message);
-            } else {
-              // Don't throw in finally block - it masks the original error
-              console.error('Error restoring file permissions:', error.message);
-            }
-          }
-        }
+        throw testError;
       }
     });
     
     it('should recover from corrupted persona files', async () => {
       // Create a corrupted file with invalid YAML that will cause parsing errors
-      const fs = await import('fs/promises');
+      const { promises: fs } = await import('node:fs');
       const corruptedPath = path.join(personasDir, 'corrupted.md');
       
       // This will cause gray-matter to fail parsing due to invalid YAML syntax
