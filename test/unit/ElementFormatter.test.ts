@@ -433,9 +433,7 @@ tags:
         files.push(testFile);
       }
 
-      const startTime = Date.now();
       const results = await formatter.formatFiles(files, 3); // Limit concurrency to 3
-      const duration = Date.now() - startTime;
 
       expect(results).toHaveLength(fileCount);
       expect(results.every(r => r.success)).toBe(true);

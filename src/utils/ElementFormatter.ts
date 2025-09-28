@@ -428,7 +428,7 @@ export class ElementFormatter {
    * Check if content has embedded metadata
    */
   private hasEmbeddedMetadata(content: string): boolean {
-    return content.includes('---\n') || content.includes('---\\n');
+    return content.includes('---\n') || content.includes(String.raw`---\n`);
   }
 
   /**
@@ -540,7 +540,7 @@ export class ElementFormatter {
   private extractEmbeddedMetadata(content: string): { metadata: any; content: string } {
     // Handle both actual newlines and escaped newlines
     // Using replaceAll as per SonarCloud S7781
-    const unescaped = content.replaceAll('\\n', '\n');
+    const unescaped = content.replaceAll(String.raw`\n`, '\n');
 
     // Use indexOf for linear-time parsing instead of regex to prevent ReDoS
     const startMarker = '---';
@@ -588,10 +588,10 @@ export class ElementFormatter {
    */
   private unescapeNewlines(text: string): string {
     return text
-      .replaceAll('\\n', '\n')
-      .replaceAll('\\r', '\r')
-      .replaceAll('\\t', '\t')
-      .replaceAll('\\\\', '\\');
+      .replaceAll(String.raw`\n`, '\n')
+      .replaceAll(String.raw`\r`, '\r')
+      .replaceAll(String.raw`\t`, '\t')
+      .replaceAll(String.raw`\\`, '\\');
   }
 
   /**
