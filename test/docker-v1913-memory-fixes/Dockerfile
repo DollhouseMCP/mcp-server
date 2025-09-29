@@ -17,8 +17,8 @@ COPY --chown=claude:claude . /home/claude/mcp-server/
 WORKDIR /home/claude/mcp-server
 RUN npm ci && npm run build
 
-# Install Claude Code CLI
-RUN npm install -g @anthropic/claude-code@latest
+# Install Claude Code CLI (correct package name)
+RUN npm install -g @anthropic-ai/claude-code@latest
 
 # Setup MCP configuration
 RUN mkdir -p /home/claude/.config/claude-code
