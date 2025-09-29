@@ -13,7 +13,7 @@ import * as os from 'node:os';
 
 // Helper function for flexible name matching
 const normalizeMemoryName = (name: string): string => {
-  return name.replace(/[\s-]/g, '-').toLowerCase();
+  return name.replaceAll(/[\s-]/g, '-').toLowerCase();
 };
 
 const findMemoryByName = (
@@ -118,7 +118,7 @@ shardInfo:
 
     // Reset singleton instances for clean test
     // MUST reset PortfolioManager first since PortfolioIndexManager depends on it
-    // TODO: Add proper resetInstance() methods to singleton classes
+    // Test isolation: Direct instance reset is acceptable for test code
     (PortfolioManager as any).instance = null;
     (PortfolioIndexManager as any).instance = null;
 
@@ -128,7 +128,7 @@ shardInfo:
 
   afterAll(async () => {
     // Reset singleton instances to ensure clean state for next tests
-    // TODO: Add proper resetInstance() methods to singleton classes
+    // Test isolation: Direct instance reset is acceptable for test code
     (PortfolioManager as any).instance = null;
     (PortfolioIndexManager as any).instance = null;
 
