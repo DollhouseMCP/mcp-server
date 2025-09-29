@@ -595,14 +595,22 @@ export class ElementFormatter {
 
   /**
    * Detect element type from file path
+   * Enhanced with more robust path matching to avoid false positives
    */
   private detectElementType(filePath: string): ElementType {
-    // Using replaceAll as per SonarCloud S7781
+    // Normalize path separators
     const normalizedPath = filePath.replaceAll('\\', '/');
 
-    for (const [, value] of Object.entries(ElementType)) {
-      if (normalizedPath.includes(`/${value}/`)) {
-        return value as ElementType;
+    // Split into path segments for more accurate matching
+    const segments = normalizedPath.split('/').filter(s => s.length > 0);
+
+    // Check each segment for element type match
+    for (const segment of segments) {
+      for (const [, value] of Object.entries(ElementType)) {
+        // Exact segment match to avoid false positives with nested paths
+        if (segment === value) {
+          return value as ElementType;
+        }
       }
     }
 

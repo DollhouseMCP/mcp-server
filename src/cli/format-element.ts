@@ -156,10 +156,22 @@ async function formatSpecificFiles(
 
 /**
  * Exit with appropriate code based on results
+ * Exit codes:
+ * 0 - All successful
+ * 1 - Total failure (all files failed)
+ * 2 - Partial failure (some files failed)
  */
 function exitWithCode(results: FormatterResult[]): void {
-  const hasErrors = results.some(r => !r.success);
-  process.exit(hasErrors ? 1 : 0);
+  const failed = results.filter(r => !r.success).length;
+  const total = results.length;
+
+  if (failed === 0) {
+    process.exit(0);  // All successful
+  } else if (failed === total) {
+    process.exit(1);  // Total failure
+  } else {
+    process.exit(2);  // Partial failure
+  }
 }
 
 /**
