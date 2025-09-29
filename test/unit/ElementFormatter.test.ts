@@ -278,10 +278,10 @@ No frontmatter here, just content.`;
       await fs.mkdir(personaDir);
 
       // Add test personas
-      const persona1 = `---\nname: persona-1\\nversion: 1.0.0\n---\n# Persona 1`;
+      const persona1 = `---\nname: persona-1\nversion: 1.0.0\n---\n# Persona 1`;
       await fs.writeFile(path.join(personaDir, 'persona-1.md'), persona1, 'utf-8');
 
-      const persona2 = `---\nname: persona-2\\nversion: 2.0.0\n---\n# Persona 2`;
+      const persona2 = `---\nname: persona-2\nversion: 2.0.0\n---\n# Persona 2`;
       await fs.writeFile(path.join(personaDir, 'persona-2.md'), persona2, 'utf-8');
 
       const results = await formatter.formatElementType(ElementType.PERSONA, tempDir);

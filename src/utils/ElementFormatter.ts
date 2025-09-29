@@ -428,7 +428,10 @@ export class ElementFormatter {
    * Check if content has embedded metadata
    */
   private hasEmbeddedMetadata(content: string): boolean {
-    return content.includes('---\n') || content.includes(String.raw`---\n`);
+    // Check for both actual newlines and escaped newlines
+    return content.includes('---\n') ||
+           content.includes('---\\n') ||
+           content.includes(String.raw`---\n`);
   }
 
   /**
@@ -436,12 +439,23 @@ export class ElementFormatter {
    */
   private handleEmbeddedMetadata(entry: any, data: any, result: FormatterResult): void {
     result.issues.push('Found embedded metadata in content');
-    const extracted = this.extractEmbeddedMetadata(entry.content);
+
+    // First unescape the content to make it parseable
+    const unescapedContent = this.unescapeNewlines(entry.content);
+
+    // Then try to extract metadata from the unescaped content
+    const extracted = this.extractEmbeddedMetadata(unescapedContent);
 
     if (extracted.metadata) {
+      // Merge extracted metadata to top level
       Object.assign(data, extracted.metadata);
-      entry.content = this.unescapeNewlines(extracted.content);
+      // Update entry with clean content
+      entry.content = extracted.content;
       result.fixed.push('Extracted embedded metadata to top level', 'Unescaped newlines in content');
+    } else {
+      // Just unescape if no metadata found
+      entry.content = unescapedContent;
+      result.fixed.push('Unescaped newlines in content');
     }
   }
 
@@ -537,28 +551,48 @@ export class ElementFormatter {
    * with a linear-time string parsing approach to prevent ReDoS attacks
    */
   private extractEmbeddedMetadata(content: string): { metadata: any; content: string } {
-    // Handle both actual newlines and escaped newlines
-    // Using replaceAll as per SonarCloud S7781
-    const unescaped = content.replaceAll(String.raw`\n`, '\n');
+    // Content should already be unescaped by the time we get here
+    const unescaped = content;
 
     // Use indexOf for linear-time parsing instead of regex to prevent ReDoS
     const startMarker = '---';
     const endMarker = '\n---\n';
 
-    // Check if content starts with frontmatter marker
-    if (!unescaped.startsWith(startMarker)) {
+    // Try to find the start marker anywhere in the content
+    const trimmed = unescaped.trim();
+    const startIdx = trimmed.indexOf(startMarker);
+
+    if (startIdx === -1) {
       return { metadata: null, content };
     }
 
     // Find the starting position after first marker
-    const startPos = startMarker.length;
+    const startPos = startIdx + startMarker.length;
 
     // Look for the end marker
-    const endPos = unescaped.indexOf(endMarker, startPos);
+    const endPos = trimmed.indexOf(endMarker, startPos);
 
     if (endPos === -1) {
-      // No closing marker found
-      return { metadata: null, content };
+      // Try alternative end marker for edge cases
+      const altEndMarker = '---\n';
+      const altEndPos = trimmed.indexOf(altEndMarker, startPos + 1);
+      if (altEndPos === -1) {
+        return { metadata: null, content };
+      }
+      // Use alternative end position
+      const metadataStr = trimmed.slice(startPos, altEndPos).trim();
+      const cleanContent = trimmed.slice(altEndPos + altEndMarker.length).trim();
+
+      try {
+        const tempDoc = `---\n${metadataStr}\n---\n`;
+        const parsed = SecureYamlParser.parse(tempDoc, {
+          validateContent: true,
+          validateFields: false
+        });
+        return { metadata: parsed.data, content: cleanContent };
+      } catch {
+        return { metadata: null, content };
+      }
     }
 
     // Extract metadata and content sections
@@ -587,10 +621,10 @@ export class ElementFormatter {
    */
   private unescapeNewlines(text: string): string {
     return text
-      .replaceAll(String.raw`\n`, '\n')
-      .replaceAll(String.raw`\r`, '\r')
-      .replaceAll(String.raw`\t`, '\t')
-      .replaceAll(String.raw`\\`, '\\');
+      .replaceAll('\\n', '\n')
+      .replaceAll('\\r', '\r')
+      .replaceAll('\\t', '\t')
+      .replaceAll('\\\\', '\\');
   }
 
   /**
