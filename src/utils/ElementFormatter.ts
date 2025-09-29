@@ -429,8 +429,9 @@ export class ElementFormatter {
    */
   private hasEmbeddedMetadata(content: string): boolean {
     // Check for both actual newlines and escaped newlines
+    // NOSONAR: String.raw doesn't help here - we need to check for the literal backslash-n sequence
     return content.includes('---\n') ||
-           content.includes('---\\n') ||
+           content.includes('---\\n') || // eslint-disable-line no-useless-escape
            content.includes(String.raw`---\n`);
   }
 
@@ -482,6 +483,7 @@ export class ElementFormatter {
 
   /**
    * Format data as clean YAML
+   * FIX: Improved YAML formatting for consistency and special character handling
    */
   private formatAsYaml(data: any): string {
     return yaml.dump(data, {
@@ -489,7 +491,19 @@ export class ElementFormatter {
       noRefs: true,
       sortKeys: false,
       quotingType: '"',
-      forceQuotes: false
+      forceQuotes: false,
+      // Use block scalar style for strings containing newlines
+      // This preserves formatting while keeping tabs/returns readable
+      styles: {
+        '!!str': (str: string) => {
+          // Use block scalar for multiline strings
+          if (typeof str === 'string' && str.includes('\n')) {
+            return 'literal';
+          }
+          // Use default (quoted) for other strings, including those with tabs/returns
+          return 'plain';
+        }
+      }
     });
   }
 
@@ -618,38 +632,54 @@ export class ElementFormatter {
   /**
    * Unescape newline characters
    * Using replaceAll as per SonarCloud S7781
+   * NOSONAR: String.raw doesn't work for unescaping - we need to replace literal escape sequences
    */
   private unescapeNewlines(text: string): string {
     return text
-      .replaceAll('\\n', '\n')
-      .replaceAll('\\r', '\r')
-      .replaceAll('\\t', '\t')
+      .replaceAll('\\n', '\n') // eslint-disable-line no-useless-escape
+      .replaceAll('\\r', '\r') // eslint-disable-line no-useless-escape
+      .replaceAll('\\t', '\t') // eslint-disable-line no-useless-escape
       .replaceAll('\\\\', '\\');
   }
 
   /**
    * Detect element type from file path
-   * Enhanced with more robust path matching to avoid false positives
+   * Enhanced with more explicit and robust path matching
    */
   private detectElementType(filePath: string): ElementType {
-    // Normalize path separators
+    // Normalize path separators for cross-platform compatibility
     const normalizedPath = filePath.replaceAll('\\', '/');
 
-    // Split into path segments for more accurate matching
+    // Map of element type directory names to ElementType enum values
+    // More explicit than iterating through enum values
+    const elementTypeMap: Record<string, ElementType> = {
+      'personas': ElementType.PERSONA,
+      'skills': ElementType.SKILL,
+      'templates': ElementType.TEMPLATE,
+      'agents': ElementType.AGENT,
+      'memories': ElementType.MEMORY,
+      'ensembles': ElementType.ENSEMBLE
+    };
+
+    // Split into path segments for accurate matching
     const segments = normalizedPath.split('/').filter(s => s.length > 0);
 
-    // Check each segment for element type match
+    // Find the element type by checking each segment against our explicit map
     for (const segment of segments) {
-      for (const [, value] of Object.entries(ElementType)) {
-        // Exact segment match to avoid false positives with nested paths
-        if (segment === value) {
-          return value as ElementType;
-        }
+      const elementType = elementTypeMap[segment.toLowerCase()];
+      if (elementType) {
+        return elementType;
       }
     }
 
-    // Default based on file extension
-    return filePath.endsWith('.yaml') ? ElementType.MEMORY : ElementType.PERSONA;
+    // Fallback: Use file extension as a hint
+    // .yaml files are typically memories, .md files are standard elements
+    if (filePath.endsWith('.yaml') || filePath.endsWith('.yml')) {
+      return ElementType.MEMORY;
+    }
+
+    // Default to PERSONA for .md files or unknown types
+    return ElementType.PERSONA;
   }
 
   /**

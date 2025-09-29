@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as yaml from 'js-yaml';
 import { ElementFormatter } from '../../src/utils/ElementFormatter.js';
 import { ElementType } from '../../src/portfolio/types.js';
 
@@ -529,9 +530,19 @@ entries:
       expect(result.success).toBe(true);
       const formattedPath = testFile.replace('.yaml', '.formatted.yaml');
       const formatted = await fs.readFile(formattedPath, 'utf-8');
+
+      // Check multiline content is preserved with block scalar
       expect(formatted).toContain('Level 1');
       expect(formatted).toContain('Level 2');
-      expect(formatted).toContain('Tab\t');
+
+      // YAML correctly escapes tab/return in quoted strings - this is expected behavior
+      // The actual tab character is in the data, but YAML shows it as \t for readability
+      expect(formatted).toMatch(/Tab\\t.*return\\r/);
+
+      // Verify the actual parsed content has real tab/return characters
+      const parsedYaml = yaml.load(formatted) as any;
+      expect(parsedYaml.entries[1].content).toContain('\t');
+      expect(parsedYaml.entries[1].content).toContain('\r');
     });
   });
 });
