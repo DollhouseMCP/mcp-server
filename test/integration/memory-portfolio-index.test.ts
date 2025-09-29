@@ -11,11 +11,27 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
+// Helper function for flexible name matching
+const normalizeMemoryName = (name: string): string => {
+  return name.replace(/[\s-]/g, '-').toLowerCase();
+};
+
+const findMemoryByName = (
+  memories: any[],
+  expectedName: string
+): any => {
+  const normalized = normalizeMemoryName(expectedName);
+  return memories.find(m =>
+    normalizeMemoryName(m.metadata.name) === normalized
+  );
+};
+
 describe('PortfolioIndexManager Memory Indexing (Issue #1188)', () => {
   let tempDir: string;
   let originalHomeDir: string;
   let originalPortfolioDir: string | undefined;
   let indexManager: PortfolioIndexManager;
+  const DEBUG_TESTS = process.env.DEBUG_TESTS === 'true';
 
   beforeAll(async () => {
     // Create temp directory structure
@@ -102,6 +118,7 @@ shardInfo:
 
     // Reset singleton instances for clean test
     // MUST reset PortfolioManager first since PortfolioIndexManager depends on it
+    // TODO: Add proper resetInstance() methods to singleton classes
     (PortfolioManager as any).instance = null;
     (PortfolioIndexManager as any).instance = null;
 
@@ -111,15 +128,17 @@ shardInfo:
 
   afterAll(async () => {
     // Reset singleton instances to ensure clean state for next tests
+    // TODO: Add proper resetInstance() methods to singleton classes
     (PortfolioManager as any).instance = null;
     (PortfolioIndexManager as any).instance = null;
 
     // Restore environment variables
     process.env.HOME = originalHomeDir;
-    if (originalPortfolioDir !== undefined) {
-      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
-    } else {
+    // Fix: Avoid negated condition (SonarCloud)
+    if (originalPortfolioDir === undefined) {
       delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+    } else {
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
     }
 
     // Clean up temp directory
@@ -140,18 +159,17 @@ shardInfo:
     // Check that memories are indexed
     const memories = index.byType.get(ElementType.MEMORY) || [];
 
-    // Debug logging
-    console.log('Found memories count:', memories.length);
-    console.log('Memory names:', memories.map(m => m.metadata.name));
+    // Debug logging (only when DEBUG_TESTS is enabled)
+    if (DEBUG_TESTS) {
+      console.log('Found memories count:', memories.length);
+      console.log('Memory names:', memories.map(m => m.metadata.name));
+    }
 
     // Should find all three memories (test, legacy, sharded)
     expect(memories.length).toBeGreaterThanOrEqual(3);
 
-    // Find our test memory (name might be transformed)
-    const testMemory = memories.find(m =>
-      m.metadata.name === 'test-memory-index' ||
-      m.metadata.name === 'test memory index'
-    );
+    // Find our test memory using flexible name matching
+    const testMemory = findMemoryByName(memories, 'test-memory-index');
     expect(testMemory).toBeDefined();
     expect(testMemory?.metadata.description).toBe('Test memory for index verification');
     expect(testMemory?.metadata.tags).toContain('test');
@@ -165,11 +183,16 @@ shardInfo:
   });
 
   it('should support finding memories by name', async () => {
-    // Try both hyphenated and space-separated versions
+    // Try finding with original name or transformed name
     const found = await indexManager.findByName('test-memory-index') ||
                   await indexManager.findByName('test memory index');
     expect(found).toBeDefined();
-    expect(found?.metadata.name).toMatch(/test[\s-]memory[\s-]index/i);
+    // Verify name matches expected pattern (with hyphens or spaces)
+    if (found) {
+      expect(normalizeMemoryName(found.metadata.name)).toBe(
+        normalizeMemoryName('test-memory-index')
+      );
+    }
     expect(found?.elementType).toBe(ElementType.MEMORY);
   });
 
@@ -190,8 +213,7 @@ shardInfo:
     const recallTriggers = index.byTrigger.get('recall') || [];
     const memoryWithRecall = recallTriggers.find(e =>
       e.elementType === ElementType.MEMORY &&
-      (e.metadata.name === 'test-memory-index' ||
-       e.metadata.name === 'test memory index')
+      normalizeMemoryName(e.metadata.name) === normalizeMemoryName('test-memory-index')
     );
 
     expect(memoryWithRecall).toBeDefined();
@@ -273,15 +295,14 @@ entries:
     const index = await indexManager.getIndex();
     const memories = index.byType.get(ElementType.MEMORY) || [];
 
-    // Find the sharded memory (name might be transformed or just "metadata")
-    const shardedMemory = memories.find(m =>
-      m.metadata.name === 'large-sharded-memory' ||
-      m.metadata.name === 'large sharded memory' ||
-      m.metadata.name === 'metadata'
-    );
+    // Find the sharded memory using flexible name matching
+    const shardedMemory = findMemoryByName(memories, 'large-sharded-memory') ||
+                          memories.find(m => m.metadata.name === 'metadata');
 
-    console.log('Sharded memory found:', shardedMemory?.metadata.name);
-    console.log('Shard info:', (shardedMemory as any)?.shardInfo);
+    if (DEBUG_TESTS) {
+      console.log('Sharded memory found:', shardedMemory?.metadata.name);
+      console.log('Shard info:', shardedMemory?.shardInfo);
+    }
 
     expect(shardedMemory).toBeDefined();
     expect(shardedMemory?.metadata.description).toBe('Large memory stored in shards');
@@ -290,9 +311,18 @@ entries:
     expect(shardedMemory?.metadata.keywords).toContain('sharded'); // Auto-added by indexer
 
     // Verify shard info was stored
-    const shardInfo = (shardedMemory as any)?.shardInfo;
+    // Using type assertion for shardInfo access (memory-specific property)
+    interface ShardedMemory {
+      shardInfo?: {
+        shardCount: number;
+        shardDir: string;
+      };
+    }
+    const shardInfo = (shardedMemory as ShardedMemory)?.shardInfo;
     expect(shardInfo).toBeDefined();
-    expect(shardInfo?.shardCount).toBe(3); // metadata.yaml + 2 shard files
+    // Expected: 3 files (metadata.yaml + shard-001.yaml + shard-002.yaml)
+    const EXPECTED_SHARD_COUNT = 3;
+    expect(shardInfo?.shardCount).toBe(EXPECTED_SHARD_COUNT);
     expect(shardInfo?.shardDir).toBe('2025-09-28/large-sharded-memory');
   });
 });
