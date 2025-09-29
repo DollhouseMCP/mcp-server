@@ -16,8 +16,10 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -207,7 +209,22 @@ async function migrateAll(memoriesDir: string, dryRun: boolean = true) {
 
 // CLI
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const memoriesDir = process.argv[2] || path.join(process.env.HOME || '~', '.dollhouse/portfolio/memories');
+  // FIX (DMCP-SEC-004): Normalize user input to prevent Unicode normalization attacks
+  const userProvidedDir = process.argv[2];
+  let memoriesDir: string;
+
+  if (userProvidedDir) {
+    const validation = UnicodeValidator.normalize(userProvidedDir);
+    if (!validation.isValid) {
+      console.error(`❌ Invalid path: ${validation.detectedIssues?.join(', ')}`);
+      process.exit(1);
+    }
+    memoriesDir = validation.normalizedContent;
+  } else {
+    // FIX (SonarCloud): Use os.homedir() instead of process.env.HOME for reliability
+    memoriesDir = path.join(os.homedir(), '.dollhouse/portfolio/memories');
+  }
+
   const dryRun = !process.argv.includes('--live');
 
   migrateAll(memoriesDir, dryRun).catch(console.error);

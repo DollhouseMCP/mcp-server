@@ -433,7 +433,26 @@ export class MemoryManager implements IElementManager<Memory> {
       throw new Error(`Failed to save memory: ${error}`);
     }
   }
-  
+  /**
+   * Handle memory load failure
+   * FIX (SonarCloud): Extract duplicated error handling to reduce code duplication
+   * @private
+   */
+  private handleLoadFailure(
+    file: string,
+    error: unknown,
+    failedLoads: Array<{ file: string; error: string }>
+  ): void {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    failedLoads.push({ file, error: errorMsg });
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
+      severity: 'LOW',
+      source: 'MemoryManager.list',
+      details: `Failed to load ${file}: ${error}`
+    });
+  }
+
   /**
    * List all available memories
    */
@@ -458,14 +477,7 @@ export class MemoryManager implements IElementManager<Memory> {
           const memory = await this.load(file);
           memories.push(memory);
         } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          failedLoads.push({ file, error: errorMsg });
-          SecurityMonitor.logSecurityEvent({
-            type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
-            severity: 'LOW',
-            source: 'MemoryManager.list',
-            details: `Failed to load ${file}: ${error}`
-          });
+          this.handleLoadFailure(file, error, failedLoads);
         }
       }
 
@@ -481,15 +493,8 @@ export class MemoryManager implements IElementManager<Memory> {
             const memory = await this.load(path.join(dateFolder, file));
             memories.push(memory);
           } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
             const fullPath = `${dateFolder}/${file}`;
-            failedLoads.push({ file: fullPath, error: errorMsg });
-            SecurityMonitor.logSecurityEvent({
-              type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
-              severity: 'LOW',
-              source: 'MemoryManager.list',
-              details: `Failed to load ${fullPath}: ${error}`
-            });
+            this.handleLoadFailure(fullPath, error, failedLoads);
           }
         }
       }
