@@ -429,10 +429,12 @@ export class ElementFormatter {
    */
   private hasEmbeddedMetadata(content: string): boolean {
     // Check for both actual newlines and escaped newlines
-    // NOSONAR: String.raw doesn't help here - we need to check for the literal backslash-n sequence
-    return content.includes('---\n') ||
-           content.includes('---\\n') || // eslint-disable-line no-useless-escape
-           content.includes(String.raw`---\n`);
+    // Using String.raw to properly handle escape sequences (SonarCloud compliance)
+    const actualNewline = '---\n';
+    const escapedNewline = String.raw`---\n`;  // This represents the literal string "---\n"
+
+    return content.includes(actualNewline) ||
+           content.includes(escapedNewline);
   }
 
   /**
@@ -632,14 +634,23 @@ export class ElementFormatter {
   /**
    * Unescape newline characters
    * Using replaceAll as per SonarCloud S7781
-   * NOSONAR: String.raw doesn't work for unescaping - we need to replace literal escape sequences
+   * Using character map to avoid escape sequence issues
    */
   private unescapeNewlines(text: string): string {
-    return text
-      .replaceAll('\\n', '\n') // eslint-disable-line no-useless-escape
-      .replaceAll('\\r', '\r') // eslint-disable-line no-useless-escape
-      .replaceAll('\\t', '\t') // eslint-disable-line no-useless-escape
-      .replaceAll('\\\\', '\\');
+    // Map of escape sequences to their actual characters
+    // This avoids SonarCloud's String.raw warnings
+    const escapeMap: Array<[string, string]> = [
+      [String.raw`\n`, '\n'],  // Newline
+      [String.raw`\r`, '\r'],  // Carriage return
+      [String.raw`\t`, '\t'],  // Tab
+      [String.raw`\\`, '\\']   // Backslash (must be last to avoid double-unescaping)
+    ];
+
+    let result = text;
+    for (const [escaped, actual] of escapeMap) {
+      result = result.replaceAll(escaped, actual);
+    }
+    return result;
   }
 
   /**
