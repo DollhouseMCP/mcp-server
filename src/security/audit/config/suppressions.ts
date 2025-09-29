@@ -151,6 +151,11 @@ export const suppressions: Suppression[] = [
     file: 'src/config/ConfigManager.ts',
     reason: 'INTENTIONAL: Uses js-yaml with FAILSAFE_SCHEMA for pure YAML config files. This prevents code execution and is the appropriate security measure for config files that are NOT markdown with frontmatter. Regression test ensures we do not use SecureYamlParser here which would reset config values.'
   },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/portfolio/PortfolioIndexManager.ts',
+    reason: 'INTENTIONAL: Memory files are pure YAML (not Markdown with frontmatter), so SecureYamlParser cannot be used. Uses yaml.load with FAILSAFE_SCHEMA + size validation + type checking for security. These are trusted local user files. Fix for issue #1196.'
+  },
   
   // ========================================
   // Clear-text Logging False Positives

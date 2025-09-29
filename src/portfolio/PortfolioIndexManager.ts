@@ -704,9 +704,24 @@ export class PortfolioIndexManager {
       // Memory files are pure YAML without frontmatter markers, so we can't use SecureYamlParser
       // (which is designed for Markdown files with YAML frontmatter between --- markers)
       // Using FAILSAFE_SCHEMA for security (same as MemoryManager uses)
-      const parsed = yaml.load(content, {
+
+      // Security validation: Check content size before parsing
+      if (content.length > 1048576) { // 1MB limit
+        logger.warn(`Large memory file detected, skipping: ${filePath}`);
+        return null;
+      }
+
+      const rawParsed = yaml.load(content, {
         schema: yaml.FAILSAFE_SCHEMA
-      }) as Record<string, any>;
+      });
+
+      // Type safety: Ensure parsed result is a valid object
+      if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+        logger.warn(`Invalid YAML structure in memory file: ${filePath}`);
+        return null;
+      }
+
+      const parsed = rawParsed as Record<string, any>;
 
       // Extract base filename
       const filename = path.basename(filePath, '.yaml');
