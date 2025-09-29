@@ -17,6 +17,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { PortfolioManager } from './PortfolioManager.js';
@@ -689,6 +690,7 @@ export class PortfolioIndexManager {
   /**
    * Create an index entry from a memory YAML file
    * FIX #1188: Special handling for memory files with different structure
+   * FIX #1196: Use yaml.load for pure YAML files, not SecureYamlParser (which expects Markdown frontmatter)
    */
   private async createMemoryIndexEntry(filePath: string, elementType: ElementType): Promise<IndexEntry | null> {
     try {
@@ -698,18 +700,38 @@ export class PortfolioIndexManager {
       // Read file content
       const content = await fs.readFile(filePath, 'utf-8');
 
-      // Parse YAML directly (memories are pure YAML, not markdown with frontmatter)
-      const parsed = SecureYamlParser.parse(content, {
-        validateContent: false,  // Trust local files
-        validateFields: false
+      // FIX #1196: Parse pure YAML using yaml.load()
+      // Memory files are pure YAML without frontmatter markers, so we can't use SecureYamlParser
+      // (which is designed for Markdown files with YAML frontmatter between --- markers)
+      // Using FAILSAFE_SCHEMA for security (same as MemoryManager uses)
+
+      // Security validation: Check content size before parsing
+      if (content.length > 1048576) { // 1MB limit
+        logger.warn(`Large memory file detected, skipping: ${filePath}`);
+        return null;
+      }
+
+      const rawParsed = yaml.load(content, {
+        schema: yaml.FAILSAFE_SCHEMA
       });
+
+      // Type safety: Ensure parsed result is a valid object
+      if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+        logger.warn(`Invalid YAML structure in memory file: ${filePath}`);
+        return null;
+      }
+
+      const parsed = rawParsed as Record<string, any>;
 
       // Extract base filename
       const filename = path.basename(filePath, '.yaml');
 
       // Memory files can have metadata at top level OR nested under 'metadata' key
-      // Some may have metadata embedded in entries (malformed but common)
-      const metadataSource = parsed.data.metadata || parsed.data;
+      // FIX #1196: Merge both levels, preferring nested metadata block over top-level
+      // This handles mixed structures where some fields are top-level and others are nested
+      const metadataSource = parsed.metadata
+        ? { ...parsed, ...parsed.metadata }  // Merge top-level with nested, nested wins
+        : parsed;  // No nested metadata, use top-level only
 
       // Build metadata with memory-specific defaults
       const metadata = {
