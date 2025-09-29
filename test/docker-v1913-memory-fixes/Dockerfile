@@ -11,7 +11,11 @@ RUN useradd -m -s /bin/bash claude
 WORKDIR /home/claude
 
 # Copy the local MCP server source with our v1.9.13 fixes
-COPY --chown=claude:claude . /home/claude/mcp-server/
+# Note: Build context should be run from mcp-server root: docker build -f test/docker-v1913-memory-fixes/Dockerfile .
+COPY --chown=claude:claude package*.json /home/claude/mcp-server/
+COPY --chown=claude:claude tsconfig.json /home/claude/mcp-server/
+COPY --chown=claude:claude src /home/claude/mcp-server/src/
+COPY --chown=claude:claude scripts /home/claude/mcp-server/scripts/
 
 # Build the MCP server
 WORKDIR /home/claude/mcp-server
@@ -82,10 +86,7 @@ RUN chown -R claude:claude /home/claude
 USER claude
 WORKDIR /home/claude
 
-# Configure Claude
-RUN claude config set --global apiKeyHelper /home/claude/.claude/anthropic_key_helper.sh
-
-# Create comprehensive test script
+# Create comprehensive test script with runtime Claude configuration
 RUN echo '#!/bin/bash' > /home/claude/test-v1913-fixes.sh && \
     echo 'set -e' >> /home/claude/test-v1913-fixes.sh && \
     echo 'echo "==================================="' >> /home/claude/test-v1913-fixes.sh && \
