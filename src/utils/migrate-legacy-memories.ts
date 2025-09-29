@@ -184,8 +184,16 @@ async function migrateAll(memoriesDir: string, dryRun: boolean = true) {
     const result = await migrateLegacyFile(memoriesDir, file, dryRun);
     results.push(result);
 
-    const icon = result.status === 'success' ? '✅' :
-                 result.status === 'skipped' ? '⏭️' : '❌';
+    // FIX (SonarCloud S3358): Extract nested ternary to if-else
+    let icon: string;
+    if (result.status === 'success') {
+      icon = '✅';
+    } else if (result.status === 'skipped') {
+      icon = '⏭️';
+    } else {
+      icon = '❌';
+    }
+
     console.log(`${icon} ${file}`);
     if (result.reason) console.log(`   ${result.reason}`);
     if (result.newPath) console.log(`   → ${result.newPath}`);
@@ -227,7 +235,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const dryRun = !process.argv.includes('--live');
 
-  migrateAll(memoriesDir, dryRun).catch(console.error);
+  // FIX (SonarCloud S7785): Use top-level await instead of promise chain
+  try {
+    await migrateAll(memoriesDir, dryRun);
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
 }
 
 export { migrateAll, migrateLegacyFile, findLegacyFiles };

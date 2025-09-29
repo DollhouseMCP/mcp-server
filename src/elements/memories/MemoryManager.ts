@@ -517,6 +517,55 @@ export class MemoryManager implements IElementManager<Memory> {
   }
   
   /**
+   * Check root files for load failures
+   * FIX (SonarCloud S3776): Extract to reduce cognitive complexity
+   * @private
+   */
+  private async checkRootFiles(
+    failures: Array<{ file: string; error: string }>
+  ): Promise<number> {
+    const rootFiles = await fs.readdir(this.memoriesDir)
+      .then(files => files.filter(f => f.endsWith('.yaml')))
+      .catch(() => []);
+
+    for (const file of rootFiles) {
+      try {
+        await this.load(file);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        failures.push({ file, error: errorMsg });
+      }
+    }
+
+    return rootFiles.length;
+  }
+
+  /**
+   * Check date folder files for load failures
+   * FIX (SonarCloud S3776): Extract to reduce cognitive complexity
+   * @private
+   */
+  private async checkDateFolderFiles(
+    dateFolder: string,
+    failures: Array<{ file: string; error: string }>
+  ): Promise<number> {
+    const files = await fs.readdir(path.join(this.memoriesDir, dateFolder))
+      .then(files => files.filter(f => f.endsWith('.yaml')))
+      .catch(() => []);
+
+    for (const file of files) {
+      try {
+        await this.load(path.join(dateFolder, file));
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        failures.push({ file: `${dateFolder}/${file}`, error: errorMsg });
+      }
+    }
+
+    return files.length;
+  }
+
+  /**
    * Get diagnostic information about memory loading status
    * FIX (#1206): New method to expose failed loads to users
    */
@@ -531,38 +580,13 @@ export class MemoryManager implements IElementManager<Memory> {
 
     try {
       const dateFolders = await this.getDateFolders();
-      const rootFiles = await fs.readdir(this.memoriesDir)
-        .then(files => files.filter(f => f.endsWith('.yaml')))
-        .catch(() => []);
-
-      totalFiles += rootFiles.length;
 
       // Check root files
-      for (const file of rootFiles) {
-        try {
-          await this.load(file);
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          failures.push({ file, error: errorMsg });
-        }
-      }
+      totalFiles += await this.checkRootFiles(failures);
 
       // Check date folders
       for (const dateFolder of dateFolders) {
-        const files = await fs.readdir(path.join(this.memoriesDir, dateFolder))
-          .then(files => files.filter(f => f.endsWith('.yaml')))
-          .catch(() => []);
-
-        totalFiles += files.length;
-
-        for (const file of files) {
-          try {
-            await this.load(path.join(dateFolder, file));
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            failures.push({ file: `${dateFolder}/${file}`, error: errorMsg });
-          }
-        }
+        totalFiles += await this.checkDateFolderFiles(dateFolder, failures);
       }
 
       return {
