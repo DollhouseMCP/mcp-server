@@ -187,17 +187,22 @@ export class MemoryManager implements IElementManager<Memory> {
       } else if (!content.startsWith('---', firstNonWhitespace)) {
         // Pure YAML file - wrap it with frontmatter markers for SecureYamlParser
         const wrappedContent = `---\n${content}\n---\n`;
+        // FIX (#1206): Memory files are locally trusted user content. Word-matching
+        // validation creates false positives for legitimate documentation (e.g.,
+        // SonarCloud rules reference). Security validation should happen at
+        // import/installation time, not during load. See PortfolioIndexManager:644-649.
         const parseResult = SecureYamlParser.parse(wrappedContent, {
           maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
-          validateContent: true
+          validateContent: false  // Local files are pre-trusted
         });
         // For pure YAML, the entire content becomes the data, no markdown content
         parsed = { data: parseResult.data, content: '' };
       } else {
         // File with frontmatter (shouldn't happen for memories, but handle it)
+        // FIX (#1206): Same rationale as above - local memory files are pre-trusted
         parsed = SecureYamlParser.parse(content, {
           maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
-          validateContent: true
+          validateContent: false  // Local files are pre-trusted
         });
       }
 
@@ -434,6 +439,8 @@ export class MemoryManager implements IElementManager<Memory> {
    */
   async list(): Promise<Memory[]> {
     const memories: Memory[] = [];
+    // FIX (#1206): Track failed loads to surface to users
+    const failedLoads: Array<{ file: string; error: string }> = [];
 
     try {
       // Get all date folders
@@ -451,6 +458,8 @@ export class MemoryManager implements IElementManager<Memory> {
           const memory = await this.load(file);
           memories.push(memory);
         } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          failedLoads.push({ file, error: errorMsg });
           SecurityMonitor.logSecurityEvent({
             type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
             severity: 'LOW',
@@ -472,14 +481,23 @@ export class MemoryManager implements IElementManager<Memory> {
             const memory = await this.load(path.join(dateFolder, file));
             memories.push(memory);
           } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const fullPath = `${dateFolder}/${file}`;
+            failedLoads.push({ file: fullPath, error: errorMsg });
             SecurityMonitor.logSecurityEvent({
               type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
               severity: 'LOW',
               source: 'MemoryManager.list',
-              details: `Failed to load ${dateFolder}/${file}: ${error}`
+              details: `Failed to load ${fullPath}: ${error}`
             });
           }
         }
+      }
+
+      // FIX (#1206): Log summary of failed loads if any
+      if (failedLoads.length > 0) {
+        logger.warn(`[MemoryManager] Failed to load ${failedLoads.length} memories:`,
+          failedLoads.map(f => `  - ${f.file}: ${f.error}`).join('\n'));
       }
 
       return memories;
@@ -493,6 +511,66 @@ export class MemoryManager implements IElementManager<Memory> {
     }
   }
   
+  /**
+   * Get diagnostic information about memory loading status
+   * FIX (#1206): New method to expose failed loads to users
+   */
+  async getLoadStatus(): Promise<{
+    total: number;
+    loaded: number;
+    failed: number;
+    failures: Array<{ file: string; error: string }>;
+  }> {
+    const failures: Array<{ file: string; error: string }> = [];
+    let totalFiles = 0;
+
+    try {
+      const dateFolders = await this.getDateFolders();
+      const rootFiles = await fs.readdir(this.memoriesDir)
+        .then(files => files.filter(f => f.endsWith('.yaml')))
+        .catch(() => []);
+
+      totalFiles += rootFiles.length;
+
+      // Check root files
+      for (const file of rootFiles) {
+        try {
+          await this.load(file);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          failures.push({ file, error: errorMsg });
+        }
+      }
+
+      // Check date folders
+      for (const dateFolder of dateFolders) {
+        const files = await fs.readdir(path.join(this.memoriesDir, dateFolder))
+          .then(files => files.filter(f => f.endsWith('.yaml')))
+          .catch(() => []);
+
+        totalFiles += files.length;
+
+        for (const file of files) {
+          try {
+            await this.load(path.join(dateFolder, file));
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failures.push({ file: `${dateFolder}/${file}`, error: errorMsg });
+          }
+        }
+      }
+
+      return {
+        total: totalFiles,
+        loaded: totalFiles - failures.length,
+        failed: failures.length,
+        failures
+      };
+    } catch (error) {
+      throw new Error(`Failed to get load status: ${error}`);
+    }
+  }
+
   /**
    * Find memories matching a predicate
    */
