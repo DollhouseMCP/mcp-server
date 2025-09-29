@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.9.13] - 2025-09-29
+
+### Fixed
+- **Memory System Critical Fixes (Issue #1206, PR #1207)**
+  - Fixed security scanner false positives preventing legitimate security documentation from loading
+  - Memory files with security terms (vulnerability, exploit, attack) now load correctly
+  - Local memory files are now pre-trusted (validateContent: false)
+
+  - Added visible error reporting for failed memory loads
+  - Users now see "Failed to load X memories" with detailed error messages
+  - New getLoadStatus() diagnostic method for troubleshooting
+
+  - New legacy memory migration tool (migrate-legacy-memories.ts)
+  - Migrates old .md files to .yaml format in date-organized folders
+  - Safe archiving of original files, dry-run mode by default
+
+### Added
+- **CLI Utility**: migrate-legacy-memories.ts for legacy file migration
+- **Diagnostic Method**: getLoadStatus() for memory loading diagnostics
+- **Error Tracking**: failedLoads tracking in MemoryManager
+
+### Code Quality
+- Fixed SonarCloud S3776: Reduced cognitive complexity in getLoadStatus()
+- Fixed SonarCloud S3358: Replaced nested ternary with if-else chain
+- Fixed SonarCloud S7785: Use top-level await instead of promise chain
+- Extracted handleLoadFailure() to eliminate code duplication
+- Use os.homedir() for cross-platform reliability
+
+### Security
+- Fixed DMCP-SEC-004: Added Unicode normalization to CLI input validation
+
 ## [1.9.12] - 2025-09-29
 
 ### Fixed

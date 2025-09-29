@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.github
+*.log
+.env
+.env.local
+coverage
+.nyc_output
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+*~
+# Include package-lock.json for npm ci
+!package-lock.json

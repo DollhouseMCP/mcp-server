@@ -14,7 +14,7 @@ DollhouseMCP is a professional Model Context Protocol (MCP) server that enables 
 **Collection**: https://github.com/DollhouseMCP/collection
 **NPM Package**: @dollhousemcp/mcp-server
 **License**: AGPL-3.0 with Platform Stability Commitments
-**Current Version**: v1.9.6
+**Current Version**: v1.9.12
 
 ## Key Documentation References
 
@@ -41,6 +41,28 @@ SKIP_GITFLOW_CHECK=1 git push
 
 **Known Bug**: False positive when creating feature branch from develop - verify you branched correctly and proceed.
 
+## Core Architecture
+
+### MCP Server Implementation
+- **Transport**: StdioServerTransport (standard I/O for MCP integration)
+- **Protocol**: JSON-RPC 2.0 communication
+- **Tools**: 41+ MCP tools for element management
+- **Entry Point**: `src/index.ts` - Main server class is `DollhouseMCPServer`
+
+### Key Components
+- **Element System** (`src/elements/`): Base classes and managers for all element types
+- **Portfolio Manager** (`src/portfolio/`): Local storage and GitHub sync
+- **Security Layer** (`src/security/`): Input validation, path security, YAML parsing
+- **Collection System** (`src/collection/`): Community element browsing and installation
+- **Auth Manager** (`src/auth/`): GitHub OAuth and token management
+
+### Data Flow
+1. Client Request → MCP Server (StdioServerTransport)
+2. Tool Routing → Appropriate handler in DollhouseMCPServer
+3. Element Processing → Element-specific manager (PersonaManager, SkillManager, etc.)
+4. Storage → PortfolioManager (local files or GitHub sync)
+5. Response → Client via JSON-RPC
+
 ## Element System Architecture
 
 ### Supported Element Types
@@ -54,15 +76,20 @@ SKIP_GITFLOW_CHECK=1 git push
 ### Portfolio Structure
 ```
 ~/.dollhouse/portfolio/
-├── personas/
-├── skills/
-├── templates/
-├── agents/
-│   └── .state/
-├── memories/
-│   └── .storage/
-└── ensembles/
+├── personas/         # Markdown files with YAML frontmatter
+├── skills/           # Markdown files with YAML frontmatter
+├── templates/        # Markdown files with YAML frontmatter
+├── agents/           # Markdown files with YAML frontmatter
+├── memories/         # YAML files organized by date
+│   ├── 2025-09-18/   # Automatic YYYY-MM-DD folder structure
+│   │   └── project-context.yaml
+│   └── 2025-09-19/
+│       ├── meeting-notes.yaml
+│       └── code-review.yaml
+└── ensembles/        # Markdown files with YAML frontmatter (NOT YET LIVE)
 ```
+
+**Note**: Memories use YAML format exclusively (not Markdown) and are organized in date-based folders to prevent flat directory performance issues. Ensembles are under development and not yet functional.
 
 ## Development Workflow
 
@@ -107,10 +134,29 @@ SKIP_GITFLOW_CHECK=1 git push
 
 ### Run Tests
 ```bash
-npm test                    # All tests
-npm test -- --no-coverage   # Without coverage
-npm run test:unit          # Unit tests only
-npm run test:integration   # Integration tests
+# All tests
+npm test
+
+# Without coverage
+npm test -- --no-coverage
+
+# Run a single test file
+npm test -- path/to/test.test.ts
+
+# Run tests matching a pattern
+npm test -- --testNamePattern="Memory"
+
+# Watch mode
+npm run test:watch
+
+# Integration and E2E tests
+npm run test:integration
+npm run test:e2e
+
+# Security-specific tests
+npm run security:critical     # Critical security tests only
+npm run security:rapid        # Quick security validation
+npm run security:all          # Full security test suite
 ```
 
 ### Required CI Checks
@@ -167,4 +213,4 @@ gh pr list                             # View open PRs
 ---
 
 *This document provides essential context for working in the mcp-server repository.*
-*Last verified: September 20, 2025 (v1.9.6)*
+*Last verified: September 29, 2025 (v1.9.12)*
