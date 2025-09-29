@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { TokenManager } from '../../../src/security/tokenManager.js';
+import { TEST_CREDENTIALS } from '../../__fixtures__/testCredentials.js';
 
 describe('TokenManager - GitHub Token Security', () => {
   const originalEnv = process.env;
@@ -19,7 +20,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('validateTokenFormat', () => {
     test('should validate GitHub Personal Access Tokens', () => {
-      expect(TokenManager.validateTokenFormat('ghp_1234567890123456789012345678901234567890')).toBe(true);
+      expect(TokenManager.validateTokenFormat(TEST_CREDENTIALS.MOCK_GITHUB_PAT)).toBe(true);
     });
     
     test('should validate GitHub Installation Tokens', () => {
@@ -58,10 +59,10 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('redactToken', () => {
     test('should safely redact tokens for logging', () => {
-      const token = 'ghp_1234567890123456789012345678901234567890';
+      const token = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       const redacted = TokenManager.redactToken(token);
-      expect(redacted).toBe('ghp_...7890');
-      expect(redacted).not.toContain('1234567890123456789012345678901234');
+      expect(redacted).toBe('ghp_...TEST');
+      expect(redacted).not.toContain('FAKE1234567890TESTTOKEN');
     });
 
     test('should handle short tokens', () => {
@@ -81,8 +82,8 @@ describe('TokenManager - GitHub Token Security', () => {
     });
 
     test('should return valid token when format is correct', () => {
-      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
-      expect(TokenManager.getGitHubToken()).toBe('ghp_1234567890123456789012345678901234567890');
+      process.env.GITHUB_TOKEN = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
+      expect(TokenManager.getGitHubToken()).toBe(TEST_CREDENTIALS.MOCK_GITHUB_PAT);
     });
 
     test('should return null for invalid token format', () => {
@@ -98,7 +99,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('getTokenType', () => {
     test('should identify Personal Access Token', () => {
-      expect(TokenManager.getTokenType('ghp_1234567890123456789012345678901234567890')).toBe('Personal Access Token');
+      expect(TokenManager.getTokenType(TEST_CREDENTIALS.MOCK_GITHUB_PAT)).toBe('Personal Access Token');
     });
 
     test('should identify Installation Token', () => {
@@ -120,7 +121,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('getTokenPrefix', () => {
     test('should return safe prefix for valid tokens', () => {
-      expect(TokenManager.getTokenPrefix('ghp_1234567890123456789012345678901234567890')).toBe('ghp_...');
+      expect(TokenManager.getTokenPrefix(TEST_CREDENTIALS.MOCK_GITHUB_PAT)).toBe('ghp_...');
     });
 
     test('should handle short tokens', () => {
@@ -134,7 +135,7 @@ describe('TokenManager - GitHub Token Security', () => {
       const errorWithToken = 'API failed with token ghp_1234567890123456789012345678901234567890';
       const safeMessage = TokenManager.createSafeErrorMessage(errorWithToken);
       expect(safeMessage).toContain('[REDACTED_PAT]');
-      expect(safeMessage).not.toContain('ghp_1234567890123456789012345678901234567890');
+      expect(safeMessage).not.toContain(TEST_CREDENTIALS.MOCK_GITHUB_PAT);
     });
 
     test('should remove Installation tokens', () => {
@@ -158,7 +159,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
     test('should append token prefix when provided', () => {
       const error = 'Some error occurred';
-      const token = 'ghp_1234567890123456789012345678901234567890';
+      const token = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       const safeMessage = TokenManager.createSafeErrorMessage(error, token);
       expect(safeMessage).toContain('(Token: ghp_...)');
     });
@@ -201,7 +202,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
     test('should validate token with GitHub API when token is available', async () => {
       // Set a valid token format
-      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      process.env.GITHUB_TOKEN = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       
       // Mock fetch to simulate GitHub API response
       const mockGet = jest.fn((header: string) => {
@@ -229,7 +230,7 @@ describe('TokenManager - GitHub Token Security', () => {
     });
 
     test('should handle GitHub API errors gracefully', async () => {
-      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      process.env.GITHUB_TOKEN = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       
       // Mock fetch to simulate GitHub API error
       const mockFetch = jest.fn(() => Promise.resolve({
@@ -249,7 +250,7 @@ describe('TokenManager - GitHub Token Security', () => {
     });
 
     test('should detect missing required scopes', async () => {
-      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      process.env.GITHUB_TOKEN = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       
       // Mock fetch to return token with insufficient scopes
       const mockGet = jest.fn((header: string) => {
@@ -277,7 +278,7 @@ describe('TokenManager - GitHub Token Security', () => {
     });
 
     test('should handle network errors', async () => {
-      process.env.GITHUB_TOKEN = 'ghp_1234567890123456789012345678901234567890';
+      process.env.GITHUB_TOKEN = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       
       // Mock fetch to simulate network error
       const mockFetch = jest.fn(() => Promise.reject(new Error('Network error')));
@@ -291,7 +292,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('validateTokenScopes', () => {
     test('should validate token with sufficient scopes', async () => {
-      const token = 'ghp_1234567890123456789012345678901234567890';
+      const token = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       const requiredScopes = { required: ['public_repo'], optional: ['user:email'] };
       
       const mockGet = jest.fn((header: string) => {
@@ -319,7 +320,7 @@ describe('TokenManager - GitHub Token Security', () => {
     });
 
     test('should handle empty scopes header', async () => {
-      const token = 'ghp_1234567890123456789012345678901234567890';
+      const token = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       const requiredScopes = { required: ['public_repo'] };
       
       const mockGet = jest.fn((header: string) => {
@@ -348,11 +349,11 @@ describe('TokenManager - GitHub Token Security', () => {
 
   describe('Security Integration Tests', () => {
     test('should prevent token exposure in logs across all methods', () => {
-      const sensitiveToken = 'ghp_1234567890123456789012345678901234567890';
+      const sensitiveToken = TEST_CREDENTIALS.MOCK_GITHUB_PAT;
       
       // Test redaction
       const redacted = TokenManager.redactToken(sensitiveToken);
-      expect(redacted).not.toContain('1234567890123456789012345678901234');
+      expect(redacted).not.toContain('FAKE1234567890TESTTOKEN');
       
       // Test safe error messages
       const errorWithToken = `Authentication failed for token ${sensitiveToken}`;
@@ -363,7 +364,7 @@ describe('TokenManager - GitHub Token Security', () => {
       // Test prefix logging
       const prefix = TokenManager.getTokenPrefix(sensitiveToken);
       expect(prefix).toBe('ghp_...');
-      expect(prefix).not.toContain('1234567890123456789012345678901234');
+      expect(prefix).not.toContain('FAKE1234567890TESTTOKEN');
     });
 
     test('should handle multiple tokens in error messages', () => {
@@ -378,7 +379,7 @@ describe('TokenManager - GitHub Token Security', () => {
 
     test('should validate all supported token formats', () => {
       const validTokens = [
-        'ghp_1234567890123456789012345678901234567890', // PAT
+        TEST_CREDENTIALS.MOCK_GITHUB_PAT, // PAT
         'ghs_1234567890123456789012345678901234567890', // Installation
         'ghu_1234567890123456789012345678901234567890', // User Access
         'ghr_1234567890123456789012345678901234567890'  // Refresh

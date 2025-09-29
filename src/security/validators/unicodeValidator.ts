@@ -48,7 +48,7 @@ export class UnicodeValidator {
    * U+007F-U+009F: Delete and C1 control codes
    * U+FFFE-U+FFFF: Non-characters that should never appear in valid text
    */
-  private static readonly NON_PRINTABLE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uFFFE\uFFFF]/g;
+  private static readonly NON_PRINTABLE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uFFFE\uFFFF]/g; // NOSONAR - Intentionally matching control characters for security sanitization
   
   /**
    * Common homograph/confusable character mappings
@@ -88,7 +88,7 @@ export class UnicodeValidator {
    * Detects suspicious mixing of different Unicode scripts
    */
   private static readonly SCRIPT_PATTERNS = {
-    LATIN: /[\u0000-\u007F\u00A0-\u00FF\u0100-\u017F\u0180-\u024F]/,
+    LATIN: /[\u0000-\u007F\u00A0-\u00FF\u0100-\u017F\u0180-\u024F]/, // NOSONAR - Intentionally includes control characters for comprehensive Latin script detection
     // Use alternation to avoid SonarCloud thinking \u052F\u2DE0 is a combined character
     CYRILLIC: /(?:[\u0400-\u04FF]|[\u0500-\u052F]|[\u2DE0-\u2DFF]|[\uA640-\uA69F])/,
     GREEK: /[\u0370-\u03FF\u1F00-\u1FFF]/,

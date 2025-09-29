@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.9.12] - 2025-09-29
+
+### Fixed
+- **Memory System Critical Fixes**
+  - Fixed PortfolioIndexManager overwriting memory metadata during indexing (Issue #1196, PR #1197)
+  - Memory descriptions now properly preserved instead of being replaced with "Memory element"
+  - Fixed memory portfolio index test isolation (Issue #1194, PR #1195)
+  - Tests now use temporary directories instead of contaminating real user portfolio
+  - Added security validation for memory YAML parsing (size limits, type checking)
+
+- **Code Quality**
+  - Fixed SonarCloud S7781: Use String#replaceAll() for modern string replacement (PR #1195)
+  - Fixed SonarCloud S1135: Removed TODO comments, documented test isolation patterns (PR #1195)
+  - Added ElementFormatter tool for cleaning malformed elements (Issue #1190, PR #1193)
+
+### Security
+- Added content size validation (1MB limit) for memory YAML parsing
+- Added type safety validation for parsed memory content
+- Documented security trade-offs with audit suppressions
+
+### Test Coverage
+- Memory portfolio index tests: 8/8 passing (was 3/8)
+- All tests properly isolated from user portfolio state
+- No regressions introduced (2260+ tests passing)
+
+### Closed Issues
+- #1196 - Memory metadata preservation
+- #1194 - Test isolation
+- #1190 - ElementFormatter tool
+- #659 - Tool execution timeout (verified fixed in earlier release)
+- #404 - Element system MCP exposure (verified fixed in earlier release)
+- #919 - Duplicate tool names (verified fixed in earlier release)
+
 ## [1.9.11] - 2025-09-28
 
 ### Fixed

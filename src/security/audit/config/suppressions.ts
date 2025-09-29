@@ -98,6 +98,16 @@ export const suppressions: Suppression[] = [
     reason: 'Test files use fake tokens and secrets for testing security features'
   },
   {
+    rule: 'OWASP-A01-001',
+    file: 'test/__fixtures__/**/*',
+    reason: 'Test fixtures contain intentional mock credentials clearly marked as FAKE/TEST/NOT_REAL'
+  },
+  {
+    rule: '*',
+    file: 'test/__fixtures__/testCredentials.ts',
+    reason: 'Centralized test credentials file with intentionally fake values for testing'
+  },
+  {
     rule: 'CWE-89-001',
     file: '__tests__/**/*',
     reason: 'Test files contain SQL injection patterns for security testing'
@@ -140,6 +150,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-005',
     file: 'src/config/ConfigManager.ts',
     reason: 'INTENTIONAL: Uses js-yaml with FAILSAFE_SCHEMA for pure YAML config files. This prevents code execution and is the appropriate security measure for config files that are NOT markdown with frontmatter. Regression test ensures we do not use SecureYamlParser here which would reset config values.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/portfolio/PortfolioIndexManager.ts',
+    reason: 'INTENTIONAL: Memory files are pure YAML (not Markdown with frontmatter), so SecureYamlParser cannot be used. Uses yaml.load with FAILSAFE_SCHEMA + size validation + type checking for security. These are trusted local user files. Fix for issue #1196.'
   },
   
   // ========================================
