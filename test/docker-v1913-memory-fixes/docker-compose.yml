@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  v1913-test:
+    build:
+      context: ../..
+      dockerfile: test/docker-v1913-memory-fixes/Dockerfile
+    container_name: dollhouse-v1913-memory-test
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+    volumes:
+      # Mount portfolio for inspection
+      - v1913-portfolio:/home/claude/.dollhouse/portfolio
+      # Mount logs for analysis
+      - v1913-logs:/home/claude/.claude/logs
+    networks:
+      - v1913-test-net
+
+volumes:
+  v1913-portfolio:
+    name: dollhouse-v1913-portfolio
+  v1913-logs:
+    name: dollhouse-v1913-logs
+
+networks:
+  v1913-test-net:
+    name: dollhouse-v1913-test
