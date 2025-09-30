@@ -45,6 +45,9 @@ describe('SafeRegex', () => {
     });
 
     it('should reject dangerous patterns', () => {
+      // lgtm[js/polynomial-redos] - Intentional test case for ReDoS detection
+      // This dangerous pattern is used to verify SafeRegex.test() correctly detects
+      // and blocks catastrophic backtracking patterns
       const dangerous = '(.+)+$';
       expect(SafeRegex.test(dangerous, 'aaaaaaaaaa')).toBe(false);
       // FIX: Check for full formatted message string
@@ -101,6 +104,9 @@ describe('SafeRegex', () => {
     });
 
     it('should reject dangerous patterns', () => {
+      // lgtm[js/polynomial-redos] - Intentional test case for ReDoS detection
+      // This dangerous pattern verifies SafeRegex.match() correctly detects
+      // and blocks catastrophic backtracking patterns
       const dangerous = '(.+)+$';
       expect(SafeRegex.match('aaaaaaaaaa', dangerous)).toBeNull();
     });
@@ -294,6 +300,9 @@ describe('Performance Tests (Reviewer Recommendation)', () => {
   });
 
   it('should timeout slow regex execution', () => {
+    // lgtm[js/polynomial-redos] - Intentional test case for timeout protection
+    // This nested quantifier pattern verifies SafeRegex enforces timeouts
+    // and prevents actual DOS attacks during testing
     const slowPattern = '(a+)+$';
     const maliciousInput = 'a'.repeat(100) + 'X';
 
