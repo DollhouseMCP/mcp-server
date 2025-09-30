@@ -1,5 +1,114 @@
 ## 🏷️ Version History
 
+### v1.9.14 - September 30, 2025
+
+**Bug Fixes**: ElementFormatter and portfolio search improvements
+
+#### 🔧 Fixed
+- **ElementFormatter Security Scanner False Positives** - Fixed validation option being ignored (#1211, #1212)
+  - SecureYamlParser now properly respects `validateContent: false` option
+  - ElementFormatter uses `validateContent: false` for all YAML parsing (5 locations)
+  - Local trusted files can bypass content scanning while maintaining security for untrusted sources
+  - Improved memory name generation: derives from filenames instead of auto-generated IDs
+  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
+
+- **Portfolio Search File Extension Display** - Fixed incorrect extension display (#1213, #1215)
+  - Portfolio search now shows correct file extensions based on element type
+  - Memories display `.yaml` extension, other elements show `.md` extension
+  - Added `getFileExtension()` public method to PortfolioManager
+  - No breaking changes, display-only fix
+
+#### 🛠️ Code Quality
+- Fixed 10 SonarCloud issues in Docker test files:
+  - S7018: Sorted apt packages alphabetically
+  - S7031: Merged consecutive RUN instructions
+  - S7772: Added `node:` prefix for built-in modules (4 occurrences)
+  - S2486: Added proper error logging for JSON parse exceptions
+  - S7780: Used String.raw for regex patterns (2 occurrences)
+- Added comprehensive test coverage for portfolio search file extensions
+
+#### 📚 Documentation
+- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
+- Updated CLAUDE.md with naming conventions and style guide for session notes
+- Added session notes documentation for PR #1215
+
+#### 📊 Statistics
+- 2 Bug fixes merged (PR #1212, #1215)
+- 10 Code quality issues resolved
+- 2,277 tests passing with >96% coverage
+- Quality Gate: PASSING
+- Test Coverage: >96% maintained
+
+---
+
+### v1.9.13 - September 29, 2025
+
+**Memory System Critical Fixes**: Security scanner improvements and enhanced error reporting
+
+#### 🔧 Fixed
+- **Security Scanner False Positives** - Fixed memory system rejecting legitimate security documentation (#1206, #1207)
+  - Memory files with security terms (vulnerability, exploit, attack) now load correctly
+  - Local memory files are now pre-trusted (validateContent: false)
+- **Silent Error Reporting** - Added visible error reporting for failed memory loads
+  - Users now see "Failed to load X memories" with detailed error messages
+  - New getLoadStatus() diagnostic method for troubleshooting
+- **Legacy Memory Migration** - New migration tool for old .md files
+  - Migrates to .yaml format in date-organized folders
+  - Safe archiving of original files, dry-run mode by default
+
+#### ✨ Added
+- CLI Utility: migrate-legacy-memories.ts for legacy file migration
+- Diagnostic Method: getLoadStatus() for memory loading diagnostics
+- Error Tracking: failedLoads tracking in MemoryManager
+
+#### 🛠️ Code Quality
+- Fixed SonarCloud S3776: Reduced cognitive complexity in getLoadStatus()
+- Fixed SonarCloud S3358: Replaced nested ternary with if-else chain
+- Fixed SonarCloud S7785: Use top-level await instead of promise chain
+- Extracted handleLoadFailure() to eliminate code duplication
+- Use os.homedir() for cross-platform reliability
+
+#### 🔒 Security
+- Fixed DMCP-SEC-004: Added Unicode normalization to CLI input validation
+
+#### 📊 Statistics
+- 3 Critical fixes merged in PR #1207
+- 7 Code quality issues resolved
+- 1 Security issue fixed
+- Quality Gate: PASSING
+- Test Coverage: >96% maintained
+
+---
+
+### v1.9.12 - September 29, 2025
+
+**Memory System Stability**: Portfolio index and test isolation improvements
+
+#### 🔧 Fixed
+- **Memory Metadata Preservation** - Fixed PortfolioIndexManager overwriting memory metadata (#1196, #1197)
+  - Memory descriptions now properly preserved instead of "Memory element"
+- **Test Isolation** - Fixed memory portfolio index tests contaminating real user portfolio (#1194, #1195)
+  - Tests now use temporary directories
+  - Added security validation for memory YAML parsing (size limits, type checking)
+- **ElementFormatter Tool** - Added tool for cleaning malformed elements (#1190, #1193)
+
+#### 🛠️ Code Quality
+- Fixed SonarCloud S7781: Use String#replaceAll() for modern string replacement
+- Fixed SonarCloud S1135: Removed TODO comments, documented test isolation patterns
+
+#### 🔒 Security
+- Added content size validation (1MB limit) for memory YAML parsing
+- Added type safety validation for parsed memory content
+- Documented security trade-offs with audit suppressions
+
+#### 📊 Statistics
+- Memory portfolio index tests: 8/8 passing (was 3/8)
+- Closed issues: #1196, #1194, #1190, #659, #404, #919
+- Quality Gate: PASSING
+- Test Coverage: >96% maintained
+
+---
+
 ### v1.9.11 - September 28, 2025
 
 **SonarCloud Quality & Security**: Major code quality improvements and security fixes

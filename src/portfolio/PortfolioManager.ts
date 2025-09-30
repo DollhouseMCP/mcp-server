@@ -93,7 +93,15 @@ export class PortfolioManager {
   public getElementDir(type: ElementType): string {
     return path.join(this.baseDir, type);
   }
-  
+
+  /**
+   * Get the file extension for a specific element type
+   * FIX (#1213): Expose ELEMENT_FILE_EXTENSIONS mapping for correct extension display
+   */
+  public getFileExtension(type: ElementType): string {
+    return ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
+  }
+
   /**
    * Initialize the portfolio directory structure
    * Uses locking to prevent race conditions during concurrent initialization

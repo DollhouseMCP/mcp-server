@@ -1,5 +1,102 @@
 # Changelog
 
+## [1.9.14] - 2025-09-30
+
+### Fixed
+- **ElementFormatter Security Scanner False Positives (Issue #1211, PR #1212)**
+  - Fixed SecureYamlParser ignoring `validateContent: false` option
+  - Pre-parse security validation now properly respects validation flag
+  - ElementFormatter now uses `validateContent: false` for all YAML parsing (5 locations)
+  - Allows local trusted files to bypass content scanning while maintaining security for untrusted sources
+  - Improved memory name generation: derives names from filenames instead of auto-generated IDs
+  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
+
+- **Portfolio Search File Extension Display (Issue #1213, PR #1215)**
+  - Portfolio search now displays correct file extensions based on element type
+  - Memories show `.yaml` extension, other elements show `.md` extension
+  - Added `getFileExtension()` public method to PortfolioManager
+  - Fixed hardcoded `.md` extension in search result formatting
+  - No breaking changes, display-only fix
+
+### Code Quality
+- Fixed SonarCloud issues in Docker test files:
+  - S7018: Sorted apt packages alphabetically in Dockerfile.test-enhanced
+  - S7031: Merged consecutive RUN instructions in Dockerfile.test-enhanced
+  - S7772: Added `node:` prefix for built-in module imports (4 occurrences)
+  - S2486: Added proper error logging for JSON parse exceptions
+  - S7780: Used String.raw for grep regex patterns (2 occurrences)
+- Added comprehensive test coverage for portfolio search file extensions
+- 2,277 tests passing with >96% coverage
+
+### Documentation
+- Added SESSION_NOTES_2025-09-30-AFTERNOON-PR1215-SONARCLOUD-PROCEDURE.md
+- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
+- Updated CLAUDE.md with naming conventions and style guide for session notes and memories
+
+## [1.9.13] - 2025-09-29
+
+### Fixed
+- **Memory System Critical Fixes (Issue #1206, PR #1207)**
+  - Fixed security scanner false positives preventing legitimate security documentation from loading
+  - Memory files with security terms (vulnerability, exploit, attack) now load correctly
+  - Local memory files are now pre-trusted (validateContent: false)
+
+  - Added visible error reporting for failed memory loads
+  - Users now see "Failed to load X memories" with detailed error messages
+  - New getLoadStatus() diagnostic method for troubleshooting
+
+  - New legacy memory migration tool (migrate-legacy-memories.ts)
+  - Migrates old .md files to .yaml format in date-organized folders
+  - Safe archiving of original files, dry-run mode by default
+
+### Added
+- **CLI Utility**: migrate-legacy-memories.ts for legacy file migration
+- **Diagnostic Method**: getLoadStatus() for memory loading diagnostics
+- **Error Tracking**: failedLoads tracking in MemoryManager
+
+### Code Quality
+- Fixed SonarCloud S3776: Reduced cognitive complexity in getLoadStatus()
+- Fixed SonarCloud S3358: Replaced nested ternary with if-else chain
+- Fixed SonarCloud S7785: Use top-level await instead of promise chain
+- Extracted handleLoadFailure() to eliminate code duplication
+- Use os.homedir() for cross-platform reliability
+
+### Security
+- Fixed DMCP-SEC-004: Added Unicode normalization to CLI input validation
+
+## [1.9.12] - 2025-09-29
+
+### Fixed
+- **Memory System Critical Fixes**
+  - Fixed PortfolioIndexManager overwriting memory metadata during indexing (Issue #1196, PR #1197)
+  - Memory descriptions now properly preserved instead of being replaced with "Memory element"
+  - Fixed memory portfolio index test isolation (Issue #1194, PR #1195)
+  - Tests now use temporary directories instead of contaminating real user portfolio
+  - Added security validation for memory YAML parsing (size limits, type checking)
+
+- **Code Quality**
+  - Fixed SonarCloud S7781: Use String#replaceAll() for modern string replacement (PR #1195)
+  - Fixed SonarCloud S1135: Removed TODO comments, documented test isolation patterns (PR #1195)
+  - Added ElementFormatter tool for cleaning malformed elements (Issue #1190, PR #1193)
+
+### Security
+- Added content size validation (1MB limit) for memory YAML parsing
+- Added type safety validation for parsed memory content
+- Documented security trade-offs with audit suppressions
+
+### Test Coverage
+- Memory portfolio index tests: 8/8 passing (was 3/8)
+- All tests properly isolated from user portfolio state
+- No regressions introduced (2260+ tests passing)
+
+### Closed Issues
+- #1196 - Memory metadata preservation
+- #1194 - Test isolation
+- #1190 - ElementFormatter tool
+- #659 - Tool execution timeout (verified fixed in earlier release)
+- #404 - Element system MCP exposure (verified fixed in earlier release)
+- #919 - Duplicate tool names (verified fixed in earlier release)
+
 ## [1.9.11] - 2025-09-28
 
 ### Fixed

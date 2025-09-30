@@ -4,12 +4,13 @@
 FROM node:24-slim
 
 # Install dependencies
+# FIX (SonarCloud S7018): Sort packages alphabetically for maintainability
 RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
     curl \
+    g++ \
     jq \
+    make \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -27,11 +28,10 @@ COPY src/ ./src/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
-# Build the application
-RUN npm run build
-
-# Create test user and directories
-RUN useradd -m -s /bin/bash testuser && \
+# Build the application and create test user
+# FIX (SonarCloud S7031): Merge consecutive RUN instructions to reduce Docker layers
+RUN npm run build && \
+    useradd -m -s /bin/bash testuser && \
     mkdir -p /home/testuser/.dollhouse/portfolio && \
     mkdir -p /home/testuser/.dollhouse/portfolio/personas && \
     mkdir -p /home/testuser/.dollhouse/portfolio/skills && \
