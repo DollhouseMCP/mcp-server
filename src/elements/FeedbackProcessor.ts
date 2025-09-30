@@ -461,6 +461,7 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     const density = keywordCount / textLength;
     
     // Position bonus (earlier = more relevant)
+    // Note: Using original keyword (not escapedKeyword) since indexOf is string-based, not regex
     const position = text.indexOf(keyword) / text.length;
     const positionBonus = 1 - position * 0.5;
     
