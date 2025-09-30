@@ -3,31 +3,24 @@ name: "CodeQL config"
 # Paths to ignore during analysis
 paths-ignore:
   - test/__tests__/security/regexValidator.test.ts
+  - 'test/**/*.test.ts'
 
 # Query filters to exclude specific alerts
+# FIX: Use correct array syntax for id field (CodeQL documentation)
 query-filters:
   - exclude:
-      id: js/polynomial-redos
+      id:
+        - js/polynomial-redos
+        - js/redos
       paths:
-        - test/**/*.test.ts
-  - exclude:
-      id: js/redos
-      paths:
-        - test/**/*.test.ts
-  - exclude:
-      problem.severity: error
-      tags contain: "redos"
-      paths:
-        - "test/__tests__/security/**"
+        - "test/**"
 
   - exclude:
-      id: js/prototype-polluting-assignment
+      id:
+        - js/prototype-polluting-assignment
+        - js/prototype-pollution-utility
       paths:
-        - src/config/ConfigManager.ts
-  - exclude:
-      id: js/prototype-pollution-utility
-      paths:
-        - src/config/ConfigManager.ts
+        - "src/config/ConfigManager.ts"
 
 # Additional documentation
 # These test files intentionally contain vulnerable regex patterns
