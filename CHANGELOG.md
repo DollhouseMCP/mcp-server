@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.9.14] - 2025-09-30
+
+### Fixed
+- **ElementFormatter Security Scanner False Positives (Issue #1211, PR #1212)**
+  - Fixed SecureYamlParser ignoring `validateContent: false` option
+  - Pre-parse security validation now properly respects validation flag
+  - ElementFormatter now uses `validateContent: false` for all YAML parsing (5 locations)
+  - Allows local trusted files to bypass content scanning while maintaining security for untrusted sources
+  - Improved memory name generation: derives names from filenames instead of auto-generated IDs
+  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
+
+- **Portfolio Search File Extension Display (Issue #1213, PR #1215)**
+  - Portfolio search now displays correct file extensions based on element type
+  - Memories show `.yaml` extension, other elements show `.md` extension
+  - Added `getFileExtension()` public method to PortfolioManager
+  - Fixed hardcoded `.md` extension in search result formatting
+  - No breaking changes, display-only fix
+
+### Code Quality
+- Fixed SonarCloud issues in Docker test files:
+  - S7018: Sorted apt packages alphabetically in Dockerfile.test-enhanced
+  - S7031: Merged consecutive RUN instructions in Dockerfile.test-enhanced
+  - S7772: Added `node:` prefix for built-in module imports (4 occurrences)
+  - S2486: Added proper error logging for JSON parse exceptions
+  - S7780: Used String.raw for grep regex patterns (2 occurrences)
+- Added comprehensive test coverage for portfolio search file extensions
+- 2,277 tests passing with >96% coverage
+
+### Documentation
+- Added SESSION_NOTES_2025-09-30-AFTERNOON-PR1215-SONARCLOUD-PROCEDURE.md
+- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
+- Updated CLAUDE.md with naming conventions and style guide for session notes and memories
+
 ## [1.9.13] - 2025-09-29
 
 ### Fixed
