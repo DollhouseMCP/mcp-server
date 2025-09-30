@@ -93,8 +93,9 @@ async function triggerIndexCreation() {
 
       // Check logs for any index-related activity
       console.log("\n5. Checking server logs for index activity...");
+      // FIX (SonarCloud S7780): Use String.raw to avoid escaping backslashes
       const { stdout: logs } = await execPromise(
-        'docker logs dollhouse-test 2>&1 | grep -i "index\\|enhanced" | tail -10'
+        String.raw`docker logs dollhouse-test 2>&1 | grep -i "index\|enhanced" | tail -10`
       );
       console.log("Recent index logs:");
       console.log(logs);
