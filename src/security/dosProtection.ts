@@ -318,67 +318,53 @@ export class SafeRegex {
  */
 export class DOSProtection {
   /**
-   * Protect string split operations from ReDoS
+   * Split with regex separator using SafeRegex protection
+   * Extracted to reduce cognitive complexity
    */
-  static safeSplit(
+  private static splitWithRegex(
     input: string,
     separator: string | RegExp,
     limit?: number
   ): string[] {
-    // FIX: Handle empty string case correctly
-    // Previously: Returned [] for empty string
-    // Now: Returns [''] to match standard JavaScript split() behavior
-    if (!input) {
-      return input === '' ? [''] : [];
+    // Simple whitespace split is safe
+    if (separator.toString() === '/\\s+/') {
+      return input.split(/\s+/, limit);
     }
 
-    // Length check
-    if (input.length > 100000) {
-      return [];
-    }
+    const parts: string[] = [];
+    let remaining = input;
+    let count = 0;
+    const maxIterations = limit || 1000;
 
-    // For regex separators, use SafeRegex
-    if (separator instanceof RegExp || separator.startsWith('/')) {
-      // FIX: Remove object comparison that always returns false
-      // Previously: separator === /\s+/ (compares by reference)
-      // Now: Check separator.toString() only
-      // Simple whitespace split is safe
-      if (separator.toString() === '/\\s+/') {
-        return input.split(/\s+/, limit);
+    while (remaining && count < maxIterations) {
+      const match = SafeRegex.match(remaining, separator, {
+        context: 'split operation',
+        timeout: 50
+      });
+
+      if (!match?.index && match?.index !== 0) {
+        parts.push(remaining);
+        break;
       }
 
-      // Use safe execution for complex patterns
-      const parts: string[] = [];
-      let remaining = input;
-      let count = 0;
-      const maxIterations = limit || 1000;
-
-      while (remaining && count < maxIterations) {
-        const match = SafeRegex.match(remaining, separator, {
-          context: 'split operation',
-          timeout: 50
-        });
-
-        // FIX: Use cleaner null checking
-        // Previously: !match || match.index === undefined
-        // Now: Check both conditions properly
-        if (!match?.index && match?.index !== 0) {
-          parts.push(remaining);
-          break;
-        }
-
-        parts.push(remaining.substring(0, match.index));
-        remaining = remaining.substring(match.index + match[0].length);
-        count++;
-      }
-
-      return parts;
+      parts.push(remaining.substring(0, match.index));
+      remaining = remaining.substring(match.index + match[0].length);
+      count++;
     }
 
-    // FIX: Handle limit parameter to keep remainder in final element
-    // Previously: Used native split which truncates
-    // Now: Custom implementation that preserves remainder
-    // String separator is safe
+    return parts;
+  }
+
+  /**
+   * Split with string separator preserving remainder
+   * Extracted to reduce cognitive complexity
+   */
+  private static splitWithString(
+    input: string,
+    separator: string,
+    limit?: number
+  ): string[] {
+    // No limit - use native split
     if (limit === undefined || limit <= 0) {
       return input.split(separator);
     }
@@ -386,11 +372,8 @@ export class DOSProtection {
     const parts: string[] = [];
     let remaining = input;
     let count = 0;
-
-    // FIX: Remove unnecessary type assertions
-    // Previously: separator as string (TypeScript knows it's string here)
-    // Now: Let TypeScript infer the type
     const sep = separator.toString();
+
     while (remaining && count < limit - 1) {
       const index = remaining.indexOf(sep);
       if (index === -1) {
@@ -409,6 +392,33 @@ export class DOSProtection {
     }
 
     return parts;
+  }
+
+  /**
+   * Protect string split operations from ReDoS
+   * REFACTORED: Reduced cognitive complexity by extracting helpers
+   */
+  static safeSplit(
+    input: string,
+    separator: string | RegExp,
+    limit?: number
+  ): string[] {
+    // Handle empty/invalid input
+    if (!input) {
+      return input === '' ? [''] : [];
+    }
+
+    // Length check
+    if (input.length > 100000) {
+      return [];
+    }
+
+    // Delegate to appropriate handler
+    if (separator instanceof RegExp || separator.startsWith('/')) {
+      return this.splitWithRegex(input, separator, limit);
+    }
+
+    return this.splitWithString(input, separator, limit);
   }
 
   /**
