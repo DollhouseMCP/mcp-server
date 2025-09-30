@@ -1,5 +1,46 @@
 ## 🏷️ Version History
 
+### v1.9.14 - September 30, 2025
+
+**Bug Fixes**: ElementFormatter and portfolio search improvements
+
+#### 🔧 Fixed
+- **ElementFormatter Security Scanner False Positives** - Fixed validation option being ignored (#1211, #1212)
+  - SecureYamlParser now properly respects `validateContent: false` option
+  - ElementFormatter uses `validateContent: false` for all YAML parsing (5 locations)
+  - Local trusted files can bypass content scanning while maintaining security for untrusted sources
+  - Improved memory name generation: derives from filenames instead of auto-generated IDs
+  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
+
+- **Portfolio Search File Extension Display** - Fixed incorrect extension display (#1213, #1215)
+  - Portfolio search now shows correct file extensions based on element type
+  - Memories display `.yaml` extension, other elements show `.md` extension
+  - Added `getFileExtension()` public method to PortfolioManager
+  - No breaking changes, display-only fix
+
+#### 🛠️ Code Quality
+- Fixed 10 SonarCloud issues in Docker test files:
+  - S7018: Sorted apt packages alphabetically
+  - S7031: Merged consecutive RUN instructions
+  - S7772: Added `node:` prefix for built-in modules (4 occurrences)
+  - S2486: Added proper error logging for JSON parse exceptions
+  - S7780: Used String.raw for regex patterns (2 occurrences)
+- Added comprehensive test coverage for portfolio search file extensions
+
+#### 📚 Documentation
+- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
+- Updated CLAUDE.md with naming conventions and style guide for session notes
+- Added session notes documentation for PR #1215
+
+#### 📊 Statistics
+- 2 Bug fixes merged (PR #1212, #1215)
+- 10 Code quality issues resolved
+- 2,277 tests passing with >96% coverage
+- Quality Gate: PASSING
+- Test Coverage: >96% maintained
+
+---
+
 ### v1.9.13 - September 29, 2025
 
 **Memory System Critical Fixes**: Security scanner improvements and enhanced error reporting
