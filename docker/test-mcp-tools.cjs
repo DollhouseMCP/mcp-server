@@ -3,7 +3,8 @@
 // Test script to verify Enhanced Index MCP tools
 // This simulates what Claude would do when calling these tools
 
-const http = require('http');
+// FIX (SonarCloud S7772): Use node: prefix for built-in modules
+const http = require('node:http');
 
 // MCP request helper
 function sendMCPRequest(method, params) {
@@ -33,6 +34,9 @@ function sendMCPRequest(method, params) {
         try {
           resolve(JSON.parse(data));
         } catch (e) {
+          // FIX (SonarCloud S2486): Handle parse error by returning raw data
+          // This is intentional - if JSON parsing fails, return the raw response
+          console.error('Failed to parse JSON response:', e.message);
           resolve(data);
         }
       });
@@ -54,8 +58,9 @@ async function testEnhancedIndex() {
   console.log("To properly test, we need to communicate via stdio.\n");
 
   // Instead, let's check if the index was built
-  const { exec } = require('child_process');
-  const util = require('util');
+  // FIX (SonarCloud S7772): Use node: prefix for built-in modules
+  const { exec } = require('node:child_process');
+  const util = require('node:util');
   const execPromise = util.promisify(exec);
 
   try {
@@ -74,8 +79,9 @@ async function testEnhancedIndex() {
 
       // Try to trigger index build
       console.log("2. Checking server logs for index activity...");
+      // FIX (SonarCloud S7780): Use String.raw to avoid escaping backslashes
       const { stdout: logs } = await execPromise(
-        'docker logs dollhouse-test 2>&1 | grep -i "index\\|enhanced" | tail -10'
+        String.raw`docker logs dollhouse-test 2>&1 | grep -i "index\|enhanced" | tail -10`
       );
       console.log("Recent index-related logs:");
       console.log(logs || "No index logs found");
@@ -90,8 +96,9 @@ async function testEnhancedIndex() {
 
     console.log("\n4. Verifying MCP tools are registered...");
     // Since we can't directly query MCP tools via HTTP, check server logs
+    // FIX (SonarCloud S7780): Use String.raw to avoid escaping backslashes
     const { stdout: toolLogs } = await execPromise(
-      'docker logs dollhouse-test 2>&1 | grep -i "tool.*registered\\|enhanced.*tool" | head -5'
+      String.raw`docker logs dollhouse-test 2>&1 | grep -i "tool.*registered\|enhanced.*tool" | head -5`
     );
 
     if (toolLogs) {
