@@ -1,20 +1,30 @@
 # Security Audit Report
 
-Generated: 2025-09-29T20:59:33.022Z
-Duration: 613ms
+Generated: 2025-09-30T20:08:16.249Z
+Duration: 3ms
 
 ## Summary
 
-- **Total Findings**: 0
-- **Files Scanned**: 151
+- **Total Findings**: 1
+- **Files Scanned**: 1
 
 ### Findings by Severity
 
 - 🔴 **Critical**: 0
 - 🟠 **High**: 0
 - 🟡 **Medium**: 0
-- 🟢 **Low**: 0
+- 🟢 **Low**: 1
 - ℹ️ **Info**: 0
+
+## Detailed Findings
+
+### LOW (1)
+
+#### DMCP-SEC-006: Security operation without audit logging
+
+- **File**: `/var/folders/kj/45kjdq714853c8nlnsv7l0_r0000gn/T/security-audit-test-IDXOZl/auth-handler.js`
+- **Confidence**: medium
+- **Remediation**: Add SecurityMonitor.logSecurityEvent() for audit trail
 
 ## Recommendations
 
