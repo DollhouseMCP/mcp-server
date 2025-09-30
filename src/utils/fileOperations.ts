@@ -257,7 +257,8 @@ export class FileOperations {
  * Ensures all operations succeed or all are rolled back
  */
 export class FileTransaction {
-  private operations: Array<{
+  // FIX: Mark as readonly since never reassigned (SonarCloud S2933)
+  private readonly operations: Array<{
     type: 'move' | 'copy' | 'delete' | 'create';
     source?: string;
     destination?: string;

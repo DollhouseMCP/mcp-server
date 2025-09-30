@@ -10,7 +10,7 @@
 
 // Constants for timeouts and limits (Reviewer recommendation: Extract constants)
 const REGEX_TIMEOUT_MS = 100;          // Default timeout for user input regex
-const SYSTEM_TIMEOUT_MS = 1000;        // Timeout for system operations
+// FIX: Removed SYSTEM_TIMEOUT_MS - unused variable (reserved for future use)
 const MAX_INPUT_LENGTH = 10000;        // Maximum input length to process
 const MAX_PATTERN_CACHE_SIZE = 1000;   // Maximum patterns to cache
 const RATE_LIMIT_RESET_MS = 60000;     // Reset rate limits every minute
