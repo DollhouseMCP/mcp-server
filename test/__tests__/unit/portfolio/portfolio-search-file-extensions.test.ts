@@ -9,10 +9,10 @@
  * correctly displays file extensions based on element type.
  */
 
-import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { homedir } from 'os';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { homedir } from 'node:os';
 import { PortfolioManager, ElementType } from '../../../../src/portfolio/PortfolioManager.js';
 import { PortfolioIndexManager } from '../../../../src/portfolio/PortfolioIndexManager.js';
 import type { SearchResult } from '../../../../src/portfolio/PortfolioIndexManager.js';
@@ -39,7 +39,8 @@ describe('Portfolio Search File Extension Display (Issue #1213)', () => {
     try {
       await fs.rm(testPortfolioDir, { recursive: true, force: true });
     } catch (error) {
-      // Ignore cleanup errors
+      // Expected: Test directory may not exist or be inaccessible during cleanup
+      // This is acceptable as it's test cleanup and doesn't affect test results
     }
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
 
