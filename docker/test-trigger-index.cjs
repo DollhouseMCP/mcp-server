@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 // Test script to trigger Enhanced Index creation via MCP tool call
-const { spawn } = require('child_process');
+// FIX (SonarCloud S7772): Use node: prefix for built-in modules
+const { spawn } = require('node:child_process');
 
 async function triggerIndexCreation() {
   console.log("Triggering Enhanced Index Creation");
@@ -9,8 +10,9 @@ async function triggerIndexCreation() {
 
   // First, restart the container to ensure clean state
   console.log("1. Starting fresh container...");
-  const { exec } = require('child_process');
-  const util = require('util');
+  // FIX (SonarCloud S7772): Use node: prefix for built-in modules
+  const { exec } = require('node:child_process');
+  const util = require('node:util');
   const execPromise = util.promisify(exec);
 
   try {
