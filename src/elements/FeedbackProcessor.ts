@@ -472,8 +472,8 @@ export class FeedbackProcessor implements IFeedbackProcessor {
    * Calculate confidence in the analysis.
    */
   private calculateConfidence(
-    text: string, 
-    sentiment: string, 
+    text: string,
+    _sentiment: string,
     rating: number | null
   ): number {
     let confidence = 0.5; // Base confidence
