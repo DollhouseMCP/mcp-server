@@ -45,9 +45,10 @@ describe('SafeRegex', () => {
     });
 
     it('should reject dangerous patterns', () => {
-      // lgtm[js/polynomial-redos] - Intentional test case for ReDoS detection
+      // Intentional test case for ReDoS detection
       // This dangerous pattern is used to verify SafeRegex.test() correctly detects
       // and blocks catastrophic backtracking patterns
+      // codeql[js/polynomial-redos]
       const dangerous = '(.+)+$';
       expect(SafeRegex.test(dangerous, 'aaaaaaaaaa')).toBe(false);
       // FIX: Check for full formatted message string
@@ -104,9 +105,10 @@ describe('SafeRegex', () => {
     });
 
     it('should reject dangerous patterns', () => {
-      // lgtm[js/polynomial-redos] - Intentional test case for ReDoS detection
+      // Intentional test case for ReDoS detection
       // This dangerous pattern verifies SafeRegex.match() correctly detects
       // and blocks catastrophic backtracking patterns
+      // codeql[js/polynomial-redos]
       const dangerous = '(.+)+$';
       expect(SafeRegex.match('aaaaaaaaaa', dangerous)).toBeNull();
     });
@@ -216,6 +218,7 @@ describe('DOSProtection', () => {
       // NOSONAR - Intentionally vulnerable regex pattern for testing DOS protection
       // This pattern is used to verify our security features correctly detect and block
       // catastrophic backtracking patterns. It's contained within DOSProtection wrapper.
+      // codeql[js/polynomial-redos]
       const dangerous = /(.+)+$/; // NOSONAR
       const input = 'aaaaaaaaaa';
       expect(DOSProtection.safeReplace(input, dangerous, 'x'))
@@ -300,9 +303,10 @@ describe('Performance Tests (Reviewer Recommendation)', () => {
   });
 
   it('should timeout slow regex execution', () => {
-    // lgtm[js/polynomial-redos] - Intentional test case for timeout protection
+    // Intentional test case for timeout protection
     // This nested quantifier pattern verifies SafeRegex enforces timeouts
     // and prevents actual DOS attacks during testing
+    // codeql[js/polynomial-redos]
     const slowPattern = '(a+)+$';
     const maliciousInput = 'a'.repeat(100) + 'X';
 
@@ -335,6 +339,7 @@ describe('Performance Tests (Reviewer Recommendation)', () => {
     // NOSONAR - Intentionally complex regex pattern for testing timeout detection
     // This pattern is vulnerable to super-linear runtime but is safely contained
     // within SafeRegex.test() which enforces timeouts and prevents actual DOS.
+    // codeql[js/polynomial-redos]
     const complexPattern = /^(([a-z])+.)+$/; // NOSONAR
     const testInput = 'abcdefghijklmnopqrstuvwxyz'.repeat(10);
 
