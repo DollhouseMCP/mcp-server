@@ -215,7 +215,10 @@ export class SafeRegex {
     try {
       // Validate pattern for dangerous constructs
       if (this.isDangerous(pattern)) {
-        console.warn('[SafeRegex] Dangerous pattern detected:', pattern);
+        // FIX: Combine message and pattern into single string for console.warn
+        // Previously: Called with two arguments which breaks test expectations
+        // Now: Single formatted string
+        console.warn(`[SafeRegex] Dangerous pattern detected: ${pattern}`);
         return null;
       }
 
@@ -322,15 +325,25 @@ export class DOSProtection {
     separator: string | RegExp,
     limit?: number
   ): string[] {
+    // FIX: Handle empty string case correctly
+    // Previously: Returned [] for empty string
+    // Now: Returns [''] to match standard JavaScript split() behavior
+    if (!input) {
+      return input === '' ? [''] : [];
+    }
+
     // Length check
-    if (!input || input.length > 100000) {
+    if (input.length > 100000) {
       return [];
     }
 
     // For regex separators, use SafeRegex
     if (separator instanceof RegExp || separator.startsWith('/')) {
+      // FIX: Remove object comparison that always returns false
+      // Previously: separator === /\s+/ (compares by reference)
+      // Now: Check separator.toString() only
       // Simple whitespace split is safe
-      if (separator.toString() === '/\\s+/' || separator === /\s+/) {
+      if (separator.toString() === '/\\s+/') {
         return input.split(/\s+/, limit);
       }
 
@@ -346,7 +359,10 @@ export class DOSProtection {
           timeout: 50
         });
 
-        if (!match || match.index === undefined) {
+        // FIX: Use cleaner null checking
+        // Previously: !match || match.index === undefined
+        // Now: Check both conditions properly
+        if (!match?.index && match?.index !== 0) {
           parts.push(remaining);
           break;
         }
@@ -359,8 +375,40 @@ export class DOSProtection {
       return parts;
     }
 
+    // FIX: Handle limit parameter to keep remainder in final element
+    // Previously: Used native split which truncates
+    // Now: Custom implementation that preserves remainder
     // String separator is safe
-    return input.split(separator, limit);
+    if (limit === undefined || limit <= 0) {
+      return input.split(separator);
+    }
+
+    const parts: string[] = [];
+    let remaining = input;
+    let count = 0;
+
+    // FIX: Remove unnecessary type assertions
+    // Previously: separator as string (TypeScript knows it's string here)
+    // Now: Let TypeScript infer the type
+    const sep = separator.toString();
+    while (remaining && count < limit - 1) {
+      const index = remaining.indexOf(sep);
+      if (index === -1) {
+        parts.push(remaining);
+        return parts;
+      }
+
+      parts.push(remaining.substring(0, index));
+      remaining = remaining.substring(index + sep.length);
+      count++;
+    }
+
+    // Add remainder as final element
+    if (remaining || count < limit) {
+      parts.push(remaining);
+    }
+
+    return parts;
   }
 
   /**
