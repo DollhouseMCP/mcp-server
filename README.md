@@ -9,7 +9,8 @@
 ## Build & Quality
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
-[![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
+[![Test Suite](https://img.shields.io/badge/Tests-2,371%20Passing-success)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
+[![Test Coverage](https://img.shields.io/badge/Coverage-%3E96%25-brightgreen)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
 [![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/SECURITY.md)
 
 ## Platform Support
