@@ -510,12 +510,13 @@ export class Template extends BaseElement implements IElement {
     // SECURITY FIX: Use safe, specific patterns to detect dangerous regex constructs
     // Previously: Used [^)]* patterns that could cause ReDoS in detection itself
     // Now: Use safer, bounded character classes and specific string checks
+    // FIX: Use character class and remove unnecessary escape (SonarCloud S6035, S6535)
     const dangerousPatterns = [
-      /(\+|\*){2,}/,                    // Multiple consecutive quantifiers
+      /[+*]{2,}/,                      // Multiple consecutive quantifiers
       /\(.{0,50}\+\)[+*]/,             // Quantified groups with quantifiers inside (bounded)
       /\[[^\]]{0,20}\+\][+*]/,         // Quantified character classes with quantifiers (bounded)
       /(\\[dws])\1{2,}/,               // Repeated character classes
-      /\(\?\<[!=][^)]{0,30}\)/,        // Complex lookbehinds (bounded)
+      /\(\?<[!=][^)]{0,30}\)/,         // Complex lookbehinds (bounded)
     ];
 
     // String-based checks for common catastrophic patterns (safer than regex)

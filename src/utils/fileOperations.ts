@@ -176,10 +176,11 @@ export class FileOperations {
       if (pattern.includes('*')) {
         // Safe glob support - prevent ReDoS
         // Escape special regex chars except *
-        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        // FIX: Use String.raw and replaceAll (SonarCloud S7780, S7781)
+        const escaped = pattern.replaceAll(/[.+?^${}()|[\]\\]/g, String.raw`\$&`);
         // Replace * with [^/]* (match anything except path separator)
         // This prevents catastrophic backtracking
-        const safePattern = escaped.replace(/\*/g, '[^/]*');
+        const safePattern = escaped.replaceAll('*', '[^/]*');
 
         try {
           // FIX: Use template literal to avoid security scanner false positive (PR #1187)

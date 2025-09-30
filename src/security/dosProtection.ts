@@ -135,7 +135,8 @@ export class SafeRegex {
     // Execute with timing
     const startTime = Date.now();
     try {
-      const result = input.match(regex);
+      // FIX: Use RegExp.exec() for better performance (SonarCloud S6594)
+      const result = regex.exec(input);
       const duration = Date.now() - startTime;
 
       // Log slow operations
@@ -165,7 +166,8 @@ export class SafeRegex {
     }
 
     // Escape all regex special characters
-    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
+    return input.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   }
 
   /**
@@ -185,16 +187,17 @@ export class SafeRegex {
 
     try {
       // Escape special regex chars except * and ?
-      let pattern = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      // FIX: Use String.raw and replaceAll (SonarCloud S7780, S7781)
+      let pattern = glob.replaceAll(/[.+^${}()|[\]\\]/g, String.raw`\$&`);
 
       // Replace glob patterns with safe regex equivalents
       // Use [^/]* instead of .* to prevent catastrophic backtracking
       pattern = pattern
-        .replace(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder
-        .replace(/\*/g, '[^/]*')              // * matches anything except /
-        .replace(/\?/g, '[^/]')               // ? matches single char except /
-        .replace(/<<GLOBSTAR>>\//g, '(?:.*/)?') // **/ matches any dirs
-        .replace(/<<GLOBSTAR>>/g, '.*');      // ** matches anything
+        .replaceAll('**', '<<GLOBSTAR>>')     // Temporary placeholder
+        .replaceAll('*', '[^/]*')              // * matches anything except /
+        .replaceAll('?', '[^/]')               // ? matches single char except /
+        .replaceAll('<<GLOBSTAR>>/', '(?:.*/)?') // **/ matches any dirs
+        .replaceAll('<<GLOBSTAR>>', '.*');      // ** matches anything
 
       // FIX: Use template literal to avoid security scanner false positive (PR #1187)
       // This is NOT SQL injection - it's a RegExp pattern for glob matching
@@ -256,9 +259,10 @@ export class SafeRegex {
     }
 
     // String-based checks for catastrophic patterns (safer)
+    // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
     const catastrophicPatterns = [
       '(.+)+', '(.*)+', '(.+)*', '(.*)*',  // Classic catastrophic
-      '(\\d+)+', '(\\w+)+', '(\\s+)+',     // Digit/word/space catastrophic
+      String.raw`(\d+)+`, String.raw`(\w+)+`, String.raw`(\s+)+`,     // Digit/word/space catastrophic
       '(a+)+', '(a*)*',                    // Simple catastrophic
     ];
 
@@ -329,7 +333,8 @@ export class DOSProtection {
     limit?: number
   ): string[] {
     // Simple whitespace split is safe
-    if (separator.toString() === '/\\s+/') {
+    // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
+    if (separator.toString() === String.raw`/\s+/`) {
       return input.split(/\s+/, limit);
     }
 

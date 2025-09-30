@@ -39,8 +39,9 @@ describe('SafeRegex', () => {
     });
 
     it('should handle string patterns', () => {
-      expect(SafeRegex.test('\\d+', '123')).toBe(true);
-      expect(SafeRegex.test('\\d+', 'abc')).toBe(false);
+      // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
+      expect(SafeRegex.test(String.raw`\d+`, '123')).toBe(true);
+      expect(SafeRegex.test(String.raw`\d+`, 'abc')).toBe(false);
     });
 
     it('should reject dangerous patterns', () => {
@@ -275,7 +276,8 @@ describe('Convenience functions', () => {
 
   it('should work correctly', () => {
     expect(safeTest(/test/, 'test')).toBe(true);
-    expect(escapeRegex('.*')).toBe('\\.\\*');
+    // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
+    expect(escapeRegex('.*')).toBe(String.raw`\.\*`);
     expect(safeSplit('a,b', ',')).toEqual(['a', 'b']);
   });
 });
@@ -336,7 +338,8 @@ describe('Performance Tests (Reviewer Recommendation)', () => {
   });
 
   it('should efficiently cache patterns', () => {
-    const pattern = '\\d+';
+    // FIX: Use String.raw for escaped backslashes (SonarCloud S7780)
+    const pattern = String.raw`\d+`;
 
     // First call should compile
     SafeRegex.test(pattern, '123');
