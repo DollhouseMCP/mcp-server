@@ -17,7 +17,7 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
-import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import * as path from 'path';
@@ -160,7 +160,8 @@ export class Template extends BaseElement implements IElement {
     
     // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
     // Note: We test against the original path to preserve cross-platform compatibility
-    const validPathPattern = /^[a-zA-Z0-9\-_\/\\]+\.md$/;
+    // FIX: Remove unnecessary escape for / (SonarCloud S6535)
+    const validPathPattern = /^[a-zA-Z0-9\-_/\\]+\.md$/;
     return validPathPattern.test(includePath);
   }
 
@@ -175,7 +176,8 @@ export class Template extends BaseElement implements IElement {
     }
 
     // Extract all variable tokens from the template
-    const variablePattern = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}\}/g;
+    // FIX: Use \w shorthand instead of [a-zA-Z0-9_] (SonarCloud S6353)
+    const variablePattern = /\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g;
     const tokens: TemplateToken[] = [];
     let match;
     
@@ -630,10 +632,11 @@ export class Template extends BaseElement implements IElement {
    */
   public override validate(): ElementValidationResult {
     const result = super.validate();
-    
+
     // Initialize arrays if not present
-    if (!result.errors) result.errors = [];
-    if (!result.warnings) result.warnings = [];
+    // FIX: Use nullish coalescing assignment (SonarCloud S6606)
+    result.errors ??= [];
+    result.warnings ??= [];
     
     // Content validation
     if (!this.content || this.content.trim().length === 0) {
@@ -711,16 +714,17 @@ export class Template extends BaseElement implements IElement {
     });
     
     // Warnings for best practices
+    // FIX: Remove unnecessary non-null assertion (SonarCloud S4325)
     if (!this.metadata.tags || this.metadata.tags.length === 0) {
-      result.warnings!.push({
+      result.warnings.push({
         field: 'tags',
         message: 'Consider adding tags for better searchability',
         severity: 'low'
       });
     }
-    
+
     if (!this.metadata.examples || this.metadata.examples.length === 0) {
-      result.warnings!.push({
+      result.warnings.push({
         field: 'examples',
         message: 'Adding examples improves template usability',
         severity: 'medium'
