@@ -493,6 +493,179 @@ tags:
     });
   });
 
+  describe('validateContent: false behavior (Issue #1211)', () => {
+    it('should process files with security scanner triggers when validateContent: false', async () => {
+      // This test verifies PR #1212 fix - content that looks like malicious patterns
+      // (e.g., SonarCloud rules) should process successfully
+      const sonarcloudRulesContent = `name: sonarcloud-rules-reference
+description: SonarCloud rules reference
+version: 1.0.0
+tags:
+  - sonarcloud
+  - reference
+  - rules
+entries:
+  - id: entry-1
+    timestamp: 2025-09-28T12:00:00Z
+    content: |
+      # SonarCloud Rules Reference
+
+      ## Reliability Rules
+
+      ### S7773 - Prefer Number.* methods
+      - **Category**: Reliability
+      - **Default Severity**: Medium
+      - **Fix**: Replace \`parseInt()\` with \`Number.parseInt()\`, \`isNaN()\` with \`Number.isNaN()\`
+      - **Issues in project**: ~180
+      - **Automation**: High - simple find/replace
+
+      ### S7781 - Use String#replaceAll()
+      - **Category**: Reliability
+      - **Default Severity**: Low
+      - **Fix**: Replace \`str.replace(/pattern/g, ...)\` with \`str.replaceAll('pattern', ...)\`
+      - **Issues in project**: ~104
+      - **Automation**: High - pattern matching required`;
+
+      const testFile = path.join(tempDir, 'sonarcloud-rules-reference.yaml');
+      await fs.writeFile(testFile, sonarcloudRulesContent, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      // Should succeed without security errors
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(result.issues).not.toContain(expect.stringContaining('Malicious'));
+      expect(result.fixed).toContain('YAML validation passed');
+    });
+
+    it('should process files with API endpoint patterns when validateContent: false', async () => {
+      // API documentation often contains patterns that security scanners flag
+      const apiReferenceContent = `name: sonarcloud-api-reference
+description: SonarCloud API reference
+version: 1.0.0
+tags:
+  - sonarcloud
+  - api
+  - automation
+entries:
+  - id: entry-1
+    timestamp: 2025-09-27T12:00:00Z
+    content: |
+      # SonarCloud API Reference
+
+      ## Authentication
+      **Token Storage**: macOS Keychain as "sonar_token2"
+      **Header Format**: \`Authorization: Bearer $TOKEN\`
+
+      ### Validate Token
+      \`\`\`bash
+      GET /api/authentication/validate
+      → Returns {"valid": true} with 200 if valid, 401 if not
+      \`\`\`
+
+      ## Reading Issues
+
+      ### Search Issues
+      \`\`\`bash
+      GET /api/issues/search
+      \`\`\``;
+
+      const testFile = path.join(tempDir, 'sonarcloud-api-reference.yaml');
+      await fs.writeFile(testFile, apiReferenceContent, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      // Should succeed without security errors
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(result.issues).not.toContain(expect.stringContaining('Malicious'));
+      expect(result.fixed).toContain('YAML validation passed');
+    });
+  });
+
+  describe('filename-based name generation (Issue #1211)', () => {
+    it('should derive memory name from filename when missing', async () => {
+      // Test PR #1212 fix - names should come from filename, not random IDs
+      const contentWithoutName = `description: Test memory without name field
+version: 1.0.0
+retention: 30
+tags:
+  - test
+entries:
+  - id: entry-1
+    timestamp: 2025-09-28T12:00:00Z
+    content: Test content`;
+
+      const testFile = path.join(tempDir, 'sonarcloud-rules-reference.yaml');
+      await fs.writeFile(testFile, contentWithoutName, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).toContain('Added name field from filename: sonarcloud-rules-reference');
+
+      // Verify the formatted content has the correct name
+      const formattedPath = testFile.replace('.yaml', '.formatted.yaml');
+      const formatted = await fs.readFile(formattedPath, 'utf-8');
+      expect(formatted).toContain('name: sonarcloud-rules-reference');
+
+      // Verify it's NOT a random ID like mem_1759077319164_w9m9fk56y
+      expect(formatted).not.toMatch(/name: mem_\d+_[a-z0-9]+/);
+    });
+
+    it('should preserve existing name field if present', async () => {
+      const contentWithName = `name: custom-memory-name
+description: Test memory with existing name
+version: 1.0.0
+entries:
+  - id: entry-1
+    timestamp: 2025-09-28T12:00:00Z
+    content: Test content`;
+
+      const testFile = path.join(tempDir, 'different-filename.yaml');
+      await fs.writeFile(testFile, contentWithName, 'utf-8');
+
+      const result = await formatter.formatFile(testFile);
+
+      expect(result.success).toBe(true);
+      expect(result.fixed).not.toContain(expect.stringContaining('Added name field'));
+
+      // Verify the original name is preserved
+      const formattedPath = testFile.replace('.yaml', '.formatted.yaml');
+      const formatted = await fs.readFile(formattedPath, 'utf-8');
+      expect(formatted).toContain('name: custom-memory-name');
+      expect(formatted).not.toContain('different-filename');
+    });
+
+    it('should handle complex filenames correctly', async () => {
+      // Test filenames with hyphens, underscores, and dates
+      const testCases = [
+        { filename: 'session-2025-09-28-afternoon.yaml', expectedName: 'session-2025-09-28-afternoon' },
+        { filename: 'my_complex_memory_name.yaml', expectedName: 'my_complex_memory_name' },
+        { filename: 'SomeCapitalLetters.yaml', expectedName: 'SomeCapitalLetters' }
+      ];
+
+      for (const testCase of testCases) {
+        const content = `description: Test
+version: 1.0.0
+entries:
+  - content: Test`;
+
+        const testFile = path.join(tempDir, testCase.filename);
+        await fs.writeFile(testFile, content, 'utf-8');
+
+        const result = await formatter.formatFile(testFile);
+
+        expect(result.success).toBe(true);
+        expect(result.fixed).toContain(`Added name field from filename: ${testCase.expectedName}`);
+
+        const formattedPath = testFile.replace('.yaml', '.formatted.yaml');
+        const formatted = await fs.readFile(formattedPath, 'utf-8');
+        expect(formatted).toContain(`name: ${testCase.expectedName}`);
+      }
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle empty files', async () => {
       const testFile = path.join(tempDir, 'empty.yaml');

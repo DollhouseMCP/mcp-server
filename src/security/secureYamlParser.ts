@@ -151,7 +151,8 @@ export class SecureYamlParser {
     }
 
     // 4. Pre-parse security validation
-    if (!ContentValidator.validateYamlContent(yamlContent)) {
+    // FIX (Issue #1211): Only validate content if validateContent option is true
+    if (opts.validateContent && !ContentValidator.validateYamlContent(yamlContent)) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',

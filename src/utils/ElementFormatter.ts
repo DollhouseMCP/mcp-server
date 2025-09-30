@@ -156,7 +156,7 @@ export class ElementFormatter {
     const elementType = this.detectElementType(filePath);
 
     if (elementType === ElementType.MEMORY) {
-      return await this.formatMemory(content, result);
+      return await this.formatMemory(content, filePath, result);
     } else {
       return await this.formatStandardElement(content, result);
     }
@@ -174,8 +174,9 @@ export class ElementFormatter {
         ? `---\n${formatted}\n---\n`
         : formatted;
 
+      // FIX (Issue #1211): Local files are pre-trusted (same as MemoryManager PR #1207)
       SecureYamlParser.parse(yamlToValidate, {
-        validateContent: true,
+        validateContent: false,
         validateFields: false
       });
 
@@ -372,7 +373,7 @@ export class ElementFormatter {
    * Format a memory YAML file
    * Refactored to reduce cognitive complexity
    */
-  private async formatMemory(content: string, result: FormatterResult): Promise<string> {
+  private async formatMemory(content: string, filePath: string, result: FormatterResult): Promise<string> {
     try {
       const data = await this.parseMemoryContent(content);
 
@@ -382,7 +383,7 @@ export class ElementFormatter {
       }
 
       // Ensure proper structure
-      this.ensureMemoryStructure(data, result);
+      this.ensureMemoryStructure(data, filePath, result);
 
       // Format as clean YAML
       return this.formatAsYaml(data);
@@ -398,8 +399,9 @@ export class ElementFormatter {
    */
   private async parseMemoryContent(content: string): Promise<any> {
     const wrappedContent = `---\n${content}\n---\n`;
+    // FIX (Issue #1211): Local files are pre-trusted (same as MemoryManager PR #1207)
     const parsed = SecureYamlParser.parse(wrappedContent, {
-      validateContent: true,
+      validateContent: false,
       validateFields: false
     });
     return parsed.data;
@@ -475,11 +477,14 @@ export class ElementFormatter {
 
   /**
    * Ensure memory has proper structure
+   * FIX (Issue #1211): Derive name from filename instead of auto-generated entry ID
    */
-  private ensureMemoryStructure(data: any, result: FormatterResult): void {
-    if (!data.name && data.entries?.[0]?.id) {
-      data.name = data.entries[0].id;
-      result.fixed.push('Added name field from entry ID');
+  private ensureMemoryStructure(data: any, filePath: string, result: FormatterResult): void {
+    if (!data.name) {
+      // Derive name from filename, removing extension and normalizing
+      const filename = path.basename(filePath, path.extname(filePath));
+      data.name = filename;
+      result.fixed.push(`Added name field from filename: ${filename}`);
     }
   }
 
@@ -526,9 +531,10 @@ export class ElementFormatter {
       const [, frontmatterStr, body] = match;
 
       // FIX: HIGH - Use SecureYamlParser for frontmatter
+      // FIX (Issue #1211): Local files are pre-trusted (same as MemoryManager PR #1207)
       const tempDoc = `---\n${frontmatterStr}\n---\n`;
       const parsed = SecureYamlParser.parse(tempDoc, {
-        validateContent: true,
+        validateContent: false,
         validateFields: false
       });
       const frontmatter = parsed.data as any;
@@ -600,9 +606,10 @@ export class ElementFormatter {
       const cleanContent = trimmed.slice(altEndPos + altEndMarker.length).trim();
 
       try {
+        // FIX (Issue #1211): Local files are pre-trusted (same as MemoryManager PR #1207)
         const tempDoc = `---\n${metadataStr}\n---\n`;
         const parsed = SecureYamlParser.parse(tempDoc, {
-          validateContent: true,
+          validateContent: false,
           validateFields: false
         });
         return { metadata: parsed.data, content: cleanContent };
@@ -617,9 +624,10 @@ export class ElementFormatter {
 
     try {
       // FIX: HIGH - Use SecureYamlParser for metadata extraction
+      // FIX (Issue #1211): Local files are pre-trusted (same as MemoryManager PR #1207)
       const tempDoc = `---\n${metadataStr}\n---\n`;
       const parsed = SecureYamlParser.parse(tempDoc, {
-        validateContent: true,
+        validateContent: false,
         validateFields: false
       });
       const metadata = parsed.data;
