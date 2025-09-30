@@ -5449,8 +5449,12 @@ Placeholders for custom format:
           if (entry.metadata.tags && entry.metadata.tags.length > 0) {
             text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
           }
-          
-          text += `   📄 File: ${entry.filename}.md\n\n`;
+
+          // FIX (#1213): Use correct file extension based on element type
+          // Previously: Hardcoded .md for all types (wrong for memories which are .yaml)
+          // Now: Get correct extension from PortfolioManager
+          const fileExtension = this.portfolioManager.getFileExtension(entry.elementType);
+          text += `   📄 File: ${entry.filename}${fileExtension}\n\n`;
         }
         
         if (results.length >= searchOptions.maxResults) {
