@@ -39,8 +39,9 @@ describe('Portfolio Search File Extension Display (Issue #1213)', () => {
     try {
       await fs.rm(testPortfolioDir, { recursive: true, force: true });
     } catch (error) {
-      // Expected: Test directory may not exist or be inaccessible during cleanup
-      // This is acceptable as it's test cleanup and doesn't affect test results
+      // Test directory cleanup failed - this is acceptable as it's test cleanup
+      // and doesn't affect test results. Log for debugging purposes.
+      console.debug('Test cleanup warning:', error instanceof Error ? error.message : String(error));
     }
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
 
