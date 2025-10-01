@@ -4065,7 +4065,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replaceAll(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
@@ -4278,7 +4278,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replaceAll(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );

@@ -751,12 +751,12 @@ function globToRegex(glob: string): RegExp {
   // Handle glob patterns in correct order
   // Replace ** before * to avoid conflicts
   pattern = pattern
-    .replaceAll(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder for **
-    .replaceAll(/\*/g, '<<STAR>>')            // Temporary placeholder for *
-    .replaceAll(/<<GLOBSTAR>>\//g, '(?:.*/)?') // **/ matches any number of directories including none
-    .replaceAll(/<<GLOBSTAR>>/g, '.*')       // ** matches anything
-    .replaceAll(/<<STAR>>/g, '[^/]*')        // * matches anything except directory separator
-    .replaceAll(/\//g, '\\/');                // Escape forward slashes
+    .replaceAll('**', '<<GLOBSTAR>>')     // Temporary placeholder for **
+    .replaceAll('*', '<<STAR>>')            // Temporary placeholder for *
+    .replaceAll('<<GLOBSTAR>>/', '(?:.*/)?') // **/ matches any number of directories including none
+    .replaceAll('<<GLOBSTAR>>', '.*')       // ** matches anything
+    .replaceAll('<<STAR>>', '[^/]*')        // * matches anything except directory separator
+    .replaceAll('/', '\\/');                // Escape forward slashes
   
   // Combine prefix and pattern
   const fullPattern = prefix + pattern;
@@ -776,7 +776,7 @@ function globToRegex(glob: string): RegExp {
  */
 function normalizePath(filePath: string): string {
   // Convert backslashes to forward slashes for Windows paths
-  let normalized = filePath.replaceAll(/\\/g, '/');
+  let normalized = filePath.replaceAll('\\', '/');
 
   // Remove duplicate slashes
   normalized = normalized.replaceAll(/\/+/g, '/');

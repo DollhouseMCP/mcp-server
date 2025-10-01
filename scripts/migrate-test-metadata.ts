@@ -195,7 +195,7 @@ function addTestMetadata(content: string, filePath: string): string {
   const purpose = determineTestPurpose(filePath, content);
   // CROSS-PLATFORM FIX: Normalize path separators for consistent behavior across Windows/Unix
   // Use forward slashes in metadata for consistency regardless of platform
-  const relativePath = path.relative(ROOT_DIR, filePath).replaceAll(/\\/g, '/');
+  const relativePath = path.relative(ROOT_DIR, filePath).replaceAll('\\', '/');
   
   const testMetadata: TestMetadata = {
     _dollhouseMCPTest: true,

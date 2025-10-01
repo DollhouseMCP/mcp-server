@@ -244,7 +244,7 @@ export class SubmitToPortfolioTool {
         message += `   • "${(originalName || safeName).toLowerCase()}" (lowercase)\n`;
         message += `   • "${(originalName || safeName).replaceAll(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
         if ((originalName || safeName).includes('.')) {
-          message += `   • "${(originalName || safeName).replaceAll(/\./g, '')}" (no dots)\n`;
+          message += `   • "${(originalName || safeName).replaceAll('.', '')}" (no dots)\n`;
         }
         message += `3. 🎯 Specify element type: \`submit_collection_content "${originalName || safeName}" --type=personas\`\n`;
         message += `4. 📁 Check if file exists in portfolio directories\n\n`;
@@ -1975,7 +1975,7 @@ ${elementContent}
       if (!file) {
         // Try common variations like removing dots, spaces, etc.
         const variations = [
-          name.replaceAll(/\./g, ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
+          name.replaceAll('.', ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
           name.replaceAll(/\s+/g, '-'),      // Replace spaces with dashes
           name.replaceAll(/[\s\.]/g, ''),    // Remove spaces and dots
           name.replaceAll(/[\s\.]/g, '-'),   // Replace spaces and dots with dashes

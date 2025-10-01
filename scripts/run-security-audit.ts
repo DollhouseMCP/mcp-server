@@ -110,7 +110,7 @@ async function runSecurityAudit() {
     // Just need to generate the detailed reports
 
     // Generate detailed reports
-    const timestamp = new Date().toISOString().replaceAll(/:/g, '-').split('.')[0];
+    const timestamp = new Date().toISOString().replaceAll(':', '-').split('.')[0];
     const reportsDir = path.join(projectRoot, '.security-audit');
     await fs.mkdir(reportsDir, { recursive: true });
 

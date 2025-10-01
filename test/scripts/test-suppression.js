@@ -9,12 +9,12 @@ function globToRegex(glob) {
   let pattern = processedGlob.replaceAll(/[\\^$.()+?{}[\]|]/g, '\\$&');
 
   pattern = pattern
-    .replaceAll(/\*\*/g, '<<GLOBSTAR>>')
-    .replaceAll(/\*/g, '<<STAR>>')
-    .replaceAll(/<<GLOBSTAR>>\//g, '(?:.*/)?')
-    .replaceAll(/<<GLOBSTAR>>/g, '.*')
-    .replaceAll(/<<STAR>>/g, '[^/]*')
-    .replaceAll(/\//g, '\\/');
+    .replaceAll('**', '<<GLOBSTAR>>')
+    .replaceAll('*', '<<STAR>>')
+    .replaceAll('<<GLOBSTAR>>/', '(?:.*/)?')
+    .replaceAll('<<GLOBSTAR>>', '.*')
+    .replaceAll('<<STAR>>', '[^/]*')
+    .replaceAll('/', '\\/');
   
   const fullPattern = prefix + pattern;
   const regex = new RegExp(`^${fullPattern}$`);

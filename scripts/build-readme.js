@@ -83,7 +83,7 @@ async function loadChunk(chunkName, chunkDirectory) {
   // Remove any path separators and parent directory references
   const sanitizedChunkName = chunkName
     .replaceAll(/[\/\\]/g, '_')  // Replace path separators with underscore
-    .replaceAll(/\.\./g, '_')    // Replace parent directory references
+    .replaceAll('..', '_')    // Replace parent directory references
     .replace(/^\./, '_');     // Replace leading dots
   
   const chunkPath = path.join(README_DIR, chunkDirectory, `${sanitizedChunkName}.md`);

@@ -177,7 +177,7 @@ malicious_field: !!js/function "alert()"
       for (const { input, expected } of inputs) {
         const sanitized = input
           .replaceAll(/[<>]/g, '')
-          .replaceAll(/\u0000/g, '')
+          .replaceAll('\u0000', '')
           .replaceAll(/[\r\n]/g, ' ')
           .trim();
         

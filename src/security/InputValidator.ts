@@ -388,7 +388,7 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
   // WINDOWS FIX: Convert backslashes to forward slashes for cross-platform compatibility
-  let normalized = inputPath.replaceAll(/\\/g, '/');
+  let normalized = inputPath.replaceAll('\\', '/');
 
   // FIX: Preserve leading slash for absolute paths
   const isAbsolute = normalized.startsWith('/') || isWindowsAbsolute;

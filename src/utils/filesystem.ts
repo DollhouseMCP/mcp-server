@@ -24,8 +24,8 @@ const ALPHANUMERIC_REGEX = /[a-z0-9]/;
 
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replaceAll(/-/g, '');
-  const timeStr = now.toTimeString().slice(0, 8).replaceAll(/:/g, '');
+  const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
+  const timeStr = now.toTimeString().slice(0, 8).replaceAll(':', '');
   // SECURITY FIX: Prevent ReDoS by using a single-pass approach
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
