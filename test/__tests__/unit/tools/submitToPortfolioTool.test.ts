@@ -84,7 +84,7 @@ User submitted element for community review.
       ];
 
       testCases.forEach(({ input, expected }) => {
-        const filename = input.toLowerCase().replace(/\s+/g, '-') + '.md';
+        const filename = input.toLowerCase().replaceAll(/\s+/g, '-') + '.md';
         expect(filename).toBe(expected);
       });
     });

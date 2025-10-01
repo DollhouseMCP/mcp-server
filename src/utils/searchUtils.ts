@@ -24,7 +24,7 @@ export function normalizeSearchTerm(term: string, maxLength: number = 1000): str
   }
   
   return cleanTerm.toLowerCase()
-    .replace(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
+    .replaceAll(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
     .replace(/\.md$/, '')       // Remove .md extension
     .trim();
 }

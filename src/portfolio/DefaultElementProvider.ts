@@ -452,6 +452,18 @@ export class DefaultElementProvider {
     };
   }
 
+  /**
+   * Read only the YAML frontmatter metadata from a file (first 4KB)
+   *
+   * SECURITY NOTE (Issue #1228): This method MUST use validateContent: true when calling
+   * SecureYamlParser.parse() to ensure Unicode security validation runs. Setting validateContent
+   * to false would disable ALL content validation including zero-width character detection,
+   * creating a security bypass vulnerability.
+   *
+   * @param filePath - Absolute path to the file to read
+   * @param retries - Number of retries for transient failures (default: 2)
+   * @returns Parsed metadata object or null if no valid frontmatter found
+   */
   private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
     // PERFORMANCE: Check cache first before reading file
     try {
@@ -488,14 +500,19 @@ export class DefaultElementProvider {
         
         // Parse the YAML frontmatter safely
         try {
-          // SECURITY FIX: Replace direct YAML parsing function with SecureYamlParser for enhanced security
+          // SECURITY FIX (Issue #1228): Enable validateContent to block zero-width Unicode and other security threats
           // SecureYamlParser provides additional validation, injection prevention, and content sanitization
           // It expects full YAML with --- markers, so we reconstruct the frontmatter block
-          // We disable specific field validation as this is general metadata parsing, not persona-specific
+          // We disable field-specific validation as this is general metadata parsing, not persona-specific
+          // but we MUST keep validateContent: true to ensure Unicode security validation runs
           const fullYaml = `---\n${match[1]}\n---`;
-          const parseResult = SecureYamlParser.parse(fullYaml, { 
-            validateContent: false, 
-            validateFields: false 
+          const parseResult = SecureYamlParser.parse(fullYaml, {
+            // REQUIRED: validateContent must be true to enable Unicode security validation including
+            // zero-width character detection (U+200B-U+200F, U+FEFF, etc.). Setting this to false
+            // would disable ALL content validation, creating a security bypass for Unicode-based attacks.
+            // See UnicodeValidator.normalize() for detection logic.
+            validateContent: true,
+            validateFields: false   // Field-specific validation is optional for general metadata parsing
           });
           const metadata = parseResult.data;
           
@@ -614,7 +631,7 @@ export class DefaultElementProvider {
       notInTestDir: (() => {
         const cwd = process.cwd().toLowerCase();
         // Normalize path separators for cross-platform checking (Windows uses \ but checks use /)
-        const normalizedCwd = cwd.replace(/\\/g, '/');
+        const normalizedCwd = cwd.replaceAll('\\', '/');
         return !normalizedCwd.includes('/test') && 
                !normalizedCwd.includes('/__tests__') && 
                !normalizedCwd.includes('/temp') &&

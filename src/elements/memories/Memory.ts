@@ -69,7 +69,7 @@ function sanitizeMemoryContent(content: string, maxLength: number): string {
   
   // Remove only control characters and null bytes
   return cleaned
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR - Intentionally removing control chars except \t \n \r for sanitization
+    .replaceAll(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR - Intentionally removing control chars except \t \n \r for sanitization
     .substring(0, maxLength)
     .trim();
 }
@@ -549,7 +549,7 @@ export class Memory extends BaseElement implements IElement {
 
     // If already a Date, validate it
     if (value instanceof Date) {
-      if (isNaN(value.getTime())) {
+      if (Number.isNaN(value.getTime())) {
         throw new Error(`Invalid Date object provided`);
       }
       return value;
@@ -557,7 +557,7 @@ export class Memory extends BaseElement implements IElement {
 
     // Try to convert to Date
     const date = new Date(value);
-    if (isNaN(date.getTime())) {
+    if (Number.isNaN(date.getTime())) {
       throw new Error(`Invalid date value: ${value}`);
     }
 

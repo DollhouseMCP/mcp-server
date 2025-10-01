@@ -437,11 +437,11 @@ export class RelationshipManager {
    * Find element by partial name match
    */
   private findElementByName(name: string, index: EnhancedIndex): string | null {
-    const nameLower = name.toLowerCase().replace(/[_-]/g, '');
+    const nameLower = name.toLowerCase().replaceAll(/[_-]/g, '');
 
     for (const [type, elements] of Object.entries(index.elements)) {
       for (const [elementName, element] of Object.entries(elements)) {
-        const elementNameLower = elementName.toLowerCase().replace(/[_-]/g, '');
+        const elementNameLower = elementName.toLowerCase().replaceAll(/[_-]/g, '');
 
         // Check exact match first
         if (elementNameLower === nameLower) {
@@ -454,7 +454,7 @@ export class RelationshipManager {
         }
 
         // Check display name
-        const displayNameLower = element.core.name?.toLowerCase().replace(/[_-]/g, '');
+        const displayNameLower = element.core.name?.toLowerCase().replaceAll(/[_-]/g, '');
         if (displayNameLower && (displayNameLower === nameLower || displayNameLower.includes(nameLower))) {
           return `${type}:${elementName}`;
         }

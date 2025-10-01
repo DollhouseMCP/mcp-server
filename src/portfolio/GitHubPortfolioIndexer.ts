@@ -463,7 +463,7 @@ export class GitHubPortfolioIndexer {
     try {
       // Parse metadata from filename or fetch content if needed
       // FIX: Keep original filename format to match local file expectations
-      // Previously: .replace(/-/g, ' ') converted hyphens to spaces causing sync mismatch
+      // Previously: .replaceAll(/-/g, ' ') converted hyphens to spaces causing sync mismatch
       const name = fileInfo.name.replace('.md', '');
       
       const entry: GitHubIndexEntry = {

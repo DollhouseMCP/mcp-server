@@ -338,7 +338,7 @@ export function createRelationship(
   }
 
   // Validate strength is in range
-  if (strength !== undefined && (strength < 0 || strength > 1 || isNaN(strength))) {
+  if (strength !== undefined && (strength < 0 || strength > 1 || Number.isNaN(strength))) {
     throw new Error(`Relationship strength must be between 0 and 1, got ${strength}`);
   }
 

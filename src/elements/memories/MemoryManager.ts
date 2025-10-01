@@ -269,7 +269,7 @@ export class MemoryManager implements IElementManager<Memory> {
     this.dateFoldersCache = null;
 
     // Generate filename
-    const baseName = fileName || `${element.metadata.name?.toLowerCase().replace(/\s+/g, '-') || 'memory'}.yaml`;
+    const baseName = fileName || `${element.metadata.name?.toLowerCase().replaceAll(/\s+/g, '-') || 'memory'}.yaml`;
     let finalName = baseName;
     let version = 1;
 
@@ -937,6 +937,6 @@ export class MemoryManager implements IElementManager<Memory> {
     if (typeof retention === 'number') return retention;
     if (retention === 'permanent' || retention === 'perpetual') return 999999;
     const match = retention.match(/(\d+)\s*days?/i);
-    return match ? parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
+    return match ? Number.parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
   }
 }

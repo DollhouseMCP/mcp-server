@@ -204,7 +204,7 @@ export class PortfolioSyncComparer {
     normalized = normalized.toLowerCase();
     
     // Replace spaces with hyphens (some systems use different formats)
-    normalized = normalized.replace(/\s+/g, '-');
+    normalized = normalized.replaceAll(/\s+/g, '-');
     
     return normalized;
   }

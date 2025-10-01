@@ -17,7 +17,7 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
-import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import * as path from 'path';
@@ -160,7 +160,8 @@ export class Template extends BaseElement implements IElement {
     
     // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
     // Note: We test against the original path to preserve cross-platform compatibility
-    const validPathPattern = /^[a-zA-Z0-9\-_\/\\]+\.md$/;
+    // FIX: Remove unnecessary escape for / (SonarCloud S6535)
+    const validPathPattern = /^[a-zA-Z0-9\-_/\\]+\.md$/;
     return validPathPattern.test(includePath);
   }
 
@@ -175,7 +176,8 @@ export class Template extends BaseElement implements IElement {
     }
 
     // Extract all variable tokens from the template
-    const variablePattern = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}\}/g;
+    // FIX: Use \w shorthand instead of [a-zA-Z0-9_] (SonarCloud S6353)
+    const variablePattern = /\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g;
     const tokens: TemplateToken[] = [];
     let match;
     
@@ -367,7 +369,7 @@ export class Template extends BaseElement implements IElement {
         
       case 'number':
         const num = Number(value);
-        if (isNaN(num)) {
+        if (Number.isNaN(num)) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a number`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
         }
         return num;
@@ -377,7 +379,7 @@ export class Template extends BaseElement implements IElement {
         
       case 'date':
         const date = new Date(value);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a valid date`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_DATE);
         }
         return date;
@@ -507,25 +509,49 @@ export class Template extends BaseElement implements IElement {
    */
   private isDangerousRegex(pattern: string): boolean {
     // Check for nested quantifiers which can cause exponential backtracking
+    // SECURITY FIX: Use safe, specific patterns to detect dangerous regex constructs
+    // Previously: Used [^)]* patterns that could cause ReDoS in detection itself
+    // Now: Use safer, bounded character classes and specific string checks
+    // FIX: Use character class and remove unnecessary escape (SonarCloud S6035, S6535)
     const dangerousPatterns = [
-      /(\+|\*){2,}/,           // Multiple quantifiers
-      /\([^)]*\+\)[+*]/,       // Quantified groups with quantifiers inside
-      /\[[^\]]*\+\][+*]/,      // Quantified character classes with quantifiers
-      /(\\[dws])\1{2,}/,       // Repeated character classes
-      /\(\?\<[!=][^)]+\)/,     // Complex lookbehinds
+      /[+*]{2,}/,                      // Multiple consecutive quantifiers
+      /\(.{0,50}\+\)[+*]/,             // Quantified groups with quantifiers inside (bounded)
+      /\[[^\]]{0,20}\+\][+*]/,         // Quantified character classes with quantifiers (bounded)
+      /(\\[dws])\1{2,}/,               // Repeated character classes
+      /\(\?<[!=][^)]{0,30}\)/,         // Complex lookbehinds (bounded)
+    ];
+
+    // String-based checks for common catastrophic patterns (safer than regex)
+    const dangerousStringPatterns = [
+      '(.+)+',    // (.+)+ catastrophic backtracking
+      '(.*)++',   // (.*)++
+      '(.*)*',    // (.*)* catastrophic backtracking
+      '(.+)*',    // (.+)*
+      '(a+)+',    // (a+)+ type patterns
+      '(a*)*',    // (a*)* type patterns
+      '(a|a)*',   // Overlapping alternation
+      '(a|b)*+',  // Possessive quantifiers with alternation
     ];
     
+    // Check regex-based dangerous patterns
     for (const dangerous of dangerousPatterns) {
       if (dangerous.test(pattern)) {
         return true;
       }
     }
-    
+
+    // Check string-based dangerous patterns (safer than complex regex)
+    for (const dangerousString of dangerousStringPatterns) {
+      if (pattern.includes(dangerousString)) {
+        return true;
+      }
+    }
+
     // Check for excessive backtracking potential
-    // Count groups and quantifiers
+    // Count groups and quantifiers (using safe, simple regex)
     const groups = (pattern.match(/\(/g) || []).length;
     const quantifiers = (pattern.match(/[+*?{]/g) || []).length;
-    
+
     // If there are many groups and quantifiers, it's potentially dangerous
     if (groups > 5 && quantifiers > 5) {
       return true;
@@ -606,10 +632,11 @@ export class Template extends BaseElement implements IElement {
    */
   public override validate(): ElementValidationResult {
     const result = super.validate();
-    
+
     // Initialize arrays if not present
-    if (!result.errors) result.errors = [];
-    if (!result.warnings) result.warnings = [];
+    // FIX: Use nullish coalescing assignment (SonarCloud S6606)
+    result.errors ??= [];
+    result.warnings ??= [];
     
     // Content validation
     if (!this.content || this.content.trim().length === 0) {
@@ -687,16 +714,17 @@ export class Template extends BaseElement implements IElement {
     });
     
     // Warnings for best practices
+    // FIX: Remove unnecessary non-null assertion (SonarCloud S4325)
     if (!this.metadata.tags || this.metadata.tags.length === 0) {
-      result.warnings!.push({
+      result.warnings.push({
         field: 'tags',
         message: 'Consider adding tags for better searchability',
         severity: 'low'
       });
     }
-    
+
     if (!this.metadata.examples || this.metadata.examples.length === 0) {
-      result.warnings!.push({
+      result.warnings.push({
         field: 'examples',
         message: 'Adding examples improves template usability',
         severity: 'medium'

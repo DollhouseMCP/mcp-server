@@ -66,7 +66,7 @@ const resultsDir = join(process.cwd(), 'test-results');
 if (!existsSync(resultsDir)) {
   mkdirSync(resultsDir, { recursive: true });
 }
-const resultsFile = join(resultsDir, `test-element-lifecycle-${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+const resultsFile = join(resultsDir, `test-element-lifecycle-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.md`);
 
 // Initialize results file
 writeFileSync(resultsFile, `# Test Element Lifecycle Results
@@ -274,7 +274,7 @@ const CONFIG = {
   maxRetries: 3,
   baseDelay: 5000, // 5 seconds base delay for rate limits
   verbose: process.env.VERBOSE === 'true',
-  skipPhases: process.env.SKIP_PHASES ? process.env.SKIP_PHASES.split(',').map(p => parseInt(p)) : [],
+  skipPhases: process.env.SKIP_PHASES ? process.env.SKIP_PHASES.split(',').map(p => Number.parseInt(p)) : [],
   continueOnError: process.env.CONTINUE_ON_ERROR === 'true'
 };
 

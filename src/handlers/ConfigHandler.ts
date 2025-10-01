@@ -147,8 +147,8 @@ export class ConfigHandler {
         coercedValue = false;
       } else if (/^\d+$/.test(coercedValue)) {
         // Convert numeric strings to numbers
-        const numValue = parseInt(coercedValue, 10);
-        if (!isNaN(numValue)) {
+        const numValue = Number.parseInt(coercedValue, 10);
+        if (!Number.isNaN(numValue)) {
           coercedValue = numValue;
         }
       }

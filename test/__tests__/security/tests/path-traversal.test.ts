@@ -68,7 +68,7 @@ describe('Path Traversal Security Tests', () => {
         expect(nullPath).toMatch(/\u0000/);
         
         // After sanitization, null bytes should be removed
-        const sanitized = nullPath.replace(/\u0000/g, '');
+        const sanitized = nullPath.replaceAll('\u0000', '');
         expect(sanitized).not.toMatch(/\u0000/);
       }
     });
@@ -209,7 +209,7 @@ describe('Path Traversal Security Tests', () => {
       
       for (const { path: winPath, unsafe } of windowsPaths) {
         // Convert to forward slashes for consistent handling
-        const normalized = winPath.replace(/\\/g, '/');
+        const normalized = winPath.replaceAll('\\', '/');
         
         // Check for traversal or absolute paths
         const hasTraversal = normalized.includes('..');

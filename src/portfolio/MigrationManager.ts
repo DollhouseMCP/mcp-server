@@ -284,7 +284,7 @@ export class MigrationManager {
    */
   private async createBackup(): Promise<string> {
     const legacyDir = this.portfolioManager.getLegacyPersonasDir();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
     const backupDir = `${legacyDir}_backup_${timestamp}`;
     
     // Create backup directory

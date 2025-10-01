@@ -151,7 +151,7 @@ export class PersonaImporter {
       }
 
       const metadata = data as PersonaMetadata;
-      const filename = `${metadata.name.toLowerCase().replace(/\s+/g, '-')}.md`;
+      const filename = `${metadata.name.toLowerCase().replaceAll(/\s+/g, '-')}.md`;
 
       const exportedPersona: ExportedPersona = {
         metadata,
@@ -228,7 +228,7 @@ export class PersonaImporter {
       const sanitizedContent = validationResult.sanitizedContent || unicodeNormalizedContent;
 
       // Generate safe filename
-      let filename = validateFilename(exportData.filename || `${metadata.name.toLowerCase().replace(/\s+/g, '-')}.md`);
+      let filename = validateFilename(exportData.filename || `${metadata.name.toLowerCase().replaceAll(/\s+/g, '-')}.md`);
       
       // Check for conflicts
       const conflicts = this.findConflicts(metadata.name, filename, existingPersonas);

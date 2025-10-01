@@ -225,8 +225,8 @@ export class TokenManager {
         }
       });
 
-      const rateLimitRemaining = parseInt(response.headers.get('x-ratelimit-remaining') || '0');
-      const rateLimitReset = parseInt(response.headers.get('x-ratelimit-reset') || '0');
+      const rateLimitRemaining = Number.parseInt(response.headers.get('x-ratelimit-remaining') || '0');
+      const rateLimitReset = Number.parseInt(response.headers.get('x-ratelimit-reset') || '0');
 
       if (!response.ok) {
         const error = `GitHub API error: ${response.status} ${response.statusText}`;
@@ -316,13 +316,13 @@ export class TokenManager {
     // Remove any potential token data from error messages
     // Using word boundaries to avoid over-matching
     let safeMessage = error
-      .replace(/\bghp_\S+/g, '[REDACTED_PAT]')
-      .replace(/\bgithub_pat_\S+/g, '[REDACTED_FINE_PAT]')
-      .replace(/\bghs_\S+/g, '[REDACTED_INSTALL]')
-      .replace(/\bghu_\S+/g, '[REDACTED_USER]')
-      .replace(/\bghr_\S+/g, '[REDACTED_REFRESH]')
-      .replace(/\bgho_\S+/g, '[REDACTED_OAUTH]')
-      .replace(/\bgh[a-z]_\S+/gi, '[REDACTED_TOKEN]');  // Catch any other gh*_ pattern
+      .replaceAll(/\bghp_\S+/g, '[REDACTED_PAT]')
+      .replaceAll(/\bgithub_pat_\S+/g, '[REDACTED_FINE_PAT]')
+      .replaceAll(/\bghs_\S+/g, '[REDACTED_INSTALL]')
+      .replaceAll(/\bghu_\S+/g, '[REDACTED_USER]')
+      .replaceAll(/\bghr_\S+/g, '[REDACTED_REFRESH]')
+      .replaceAll(/\bgho_\S+/g, '[REDACTED_OAUTH]')
+      .replaceAll(/\bgh[a-z]_\S+/gi, '[REDACTED_TOKEN]');  // Catch any other gh*_ pattern
 
     if (token) {
       const tokenPrefix = this.getTokenPrefix(token);

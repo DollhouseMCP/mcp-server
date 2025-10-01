@@ -211,7 +211,7 @@ export function formatIndicator(
     result = result.replace(/\sby(?=\s|]|\)|>|}|$)/, '');
   }
   // Clean up extra spaces
-  result = result.replace(/\s+/g, ' ').trim();
+  result = result.replaceAll(/\s+/g, ' ').trim();
   
   // Apply brackets based on the template format (only if template doesn't already have them)
   if (result && config.style !== 'custom') {

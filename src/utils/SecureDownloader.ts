@@ -635,7 +635,7 @@ export class SecureDownloader {
 
       // SECURITY: Check Content-Length header if available
       const contentLength = response.headers.get('content-length');
-      if (contentLength && parseInt(contentLength, 10) > maxSize) {
+      if (contentLength && Number.parseInt(contentLength, 10) > maxSize) {
         throw DownloadError.securityError(
           `Content size ${contentLength} exceeds limit of ${maxSize} bytes`
         );

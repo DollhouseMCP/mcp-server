@@ -55,7 +55,7 @@ if (currentVersion === newVersion) {
 // Helper function to escape special regex characters
 function escapeRegExp(string) {
   // Escape all special regex characters including backslashes
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 console.log(`\n🔄 Updating version from ${currentVersion} to ${newVersion}`);

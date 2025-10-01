@@ -378,8 +378,8 @@ export class PersonaElementManager implements IElementManager<PersonaElement> {
     // Convert name to safe filename
     const safeName = persona.metadata.name
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')    // Replace non-alphanumeric with hyphens
-      .replace(/(^-+)|(-+$)/g, '');  // Remove leading/trailing hyphens
+      .replaceAll(/[^a-z0-9]+/g, '-')    // Replace non-alphanumeric with hyphens
+      .replaceAll(/(^-+)|(-+$)/g, '');  // Remove leading/trailing hyphens
     
     return `${safeName}.md`;
   }

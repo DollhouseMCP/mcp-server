@@ -17,7 +17,7 @@ describe('Fuzzy Matching Integration Tests', () => {
 
       // Fuzzy matching function (simplified for testing)
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -45,7 +45,7 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -64,7 +64,7 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -88,7 +88,7 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -101,9 +101,9 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       searches.forEach(search => {
-        const normalizedSearch = search.toLowerCase().replace(/[-_\s.\/]/g, '');
+        const normalizedSearch = search.toLowerCase().replaceAll(/[-_\s.\/]/g, '');
         const found = elements.find(e => {
-          const normalizedTarget = e.name.toLowerCase().replace(/[-_\s]/g, '');
+          const normalizedTarget = e.name.toLowerCase().replaceAll(/[-_\s]/g, '');
           return normalizedTarget.includes(normalizedSearch);
         });
         expect(found).toBeDefined();
@@ -118,7 +118,7 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -143,7 +143,7 @@ describe('Fuzzy Matching Integration Tests', () => {
 
       // More sophisticated matching with priority
       const findBestMatch = (search: string, items: typeof elements) => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         const searchNorm = normalize(search);
         
         // First try exact match
@@ -168,7 +168,7 @@ describe('Fuzzy Matching Integration Tests', () => {
 
       const fuzzyMatch = (search: string, target: string): boolean => {
         if (!search || !target) return false;
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 
@@ -183,7 +183,7 @@ describe('Fuzzy Matching Integration Tests', () => {
       ];
 
       const fuzzyMatch = (search: string, target: string): boolean => {
-        const normalize = (s: string) => s.toLowerCase().replace(/[-_\s]/g, '');
+        const normalize = (s: string) => s.toLowerCase().replaceAll(/[-_\s]/g, '');
         return normalize(target).includes(normalize(search));
       };
 

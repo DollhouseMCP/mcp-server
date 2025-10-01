@@ -16,8 +16,8 @@ export function compareVersions(version1: string, version2: string): number {
   const [v2main, v2pre] = v2.split('-');
   
   // Compare main version parts (x.y.z)
-  const v1parts = v1main.split('.').map(part => parseInt(part) || 0);
-  const v2parts = v2main.split('.').map(part => parseInt(part) || 0);
+  const v1parts = v1main.split('.').map(part => Number.parseInt(part) || 0);
+  const v2parts = v2main.split('.').map(part => Number.parseInt(part) || 0);
   
   const maxLength = Math.max(v1parts.length, v2parts.length);
   for (let i = 0; i < maxLength; i++) {

@@ -1760,7 +1760,7 @@ export class DollhouseMCPServer implements IToolHandler {
           if (entry.timestamp) {
             if (!(entry.timestamp instanceof Date)) {
               const date = new Date(entry.timestamp);
-              if (isNaN(date.getTime())) {
+              if (Number.isNaN(date.getTime())) {
                 errors.push(`Entry ${i}: Invalid timestamp '${entry.timestamp}'`);
                 continue; // Skip this entry
               }
@@ -1782,7 +1782,7 @@ export class DollhouseMCPServer implements IToolHandler {
           if (entry.expiresAt) {
             if (!(entry.expiresAt instanceof Date)) {
               const date = new Date(entry.expiresAt);
-              if (isNaN(date.getTime())) {
+              if (Number.isNaN(date.getTime())) {
                 errors.push(`Entry ${i}: Invalid expiresAt '${entry.expiresAt}'`);
                 // Don't skip entry, just remove invalid expiresAt
                 delete entry.expiresAt;
@@ -1865,7 +1865,7 @@ export class DollhouseMCPServer implements IToolHandler {
                 const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
                 if (preReleaseNumberMatch) {
                   const preReleaseType = preReleaseNumberMatch[1];
-                  const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+                  const preReleaseNumber = Number.parseInt(preReleaseNumberMatch[2] || '0') + 1;
                   element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
                 } else {
                   // Complex pre-release, just increment patch
@@ -1882,7 +1882,7 @@ export class DollhouseMCPServer implements IToolHandler {
               const versionParts = element.version.split('.');
               if (versionParts.length >= 3) {
                 // Standard semver format (e.g., 1.0.0)
-                const patch = parseInt(versionParts[2]) || 0;
+                const patch = Number.parseInt(versionParts[2]) || 0;
                 versionParts[2] = String(patch + 1);
                 element.version = versionParts.join('.');
               } else if (versionParts.length === 2) {
@@ -1917,7 +1917,7 @@ export class DollhouseMCPServer implements IToolHandler {
       // Previously: All elements used .md extension, causing memory saves to fail
       // Now: Memories use .yaml as required by MemoryManager
       const extension = type === ElementType.MEMORY ? '.yaml' : '.md';
-      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}${extension}`;
+      const filename = `${element.metadata.name.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-')}${extension}`;
       // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
       await manager!.save(element, filename);
       
@@ -2520,8 +2520,8 @@ export class DollhouseMCPServer implements IToolHandler {
       const validatedOptions = {
         elementType: options.elementType ? String(options.elementType) : undefined,
         category: options.category ? String(options.category) : undefined,
-        page: options.page ? Math.max(1, parseInt(options.page) || 1) : 1,
-        pageSize: options.pageSize ? Math.min(100, Math.max(1, parseInt(options.pageSize) || 25)) : 25,
+        page: options.page ? Math.max(1, Number.parseInt(options.page) || 1) : 1,
+        pageSize: options.pageSize ? Math.min(100, Math.max(1, Number.parseInt(options.pageSize) || 25)) : 25,
         sortBy: options.sortBy && ['relevance', 'name', 'date'].includes(options.sortBy) ? options.sortBy : 'relevance'
       };
       
@@ -3923,11 +3923,11 @@ export class DollhouseMCPServer implements IToolHandler {
             return `${key}: ${value}`;
           } else if (typeof value === 'number') {
             // CRITICAL: Reject special float values that break logic
-            if (!isFinite(value)) {
+            if (!Number.isFinite(value)) {
               logger.warn(`Rejected non-finite number for ${key}: ${value}`);
               return `${key}: 0`; // Safe default
             }
-            if (isNaN(value)) {
+            if (Number.isNaN(value)) {
               logger.warn(`Rejected NaN for ${key}`);
               return `${key}: 0`; // Safe default
             }
@@ -4065,7 +4065,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
@@ -4172,7 +4172,7 @@ ${sanitizedInstructions}
       let sanitizedValue = valueValidation.sanitizedContent || value;
       
       // Always remove shell metacharacters from display output
-      const displayValue = sanitizedValue.replace(/[;&|`$()]/g, '');
+      const displayValue = MCPInputValidator.sanitizeForDisplay(sanitizedValue);
       
       if (normalizedField === 'instructions') {
         // Update the main content
@@ -4221,13 +4221,13 @@ ${sanitizedInstructions}
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
               (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
-              `🎭 **${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}**\n` +
+              `🎭 **${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : displayValue}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
               (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
-              `Use \`get_persona_details "${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}"\` to see all changes.`,
+              `Use \`get_persona_details "${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}"\` to see all changes.`,
           },
         ],
       };
@@ -4278,7 +4278,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );

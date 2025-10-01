@@ -746,17 +746,17 @@ function globToRegex(glob: string): RegExp {
   
   // Escape all regex special characters except * and /
   // Fixed: Properly escape backslashes and other special regex characters
-  let pattern = processedGlob.replace(/[\\^$.()+?{}[\]|]/g, '\\$&');
-  
+  let pattern = processedGlob.replaceAll(/[\\^$.()+?{}[\]|]/g, '\\$&');
+
   // Handle glob patterns in correct order
   // Replace ** before * to avoid conflicts
   pattern = pattern
-    .replace(/\*\*/g, '<<GLOBSTAR>>')     // Temporary placeholder for **
-    .replace(/\*/g, '<<STAR>>')            // Temporary placeholder for *
-    .replace(/<<GLOBSTAR>>\//g, '(?:.*/)?') // **/ matches any number of directories including none
-    .replace(/<<GLOBSTAR>>/g, '.*')       // ** matches anything
-    .replace(/<<STAR>>/g, '[^/]*')        // * matches anything except directory separator
-    .replace(/\//g, '\\/');                // Escape forward slashes
+    .replaceAll('**', '<<GLOBSTAR>>')     // Temporary placeholder for **
+    .replaceAll('*', '<<STAR>>')            // Temporary placeholder for *
+    .replaceAll('<<GLOBSTAR>>/', '(?:.*/)?') // **/ matches any number of directories including none
+    .replaceAll('<<GLOBSTAR>>', '.*')       // ** matches anything
+    .replaceAll('<<STAR>>', '[^/]*')        // * matches anything except directory separator
+    .replaceAll('/', '\\/');                // Escape forward slashes
   
   // Combine prefix and pattern
   const fullPattern = prefix + pattern;
@@ -776,10 +776,10 @@ function globToRegex(glob: string): RegExp {
  */
 function normalizePath(filePath: string): string {
   // Convert backslashes to forward slashes for Windows paths
-  let normalized = filePath.replace(/\\/g, '/');
-  
+  let normalized = filePath.replaceAll('\\', '/');
+
   // Remove duplicate slashes
-  normalized = normalized.replace(/\/+/g, '/');
+  normalized = normalized.replaceAll(/\/+/g, '/');
   
   // Remove trailing slash if present
   if (normalized.endsWith('/') && normalized.length > 1) {

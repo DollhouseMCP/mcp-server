@@ -13,7 +13,7 @@ import { PersonaImporter } from '../../../src/persona/export-import/PersonaImpor
 describe('ReDoS Pathological Input Tests', () => {
   describe('filesystem.ts - Pattern: Multiple chained replace operations', () => {
     /**
-     * Vulnerable pattern: .replace(/-+/g, '-').replace(/^-|-$/g, '')
+     * Vulnerable pattern: .replaceAll(/-+/g, '-').replaceAll(/^-|-$/g, '')
      * Attack: String with many hyphens causes each replace to scan entire string
      */
     

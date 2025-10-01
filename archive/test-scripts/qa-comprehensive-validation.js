@@ -593,7 +593,7 @@ ${report.edgeCaseValidation.map(test =>
 ## Infrastructure Repair Validation
 
 ### ✅ Critical Issues Resolved
-${Object.entries(report.repairValidation).map(([key, value]) => `- **${key.replace(/([A-Z])/g, ' $1').toLowerCase()}**: ${value}`).join('\n')}
+${Object.entries(report.repairValidation).map(([key, value]) => `- **${key.replaceAll(/([A-Z])/g, ' $1').toLowerCase()}**: ${value}`).join('\n')}
 
 ### Root Cause Resolution
 The timeout issue was definitively resolved by correcting MCP SDK Client API usage:
@@ -618,7 +618,7 @@ The infrastructure repair enables deployment of remaining QA agents:
 ## Recommendations
 
 ${Object.entries(report.recommendations).map(([key, value]) => 
-  `### ${key.replace(/([A-Z])/g, ' $1').trim()}
+  `### ${key.replaceAll(/([A-Z])/g, ' $1').trim()}
 ${value}`
 ).join('\n\n')}
 

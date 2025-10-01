@@ -515,14 +515,14 @@ entries:
       ### S7773 - Prefer Number.* methods
       - **Category**: Reliability
       - **Default Severity**: Medium
-      - **Fix**: Replace \`parseInt()\` with \`Number.parseInt()\`, \`isNaN()\` with \`Number.isNaN()\`
+      - **Fix**: Replace \`Number.parseInt()\` with \`Number.parseInt()\`, \`Number.isNaN()\` with \`Number.isNaN()\`
       - **Issues in project**: ~180
       - **Automation**: High - simple find/replace
 
       ### S7781 - Use String#replaceAll()
       - **Category**: Reliability
       - **Default Severity**: Low
-      - **Fix**: Replace \`str.replace(/pattern/g, ...)\` with \`str.replaceAll('pattern', ...)\`
+      - **Fix**: Replace \`str.replaceAll(/pattern/g, ...)\` with \`str.replaceAll('pattern', ...)\`
       - **Issues in project**: ~104
       - **Automation**: High - pattern matching required`;
 

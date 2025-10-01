@@ -242,9 +242,9 @@ export class SubmitToPortfolioTool {
         message += `1. 📝 Use \`list_portfolio\` to see all available content\n`;
         message += `2. 🔍 Check exact spelling and try variations:\n`;
         message += `   • "${(originalName || safeName).toLowerCase()}" (lowercase)\n`;
-        message += `   • "${(originalName || safeName).replace(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
+        message += `   • "${(originalName || safeName).replaceAll(/[^a-z0-9]/gi, '-').toLowerCase()}" (normalized)\n`;
         if ((originalName || safeName).includes('.')) {
-          message += `   • "${(originalName || safeName).replace(/\./g, '')}" (no dots)\n`;
+          message += `   • "${(originalName || safeName).replaceAll('.', '')}" (no dots)\n`;
         }
         message += `3. 🎯 Specify element type: \`submit_collection_content "${originalName || safeName}" --type=personas\`\n`;
         message += `4. 📁 Check if file exists in portfolio directories\n\n`;
@@ -793,7 +793,7 @@ export class SubmitToPortfolioTool {
       let normalizedPath: string;
       try {
         // Remove null bytes and normalize
-        const cleanPath = filePath.replace(/\u0000/g, ''); // NOSONAR - Removing null bytes for security
+        const cleanPath = filePath.replaceAll(/\u0000/g, ''); // NOSONAR - Removing null bytes for security
         normalizedPath = path.normalize(cleanPath);
         
         // Check if path is within the portfolio directory
@@ -1849,16 +1849,16 @@ ${elementContent}
               operation: 'create-collection-issue',
               remaining: rateLimitRemaining,
               limit: rateLimitLimit,
-              resetTime: rateLimitReset ? new Date(parseInt(rateLimitReset) * 1000) : undefined,
+              resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
               responseStatus: response.status
             });
             
             // Log warning if approaching rate limit
-            if (rateLimitRemaining && parseInt(rateLimitRemaining) < 100) {
+            if (rateLimitRemaining && Number.parseInt(rateLimitRemaining) < 100) {
               logger.warn('Approaching GitHub API rate limit', {
                 operation: 'create-collection-issue',
                 remaining: rateLimitRemaining,
-                resetTime: rateLimitReset ? new Date(parseInt(rateLimitReset) * 1000) : undefined,
+                resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
                 recommendation: 'Consider reducing API usage frequency or authenticating for higher limits'
               });
             }
@@ -1952,9 +1952,9 @@ ${elementContent}
       // If not found, try normalizing the name (e.g., "J.A.R.V.I.S." -> "j-a-r-v-i-s")
       if (!file) {
         const normalizedName = name.toLowerCase()
-          .replace(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
-          .replace(/-+/g, '-')         // Replace multiple dashes with single dash
-          .replace(/(^-)|(-$)/g, '');      // Remove leading/trailing dashes
+          .replaceAll(/[^a-z0-9]/gi, '-')  // Replace non-alphanumeric with dashes
+          .replaceAll(/-+/g, '-')         // Replace multiple dashes with single dash
+          .replaceAll(/(^-)|(-$)/g, '');      // Remove leading/trailing dashes
           
         if (normalizedName !== name.toLowerCase()) {
           logger.debug('Trying normalized name search', { 
@@ -1975,10 +1975,10 @@ ${elementContent}
       if (!file) {
         // Try common variations like removing dots, spaces, etc.
         const variations = [
-          name.replace(/\./g, ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
-          name.replace(/\s+/g, '-'),      // Replace spaces with dashes
-          name.replace(/[\s\.]/g, ''),    // Remove spaces and dots
-          name.replace(/[\s\.]/g, '-'),   // Replace spaces and dots with dashes
+          name.replaceAll('.', ''),        // Remove dots: "J.A.R.V.I.S." -> "JARVIS"
+          name.replaceAll(/\s+/g, '-'),      // Replace spaces with dashes
+          name.replaceAll(/[\s\.]/g, ''),    // Remove spaces and dots
+          name.replaceAll(/[\s\.]/g, '-'),   // Replace spaces and dots with dashes
         ].filter(v => v !== name && v.length > 0);
         
         for (const variation of variations) {

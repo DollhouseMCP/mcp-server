@@ -26,7 +26,7 @@ describe('ReDoS Performance Regression Tests', () => {
 
   describe('filesystem.ts - generateUniqueId', () => {
     it('should handle repeated hyphens efficiently', () => {
-      // This would cause catastrophic backtracking with .replace(/-+/g, '-')
+      // This would cause catastrophic backtracking with .replaceAll(/-+/g, '-')
       const pathological = 'a' + '-'.repeat(10000) + 'b' + '-'.repeat(10000);
       
       const duration = measureTime(() => {

@@ -24,7 +24,7 @@ if (!existsSync(resultsDir)) {
 }
 
 // Results file
-const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-').slice(0, -5);
 const resultsFile = join(resultsDir, `full-validation-${timestamp}.md`);
 
 // Initialize results file

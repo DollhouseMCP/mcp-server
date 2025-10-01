@@ -324,7 +324,7 @@ class InspectorCLITestRunner {
 
     // Save report
     ensureDirectoryExists('docs/QA');
-    const reportPath = `docs/QA/qa-inspector-cli-results-${endTime.toISOString().replace(/[:.]/g, '-')}.json`;
+    const reportPath = `docs/QA/qa-inspector-cli-results-${endTime.toISOString().replaceAll(/[:.]/g, '-')}.json`;
     writeFileSync(reportPath, JSON.stringify(report, null, 2));
 
     // Console output

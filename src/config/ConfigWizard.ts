@@ -270,7 +270,7 @@ export class ConfigWizard {
 
     if (trackVersions) {
       const historyCount = await this.prompt('    How many versions to keep? [10]: ', '10');
-      await this.configManager.updateSetting('sync.individual.keep_history', parseInt(historyCount) || 10);
+      await this.configManager.updateSetting('sync.individual.keep_history', Number.parseInt(historyCount) || 10);
     }
 
     // Privacy settings
@@ -326,7 +326,7 @@ export class ConfigWizard {
       
       const styleChoice = await this.prompt('  Choice [1-4]: ', '2');
       const styles = ['full', 'minimal', 'compact', 'custom'];
-      const style = styles[parseInt(styleChoice) - 1] || 'minimal';
+      const style = styles[Number.parseInt(styleChoice) - 1] || 'minimal';
       await this.configManager.updateSetting('display.persona_indicators.style', style);
 
       const includeEmoji = await this.promptYesNo('\n  Include emoji in indicators?', true);

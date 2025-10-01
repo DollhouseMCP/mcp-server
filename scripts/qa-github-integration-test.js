@@ -638,7 +638,7 @@ class GitHubIntegrationTestRunner {
 
     mkdirSync('docs/QA', { recursive: true });
     
-    const filename = `qa-github-integration-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+    const filename = `qa-github-integration-${new Date().toISOString().slice(0, 19).replaceAll(/[:.]/g, '-')}.json`;
     const filepath = `docs/QA/${filename}`;
     
     // Track test result file for cleanup
@@ -758,7 +758,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const runner = new GitHubIntegrationTestRunner();
   runner.runGitHubIntegrationTests().then(report => {
     console.log('\n🎯 Test completed! Check the report for detailed results.');
-    process.exit(report && parseFloat(report.summary.success_rate) > 0 ? 0 : 1);
+    process.exit(report && Number.parseFloat(report.summary.success_rate) > 0 ? 0 : 1);
   });
 }
 

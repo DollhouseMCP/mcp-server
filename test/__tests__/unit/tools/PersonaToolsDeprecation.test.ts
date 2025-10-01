@@ -59,7 +59,7 @@ describe('PersonaTools Deprecation Tests', () => {
             // Extract persona count from response text for comparison
             const initialListText = initialListResponse.content[0].text;
             const initialCount = initialListText.includes('Available Personas (') ? 
-                parseInt(initialListText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(initialListText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
 
             // ✅ FIXED: createPersona returns MCP response object [AGENT-FIX-637]
             // Test creating a persona (was create_persona tool)
@@ -79,7 +79,7 @@ describe('PersonaTools Deprecation Tests', () => {
             const updatedListResponse = await server.listPersonas();
             const updatedListText = updatedListResponse.content[0].text;
             const updatedCount = updatedListText.includes('Available Personas (') ? 
-                parseInt(updatedListText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(updatedListText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             expect(updatedCount).toBe(initialCount + 1);
 
             // ✅ FIXED: Use persona name for activation (server looks up by name) [AGENT-FIX-637]
@@ -177,7 +177,7 @@ describe('PersonaTools Deprecation Tests', () => {
             const beforeReloadResponse = await server.listPersonas();
             const beforeText = beforeReloadResponse.content[0].text;
             const beforeCount = beforeText.includes('Available Personas (') ? 
-                parseInt(beforeText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(beforeText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             
             const reloadResponse = await server.reloadPersonas();
             expect(reloadResponse.content[0].type).toBe('text');
@@ -190,7 +190,7 @@ describe('PersonaTools Deprecation Tests', () => {
             // Should have same number of personas (no external changes)
             const afterText = afterReloadResponse.content[0].text;
             const afterCount = afterText.includes('Available Personas (') ? 
-                parseInt(afterText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(afterText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             expect(afterCount).toBe(beforeCount);
         });
     });
@@ -299,7 +299,7 @@ describe('PersonaTools Deprecation Tests', () => {
             const personasResponse = await server.listPersonas();
             const personasText = personasResponse.content[0].text;
             const personaCount = personasText.includes('Available Personas (') ? 
-                parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             expect(personaCount).toBeGreaterThanOrEqual(3);
             
             // Test that server is still responsive
@@ -319,7 +319,7 @@ describe('PersonaTools Deprecation Tests', () => {
             const personasResponse = await server.listPersonas();
             const personasText = personasResponse.content[0].text;
             const personaCount = personasText.includes('Available Personas (') ? 
-                parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             expect(personaCount).toBeGreaterThanOrEqual(2);
             
             // ✅ FIXED: Use persona name for operations [AGENT-FIX-637]

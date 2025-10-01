@@ -94,7 +94,7 @@ export class SecureYamlParser {
       if (!matchesPattern) {
         // Fall back to Date.parse for other formats, but be more lenient
         const parsed = Date.parse(v);
-        return !isNaN(parsed) && parsed > 0; // Ensure it's a valid positive timestamp
+        return !Number.isNaN(parsed) && parsed > 0; // Ensure it's a valid positive timestamp
       }
       
       return true;
