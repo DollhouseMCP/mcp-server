@@ -11,17 +11,17 @@ Successfully completed the v1.9.14 release cycle from pre-release through to NPM
 
 ## Major Accomplishments
 
-### 1. v1.9.14 Release Completed ✅
+### 1. v1.9.15 Release Completed ✅
 
 **Release Flow:**
 1. **PR #1216**: `release/v1.9.14-pre` → `develop` - MERGED
 2. **PR #1217**: `develop` → `main` - MERGED
-3. **Git Tag**: `v1.9.14` created and pushed
-4. **GitHub Release**: Published at https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.14
+3. **Git Tag**: `v1.9.15` created and pushed
+4. **GitHub Release**: Published at https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.15
 5. **NPM**: `@dollhousemcp/mcp-server@1.9.14` published
 6. **Branch Sync**: `main` merged back to `develop`
 
-**What's in v1.9.14:**
+**What's in v1.9.15:**
 - Fixed ElementFormatter security scanner false positives (Issue #1211, PR #1212)
 - Fixed portfolio search file extension display (Issue #1213, PR #1215)
 - Resolved 10 SonarCloud code quality issues in Docker test files
@@ -182,7 +182,7 @@ The SonarCloud MCP server is now working properly! This was the **major blocker*
 
 ### Release Process Refinement
 
-The v1.9.14 release went smoothly with:
+The v1.9.15 release went smoothly with:
 - Proper pre-release testing via Docker integration
 - Clean PR flow from release branch through develop to main
 - Automated README chunk updates

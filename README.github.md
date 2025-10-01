@@ -873,7 +873,7 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.14 - September 30, 2025
+### v1.9.15 - September 30, 2025
 
 **Bug Fixes**: ElementFormatter and portfolio search improvements
 

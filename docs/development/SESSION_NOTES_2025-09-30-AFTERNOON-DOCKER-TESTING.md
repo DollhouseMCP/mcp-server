@@ -2,7 +2,7 @@
 
 **Date**: September 30, 2025
 **Time**: 2:18 PM - 3:00 PM (estimated 42 minutes)
-**Focus**: Docker integration testing for v1.9.14-pre release
+**Focus**: Docker integration testing for v1.9.15-pre release
 **Outcome**: ✅ Docker tests working, release-specific fixes verified
 
 ## Session Summary
@@ -12,8 +12,8 @@ Picked up from morning session where we created v1.9.14-pre release branch. Main
 ## Context Loaded
 
 - Previous session: SESSION_NOTES_2025-09-30-AFTERNOON-V1914-PRE-RELEASE.md
-- Release branch: `release/v1.9.14-pre` already created
-- Pre-release published: https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.14-pre
+- Release branch: `release/v1.9.15-pre` already created
+- Pre-release published: https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.15-pre
 - Personas: Alex Sterling activated for evidence-based verification
 
 ## Work Completed
@@ -74,7 +74,7 @@ claude config set --global apiKeyHelper /home/claude/.claude/anthropic_key_helpe
 **Success**:
 - ✅ Heredoc pattern with v1.0.128
 - ✅ Basic test: "Say TEST_SUCCESSFUL" → Output: "TEST_SUCCESSFUL"
-- ✅ MCP test: `mcp__dollhousemcp__get_build_info` → Version 1.9.14 confirmed
+- ✅ MCP test: `mcp__dollhousemcp__get_build_info` → Version 1.9.15 confirmed
 
 ### 4. Release-Specific Fix Verification
 
@@ -150,7 +150,7 @@ entries:
 
 **Docker Integration**: ✅ PASSING
 - Claude Code v1.0.128: Working with apiKeyHelper
-- DollhouseMCP v1.9.14: Running in container
+- DollhouseMCP v1.9.15: Running in container
 - MCP Connection: Established and responding
 
 **Bug Fix Verification**: ✅ PASSING
@@ -190,9 +190,9 @@ entries:
 ## Branch State
 
 ```
-release/v1.9.14-pre (HEAD)
+release/v1.9.15-pre (HEAD)
 ├─ Commit: 34203c9 "chore(release): Prepare v1.9.14 pre-release"
-├─ Tag: v1.9.14-pre
+├─ Tag: v1.9.15-pre
 ├─ Origin: pushed
 ├─ Pre-release: Published
 └─ Docker tests: PASSING ✅
@@ -200,9 +200,9 @@ release/v1.9.14-pre (HEAD)
 
 ## Next Session Priorities
 
-1. **Create PR**: `release/v1.9.14-pre` → `main`
+1. **Create PR**: `release/v1.9.15-pre` → `main`
 2. **Merge PR**: After review (likely auto-approve)
-3. **Tag v1.9.14**: Final release tag on main
+3. **Tag v1.9.15**: Final release tag on main
 4. **Publish to NPM**: `npm publish`
 5. **Update installation**: Test NPM install works
 6. **Announcements**: Update relevant channels
@@ -255,7 +255,7 @@ None blocking release.
 **Memories Used**:
 - `docker-claude-code-dollhousemcp-integration-testing.yaml` - Claude Code v2.0 info
 - `docker-claude-code-authentication-solution.yaml` - apiKeyHelper pattern
-- Session notes from morning (v1.9.14-pre creation)
+- Session notes from morning (v1.9.15-pre creation)
 
 **Memories to Create**:
 - This session's notes (afternoon Docker testing)
@@ -263,5 +263,5 @@ None blocking release.
 ---
 
 **Status**: ✅ Docker tests passing, ready for PR creation in next session
-**Next Action**: Create PR `release/v1.9.14-pre` → `main`
+**Next Action**: Create PR `release/v1.9.15-pre` → `main`
 **Context Usage**: 199k/200k (99%) - Session notes written just in time
