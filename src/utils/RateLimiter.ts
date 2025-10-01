@@ -42,7 +42,7 @@ export class RateLimiter {
     this.refillRate = this.maxTokens / config.windowMs;
     
     // Validate refill rate to prevent division by zero
-    if (this.refillRate <= 0 || !isFinite(this.refillRate)) {
+    if (this.refillRate <= 0 || !Number.isFinite(this.refillRate)) {
       throw new Error('Invalid configuration: refill rate must be positive and finite');
     }
     

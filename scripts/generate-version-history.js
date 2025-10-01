@@ -43,9 +43,9 @@ function parseVersion(versionStr) {
   if (!match) return null;
 
   return {
-    major: parseInt(match[1]),
-    minor: parseInt(match[2]),
-    patch: parseInt(match[3]),
+    major: Number.parseInt(match[1]),
+    minor: Number.parseInt(match[2]),
+    patch: Number.parseInt(match[3]),
     preRelease: match[4] || null,
     original: versionStr
   };

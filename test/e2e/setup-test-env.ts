@@ -82,10 +82,10 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
       githubUser,
       cleanupAfter: process.env.TEST_CLEANUP_AFTER !== 'false',
       verboseLogging: process.env.TEST_VERBOSE_LOGGING === 'true',
-      retryAttempts: parseInt(process.env.TEST_RETRY_ATTEMPTS || '3'),
-      timeoutMs: parseInt(process.env.TEST_TIMEOUT_MS || '30000'),
-      rateLimitDelayMs: parseInt(process.env.TEST_RATE_LIMIT_DELAY_MS || '1000'),
-      maxConcurrentRequests: parseInt(process.env.TEST_MAX_CONCURRENT_REQUESTS || '3'),
+      retryAttempts: Number.parseInt(process.env.TEST_RETRY_ATTEMPTS || '3'),
+      timeoutMs: Number.parseInt(process.env.TEST_TIMEOUT_MS || '30000'),
+      rateLimitDelayMs: Number.parseInt(process.env.TEST_RATE_LIMIT_DELAY_MS || '1000'),
+      maxConcurrentRequests: Number.parseInt(process.env.TEST_MAX_CONCURRENT_REQUESTS || '3'),
       personaPrefix: process.env.TEST_PERSONA_PREFIX || 'test-qa-',
       testBranch: process.env.TEST_BRANCH || 'main'
     };

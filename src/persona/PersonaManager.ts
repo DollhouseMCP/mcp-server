@@ -399,7 +399,7 @@ export class PersonaManager {
       parts.push('0');
     }
     
-    const patch = parseInt(parts[parts.length - 1]) || 0;
+    const patch = Number.parseInt(parts[parts.length - 1]) || 0;
     parts[parts.length - 1] = (patch + 1).toString();
     return parts.join('.');
   }

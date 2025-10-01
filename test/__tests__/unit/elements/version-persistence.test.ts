@@ -215,7 +215,7 @@ describe('Version Persistence', () => {
             const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
             if (preReleaseNumberMatch) {
               const preReleaseType = preReleaseNumberMatch[1];
-              const preReleaseNumber = parseInt(preReleaseNumberMatch[2] || '0') + 1;
+              const preReleaseNumber = Number.parseInt(preReleaseNumberMatch[2] || '0') + 1;
               result = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
             } else {
               const [major, minor, patch] = baseVersion.split('.').map(Number);
@@ -228,7 +228,7 @@ describe('Version Persistence', () => {
         } else {
           const versionParts = input.split('.');
           if (versionParts.length >= 3) {
-            const patch = parseInt(versionParts[2]) || 0;
+            const patch = Number.parseInt(versionParts[2]) || 0;
             versionParts[2] = String(patch + 1);
             result = versionParts.join('.');
           } else if (versionParts.length === 2) {

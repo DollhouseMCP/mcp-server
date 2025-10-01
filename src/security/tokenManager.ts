@@ -225,8 +225,8 @@ export class TokenManager {
         }
       });
 
-      const rateLimitRemaining = parseInt(response.headers.get('x-ratelimit-remaining') || '0');
-      const rateLimitReset = parseInt(response.headers.get('x-ratelimit-reset') || '0');
+      const rateLimitRemaining = Number.parseInt(response.headers.get('x-ratelimit-remaining') || '0');
+      const rateLimitReset = Number.parseInt(response.headers.get('x-ratelimit-reset') || '0');
 
       if (!response.ok) {
         const error = `GitHub API error: ${response.status} ${response.statusText}`;

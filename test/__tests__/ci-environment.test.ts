@@ -163,7 +163,7 @@ describe('CI Environment Tests', () => {
   describe('CI-Specific Features', () => {
     it('should have proper Node.js version', () => {
       const nodeVersion = process.version;
-      const majorVersion = parseInt(nodeVersion.split('.')[0].substring(1));
+      const majorVersion = Number.parseInt(nodeVersion.split('.')[0].substring(1));
       
       // We support Node 18, 20, 22, and 24
       expect([18, 20, 22, 24]).toContain(majorVersion);

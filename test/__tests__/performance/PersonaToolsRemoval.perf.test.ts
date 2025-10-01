@@ -324,7 +324,7 @@ describe('PersonaTools Removal Performance Verification', () => {
             const personasResponse = await server.listPersonas();
             const personasText = personasResponse.content[0].text;
             const personaCount = personasText.includes('Available Personas (') ? 
-                parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
+                Number.parseInt(personasText.match(/Available Personas \((\d+)\)/)?.[1] || '0') : 0;
             expect(personaCount).toBeGreaterThanOrEqual(3);
         });
 

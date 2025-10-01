@@ -421,22 +421,22 @@ export class AgentManager implements IElementManager<Agent> {
       
       // Convert string numbers back to numbers
       if (state.sessionCount !== undefined) {
-        state.sessionCount = parseInt(state.sessionCount, 10);
+        state.sessionCount = Number.parseInt(state.sessionCount, 10);
       }
       
       // Convert goal numbers
       if (state.goals) {
         state.goals.forEach((goal: any) => {
-          if (goal.importance !== undefined) goal.importance = parseInt(goal.importance, 10);
-          if (goal.urgency !== undefined) goal.urgency = parseInt(goal.urgency, 10);
-          if (goal.estimatedEffort !== undefined) goal.estimatedEffort = parseFloat(goal.estimatedEffort);
+          if (goal.importance !== undefined) goal.importance = Number.parseInt(goal.importance, 10);
+          if (goal.urgency !== undefined) goal.urgency = Number.parseInt(goal.urgency, 10);
+          if (goal.estimatedEffort !== undefined) goal.estimatedEffort = Number.parseFloat(goal.estimatedEffort);
         });
       }
       
       // Convert decision confidence
       if (state.decisions) {
         state.decisions.forEach((decision: any) => {
-          if (decision.confidence !== undefined) decision.confidence = parseFloat(decision.confidence);
+          if (decision.confidence !== undefined) decision.confidence = Number.parseFloat(decision.confidence);
         });
       }
 

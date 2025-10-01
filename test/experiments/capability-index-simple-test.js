@@ -185,7 +185,7 @@ console.log('SUMMARY - Best Configurations');
 console.log('='.repeat(80));
 
 // Sort by accuracy
-results.sort((a, b) => parseFloat(b.accuracy) - parseFloat(a.accuracy));
+results.sort((a, b) => Number.parseFloat(b.accuracy) - Number.parseFloat(a.accuracy));
 
 console.log('\nTop 3 by Accuracy:');
 results.slice(0, 3).forEach((r, i) => {
@@ -201,7 +201,7 @@ results.slice(0, 3).forEach((r, i) => {
 });
 
 // Sort by index usage
-results.sort((a, b) => parseFloat(b.indexUsage) - parseFloat(a.indexUsage));
+results.sort((a, b) => Number.parseFloat(b.indexUsage) - Number.parseFloat(a.indexUsage));
 
 console.log('\nTop 3 by Index Usage:');
 results.slice(0, 3).forEach((r, i) => {
@@ -218,7 +218,7 @@ const control = results.find(r => r.config === 'control');
 
 if (cascadeTop && control) {
   const tokenSavings = Math.round((1 - cascadeTop.avgTokens / control.avgTokens) * 100);
-  const accuracyGain = parseFloat(cascadeTop.accuracy) - parseFloat(control.accuracy);
+  const accuracyGain = Number.parseFloat(cascadeTop.accuracy) - Number.parseFloat(control.accuracy);
 
   console.log(`\nCascade-Top-Explicit vs Control:`);
   console.log(`  - Token Savings: ${tokenSavings}%`);

@@ -1849,16 +1849,16 @@ ${elementContent}
               operation: 'create-collection-issue',
               remaining: rateLimitRemaining,
               limit: rateLimitLimit,
-              resetTime: rateLimitReset ? new Date(parseInt(rateLimitReset) * 1000) : undefined,
+              resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
               responseStatus: response.status
             });
             
             // Log warning if approaching rate limit
-            if (rateLimitRemaining && parseInt(rateLimitRemaining) < 100) {
+            if (rateLimitRemaining && Number.parseInt(rateLimitRemaining) < 100) {
               logger.warn('Approaching GitHub API rate limit', {
                 operation: 'create-collection-issue',
                 remaining: rateLimitRemaining,
-                resetTime: rateLimitReset ? new Date(parseInt(rateLimitReset) * 1000) : undefined,
+                resetTime: rateLimitReset ? new Date(Number.parseInt(rateLimitReset) * 1000) : undefined,
                 recommendation: 'Consider reducing API usage frequency or authenticating for higher limits'
               });
             }

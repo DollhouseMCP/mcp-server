@@ -91,10 +91,10 @@ describe('YAML Security Formatting Tests - Unit', () => {
           }
           return `${key}: ${value}`;
         } else if (typeof value === 'number') {
-          if (!isFinite(value)) {
+          if (!Number.isFinite(value)) {
             return `${key}: 0`;
           }
-          if (isNaN(value)) {
+          if (Number.isNaN(value)) {
             return `${key}: 0`;
           }
           return `${key}: ${value}`;

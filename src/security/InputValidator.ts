@@ -212,7 +212,7 @@ export class MCPInputValidator {
       throw ErrorHandler.createError('Expiry days must be a valid number', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
     }
     
-    if (isNaN(days) || !isFinite(days)) {
+    if (Number.isNaN(days) || !Number.isFinite(days)) {
       throw ErrorHandler.createError('Expiry days must be a valid number', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
     }
 
@@ -297,7 +297,7 @@ export class MCPInputValidator {
     
     // fe80::/10 - Link-Local Addresses
     // IPv6 link-local addresses are fe80::/10, meaning the valid range is fe80 through febf
-    const fe80Range = parseInt(ipv6Lower.substring(0, 4), 16);
+    const fe80Range = Number.parseInt(ipv6Lower.substring(0, 4), 16);
     if (fe80Range >= 0xfe80 && fe80Range <= 0xfebf) {
       return true;
     }
@@ -316,7 +316,7 @@ export class MCPInputValidator {
   private static isEncodedPrivateIP(hostname: string): boolean {
     // Check for decimal encoded IPs (e.g., 2130706433 = 127.0.0.1)
     if (DECIMAL_IP_REGEX.test(hostname)) {
-      const num = parseInt(hostname, 10);
+      const num = Number.parseInt(hostname, 10);
       if (num >= 0 && num <= 4294967295) { // Valid IPv4 range
         // Convert to IP format and check if private
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
@@ -326,7 +326,7 @@ export class MCPInputValidator {
     
     // Check for hex encoded IPs (e.g., 0x7f000001 = 127.0.0.1)
     if (HEX_IP_REGEX.test(hostname)) {
-      const num = parseInt(hostname, 16);
+      const num = Number.parseInt(hostname, 16);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
         return this.isPrivateIP(ip);
@@ -335,7 +335,7 @@ export class MCPInputValidator {
     
     // Check for octal encoded IPs (e.g., 017700000001 = 127.0.0.1)
     if (OCTAL_IP_REGEX.test(hostname)) {
-      const num = parseInt(hostname, 8);
+      const num = Number.parseInt(hostname, 8);
       if (num >= 0 && num <= 4294967295) {
         const ip = [(num >>> 24) & 255, (num >>> 16) & 255, (num >>> 8) & 255, num & 255].join('.');
         return this.isPrivateIP(ip);

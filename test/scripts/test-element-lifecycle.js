@@ -274,7 +274,7 @@ const CONFIG = {
   maxRetries: 3,
   baseDelay: 5000, // 5 seconds base delay for rate limits
   verbose: process.env.VERBOSE === 'true',
-  skipPhases: process.env.SKIP_PHASES ? process.env.SKIP_PHASES.split(',').map(p => parseInt(p)) : [],
+  skipPhases: process.env.SKIP_PHASES ? process.env.SKIP_PHASES.split(',').map(p => Number.parseInt(p)) : [],
   continueOnError: process.env.CONTINUE_ON_ERROR === 'true'
 };
 

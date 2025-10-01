@@ -758,7 +758,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const runner = new GitHubIntegrationTestRunner();
   runner.runGitHubIntegrationTests().then(report => {
     console.log('\n🎯 Test completed! Check the report for detailed results.');
-    process.exit(report && parseFloat(report.summary.success_rate) > 0 ? 0 : 1);
+    process.exit(report && Number.parseFloat(report.summary.success_rate) > 0 ? 0 : 1);
   });
 }
 

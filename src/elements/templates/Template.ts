@@ -369,7 +369,7 @@ export class Template extends BaseElement implements IElement {
         
       case 'number':
         const num = Number(value);
-        if (isNaN(num)) {
+        if (Number.isNaN(num)) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a number`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
         }
         return num;
@@ -379,7 +379,7 @@ export class Template extends BaseElement implements IElement {
         
       case 'date':
         const date = new Date(value);
-        if (isNaN(date.getTime())) {
+        if (Number.isNaN(date.getTime())) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a valid date`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_DATE);
         }
         return date;

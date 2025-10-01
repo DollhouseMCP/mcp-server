@@ -935,8 +935,8 @@ export class UnifiedIndexManager {
       if (result.version && result.version !== 'unknown') {
         const versionParts = result.version.split('.');
         if (versionParts.length >= 2) {
-          const major = parseInt(versionParts[0]) || 0;
-          const minor = parseInt(versionParts[1]) || 0;
+          const major = Number.parseInt(versionParts[0]) || 0;
+          const minor = Number.parseInt(versionParts[1]) || 0;
           adjustedScore += (major * 0.1) + (minor * 0.01);
         }
       }
@@ -1609,7 +1609,7 @@ export class UnifiedIndexManager {
    */
   private compareVersions(a: string, b: string): number {
     const parseVersion = (version: string) => {
-      const parts = version.split('.').map(part => parseInt(part) || 0);
+      const parts = version.split('.').map(part => Number.parseInt(part) || 0);
       return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
     };
     
