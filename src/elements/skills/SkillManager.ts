@@ -298,7 +298,7 @@ export class SkillManager implements IElementManager<Skill> {
     }, sanitizedContent);
     
     // Generate filename from skill name
-    const filename = `${sanitizedName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+    const filename = `${sanitizedName.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-')}.md`;
     
     // Save the skill
     await this.save(skill, filename);

@@ -39,7 +39,7 @@ describe('update-version.mjs security validation', () => {
     
     // Check for proper escaping function
     expect(scriptContent).toMatch(/function escapeRegExp/);
-    expect(scriptContent).toContain('replace(/[.*+?^${}()|[\\]\\\\]/g');
+    expect(scriptContent).toContain('replaceAll(/[.*+?^${}()|[\\]\\\\]/g');
   });
   
   test('script validates semantic version format', () => {

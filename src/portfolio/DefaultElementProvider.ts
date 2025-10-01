@@ -614,7 +614,7 @@ export class DefaultElementProvider {
       notInTestDir: (() => {
         const cwd = process.cwd().toLowerCase();
         // Normalize path separators for cross-platform checking (Windows uses \ but checks use /)
-        const normalizedCwd = cwd.replace(/\\/g, '/');
+        const normalizedCwd = cwd.replaceAll(/\\/g, '/');
         return !normalizedCwd.includes('/test') && 
                !normalizedCwd.includes('/__tests__') && 
                !normalizedCwd.includes('/temp') &&

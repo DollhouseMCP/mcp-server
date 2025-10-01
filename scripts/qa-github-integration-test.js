@@ -638,7 +638,7 @@ class GitHubIntegrationTestRunner {
 
     mkdirSync('docs/QA', { recursive: true });
     
-    const filename = `qa-github-integration-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+    const filename = `qa-github-integration-${new Date().toISOString().slice(0, 19).replaceAll(/[:.]/g, '-')}.json`;
     const filepath = `docs/QA/${filename}`;
     
     // Track test result file for cleanup

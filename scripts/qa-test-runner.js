@@ -572,7 +572,7 @@ class MCPTestRunner {
     const outputDir = 'docs/QA';
     ensureDirectoryExists(outputDir);
     
-    const filename = `qa-test-results-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+    const filename = `qa-test-results-${new Date().toISOString().slice(0, 19).replaceAll(/[:.]/g, '-')}.json`;
     const filepath = `${outputDir}/${filename}`;
     
     // Track test result file for cleanup

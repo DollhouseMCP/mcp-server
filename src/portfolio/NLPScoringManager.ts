@@ -101,7 +101,7 @@ export class NLPScoringManager {
     // Convert to lowercase and split on word boundaries
     // Keep Unicode letter characters for multilingual support
     const tokens = text.toLowerCase()
-      .replace(/[^\p{L}\p{N}\s_-]/gu, ' ')  // Unicode-aware: keep letters, numbers, underscore, hyphen
+      .replaceAll(/[^\p{L}\p{N}\s_-]/gu, ' ')  // Unicode-aware: keep letters, numbers, underscore, hyphen
       .split(/\s+/)
       .filter(token => token.length >= this.config.minTokenLength);
 

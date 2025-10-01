@@ -6,15 +6,15 @@ function globToRegex(glob) {
     processedGlob = glob.substring(1);
   }
   
-  let pattern = processedGlob.replace(/[\\^$.()+?{}[\]|]/g, '\\$&');
-  
+  let pattern = processedGlob.replaceAll(/[\\^$.()+?{}[\]|]/g, '\\$&');
+
   pattern = pattern
-    .replace(/\*\*/g, '<<GLOBSTAR>>')
-    .replace(/\*/g, '<<STAR>>')
-    .replace(/<<GLOBSTAR>>\//g, '(?:.*/)?')
-    .replace(/<<GLOBSTAR>>/g, '.*')
-    .replace(/<<STAR>>/g, '[^/]*')
-    .replace(/\//g, '\\/');
+    .replaceAll(/\*\*/g, '<<GLOBSTAR>>')
+    .replaceAll(/\*/g, '<<STAR>>')
+    .replaceAll(/<<GLOBSTAR>>\//g, '(?:.*/)?')
+    .replaceAll(/<<GLOBSTAR>>/g, '.*')
+    .replaceAll(/<<STAR>>/g, '[^/]*')
+    .replaceAll(/\//g, '\\/');
   
   const fullPattern = prefix + pattern;
   const regex = new RegExp(`^${fullPattern}$`);

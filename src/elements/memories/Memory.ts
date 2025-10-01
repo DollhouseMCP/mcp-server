@@ -69,7 +69,7 @@ function sanitizeMemoryContent(content: string, maxLength: number): string {
   
   // Remove only control characters and null bytes
   return cleaned
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR - Intentionally removing control chars except \t \n \r for sanitization
+    .replaceAll(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR - Intentionally removing control chars except \t \n \r for sanitization
     .substring(0, maxLength)
     .trim();
 }
