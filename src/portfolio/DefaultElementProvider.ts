@@ -488,14 +488,15 @@ export class DefaultElementProvider {
         
         // Parse the YAML frontmatter safely
         try {
-          // SECURITY FIX: Replace direct YAML parsing function with SecureYamlParser for enhanced security
+          // SECURITY FIX (Issue #1228): Enable validateContent to block zero-width Unicode and other security threats
           // SecureYamlParser provides additional validation, injection prevention, and content sanitization
           // It expects full YAML with --- markers, so we reconstruct the frontmatter block
-          // We disable specific field validation as this is general metadata parsing, not persona-specific
+          // We disable field-specific validation as this is general metadata parsing, not persona-specific
+          // but we MUST keep validateContent: true to ensure Unicode security validation runs
           const fullYaml = `---\n${match[1]}\n---`;
-          const parseResult = SecureYamlParser.parse(fullYaml, { 
-            validateContent: false, 
-            validateFields: false 
+          const parseResult = SecureYamlParser.parse(fullYaml, {
+            validateContent: true,  // FIX: Must be true to block zero-width chars and Unicode attacks
+            validateFields: false   // Can be false - field-specific validation is optional for metadata
           });
           const metadata = parseResult.data;
           
