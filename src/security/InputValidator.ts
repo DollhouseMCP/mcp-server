@@ -260,6 +260,22 @@ export class MCPInputValidator {
   }
 
   /**
+   * Sanitize text for safe display output
+   * Removes shell metacharacters to prevent command injection in displayed messages
+   *
+   * @param text - Text to sanitize for display
+   * @returns Sanitized text with shell metacharacters removed
+   */
+  static sanitizeForDisplay(text: string): string {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    // Remove core shell metacharacters that could enable command injection
+    // Pattern: semicolon, ampersand, pipe, backtick, dollar, parentheses
+    return text.replaceAll(/[;&|`$()]/g, '');
+  }
+
+  /**
    * Check if hostname is a private IP address (IPv4 and IPv6)
    */
   private static isPrivateIP(hostname: string): boolean {

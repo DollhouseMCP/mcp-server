@@ -4172,7 +4172,7 @@ ${sanitizedInstructions}
       let sanitizedValue = valueValidation.sanitizedContent || value;
       
       // Always remove shell metacharacters from display output
-      const displayValue = sanitizedValue.replaceAll(/[;&|`$()]/g, '');
+      const displayValue = MCPInputValidator.sanitizeForDisplay(sanitizedValue);
       
       if (normalizedField === 'instructions') {
         // Update the main content
@@ -4221,13 +4221,13 @@ ${sanitizedInstructions}
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
               (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
-              `🎭 **${(parsed.data.name || persona.metadata.name || '').replaceAll(/[;&|`$()]/g, '')}**\n` +
+              `🎭 **${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : displayValue}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
               (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
-              `Use \`get_persona_details "${(parsed.data.name || persona.metadata.name || '').replaceAll(/[;&|`$()]/g, '')}"\` to see all changes.`,
+              `Use \`get_persona_details "${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}"\` to see all changes.`,
           },
         ],
       };
