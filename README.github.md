@@ -873,7 +873,33 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.15 - September 30, 2025
+### v1.9.15 - October 1, 2025
+
+**Security Patch**: Zero-width Unicode bypass vulnerability + SonarCloud cleanup
+
+#### 🔒 Security Fix [HIGH]
+- **Zero-width Unicode bypass vulnerability** - Restored Unicode security validation (#1228, #1229)
+  - Blocks zero-width characters (U+200B-U+200F, U+FEFF) in metadata validation
+  - Prevents steganography and homograph attacks
+  - Fixed `validateContent` bypass in DefaultElementProvider
+  - Restored security validation chain through ContentValidator and UnicodeValidator
+
+#### 🧹 Code Quality
+- **228+ SonarCloud issues resolved** across 5 issues (#1220-1224):
+  - S7773: Modernized Number parsing methods (90 issues) - `parseInt()` → `Number.parseInt()`
+  - S7781: String.replaceAll modernization (134 issues) - `.replace(/g)` → `.replaceAll()`
+  - MEDIUM severity fixes (4 issues) - Object literals, loop counters, Promise types
+  - False positives marked (11 issues) - Test-only patterns properly categorized
+- **199 security hotspots evaluated** - All marked SAFE, zero production concerns (#1219)
+  - Math.random(), MD5, PATH usage validated for non-security contexts
+  - Comprehensive documentation of safe patterns
+
+#### 📊 Impact
+- ✅ 1 HIGH severity security vulnerability fixed
+- ✅ All production security concerns resolved
+- ✅ Test coverage maintained at >96%
+
+### v1.9.14 - September 30, 2025
 
 **Bug Fixes**: ElementFormatter and portfolio search improvements
 
@@ -882,23 +908,10 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
   - SecureYamlParser now properly respects `validateContent: false` option
   - ElementFormatter uses `validateContent: false` for all YAML parsing (5 locations)
   - Local trusted files can bypass content scanning while maintaining security for untrusted sources
-  - Improved memory name generation: derives from filenames instead of auto-generated IDs
-  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
 
 - **Portfolio Search File Extension Display** - Fixed incorrect extension display (#1213, #1215)
   - Portfolio search now shows correct file extensions based on element type
   - Memories display `.yaml` extension, other elements show `.md` extension
-  - Added `getFileExtension()` public method to PortfolioManager
-  - No breaking changes, display-only fix
-
-#### 🛠️ Code Quality
-- Fixed 10 SonarCloud issues in Docker test files:
-  - S7018: Sorted apt packages alphabetically
-  - S7031: Merged consecutive RUN instructions
-  - S7772: Added `node:` prefix for built-in modules (4 occurrences)
-  - S2486: Added proper error logging for JSON parse exceptions
-  - S7780: Used String.raw for regex patterns (2 occurrences)
-- Added comprehensive test coverage for portfolio search file extensions
 
 #### 📚 Documentation
 - Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
