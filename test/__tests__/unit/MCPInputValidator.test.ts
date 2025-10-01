@@ -267,7 +267,7 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
         'value $(whoami)'
       ];
 
-      maliciousInputs.forEach(input => {
+      for (const input of maliciousInputs) {
         const result = MCPInputValidator.sanitizeForDisplay(input);
 
         // Core shell metacharacters should be removed
@@ -278,7 +278,7 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
         expect(result).not.toContain('|');
         expect(result).not.toContain('(');
         expect(result).not.toContain(')');
-      });
+      }
     });
 
     test('should handle unicode and special characters', () => {
@@ -303,12 +303,12 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
         'Backtick`test'
       ];
 
-      testCases.forEach(input => {
+      for (const input of testCases) {
         const utilityResult = MCPInputValidator.sanitizeForDisplay(input);
         const inlineResult = input.replaceAll(/[;&|`$()]/g, '');
 
         expect(utilityResult).toBe(inlineResult);
-      });
+      }
     });
   });
 });
