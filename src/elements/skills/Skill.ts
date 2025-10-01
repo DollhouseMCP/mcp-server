@@ -220,7 +220,7 @@ export class Skill extends BaseElement implements IElement {
         return typeof value === 'string';
       case 'number':
         const num = Number(value);
-        if (isNaN(num)) return false;
+        if (Number.isNaN(num)) return false;
         if (param.min !== undefined && num < param.min) return false;
         if (param.max !== undefined && num > param.max) return false;
         return true;

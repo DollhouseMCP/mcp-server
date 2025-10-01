@@ -136,8 +136,8 @@ export function calculateShardKey(memoryId: string, shardCount = 16): number {
 export function parseMemoryTimestamp(memoryId: string): number | null {
   const match = memoryId.match(/^mem_(\d+)_/);
   if (match && match[1]) {
-    const timestamp = parseInt(match[1], 10);
-    return isNaN(timestamp) ? null : timestamp;
+    const timestamp = Number.parseInt(match[1], 10);
+    return Number.isNaN(timestamp) ? null : timestamp;
   }
   return null;
 }

@@ -515,7 +515,7 @@ entries:
       ### S7773 - Prefer Number.* methods
       - **Category**: Reliability
       - **Default Severity**: Medium
-      - **Fix**: Replace \`parseInt()\` with \`Number.parseInt()\`, \`isNaN()\` with \`Number.isNaN()\`
+      - **Fix**: Replace \`Number.parseInt()\` with \`Number.parseInt()\`, \`Number.isNaN()\` with \`Number.isNaN()\`
       - **Issues in project**: ~180
       - **Automation**: High - simple find/replace
 

@@ -351,7 +351,7 @@ describe('ToolCache', () => {
       const isWindows = process.platform === 'win32';
       const defaultThreshold = isWindows ? 2 : 1;
       const cacheThreshold = process.env.TOOLCACHE_THRESHOLD_MS
-        ? parseFloat(process.env.TOOLCACHE_THRESHOLD_MS)
+        ? Number.parseFloat(process.env.TOOLCACHE_THRESHOLD_MS)
         : defaultThreshold;
 
       expect(cachedTime).toBeLessThan(cacheThreshold); // Configurable threshold
@@ -374,14 +374,14 @@ describe('ToolCache', () => {
       // - This follows the same pattern as TOOLCACHE_THRESHOLD_MS for consistency
 
       const isMacOS = process.platform === 'darwin';
-      const isNode22Plus = parseInt(process.version.slice(1).split('.')[0]) >= 22;
+      const isNode22Plus = Number.parseInt(process.version.slice(1).split('.')[0]) >= 22;
 
       // Determine the minimum improvement ratio
       // Allow environment variable override, then platform-specific defaults
       let minImprovement: number;
       if (process.env.TOOLCACHE_IMPROVEMENT_RATIO) {
         // Environment variable override for CI flexibility
-        minImprovement = parseFloat(process.env.TOOLCACHE_IMPROVEMENT_RATIO);
+        minImprovement = Number.parseFloat(process.env.TOOLCACHE_IMPROVEMENT_RATIO);
       } else if (isMacOS && isNode22Plus) {
         // Relaxed threshold for macOS + Node 22+
         minImprovement = 2;

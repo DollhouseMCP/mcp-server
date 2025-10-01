@@ -49,9 +49,9 @@ export function normalizeVersion(version: string): string {
   const [, major, minor = '0', patch = '0', suffix = ''] = match;
   
   // Strip leading zeros but preserve "0" as valid
-  const normalizedMajor = parseInt(major, 10).toString();
-  const normalizedMinor = parseInt(minor, 10).toString();
-  const normalizedPatch = parseInt(patch, 10).toString();
+  const normalizedMajor = Number.parseInt(major, 10).toString();
+  const normalizedMinor = Number.parseInt(minor, 10).toString();
+  const normalizedPatch = Number.parseInt(patch, 10).toString();
   
   return `${normalizedMajor}.${normalizedMinor}.${normalizedPatch}${suffix}`;
 }
@@ -473,7 +473,7 @@ export abstract class BaseElement implements IElement {
     // Look for explicit ratings
     const ratingMatch = lower.match(/(\d+)\s*(stars?|\/5|out of 5)/);
     if (ratingMatch) {
-      const rating = parseInt(ratingMatch[1]);
+      const rating = Number.parseInt(ratingMatch[1]);
       if (rating >= 1 && rating <= 5) return rating;
     }
     

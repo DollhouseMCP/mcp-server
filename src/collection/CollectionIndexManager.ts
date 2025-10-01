@@ -91,8 +91,8 @@ export class CollectionIndexManager {
     // Check environment variable first
     const envTimeout = process.env.COLLECTION_FETCH_TIMEOUT;
     if (envTimeout) {
-      const parsed = parseInt(envTimeout, 10);
-      if (!isNaN(parsed) && parsed > 0) {
+      const parsed = Number.parseInt(envTimeout, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) {
         logger.debug(`Using COLLECTION_FETCH_TIMEOUT from environment: ${parsed}ms`);
         return parsed;
       }

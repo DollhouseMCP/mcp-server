@@ -549,7 +549,7 @@ export class Memory extends BaseElement implements IElement {
 
     // If already a Date, validate it
     if (value instanceof Date) {
-      if (isNaN(value.getTime())) {
+      if (Number.isNaN(value.getTime())) {
         throw new Error(`Invalid Date object provided`);
       }
       return value;
@@ -557,7 +557,7 @@ export class Memory extends BaseElement implements IElement {
 
     // Try to convert to Date
     const date = new Date(value);
-    if (isNaN(date.getTime())) {
+    if (Number.isNaN(date.getTime())) {
       throw new Error(`Invalid date value: ${value}`);
     }
 

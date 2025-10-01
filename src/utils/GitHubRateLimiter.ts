@@ -366,9 +366,9 @@ export class GitHubRateLimiter {
     // Parse rate limit headers if available
     if (error?.response?.headers) {
       const headers = error.response.headers;
-      const resetTimestamp = parseInt(headers['x-ratelimit-reset'] || '0');
-      const remaining = parseInt(headers['x-ratelimit-remaining'] || '0');
-      const limit = parseInt(headers['x-ratelimit-limit'] || '0');
+      const resetTimestamp = Number.parseInt(headers['x-ratelimit-reset'] || '0');
+      const remaining = Number.parseInt(headers['x-ratelimit-remaining'] || '0');
+      const limit = Number.parseInt(headers['x-ratelimit-limit'] || '0');
       
       if (resetTimestamp > 0) {
         resetTime = new Date(resetTimestamp * 1000);
