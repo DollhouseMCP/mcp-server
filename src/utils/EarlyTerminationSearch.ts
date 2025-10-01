@@ -33,17 +33,17 @@ export class EarlyTerminationSearch {
   static async executeWithEarlyTermination<T>(
     searches: Array<() => Promise<T | null>>,
     isExactMatch: (result: T) => boolean,
-    options: {
-      operationName: string;
+    options?: {
+      operationName?: string;
       timeoutAfterExactMatch?: number; // ms to wait for other searches after exact match
       maxParallelSearches?: number; // limit concurrent searches
-    } = { operationName: 'search' }
+    }
   ): Promise<EarlyTerminationResult<T>> {
     const {
-      operationName,
+      operationName = 'search',
       timeoutAfterExactMatch = 1000,
       maxParallelSearches = 10
-    } = options;
+    } = options || {};
 
     const startTime = Date.now();
     const results: EarlyTerminationResult<T> = {

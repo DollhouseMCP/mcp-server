@@ -460,19 +460,29 @@ async function main() {
     const options = {};
 
     // Parse command line arguments
-    for (let i = 0; i < args.length; i++) {
+    let i = 0;
+    while (i < args.length) {
         const arg = args[i];
         switch (arg) {
             case '--dry-run':
                 options.dryRun = true;
+                i++;
                 break;
             case '--verbose':
             case '-v':
                 options.verbose = true;
+                i++;
                 break;
             case '--target':
             case '-t':
-                options.targetDir = args[++i];
+                i++;
+                if (i < args.length) {
+                    options.targetDir = args[i];
+                    i++;
+                } else {
+                    console.error('Error: --target requires an argument');
+                    process.exit(1);
+                }
                 break;
             case '--help':
             case '-h':
