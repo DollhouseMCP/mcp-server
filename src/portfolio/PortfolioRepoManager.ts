@@ -620,7 +620,7 @@ These elements can be imported into your DollhouseMCP installation.
     // 2. Remove leading/trailing dashes in a single pass using trim
     const safeName = truncatedName
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
+      .replaceAll(/[^a-z0-9]+/g, '-')
       .replace(/^-+/, '')  // Remove leading dashes
       .replace(/-+$/, ''); // Remove trailing dashes
     

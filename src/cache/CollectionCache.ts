@@ -148,7 +148,7 @@ export class CollectionCache {
    */
   private normalizeSearchTerm(term: string): string {
     return term.toLowerCase()
-      .replace(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
+      .replaceAll(/[-_\s]+/g, ' ')  // Convert dashes, underscores to spaces
       .replace(/\.md$/, '')       // Remove .md extension
       .trim();
   }

@@ -263,7 +263,7 @@ export class QAMetricsCollector {
     const metricsDir = 'docs/QA/metrics';
     mkdirSync(metricsDir, { recursive: true });
 
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
+    const timestamp = new Date().toISOString().slice(0, 19).replaceAll(/[:.]/g, '-');
     const filename = `qa-metrics-${timestamp}.json`;
     const filepath = resolve(metricsDir, filename);
 

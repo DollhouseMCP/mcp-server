@@ -61,9 +61,9 @@ export class PortfolioElementAdapter implements IElement {
     this.version = element.metadata.version || '1.0.0';
     
     // Generate ID from type and normalized name
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
     const safeName = normalizedName.normalizedContent || element.metadata.name;
-    const nameSlug = safeName.toLowerCase().replace(/\s+/g, '-');
+    const nameSlug = safeName.toLowerCase().replaceAll(/\s+/g, '-');
     this.id = `${element.type}_${nameSlug}_${timestamp}`;
     
     // Convert metadata to IElementMetadata format with normalized values

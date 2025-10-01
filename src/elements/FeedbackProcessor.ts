@@ -396,7 +396,7 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     
     // Extract words
     const words = text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
+      .replaceAll(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter(word =>
         word.length > 2 &&

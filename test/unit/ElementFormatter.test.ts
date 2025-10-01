@@ -522,7 +522,7 @@ entries:
       ### S7781 - Use String#replaceAll()
       - **Category**: Reliability
       - **Default Severity**: Low
-      - **Fix**: Replace \`str.replace(/pattern/g, ...)\` with \`str.replaceAll('pattern', ...)\`
+      - **Fix**: Replace \`str.replaceAll(/pattern/g, ...)\` with \`str.replaceAll('pattern', ...)\`
       - **Issues in project**: ~104
       - **Automation**: High - pattern matching required`;
 

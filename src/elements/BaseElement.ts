@@ -126,8 +126,8 @@ export abstract class BaseElement implements IElement {
     const typeSlug = this.type.toLowerCase();
     const nameSlug = name
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')  // Replace non-alphanumeric chars with hyphens
-      .replace(/(^-)|(-$)/g, '');   // Trim leading/trailing hyphens
+      .replaceAll(/[^a-z0-9]+/g, '-')  // Replace non-alphanumeric chars with hyphens
+      .replaceAll(/(^-)|(-$)/g, '');   // Trim leading/trailing hyphens
     const timestamp = Date.now();
     
     return `${typeSlug}_${nameSlug}_${timestamp}`;

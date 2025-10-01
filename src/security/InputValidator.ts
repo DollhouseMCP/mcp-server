@@ -14,6 +14,7 @@ import { ValidationErrorCodes } from '../utils/errorCodes.js';
 const CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g; // NOSONAR - Removing control characters for security
 const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
 const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
+const SHELL_METACHAR_DISPLAY_REGEX = /[;&|`$()]/g; // Core shell metacharacters for display sanitization
 const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
 const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
 const VALID_COLLECTION_PATH_REGEX = /^[a-zA-Z0-9\/\-_.]*$/;
@@ -71,10 +72,10 @@ export class MCPInputValidator {
 
     // Sanitize but preserve spaces for search
     const sanitized = query
-      .replace(CONTROL_CHARS_REGEX, '') // Remove control characters
-      .replace(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
-      .replace(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
-      .replace(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
+      .replaceAll(CONTROL_CHARS_REGEX, '') // Remove control characters
+      .replaceAll(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
+      .replaceAll(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
+      .replaceAll(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
       .trim();
 
     if (!sanitized) {
@@ -112,7 +113,7 @@ export class MCPInputValidator {
 
     // Prevent path traversal in GitHub paths (comprehensive check)
     const pathLower = path.toLowerCase();
-    const encodedPath = decodeURIComponent(path.replace(URL_PLUS_DECODE_REGEX, ' ')); // Decode URL encoding
+    const encodedPath = decodeURIComponent(path.replaceAll(URL_PLUS_DECODE_REGEX, ' ')); // Decode URL encoding
     
     // Check for various path traversal patterns
     const traversalPatterns = [
@@ -260,6 +261,26 @@ export class MCPInputValidator {
   }
 
   /**
+   * Sanitize text for safe display output
+   * Removes core shell metacharacters to prevent command injection in displayed messages
+   *
+   * Uses a conservative subset of shell metacharacters (;, &, |, `, $, parentheses)
+   * that are most critical for command injection prevention while preserving
+   * common punctuation like !, ?, * for better user experience in display contexts.
+   *
+   * @param text - Text to sanitize for display
+   * @returns Sanitized text with core shell metacharacters removed
+   */
+  static sanitizeForDisplay(text: string): string {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    // Use pre-compiled regex for performance
+    // Removes: ; & | ` $ ( )
+    return text.replaceAll(SHELL_METACHAR_DISPLAY_REGEX, '');
+  }
+
+  /**
    * Check if hostname is a private IP address (IPv4 and IPv6)
    */
   private static isPrivateIP(hostname: string): boolean {
@@ -359,7 +380,7 @@ export function validateFilename(filename: string): string {
   }
   
   // Remove any path separators and dangerous characters
-  const sanitized = filename.replace(FILENAME_DANGEROUS_REGEX, '').replace(FILENAME_LEADING_DOTS_REGEX, '');
+  const sanitized = filename.replaceAll(FILENAME_DANGEROUS_REGEX, '').replace(FILENAME_LEADING_DOTS_REGEX, '');
   
   if (!RegexValidator.validate(sanitized, VALIDATION_PATTERNS.SAFE_FILENAME, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
     throw ErrorHandler.createError('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FILENAME);
@@ -388,13 +409,13 @@ export function validatePath(inputPath: string, baseDir?: string): string {
   // Remove leading/trailing slashes and normalize
   // Length limits added to prevent ReDoS attacks
   // WINDOWS FIX: Convert backslashes to forward slashes for cross-platform compatibility
-  let normalized = inputPath.replace(/\\/g, '/');
-  
+  let normalized = inputPath.replaceAll('\\', '/');
+
   // FIX: Preserve leading slash for absolute paths
   const isAbsolute = normalized.startsWith('/') || isWindowsAbsolute;
-  
+
   // Remove trailing slashes and normalize multiple slashes
-  normalized = normalized.replace(/\/{1,100}$/g, '').replace(/\/{2,100}/g, '/');
+  normalized = normalized.replaceAll(/\/{1,100}$/g, '').replaceAll(/\/{2,100}/g, '/');
   
   // Preserve the leading slash if it was an absolute path
   if (isAbsolute && !normalized.startsWith('/') && !isWindowsAbsolute) {
@@ -557,10 +578,10 @@ export function sanitizeInput(input: string, maxLength: number = 1000): string {
   
   // Remove potentially dangerous characters and limit length
   return input
-    .replace(CONTROL_CHARS_REGEX, '') // Remove control characters
-    .replace(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
-    .replace(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
-    .replace(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
+    .replaceAll(CONTROL_CHARS_REGEX, '') // Remove control characters
+    .replaceAll(HTML_DANGEROUS_REGEX, '') // Remove HTML-dangerous characters
+    .replaceAll(SHELL_METACHAR_REGEX, '') // Remove shell metacharacters (expanded)
+    .replaceAll(RTL_ZEROWIDTH_REGEX, '') // Remove RTL override and zero-width chars
     .substring(0, maxLength)
     .trim();
 }

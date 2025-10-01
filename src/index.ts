@@ -1917,7 +1917,7 @@ export class DollhouseMCPServer implements IToolHandler {
       // Previously: All elements used .md extension, causing memory saves to fail
       // Now: Memories use .yaml as required by MemoryManager
       const extension = type === ElementType.MEMORY ? '.yaml' : '.md';
-      const filename = `${element.metadata.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}${extension}`;
+      const filename = `${element.metadata.name.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-')}${extension}`;
       // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
       await manager!.save(element, filename);
       
@@ -4065,7 +4065,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );
@@ -4172,7 +4172,7 @@ ${sanitizedInstructions}
       let sanitizedValue = valueValidation.sanitizedContent || value;
       
       // Always remove shell metacharacters from display output
-      const displayValue = sanitizedValue.replace(/[;&|`$()]/g, '');
+      const displayValue = MCPInputValidator.sanitizeForDisplay(sanitizedValue);
       
       if (normalizedField === 'instructions') {
         // Update the main content
@@ -4221,13 +4221,13 @@ ${sanitizedInstructions}
             type: "text",
             text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
               (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
-              `🎭 **${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}**\n` +
+              `🎭 **${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}**\n` +
               `📝 **Field Updated:** ${field}\n` +
               `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : displayValue}\n` +
               `📊 **Version:** ${parsed.data.version}\n` +
               (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
               `\n` +
-              `Use \`get_persona_details "${(parsed.data.name || persona.metadata.name || '').replace(/[;&|`$()]/g, '')}"\` to see all changes.`,
+              `Use \`get_persona_details "${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}"\` to see all changes.`,
           },
         ],
       };
@@ -4278,7 +4278,7 @@ ${sanitizedInstructions}
     
     if (!persona) {
       // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replace(/-/g, ' ');
+      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
       persona = Array.from(this.personas.values()).find(p => 
         p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
       );

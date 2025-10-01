@@ -66,7 +66,7 @@ const resultsDir = join(process.cwd(), 'test-results');
 if (!existsSync(resultsDir)) {
   mkdirSync(resultsDir, { recursive: true });
 }
-const resultsFile = join(resultsDir, `test-element-lifecycle-${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+const resultsFile = join(resultsDir, `test-element-lifecycle-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.md`);
 
 // Initialize results file
 writeFileSync(resultsFile, `# Test Element Lifecycle Results

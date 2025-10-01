@@ -925,13 +925,13 @@ export class PortfolioSyncManager {
    * Find a fuzzy match for an element name
    */
   private findFuzzyMatch(searchName: string, entries: GitHubIndexEntry[]): GitHubIndexEntry | null {
-    const search = searchName.toLowerCase().replace(/[-_]/g, '');
+    const search = searchName.toLowerCase().replaceAll(/[-_]/g, '');
     let bestMatch: typeof entries[0] | null = null;
     let bestScore = 0;
     
     for (const entry of entries) {
       // Normalize the entry name for comparison
-      const normalized = entry.name.toLowerCase().replace(/[-_]/g, '');
+      const normalized = entry.name.toLowerCase().replaceAll(/[-_]/g, '');
       
       // Calculate similarity score
       const score = this.calculateSimilarity(search, normalized);
@@ -948,11 +948,11 @@ export class PortfolioSyncManager {
    * Get suggestions for similar element names
    */
   private getSuggestions(searchName: string, entries: GitHubIndexEntry[]): Array<{name: string}> {
-    const search = searchName.toLowerCase().replace(/[-_]/g, '');
+    const search = searchName.toLowerCase().replaceAll(/[-_]/g, '');
     const scored: Array<{entry: typeof entries[0]; score: number}> = [];
     
     for (const entry of entries) {
-      const normalized = entry.name.toLowerCase().replace(/[-_]/g, '');
+      const normalized = entry.name.toLowerCase().replaceAll(/[-_]/g, '');
       const score = this.calculateSimilarity(search, normalized);
       if (score > 0.3) { // Lower threshold for suggestions
         scored.push({ entry, score });

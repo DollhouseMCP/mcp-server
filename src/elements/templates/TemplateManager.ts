@@ -225,7 +225,7 @@ export class TemplateManager implements IElementManager<Template> {
     }, sanitizedContent);
     
     // Generate filename from template name
-    const filename = `${sanitizedName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
+    const filename = `${sanitizedName.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-')}.md`;
     
     // Save the template
     await this.save(template, filename);

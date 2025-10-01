@@ -301,7 +301,7 @@ export class UnicodeValidator {
    * Escape special regex characters for safe replacement
    */
   private static escapeRegex(string: string): string {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return string.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**

@@ -269,7 +269,7 @@ export class MemoryManager implements IElementManager<Memory> {
     this.dateFoldersCache = null;
 
     // Generate filename
-    const baseName = fileName || `${element.metadata.name?.toLowerCase().replace(/\s+/g, '-') || 'memory'}.yaml`;
+    const baseName = fileName || `${element.metadata.name?.toLowerCase().replaceAll(/\s+/g, '-') || 'memory'}.yaml`;
     let finalName = baseName;
     let version = 1;
 
