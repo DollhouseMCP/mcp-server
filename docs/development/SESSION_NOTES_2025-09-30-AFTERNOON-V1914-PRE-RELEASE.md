@@ -2,7 +2,7 @@
 
 **Date**: September 30, 2025
 **Time**: 1:51 PM - 2:30 PM (estimated 40 minutes)
-**Focus**: Create v1.9.14 pre-release
+**Focus**: Create v1.9.15 pre-release
 **Outcome**: ✅ Pre-release created and published
 
 ## Session Summary
@@ -33,9 +33,9 @@ Successfully created v1.9.14 pre-release branch and published to GitHub. PR #121
 
 ### 2. Pre-Release Branch Creation
 
-Created `release/v1.9.14-pre` from develop:
+Created `release/v1.9.15-pre` from develop:
 ```bash
-git checkout -b release/v1.9.14-pre develop
+git checkout -b release/v1.9.15-pre develop
 ```
 
 GitFlow Guardian confirmed proper release branch creation.
@@ -92,7 +92,7 @@ GitFlow Guardian confirmed proper release branch creation.
 **Build Process:**
 ```bash
 npm run build  # TypeScript compilation
-# ✅ Generated version info: v1.9.14 (git build)
+# ✅ Generated version info: v1.9.15 (git build)
 ```
 
 **Git Operations:**
@@ -104,14 +104,14 @@ git commit -m "chore(release): Prepare v1.9.14 pre-release"
 
 **GitHub Push:**
 ```bash
-git push -u origin release/v1.9.14-pre
-git tag v1.9.14-pre
-git push origin v1.9.14-pre
-gh release create v1.9.14-pre --prerelease --target release/v1.9.14-pre --title "v1.9.14 Pre-Release"
+git push -u origin release/v1.9.15-pre
+git tag v1.9.15-pre
+git push origin v1.9.15-pre
+gh release create v1.9.15-pre --prerelease --target release/v1.9.15-pre --title "v1.9.15 Pre-Release"
 ```
 
 **Pre-Release Created:**
-- URL: https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.14-pre
+- URL: https://github.com/DollhouseMCP/mcp-server/releases/tag/v1.9.15-pre
 - Status: Pre-release (not production-ready)
 - Install command: `npm install @dollhousemcp/mcp-server@1.9.14-pre`
 
@@ -140,9 +140,9 @@ gh release create v1.9.14-pre --prerelease --target release/v1.9.14-pre --title 
 ## Branch State
 
 ```
-release/v1.9.14-pre (HEAD)
+release/v1.9.15-pre (HEAD)
 ├─ Commit: 34203c9
-├─ Tag: v1.9.14-pre
+├─ Tag: v1.9.15-pre
 ├─ Origin: pushed
 └─ CI Status: Will be checked in next session
 ```
@@ -164,7 +164,7 @@ release/v1.9.14-pre (HEAD)
 1. **Monitor Pre-Release**: Check CI/CD status on release branch
 2. **Docker Testing**: Run integration tests if needed
 3. **Validation**: Verify pre-release installs and works correctly
-4. **Full Release**: If all good, merge to main and create v1.9.14 release
+4. **Full Release**: If all good, merge to main and create v1.9.15 release
 5. **NPM Publish**: Publish to npm registry
 6. **Announcement**: Update relevant channels
 
@@ -173,7 +173,7 @@ release/v1.9.14-pre (HEAD)
 ### GitFlow Process
 - Created feature branch from `develop` ✅
 - Both PRs merged to `develop` ✅
-- Created `release/v1.9.14-pre` from `develop` ✅
+- Created `release/v1.9.15-pre` from `develop` ✅
 - Next: Merge release branch to `main` (after validation)
 
 ### CI/CD Pipeline
@@ -196,9 +196,9 @@ All checks will run on release branch:
 ## Session Artifacts
 
 **Created:**
-- Release branch: `release/v1.9.14-pre`
-- Git tag: `v1.9.14-pre`
-- GitHub pre-release: v1.9.14-pre
+- Release branch: `release/v1.9.15-pre`
+- Git tag: `v1.9.15-pre`
+- GitHub pre-release: v1.9.15-pre
 - Session notes: This file
 
 **Updated:**
@@ -228,4 +228,4 @@ These are test-only failures and don't affect production code.
 ---
 
 **Status**: ✅ Pre-release ready for testing
-**Next Action**: Validate pre-release, then proceed to full v1.9.14 release
+**Next Action**: Validate pre-release, then proceed to full v1.9.15 release

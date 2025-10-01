@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.9.15] - 2025-10-01
+
+Security patch: Zero-width Unicode bypass vulnerability + SonarCloud cleanup
+
+SECURITY FIX [HIGH]:
+- Block zero-width Unicode characters in metadata validation (#1228, #1229)
+- Prevents steganography and homograph attacks
+
+CODE QUALITY:
+- 228+ SonarCloud issues resolved (#1220-1224)
+- 199 security hotspots evaluated (all safe)
+- Number.parseInt modernization, String.replaceAll updates
+
+All production security concerns resolved.
+
 ## [1.9.14] - 2025-09-30
 
 ### Fixed

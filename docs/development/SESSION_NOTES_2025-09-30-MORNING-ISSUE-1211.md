@@ -527,7 +527,7 @@ mcp__dollhousemcp-production__portfolio_status
 
 **Decision needed**: Commit, stash, or discard?
 
-### Priority 3: Consider v1.9.14 Release
+### Priority 3: Consider v1.9.15 Release
 **Changes in develop**:
 - ✅ PR #1212 merged (Issue #1211 fix)
 - Potentially: Issue #1213 fix
