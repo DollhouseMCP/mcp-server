@@ -452,6 +452,18 @@ export class DefaultElementProvider {
     };
   }
 
+  /**
+   * Read only the YAML frontmatter metadata from a file (first 4KB)
+   *
+   * SECURITY NOTE (Issue #1228): This method MUST use validateContent: true when calling
+   * SecureYamlParser.parse() to ensure Unicode security validation runs. Setting validateContent
+   * to false would disable ALL content validation including zero-width character detection,
+   * creating a security bypass vulnerability.
+   *
+   * @param filePath - Absolute path to the file to read
+   * @param retries - Number of retries for transient failures (default: 2)
+   * @returns Parsed metadata object or null if no valid frontmatter found
+   */
   private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
     // PERFORMANCE: Check cache first before reading file
     try {
@@ -495,8 +507,12 @@ export class DefaultElementProvider {
           // but we MUST keep validateContent: true to ensure Unicode security validation runs
           const fullYaml = `---\n${match[1]}\n---`;
           const parseResult = SecureYamlParser.parse(fullYaml, {
-            validateContent: true,  // FIX: Must be true to block zero-width chars and Unicode attacks
-            validateFields: false   // Can be false - field-specific validation is optional for metadata
+            // REQUIRED: validateContent must be true to enable Unicode security validation including
+            // zero-width character detection (U+200B-U+200F, U+FEFF, etc.). Setting this to false
+            // would disable ALL content validation, creating a security bypass for Unicode-based attacks.
+            // See UnicodeValidator.normalize() for detection logic.
+            validateContent: true,
+            validateFields: false   // Field-specific validation is optional for general metadata parsing
           });
           const metadata = parseResult.data;
           
