@@ -14,6 +14,7 @@ import { ValidationErrorCodes } from '../utils/errorCodes.js';
 const CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g; // NOSONAR - Removing control characters for security
 const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
 const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
+const SHELL_METACHAR_DISPLAY_REGEX = /[;&|`$()]/g; // Core shell metacharacters for display sanitization
 const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
 const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
 const VALID_COLLECTION_PATH_REGEX = /^[a-zA-Z0-9\/\-_.]*$/;
@@ -261,18 +262,22 @@ export class MCPInputValidator {
 
   /**
    * Sanitize text for safe display output
-   * Removes shell metacharacters to prevent command injection in displayed messages
+   * Removes core shell metacharacters to prevent command injection in displayed messages
+   *
+   * Uses a conservative subset of shell metacharacters (;, &, |, `, $, parentheses)
+   * that are most critical for command injection prevention while preserving
+   * common punctuation like !, ?, * for better user experience in display contexts.
    *
    * @param text - Text to sanitize for display
-   * @returns Sanitized text with shell metacharacters removed
+   * @returns Sanitized text with core shell metacharacters removed
    */
   static sanitizeForDisplay(text: string): string {
     if (!text || typeof text !== 'string') {
       return '';
     }
-    // Remove core shell metacharacters that could enable command injection
-    // Pattern: semicolon, ampersand, pipe, backtick, dollar, parentheses
-    return text.replaceAll(/[;&|`$()]/g, '');
+    // Use pre-compiled regex for performance
+    // Removes: ; & | ` $ ( )
+    return text.replaceAll(SHELL_METACHAR_DISPLAY_REGEX, '');
   }
 
   /**
