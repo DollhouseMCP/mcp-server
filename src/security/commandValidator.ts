@@ -86,7 +86,7 @@ export class CommandValidator {
       });
       
       proc.on('error', (error) => {
-        complete(() => reject(error));
+        complete(() => reject(error instanceof Error ? error : new Error(String(error))));
       });
     });
   }
