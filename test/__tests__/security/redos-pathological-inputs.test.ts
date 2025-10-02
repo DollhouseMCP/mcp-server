@@ -43,10 +43,10 @@ describe('ReDoS Pathological Input Tests', () => {
       // Creates a-b-c-d-e... pattern that challenges replace operations
       const chars = [];
       for (let i = 0; i < 5000; i++) {
-        chars.push(i % 2 === 0 ? String.fromCharCode(97 + (i / 2) % 26) : '!@#$%'[i % 5]);
+        chars.push(i % 2 === 0 ? String.fromCodePoint(97 + (i / 2) % 26) : '!@#$%'[i % 5]);
       }
       const pathological = chars.join('');
-      
+
       expect(() => {
         slugify(pathological);
       }).not.toThrow();
