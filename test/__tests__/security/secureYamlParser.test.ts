@@ -382,8 +382,8 @@ version: ${version}
       const largeMetadata: any = {
         name: 'Test',
         description: 'A test persona',
-        triggers: Array(50).fill('trigger'),
-        content_flags: Array(20).fill('flag')
+        triggers: new Array(50).fill('trigger'),
+        content_flags: new Array(20).fill('flag')
       };
 
       const yaml = `---

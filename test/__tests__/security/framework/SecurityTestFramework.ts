@@ -75,7 +75,7 @@ export class SecurityTestFramework {
     const payloads = this.MALICIOUS_PAYLOADS[payloadType];
     
     for (const payload of payloads) {
-      const args = Array(argPosition + 1).fill('safe-value');
+      const args = new Array(argPosition + 1).fill('safe-value');
       args[argPosition] = payload;
       
       await expect(async () => {

@@ -213,7 +213,7 @@ malicious_field: !!js/function "alert()"
           valid: true
         },
         {
-          triggers: Array(25).fill('trigger'), // Too many
+          triggers: new Array(25).fill('trigger'), // Too many
           valid: false
         },
         {

@@ -257,7 +257,7 @@ describe('Memory Concurrent Access', () => {
       const entry = await memory.addEntry('Race condition test');
       
       // Try to delete the same entry multiple times concurrently
-      const deletePromises = Array(5).fill(null).map(() => 
+      const deletePromises = new Array(5).fill(null).map(() => 
         memory.deleteEntry(entry.id)
       );
       

@@ -70,7 +70,7 @@ describe('GitHubClient', () => {
 
     it('should enforce rate limiting', async () => {
       // Fill up rate limit
-      const requests = Array(SECURITY_LIMITS.RATE_LIMIT_REQUESTS).fill(Date.now());
+      const requests = new Array(SECURITY_LIMITS.RATE_LIMIT_REQUESTS).fill(Date.now());
       rateLimitTracker.set('github_api', requests);
 
       await expect(githubClient.fetchFromGitHub(testUrl))

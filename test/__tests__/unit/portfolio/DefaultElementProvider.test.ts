@@ -328,7 +328,7 @@ describe('DefaultElementProvider', () => {
       mockLogger.error.mockClear();
       
       // Call populateDefaults multiple times concurrently
-      const promises = Array(5).fill(null).map(() => 
+      const promises = new Array(5).fill(null).map(() => 
         testProvider.populateDefaults(portfolioDir)
       );
       
@@ -403,7 +403,7 @@ describe('DefaultElementProvider', () => {
       const testProvider = new TestableDefaultElementProvider([dataDir]);
       
       // Call populateDefaults multiple times concurrently
-      const promises = Array(10).fill(null).map(() => 
+      const promises = new Array(10).fill(null).map(() => 
         testProvider.populateDefaults(portfolioDir)
       );
       
