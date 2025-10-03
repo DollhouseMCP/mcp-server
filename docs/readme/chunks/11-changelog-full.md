@@ -1,5 +1,30 @@
 ## 🏷️ Version History
 
+### v1.9.16 - October 3, 2025
+
+**Patch Release**: Platform-agnostic MCP client documentation + SonarCloud code quality (19 issues)
+
+#### 📚 Documentation
+- **Platform-Agnostic Documentation** - Updated all documentation to reflect compatibility with ANY MCP client (#1236, #1237)
+  - Added "MCP Client Compatibility" section explicitly stating stdio transport compatibility
+  - Listed Claude Desktop, Claude Code, Gemini, and other MCP clients as supported platforms
+  - Updated all "Configure Claude Desktop" headers to "Configure Your MCP Client"
+  - Changed "Claude Desktop integration" to "MCP client integration" throughout
+  - New comprehensive guide: `docs/guides/MCP_CLIENT_SETUP.md`
+- **Workflow Documentation** - Added comprehensive workflow examples for efficient issue handling (#1235)
+
+#### 🧹 Code Quality
+- **SonarCloud S7723** - Array constructor modernization (15 issues) (#1233)
+- **SonarCloud S7758** - String method modernization (4 fixed, 2 false positives) (#1234)
+- Removed temporary SonarCloud utility scripts (#1232)
+
+#### 📊 Impact
+- ✅ Removes artificial barrier for Gemini and other MCP client users
+- ✅ 19 SonarCloud issues resolved
+- ✅ Maintains Claude Desktop as primary example while being inclusive of all MCP clients
+
+---
+
 ### v1.9.15 - October 1, 2025
 
 **Security Patch**: Zero-width Unicode bypass vulnerability + SonarCloud cleanup
