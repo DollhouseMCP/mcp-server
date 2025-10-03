@@ -174,7 +174,7 @@ export class PortfolioManager {
         await defaultProvider.populateDefaults(this.baseDir);
       } catch (error) {
         logger.error('[PortfolioManager] Error populating default elements:', error);
-        // Log to stderr for Claude Desktop visibility
+        // Log to stderr for MCP client visibility
         logger.error(`[PortfolioManager] CRITICAL: Failed to populate default elements: ${error instanceof Error ? error.message : String(error)}`);
         // Continue anyway - empty portfolio is valid
       }

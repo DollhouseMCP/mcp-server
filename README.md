@@ -320,6 +320,16 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ## 📦 Installation
 
+### MCP Client Compatibility
+
+**DollhouseMCP works with ANY MCP-compatible client** that supports stdio transport, including:
+- **Claude Desktop** - Anthropic's AI assistant
+- **Claude Code** - VS Code integration
+- **Gemini** - Google's AI platform
+- **Any other MCP client** supporting stdio/JSON-RPC
+
+The configuration format is standardized across MCP clients. Examples below show Claude Desktop, but the same principles apply to all MCP clients.
+
 ### Choose Your Installation Method
 
 <table>
@@ -364,12 +374,14 @@ cd ~/mcp-servers
 npm install @dollhousemcp/mcp-server
 ```
 
-**Configure Claude Desktop:**
+**Configure Your MCP Client:**
 
-Add to your config file:
+Add to your MCP client's config file. For **Claude Desktop**:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+For **Claude Code**, **Gemini**, or other clients, consult their documentation for config file location.
 
 ```json
 {
@@ -388,7 +400,7 @@ Add to your config file:
 
 ### Method 2: Always Latest with npx
 
-No installation needed! Configure Claude Desktop to always use the latest version:
+No installation needed! Configure your MCP client to always use the latest version:
 
 ```json
 {
@@ -412,7 +424,7 @@ No installation needed! Configure Claude Desktop to always use the latest versio
 npm install -g @dollhousemcp/mcp-server
 ```
 
-**Configure Claude Desktop:**
+**Configure Your MCP Client:**
 
 ```json
 {
@@ -472,13 +484,13 @@ npm install @dollhousemcp/mcp-server
 }
 ```
 
-Now you can enable/disable different configurations in Claude Desktop as needed!
+Now you can enable/disable different configurations in your MCP client as needed!
 
 ---
 
 ### ✅ Verify Installation
 
-After configuring and restarting Claude Desktop, test with:
+After configuring and restarting your MCP client, test with:
 
 ```
 list_elements type="personas"
@@ -498,7 +510,7 @@ Use the `DOLLHOUSE_PORTFOLIO_DIR` environment variable to customize this locatio
 
 ## 🚀 Quick Start
 
-Once installed, try these commands in Claude:
+Once installed, try these commands in your MCP client:
 
 ```bash
 # Browse available personas
@@ -672,7 +684,7 @@ DollhouseMCP follows a modular, extensible architecture built on the Model Conte
 ### Core Components
 
 #### MCP Server
-- **Transport**: StdioServerTransport for Claude Desktop integration
+- **Transport**: StdioServerTransport for MCP client integration
 - **Protocol**: JSON-RPC 2.0 communication
 - **Tools**: 41 MCP tools for comprehensive functionality
 
@@ -707,14 +719,16 @@ For detailed architecture documentation, see [Architecture Guide](docs/ARCHITECT
 
 #### MCP Server Not Connecting
 
-**Symptoms**: Claude Desktop doesn't show DollhouseMCP in available servers
+**Symptoms**: Your MCP client doesn't show DollhouseMCP in available servers
 
 **Solutions**:
-1. Verify configuration file location:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+1. Verify configuration file location (see installation instructions for your specific MCP client)
+   - For Claude Desktop:
+     - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+     - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+   - For other clients, consult their documentation
 2. Check JSON syntax is valid
-3. Restart Claude Desktop after configuration changes
+3. Restart your MCP client after configuration changes
 
 #### OAuth Authentication Fails
 
@@ -849,7 +863,9 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 ### External Resources
 
 - **[Model Context Protocol](https://modelcontextprotocol.io)** - MCP specification
-- **[Claude Desktop](https://claude.ai/download)** - AI assistant with MCP support
+- **[Claude Desktop](https://claude.ai/download)** - Anthropic's AI assistant with MCP support
+- **[Claude Code](https://claude.ai/claude-code)** - VS Code integration with MCP support
+- **[Gemini](https://gemini.google.com)** - Google's AI platform with MCP compatibility
 - **[Anthropic Documentation](https://docs.anthropic.com)** - Claude documentation
 
 ### Learning Materials
