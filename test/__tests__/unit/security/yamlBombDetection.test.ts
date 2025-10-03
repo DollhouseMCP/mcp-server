@@ -220,7 +220,7 @@ describe('YAML Bomb Detection', () => {
   describe('Performance', () => {
     it('should handle large YAML efficiently', () => {
       // Create a large but safe YAML
-      const largeYaml = Array(100).fill(null).map((_, i) => 
+      const largeYaml = new Array(100).fill(null).map((_, i) => 
         `item${i}: value${i}`
       ).join('\n');
       

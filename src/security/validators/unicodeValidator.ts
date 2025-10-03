@@ -330,8 +330,11 @@ export class UnicodeValidator {
    */
   private static hasMalformedSurrogates(content: string): boolean {
     for (let i = 0; i < content.length; i++) {
+      // SONARCLOUD FALSE POSITIVE (S7758): Must use charCodeAt here, not codePointAt
+      // This code specifically checks for malformed surrogate pairs at the 16-bit code unit level.
+      // codePointAt() would automatically combine valid pairs, making malformed detection impossible.
       const char = content.charCodeAt(i);
-      
+
       // High surrogate (U+D800-U+DBFF)
       if (char >= 0xD800 && char <= 0xDBFF) {
         // Check if it's followed by a low surrogate

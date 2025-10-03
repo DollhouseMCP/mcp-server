@@ -206,7 +206,7 @@ describe('submitContent method improvements', () => {
       
       // Parallel search time
       const parallelStart = Date.now();
-      const promises = Array(ELEMENT_COUNT).fill(0).map(() => 
+      const promises = new Array(ELEMENT_COUNT).fill(0).map(() => 
         new Promise(resolve => setTimeout(resolve, SEARCH_DELAY))
       );
       await Promise.allSettled(promises);

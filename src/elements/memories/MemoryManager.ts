@@ -169,7 +169,7 @@ export class MemoryManager implements IElementManager<Memory> {
       // Credit: Jeet Singh (@jeetsingh008) - PR #1035
       let firstNonWhitespace = 0;
       while (firstNonWhitespace < content.length) {
-        const charCode = content.charCodeAt(firstNonWhitespace);
+        const charCode = content.codePointAt(firstNonWhitespace);
         // Check if character is NOT whitespace
         if (charCode !== WHITESPACE_CHARS.SPACE &&
             charCode !== WHITESPACE_CHARS.TAB &&

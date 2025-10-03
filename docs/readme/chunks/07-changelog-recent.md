@@ -2,10 +2,10 @@
 
 ### Latest Releases
 
-- **v1.9.9** - Security utilities module and memory timestamp auto-repair
-- **v1.9.8** - Complete memory CRUD operations and validation
-- **v1.9.7** - NPM package fix for memory display functionality
-- **v1.9.6** - First external contribution with performance improvements
-- **v1.9.5** - Memory YAML parsing fixes
+- **v1.9.16** - Platform-agnostic MCP client compatibility documentation
+- **v1.9.15** - Zero-width Unicode bypass vulnerability fix + SonarCloud cleanup
+- **v1.9.14** - ElementFormatter and portfolio search improvements
+- **v1.9.13** - Memory system critical fixes and enhanced error reporting
+- **v1.9.12** - Memory system stability improvements
 
 > See [Full Changelog](CHANGELOG.md) for complete version history.

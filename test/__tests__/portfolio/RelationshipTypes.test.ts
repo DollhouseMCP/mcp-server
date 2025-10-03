@@ -434,7 +434,7 @@ describe('RelationshipTypes', () => {
       });
 
       it('should handle large arrays efficiently', () => {
-        const large = Array(1000).fill(null).map((_, i) => ({
+        const large = new Array(1000).fill(null).map((_, i) => ({
           element: `personas:test${i}`,
           strength: Math.random()
         }));

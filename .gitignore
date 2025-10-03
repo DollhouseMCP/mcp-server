@@ -95,3 +95,7 @@ sonarcloud_issues_summary.json
 temp_sonar.json
 *.sonar.json
 .scannerwork/
+
+# Temporary SonarCloud utility scripts
+mark-*.sh
+hotspots.json

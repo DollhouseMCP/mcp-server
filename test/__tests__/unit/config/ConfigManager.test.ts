@@ -66,7 +66,7 @@ describe('ConfigManager', () => {
     
     it('should handle concurrent getInstance calls safely', async () => {
       // Simulate concurrent calls
-      const promises = Array(10).fill(null).map(() => 
+      const promises = new Array(10).fill(null).map(() => 
         Promise.resolve(ConfigManager.getInstance())
       );
       

@@ -38,7 +38,7 @@ describe('ReDoS Performance Regression Tests', () => {
 
     it('should handle alternating valid/invalid characters efficiently', () => {
       // Creates a pattern like: a!a!a!a!... that challenges replace operations
-      const pathological = Array(5000).fill(null)
+      const pathological = new Array(5000).fill(null)
         .map((_, i) => i % 2 === 0 ? 'a' : '!').join('');
       
       const duration = measureTime(() => {

@@ -114,7 +114,7 @@ describe('GitHubRateLimiter', () => {
       await Promise.resolve();
 
       // Process the queue
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
 
       await promise;
 
@@ -138,7 +138,7 @@ describe('GitHubRateLimiter', () => {
       await Promise.resolve();
 
       // Process the queue
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
 
       await Promise.all(promises);
 
@@ -161,7 +161,7 @@ describe('GitHubRateLimiter', () => {
       await Promise.resolve();
 
       // Process the queue
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
 
       await promise;
 
@@ -190,7 +190,7 @@ describe('GitHubRateLimiter', () => {
       // First request - initialization fails
       const promise1 = rateLimiter.queueRequest('operation1', apiCall1);
       await Promise.resolve();
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await promise1;
 
       expect(mockGetGitHubTokenAsync).toHaveBeenCalledTimes(1);
@@ -198,7 +198,7 @@ describe('GitHubRateLimiter', () => {
       // Second request - should retry initialization
       const promise2 = rateLimiter.queueRequest('operation2', apiCall2);
       await Promise.resolve();
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await promise2;
 
       // Should have attempted to get token again
@@ -212,7 +212,7 @@ describe('GitHubRateLimiter', () => {
 
       const promise = rateLimiter.queueRequest('test-operation', apiCall);
       await Promise.resolve();
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await promise;
 
       // Should have called randomBytes for ID generation
@@ -233,7 +233,7 @@ describe('GitHubRateLimiter', () => {
       ];
 
       await Promise.resolve();
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await Promise.all(promises);
 
       // Should have called randomBytes for each request ID
@@ -256,7 +256,7 @@ describe('GitHubRateLimiter', () => {
 
       const promise = rateLimiter.queueRequest('test-operation', apiCall);
       await Promise.resolve();
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await promise;
 
       // Should have called randomBytes(1) for the periodic check
@@ -288,7 +288,7 @@ describe('GitHubRateLimiter', () => {
       // Complete initialization
       resolveInit!('test-token');
 
-      jest.runAllTimers();
+      jest.runOnlyPendingTimers();
       await Promise.all([promise1, promise2]);
 
       // Token should only be fetched once (no race condition)

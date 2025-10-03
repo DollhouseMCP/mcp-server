@@ -112,7 +112,7 @@ describe('ErrorHandler', () => {
     it('should truncate long stack traces', () => {
       // Create an error with a very long stack trace
       const error = new Error('Test');
-      const longStack = Array(50).fill('at someFunction (file.js:1:1)').join('\n');
+      const longStack = new Array(50).fill('at someFunction (file.js:1:1)').join('\n');
       error.stack = `Error: Test\n${longStack}`;
       
       const info = ErrorHandler.extractErrorInfo(error);
@@ -370,7 +370,7 @@ describe('ErrorHandler', () => {
     it('should truncate very long stack traces', () => {
       const originalError = new Error('Deep error');
       // Create a very long stack
-      const longStack = Array(100).fill('at function (file.js:1:1)').join('\n');
+      const longStack = new Array(100).fill('at function (file.js:1:1)').join('\n');
       originalError.stack = `Error: Deep error\n${longStack}`;
       
       const error = new ApplicationError('Wrapped', ErrorCategory.SYSTEM_ERROR, undefined, undefined, originalError);
