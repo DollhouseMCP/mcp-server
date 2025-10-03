@@ -8,7 +8,7 @@
  * - Validation and type safety
  * - Atomic updates with backup
  * - Privacy-first defaults
- * - OAuth client ID storage for Claude Desktop integration
+ * - OAuth client ID storage for MCP client integration
  */
 
 import * as fs from 'fs/promises';

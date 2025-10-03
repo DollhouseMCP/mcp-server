@@ -320,6 +320,130 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ## 📦 Installation
 
+### MCP Client Compatibility
+
+**DollhouseMCP works with ANY MCP-compatible client** that supports stdio transport.
+
+**Confirmed Working Clients**:
+- ✅ **Claude Desktop** - Anthropic's AI assistant
+- ✅ **Claude Code** - VS Code integration
+- ✅ **Bolt AI** - AI-powered development platform
+- ✅ **Gemini** - Google's AI platform (with stdio support)
+
+**Configuration Examples**: See [Client-Specific Setup Guide](docs/guides/MCP_CLIENT_SETUP.md) for detailed configuration examples for each client.
+
+### Client-Specific Quick Links
+
+<details>
+<summary><b>Claude Desktop Configuration</b></summary>
+
+**Config Location**:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+**Example**:
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Claude Code Configuration</b></summary>
+
+**Recommended Method**: Use CLI wizard
+```bash
+npm install -g @dollhousemcp/mcp-server
+claude mcp add dollhousemcp dollhousemcp --scope user
+```
+
+**Config Locations** (for manual config):
+- User scope: `~/.claude.json` (recommended)
+- Project scope: `.mcp.json` in project root
+- Local scope: Project-specific settings
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {},
+      "cwd": "/Users/YOUR_USERNAME/mcp-servers"
+    }
+  }
+}
+```
+
+**See**: [Full Claude Code Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#claude-code)
+</details>
+
+<details>
+<summary><b>Gemini CLI Configuration</b></summary>
+
+**Recommended Method**: Use Gemini CLI command
+```bash
+npm install -g @dollhousemcp/mcp-server
+gemini mcp add dollhousemcp dollhousemcp
+```
+
+**Config Location**: Gemini CLI settings.json
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {},
+      "cwd": "/Users/YOUR_USERNAME/mcp-servers",
+      "timeout": 600000
+    }
+  }
+}
+```
+
+**Note**: Gemini CLI uses stdio transport with JSON-RPC protocol.
+
+**See**: [Full Gemini CLI Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#gemini-gemini-cli)
+</details>
+
+<details>
+<summary><b>Bolt AI Configuration</b></summary>
+
+**Easiest Method**: Import from Claude Desktop or Cursor
+1. Open BoltAI → Settings → Plugins
+2. Click ellipsis button (...)
+3. Select "Import from Claude" or "Import from Cursor"
+
+**Config Location**: BoltAI `mcp.json` file (accessible via Settings > Plugins)
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+**Note**: macOS/iOS app - iOS version requires remote MCP servers only.
+
+**See**: [Full Bolt AI Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#bolt-ai)
+</details>
+
 ### Choose Your Installation Method
 
 <table>
@@ -364,12 +488,14 @@ cd ~/mcp-servers
 npm install @dollhousemcp/mcp-server
 ```
 
-**Configure Claude Desktop:**
+**Configure Your MCP Client:**
 
-Add to your config file:
+Add to your MCP client's config file. For **Claude Desktop**:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`  
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+For **Claude Code**, **Gemini**, or other clients, consult their documentation for config file location.
 
 ```json
 {
@@ -388,7 +514,7 @@ Add to your config file:
 
 ### Method 2: Always Latest with npx
 
-No installation needed! Configure Claude Desktop to always use the latest version:
+No installation needed! Configure your MCP client to always use the latest version:
 
 ```json
 {
@@ -412,7 +538,7 @@ No installation needed! Configure Claude Desktop to always use the latest versio
 npm install -g @dollhousemcp/mcp-server
 ```
 
-**Configure Claude Desktop:**
+**Configure Your MCP Client:**
 
 ```json
 {
@@ -472,13 +598,13 @@ npm install @dollhousemcp/mcp-server
 }
 ```
 
-Now you can enable/disable different configurations in Claude Desktop as needed!
+Now you can enable/disable different configurations in your MCP client as needed!
 
 ---
 
 ### ✅ Verify Installation
 
-After configuring and restarting Claude Desktop, test with:
+After configuring and restarting your MCP client, test with:
 
 ```
 list_elements type="personas"
@@ -498,7 +624,7 @@ Use the `DOLLHOUSE_PORTFOLIO_DIR` environment variable to customize this locatio
 
 ## 🚀 Quick Start
 
-Once installed, try these commands in Claude:
+Once installed, try these commands in your MCP client:
 
 ```bash
 # Browse available personas
@@ -672,7 +798,7 @@ DollhouseMCP follows a modular, extensible architecture built on the Model Conte
 ### Core Components
 
 #### MCP Server
-- **Transport**: StdioServerTransport for Claude Desktop integration
+- **Transport**: StdioServerTransport for MCP client integration
 - **Protocol**: JSON-RPC 2.0 communication
 - **Tools**: 41 MCP tools for comprehensive functionality
 
@@ -707,14 +833,16 @@ For detailed architecture documentation, see [Architecture Guide](docs/ARCHITECT
 
 #### MCP Server Not Connecting
 
-**Symptoms**: Claude Desktop doesn't show DollhouseMCP in available servers
+**Symptoms**: Your MCP client doesn't show DollhouseMCP in available servers
 
 **Solutions**:
-1. Verify configuration file location:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+1. Verify configuration file location (see installation instructions for your specific MCP client)
+   - For Claude Desktop:
+     - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+     - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+   - For other clients, consult their documentation
 2. Check JSON syntax is valid
-3. Restart Claude Desktop after configuration changes
+3. Restart your MCP client after configuration changes
 
 #### OAuth Authentication Fails
 
@@ -849,7 +977,9 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 ### External Resources
 
 - **[Model Context Protocol](https://modelcontextprotocol.io)** - MCP specification
-- **[Claude Desktop](https://claude.ai/download)** - AI assistant with MCP support
+- **[Claude Desktop](https://claude.ai/download)** - Anthropic's AI assistant with MCP support
+- **[Claude Code](https://claude.ai/claude-code)** - VS Code integration with MCP support
+- **[Gemini](https://gemini.google.com)** - Google's AI platform with MCP compatibility
 - **[Anthropic Documentation](https://docs.anthropic.com)** - Claude documentation
 
 ### Learning Materials
