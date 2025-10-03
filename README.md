@@ -322,13 +322,127 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ### MCP Client Compatibility
 
-**DollhouseMCP works with ANY MCP-compatible client** that supports stdio transport, including:
-- **Claude Desktop** - Anthropic's AI assistant
-- **Claude Code** - VS Code integration
-- **Gemini** - Google's AI platform
-- **Any other MCP client** supporting stdio/JSON-RPC
+**DollhouseMCP works with ANY MCP-compatible client** that supports stdio transport.
 
-The configuration format is standardized across MCP clients. Examples below show Claude Desktop, but the same principles apply to all MCP clients.
+**Confirmed Working Clients**:
+- ✅ **Claude Desktop** - Anthropic's AI assistant
+- ✅ **Claude Code** - VS Code integration
+- ✅ **Bolt AI** - AI-powered development platform
+- ✅ **Gemini** - Google's AI platform (with stdio support)
+
+**Configuration Examples**: See [Client-Specific Setup Guide](docs/guides/MCP_CLIENT_SETUP.md) for detailed configuration examples for each client.
+
+### Client-Specific Quick Links
+
+<details>
+<summary><b>Claude Desktop Configuration</b></summary>
+
+**Config Location**:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+**Example**:
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Claude Code Configuration</b></summary>
+
+**Recommended Method**: Use CLI wizard
+```bash
+npm install -g @dollhousemcp/mcp-server
+claude mcp add dollhousemcp dollhousemcp --scope user
+```
+
+**Config Locations** (for manual config):
+- User scope: `~/.claude.json` (recommended)
+- Project scope: `.mcp.json` in project root
+- Local scope: Project-specific settings
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {},
+      "cwd": "/Users/YOUR_USERNAME/mcp-servers"
+    }
+  }
+}
+```
+
+**See**: [Full Claude Code Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#claude-code)
+</details>
+
+<details>
+<summary><b>Gemini CLI Configuration</b></summary>
+
+**Recommended Method**: Use Gemini CLI command
+```bash
+npm install -g @dollhousemcp/mcp-server
+gemini mcp add dollhousemcp dollhousemcp
+```
+
+**Config Location**: Gemini CLI settings.json
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {},
+      "cwd": "/Users/YOUR_USERNAME/mcp-servers",
+      "timeout": 600000
+    }
+  }
+}
+```
+
+**Note**: Gemini CLI uses stdio transport with JSON-RPC protocol.
+
+**See**: [Full Gemini CLI Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#gemini-gemini-cli)
+</details>
+
+<details>
+<summary><b>Bolt AI Configuration</b></summary>
+
+**Easiest Method**: Import from Claude Desktop or Cursor
+1. Open BoltAI → Settings → Plugins
+2. Click ellipsis button (...)
+3. Select "Import from Claude" or "Import from Cursor"
+
+**Config Location**: BoltAI `mcp.json` file (accessible via Settings > Plugins)
+
+**Example** (manual configuration):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+**Note**: macOS/iOS app - iOS version requires remote MCP servers only.
+
+**See**: [Full Bolt AI Setup Guide](docs/guides/MCP_CLIENT_SETUP.md#bolt-ai)
+</details>
 
 ### Choose Your Installation Method
 
