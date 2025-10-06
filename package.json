@@ -147,7 +147,7 @@
     "ts-jest": "^29.4.0",
     "ts-jest-resolver": "^2.0.1",
     "tsx": "^4.20.6",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=20.0.0",
