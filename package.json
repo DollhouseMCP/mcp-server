@@ -86,6 +86,12 @@
     "email": "mick@mickdarling.com",
     "url": "https://github.com/mickdarling"
   },
+  "contributors": [
+    {
+      "name": "Jeet Singh",
+      "url": "https://github.com/jeetsingh008"
+    }
+  ],
   "license": "AGPL-3.0",
   "repository": {
     "type": "git",
