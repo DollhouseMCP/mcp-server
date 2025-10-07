@@ -18,7 +18,7 @@
  *   --verbose          - Show detailed output
  */
 
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -33,7 +33,11 @@ if (!prNumber && !tag) {
   process.exit(1);
 }
 
-// FIX: Input validation to prevent command injection (DMCP-SEC-XXX)
+// FIX: Input validation to prevent command injection (DMCP-SEC-001)
+// CRITICAL: Validate all inputs before using in commands
+// Previously: Used execSync with string interpolation (command injection risk)
+// Now: Using spawnSync with validated array arguments (safe)
+
 // Validate PR number is a positive integer
 if (prNumber) {
   const prNum = Number(prNumber);
@@ -53,17 +57,47 @@ if (tag) {
 }
 
 /**
- * Execute gh command and return output
+ * Validate issue number is a positive integer
  *
- * SECURITY: All inputs are validated before being passed to this function.
- * PR numbers must be positive integers.
- * Tags must match v1.2.3 format.
+ * FIX: Added validation for extracted issue numbers (DMCP-SEC-001)
+ * Previously: Issue numbers from release notes were used without validation
+ * Now: All issue numbers are validated before use
  */
-function gh(command) {
+function validateIssueNumber(issueNum) {
+  const num = Number(issueNum);
+  return Number.isInteger(num) && num > 0 && num < 100000; // Reasonable upper bound
+}
+
+/**
+ * Execute gh command safely using array arguments
+ *
+ * FIX: Changed from execSync to spawnSync (DMCP-SEC-001)
+ * CRITICAL: Prevents command injection by using array-based arguments
+ * Previously: Used string interpolation with shell commands - vulnerable
+ * Now: Uses spawnSync with array arguments - safe from injection
+ *
+ * SECURITY:
+ * - All inputs MUST be validated before being passed to this function
+ * - PR numbers must be positive integers
+ * - Tags must match v1.2.3 format
+ * - Issue numbers must be positive integers
+ * - Uses array-based arguments to prevent shell injection
+ */
+function gh(args) {
   try {
-    return execSync(`gh ${command}`, { encoding: 'utf-8' }).trim();
+    const result = spawnSync('gh', args, { encoding: 'utf-8' });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (result.status !== 0) {
+      throw new Error(result.stderr || 'Command failed');
+    }
+
+    return result.stdout.trim();
   } catch (error) {
-    console.error(`Error executing: gh ${command}`);
+    console.error(`Error executing: gh ${args.join(' ')}`);
     console.error(error.message);
     process.exit(1);
   }
@@ -87,18 +121,22 @@ function extractIssueNumbers(text) {
 
 /**
  * Get release PR body
+ *
+ * FIX: Using array arguments (DMCP-SEC-001)
  */
 function getReleasePR(prNum) {
-  const prData = gh(`pr view ${prNum} --json number,title,body,mergedAt`);
+  const prData = gh(['pr', 'view', String(prNum), '--json', 'number,title,body,mergedAt']);
   return JSON.parse(prData);
 }
 
 /**
  * Get release notes from tag
+ *
+ * FIX: Using array arguments (DMCP-SEC-001)
  */
 function getReleaseNotes(tagName) {
   try {
-    const releaseData = gh(`release view ${tagName} --json name,body,tagName`);
+    const releaseData = gh(['release', 'view', tagName, '--json', 'name,body,tagName']);
     return JSON.parse(releaseData);
   } catch {
     console.error(`Release tag ${tagName} not found`);
@@ -108,10 +146,18 @@ function getReleaseNotes(tagName) {
 
 /**
  * Get issue status
+ *
+ * FIX: Using array arguments and validating issue number (DMCP-SEC-001)
  */
 function getIssueStatus(issueNumber) {
+  // Validate issue number before use
+  if (!validateIssueNumber(issueNumber)) {
+    console.error(`Invalid issue number: ${issueNumber}`);
+    return null;
+  }
+
   try {
-    const issueData = gh(`issue view ${issueNumber} --json number,title,state,closedAt`);
+    const issueData = gh(['issue', 'view', String(issueNumber), '--json', 'number,title,state,closedAt']);
     return JSON.parse(issueData);
   } catch {
     return null; // Issue doesn't exist or is from another repo
@@ -120,12 +166,23 @@ function getIssueStatus(issueNumber) {
 
 /**
  * Close an issue with a reference
+ *
+ * FIX: Using array arguments to prevent injection (DMCP-SEC-001)
+ * CRITICAL: Message is now passed as separate argument, not interpolated into command
+ * Previously: String interpolation in shell command - vulnerable to injection
+ * Now: Array-based arguments with proper escaping - safe from injection
  */
 function closeIssue(issueNumber, reference) {
+  // Validate issue number before use
+  if (!validateIssueNumber(issueNumber)) {
+    console.error(`Invalid issue number: ${issueNumber}`);
+    return false;
+  }
+
   const message = `Closing as completed in ${reference}.`;
 
   try {
-    gh(`issue close ${issueNumber} --comment "${message}"`);
+    gh(['issue', 'close', String(issueNumber), '--comment', message]);
     return true;
   } catch (error) {
     console.error(`Failed to close #${issueNumber}: ${error.message}`);
@@ -160,10 +217,23 @@ async function main() {
   }
 
   // Extract issue numbers
-  const issueNumbers = extractIssueNumbers(releaseContent);
+  const extractedIssues = extractIssueNumbers(releaseContent);
+
+  // FIX: Validate extracted issue numbers (DMCP-SEC-001)
+  // Previously: Used extracted numbers without validation
+  // Now: Filter to only valid issue numbers
+  const issueNumbers = extractedIssues.filter(num => {
+    if (!validateIssueNumber(num)) {
+      if (verbose) {
+        console.log(`⚠️  Skipping invalid issue reference: #${num}`);
+      }
+      return false;
+    }
+    return true;
+  });
 
   if (issueNumbers.length === 0) {
-    console.log('✅ No issues referenced in release notes');
+    console.log('✅ No valid issues referenced in release notes');
     return;
   }
 
