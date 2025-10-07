@@ -18,30 +18,7 @@
  *   --verbose          - Show detailed output
  */
 
-import { spawnSync, execFileSync } from 'node:child_process';
-
-// FIX: Resolve gh path at startup to prevent PATH injection (DMCP-SEC-001)
-// CRITICAL: Using PATH-based command execution is vulnerable to PATH manipulation
-// Previously: Used 'gh' command name, relying on PATH lookup at each call
-// Now: Resolve absolute path once at startup, use fixed path for all calls
-let GH_PATH;
-try {
-  // Try to find gh in PATH using 'which' (unix) or 'where' (windows)
-  const whichCommand = process.platform === 'win32' ? 'where' : 'which';
-  GH_PATH = execFileSync(whichCommand, ['gh'], { encoding: 'utf-8' }).trim().split('\n')[0];
-
-  if (!GH_PATH || GH_PATH.length === 0) {
-    throw new Error('gh command not found');
-  }
-} catch (error) {
-  // FIX: Proper exception handling (S2486)
-  // Previously: Caught but didn't use error details
-  // Now: Include error message for better debugging
-  const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-  console.error(`Error: GitHub CLI (gh) is not installed or not in PATH: ${errorMsg}`);
-  console.error('Please install gh: https://cli.github.com/');
-  process.exit(1);
-}
+import { executeGhCommand, validateIssueNumber, validatePRNumber, validateTag } from './lib/gh-command.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -57,87 +34,20 @@ if (!prNumber && !tag) {
 }
 
 // FIX: Input validation to prevent command injection (DMCP-SEC-001)
-// CRITICAL: Validate all inputs before using in commands
-// Previously: Used execSync with string interpolation (command injection risk)
-// Now: Using spawnSync with validated array arguments (safe)
+// Uses shared validation functions from gh-command module
 
 // Validate PR number is a positive integer
-if (prNumber) {
-  const prNum = Number(prNumber);
-  if (!Number.isInteger(prNum) || prNum <= 0) {
-    console.error(`Error: Invalid PR number "${prNumber}". Must be a positive integer.`);
-    process.exit(1);
-  }
+if (prNumber && !validatePRNumber(prNumber)) {
+  console.error(`Error: Invalid PR number "${prNumber}". Must be a positive integer.`);
+  process.exit(1);
 }
 
 // Validate tag follows expected format (v1.2.3 or v1.2.3-pre)
-if (tag) {
-  const tagPattern = /^v\d+\.\d+\.\d+(-[a-z0-9]+)?$/i;
-  if (!tagPattern.test(tag)) {
-    console.error(`Error: Invalid tag format "${tag}". Expected format: v1.9.16 or v1.9.16-pre`);
-    process.exit(1);
-  }
+if (tag && !validateTag(tag)) {
+  console.error(`Error: Invalid tag format "${tag}". Expected format: v1.9.16 or v1.9.16-pre`);
+  process.exit(1);
 }
 
-/**
- * Validate issue number is a positive integer
- *
- * FIX: Added validation for extracted issue numbers (DMCP-SEC-001)
- * Previously: Issue numbers from release notes were used without validation
- * Now: All issue numbers are validated before use
- */
-function validateIssueNumber(issueNum) {
-  const num = Number(issueNum);
-  return Number.isInteger(num) && num > 0 && num < 100000; // Reasonable upper bound
-}
-
-/**
- * Execute gh command safely using array arguments and absolute path
- *
- * FIX: Multiple security improvements (DMCP-SEC-001)
- * CRITICAL FIXES:
- * 1. Changed from execSync to spawnSync - prevents command injection
- * 2. Uses absolute path instead of PATH lookup - prevents PATH injection
- * 3. Array-based arguments - prevents shell injection
- *
- * Previously:
- * - Used string interpolation with shell commands - vulnerable to injection
- * - Relied on PATH environment variable - vulnerable to PATH manipulation
- *
- * Now:
- * - Uses spawnSync with array arguments - safe from command injection
- * - Uses absolute path resolved at startup - safe from PATH injection
- *
- * SECURITY:
- * - All inputs MUST be validated before being passed to this function
- * - PR numbers must be positive integers
- * - Tags must match v1.2.3 format
- * - Issue numbers must be positive integers
- * - Uses GH_PATH (absolute path) to prevent PATH-based attacks
- * - Uses array-based arguments to prevent shell injection
- */
-function gh(args) {
-  try {
-    const result = spawnSync(GH_PATH, args, {
-      encoding: 'utf-8',
-      env: process.env // Inherit environment but use fixed GH_PATH
-    });
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    if (result.status !== 0) {
-      throw new Error(result.stderr || 'Command failed');
-    }
-
-    return result.stdout.trim();
-  } catch (error) {
-    console.error(`Error executing: ${GH_PATH} ${args.join(' ')}`);
-    console.error(error.message);
-    process.exit(1);
-  }
-}
 
 /**
  * Extract issue numbers from text
@@ -161,7 +71,7 @@ function extractIssueNumbers(text) {
  * FIX: Using array arguments (DMCP-SEC-001)
  */
 function getReleasePR(prNum) {
-  const prData = gh(['pr', 'view', String(prNum), '--json', 'number,title,body,mergedAt']);
+  const prData = executeGhCommand(['pr', 'view', String(prNum), '--json', 'number,title,body,mergedAt']);
   return JSON.parse(prData);
 }
 
@@ -172,7 +82,7 @@ function getReleasePR(prNum) {
  */
 function getReleaseNotes(tagName) {
   try {
-    const releaseData = gh(['release', 'view', tagName, '--json', 'name,body,tagName']);
+    const releaseData = executeGhCommand(['release', 'view', tagName, '--json', 'name,body,tagName']);
     return JSON.parse(releaseData);
   } catch {
     console.error(`Release tag ${tagName} not found`);
@@ -193,7 +103,7 @@ function getIssueStatus(issueNumber) {
   }
 
   try {
-    const issueData = gh(['issue', 'view', String(issueNumber), '--json', 'number,title,state,closedAt']);
+    const issueData = executeGhCommand(['issue', 'view', String(issueNumber), '--json', 'number,title,state,closedAt']);
     return JSON.parse(issueData);
   } catch {
     return null; // Issue doesn't exist or is from another repo
@@ -218,7 +128,7 @@ function closeIssue(issueNumber, reference) {
   const message = `Closing as completed in ${reference}.`;
 
   try {
-    gh(['issue', 'close', String(issueNumber), '--comment', message]);
+    executeGhCommand(['issue', 'close', String(issueNumber), '--comment', message]);
     return true;
   } catch (error) {
     console.error(`Failed to close #${issueNumber}: ${error.message}`);

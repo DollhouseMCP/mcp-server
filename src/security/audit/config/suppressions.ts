@@ -543,6 +543,16 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
+    file: 'scripts/lib/gh-command.js',
+    reason: 'CLI utility - SecurityMonitor not available in standalone scripts. Security ensured via input validation and secure command execution patterns (DMCP-SEC-001, DMCP-SEC-002)'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/scripts/lib/gh-command.js',
+    reason: 'CLI utility - SecurityMonitor not available in standalone scripts. Security ensured via input validation and secure command execution patterns (DMCP-SEC-001, DMCP-SEC-002)'
+  },
+  {
+    rule: 'DMCP-SEC-006',
     file: 'src/portfolio/PortfolioSyncManager.ts',
     reason: 'Portfolio sync operations are file management tasks, not security operations. Security validation happens at the MCP request layer.'
   },
