@@ -294,10 +294,15 @@ function checkAllIssues(issueNumbers) {
       continue;
     }
 
-    if (issue.state === 'CLOSED') {
+    // FIX: Recognize both CLOSED and MERGED states as closed
+    // GitHub PRs have state "MERGED" when merged, issues have "CLOSED" when closed
+    // Previously: Only checked for 'CLOSED'
+    // Now: Check for both 'CLOSED' and 'MERGED'
+    if (issue.state === 'CLOSED' || issue.state === 'MERGED') {
       results.closed.push(issueNum);
       if (verbose) {
-        console.log(`✅ #${issueNum}: ${issue.title} (already closed)`);
+        const stateLabel = issue.state === 'MERGED' ? 'merged' : 'closed';
+        console.log(`✅ #${issueNum}: ${issue.title} (already ${stateLabel})`);
       }
     } else {
       results.open.push(issueNum);
