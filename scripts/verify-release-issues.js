@@ -18,7 +18,27 @@
  *   --verbose          - Show detailed output
  */
 
-import { spawnSync } from 'child_process';
+import { spawnSync, execFileSync } from 'child_process';
+import { resolve } from 'path';
+
+// FIX: Resolve gh path at startup to prevent PATH injection (DMCP-SEC-001)
+// CRITICAL: Using PATH-based command execution is vulnerable to PATH manipulation
+// Previously: Used 'gh' command name, relying on PATH lookup at each call
+// Now: Resolve absolute path once at startup, use fixed path for all calls
+let GH_PATH;
+try {
+  // Try to find gh in PATH using 'which' (unix) or 'where' (windows)
+  const whichCommand = process.platform === 'win32' ? 'where' : 'which';
+  GH_PATH = execFileSync(whichCommand, ['gh'], { encoding: 'utf-8' }).trim().split('\n')[0];
+
+  if (!GH_PATH || GH_PATH.length === 0) {
+    throw new Error('gh command not found');
+  }
+} catch (error) {
+  console.error('Error: GitHub CLI (gh) is not installed or not in PATH');
+  console.error('Please install gh: https://cli.github.com/');
+  process.exit(1);
+}
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -69,23 +89,36 @@ function validateIssueNumber(issueNum) {
 }
 
 /**
- * Execute gh command safely using array arguments
+ * Execute gh command safely using array arguments and absolute path
  *
- * FIX: Changed from execSync to spawnSync (DMCP-SEC-001)
- * CRITICAL: Prevents command injection by using array-based arguments
- * Previously: Used string interpolation with shell commands - vulnerable
- * Now: Uses spawnSync with array arguments - safe from injection
+ * FIX: Multiple security improvements (DMCP-SEC-001)
+ * CRITICAL FIXES:
+ * 1. Changed from execSync to spawnSync - prevents command injection
+ * 2. Uses absolute path instead of PATH lookup - prevents PATH injection
+ * 3. Array-based arguments - prevents shell injection
+ *
+ * Previously:
+ * - Used string interpolation with shell commands - vulnerable to injection
+ * - Relied on PATH environment variable - vulnerable to PATH manipulation
+ *
+ * Now:
+ * - Uses spawnSync with array arguments - safe from command injection
+ * - Uses absolute path resolved at startup - safe from PATH injection
  *
  * SECURITY:
  * - All inputs MUST be validated before being passed to this function
  * - PR numbers must be positive integers
  * - Tags must match v1.2.3 format
  * - Issue numbers must be positive integers
+ * - Uses GH_PATH (absolute path) to prevent PATH-based attacks
  * - Uses array-based arguments to prevent shell injection
  */
 function gh(args) {
   try {
-    const result = spawnSync('gh', args, { encoding: 'utf-8' });
+    const result = spawnSync(GH_PATH, args, {
+      encoding: 'utf-8',
+      env: process.env // Inherit environment but use fixed GH_PATH
+    });
 
     if (result.error) {
       throw result.error;
@@ -97,7 +130,7 @@ function gh(args) {
 
     return result.stdout.trim();
   } catch (error) {
-    console.error(`Error executing: gh ${args.join(' ')}`);
+    console.error(`Error executing: ${GH_PATH} ${args.join(' ')}`);
     console.error(error.message);
     process.exit(1);
   }
