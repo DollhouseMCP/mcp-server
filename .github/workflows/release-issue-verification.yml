@@ -1,0 +1,108 @@
+name: Release Issue Verification
+
+# Runs after a release PR is merged to main
+# Verifies all issues mentioned in the release are closed
+# Auto-closes any that were missed
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  verify-issues:
+    name: Verify Release Issues
+    # Only run on merged release PRs
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.title, 'Release v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Verify release issues (dry-run)
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Run verification script in dry-run mode first
+          node scripts/verify-release-issues.js \
+            --pr ${{ github.event.pull_request.number }} \
+            --verbose > verification-report.txt 2>&1 || true
+
+          # Capture the report
+          echo "REPORT<<EOF" >> $GITHUB_OUTPUT
+          cat verification-report.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post verification report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `${{ steps.verify.outputs.REPORT }}`;
+
+            const comment = `## 🔍 Release Issue Verification Report
+
+            ${report}
+
+            ---
+
+            **What this means:**
+            - ✅ Issues marked as "already closed" are properly handled
+            - ⚠️ Issues marked as "OPEN" should have been closed by this release
+            - ❓ Issues marked as "not found" may be PRs or references to other repos
+
+            **Next steps:**
+            - Review the open issues above
+            - This workflow will auto-close them if they were legitimately fixed in this release
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.pull_request.number }},
+              body: comment
+            });
+
+      - name: Close open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Now actually close the issues
+          node scripts/verify-release-issues.js \
+            --pr ${{ github.event.pull_request.number }} \
+            --close \
+            --verbose
+
+      - name: Post completion comment
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.pull_request.number }},
+              body: '✅ All issues referenced in this release have been verified and closed.'
+            });
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-issue-verification-report
+          path: verification-report.txt
+          retention-days: 90
