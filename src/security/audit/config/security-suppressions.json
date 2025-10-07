@@ -34,6 +34,11 @@
       "rule": "CWE-89-001",
       "file": "**/test-memory-deletion.js",
       "reason": "False positive - Template literals in error messages are not SQL queries"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "**/scripts/lib/gh-command.js",
+      "reason": "CLI utility - SecurityMonitor not available in standalone scripts. Security ensured via input validation and secure command execution patterns (DMCP-SEC-001, DMCP-SEC-002)"
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

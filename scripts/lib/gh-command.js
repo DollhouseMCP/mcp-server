@@ -10,6 +10,10 @@
  * - Resolves gh path at startup to prevent PATH injection
  * - Uses spawnSync with array arguments to prevent command injection
  * - Validates all inputs before use
+ *
+ * DMCP-SEC-SAFE: Audit logging (DMCP-SEC-006)
+ * This is a CLI utility script without access to SecurityMonitor.
+ * Security is ensured via input validation and secure command execution patterns.
  */
 
 import { spawnSync, execFileSync } from 'node:child_process';
