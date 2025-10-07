@@ -7,61 +7,12 @@
  * in merged PRs or release notes, indicating they should be closed.
  *
  * SECURITY FIXES (DMCP-SEC-002):
- * - Uses spawnSync instead of execSync to prevent command injection
- * - Resolves gh path at startup to prevent PATH injection
+ * - Uses shared gh-command utility for secure command execution
  * - Validates all issue numbers before use
  * - Uses array-based arguments instead of string interpolation
  */
 
-import { spawnSync, execFileSync } from 'node:child_process';
-
-// FIX: Resolve gh path at startup to prevent PATH injection (DMCP-SEC-002)
-// CRITICAL: Using PATH-based command execution is vulnerable to PATH manipulation
-let GH_PATH;
-try {
-  // Try to find gh in PATH using 'which' (unix) or 'where' (windows)
-  const whichCommand = process.platform === 'win32' ? 'where' : 'which';
-  GH_PATH = execFileSync(whichCommand, ['gh'], { encoding: 'utf-8' }).trim().split('\n')[0];
-
-  if (!GH_PATH || GH_PATH.length === 0) {
-    throw new Error('gh command not found');
-  }
-} catch (error) {
-  const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-  console.error(`Error: GitHub CLI (gh) is not installed or not in PATH: ${errorMsg}`);
-  console.error('Please install gh: https://cli.github.com/');
-  process.exit(1);
-}
-
-/**
- * Execute gh command safely using array arguments and absolute path
- *
- * FIX: Prevents command injection by using spawnSync with array args (DMCP-SEC-002)
- */
-function executeGhCommand(args) {
-  const result = spawnSync(GH_PATH, args, {
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024 // 10MB buffer
-  });
-
-  if (result.error) {
-    throw new Error(`Command failed: ${result.error.message}`);
-  }
-
-  if (result.status !== 0) {
-    throw new Error(`Command exited with status ${result.status}: ${result.stderr}`);
-  }
-
-  return result.stdout;
-}
-
-/**
- * Validate issue number is a positive integer
- */
-function validateIssueNumber(issueNum) {
-  const num = Number(issueNum);
-  return Number.isInteger(num) && num > 0 && num < 100000;
-}
+import { executeGhCommand, validateIssueNumber } from './lib/gh-command.js';
 
 /**
  * Get all open issues
