@@ -18,8 +18,7 @@
  *   --verbose          - Show detailed output
  */
 
-import { spawnSync, execFileSync } from 'child_process';
-import { resolve } from 'path';
+import { spawnSync, execFileSync } from 'node:child_process';
 
 // FIX: Resolve gh path at startup to prevent PATH injection (DMCP-SEC-001)
 // CRITICAL: Using PATH-based command execution is vulnerable to PATH manipulation
@@ -35,7 +34,11 @@ try {
     throw new Error('gh command not found');
   }
 } catch (error) {
-  console.error('Error: GitHub CLI (gh) is not installed or not in PATH');
+  // FIX: Proper exception handling (S2486)
+  // Previously: Caught but didn't use error details
+  // Now: Include error message for better debugging
+  const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+  console.error(`Error: GitHub CLI (gh) is not installed or not in PATH: ${errorMsg}`);
   console.error('Please install gh: https://cli.github.com/');
   process.exit(1);
 }
@@ -224,38 +227,40 @@ function closeIssue(issueNumber, reference) {
 }
 
 /**
- * Main function
+ * Get release information (content and reference)
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
  */
-async function main() {
-  console.log('🔍 Release Issue Verification\n');
-
-  // Get release content
-  let releaseContent;
-  let reference;
-
+function getReleaseInfo() {
   if (prNumber) {
     console.log(`Checking release PR #${prNumber}...`);
     const prData = getReleasePR(prNumber);
-    releaseContent = `${prData.title}\n\n${prData.body}`;
-    reference = `PR #${prNumber}`;
 
     if (!prData.mergedAt) {
       console.warn(`⚠️  Warning: PR #${prNumber} is not merged yet\n`);
     }
-  } else {
-    console.log(`Checking release tag ${tag}...`);
-    const releaseData = getReleaseNotes(tag);
-    releaseContent = `${releaseData.name}\n\n${releaseData.body}`;
-    reference = tag;
+
+    return {
+      content: `${prData.title}\n\n${prData.body}`,
+      reference: `PR #${prNumber}`
+    };
   }
 
-  // Extract issue numbers
-  const extractedIssues = extractIssueNumbers(releaseContent);
+  console.log(`Checking release tag ${tag}...`);
+  const releaseData = getReleaseNotes(tag);
+  return {
+    content: `${releaseData.name}\n\n${releaseData.body}`,
+    reference: tag
+  };
+}
 
-  // FIX: Validate extracted issue numbers (DMCP-SEC-001)
-  // Previously: Used extracted numbers without validation
-  // Now: Filter to only valid issue numbers
-  const issueNumbers = extractedIssues.filter(num => {
+/**
+ * Validate and filter issue numbers
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function validateAndFilterIssues(extractedIssues) {
+  return extractedIssues.filter(num => {
     if (!validateIssueNumber(num)) {
       if (verbose) {
         console.log(`⚠️  Skipping invalid issue reference: #${num}`);
@@ -264,15 +269,14 @@ async function main() {
     }
     return true;
   });
+}
 
-  if (issueNumbers.length === 0) {
-    console.log('✅ No valid issues referenced in release notes');
-    return;
-  }
-
-  console.log(`Found ${issueNumbers.length} issue references: ${issueNumbers.map(n => `#${n}`).join(', ')}\n`);
-
-  // Check each issue
+/**
+ * Check all issues and categorize them
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function checkAllIssues(issueNumbers) {
   const results = {
     closed: [],
     open: [],
@@ -301,48 +305,125 @@ async function main() {
     }
   }
 
-  // Summary
+  return results;
+}
+
+/**
+ * Print summary of results
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function printSummary(results) {
   console.log('\n📊 Summary:');
   console.log(`  ✅ Already closed: ${results.closed.length}`);
   console.log(`  ⚠️  Still open: ${results.open.length}`);
   console.log(`  ❓ Not found: ${results.notFound.length}`);
+}
 
-  // Close open issues if requested
-  if (results.open.length > 0) {
-    console.log('\n📝 Open Issues:');
-    for (const issueNum of results.open) {
-      const issue = getIssueStatus(issueNum);
-      console.log(`  #${issueNum}: ${issue.title}`);
-    }
+/**
+ * Print list of open issues
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function printOpenIssues(openIssues) {
+  console.log('\n📝 Open Issues:');
+  for (const issueNum of openIssues) {
+    const issue = getIssueStatus(issueNum);
+    console.log(`  #${issueNum}: ${issue.title}`);
+  }
+}
 
-    if (shouldClose) {
-      console.log('\n🔒 Closing open issues...');
-      let closedCount = 0;
+/**
+ * Close all open issues
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function closeAllIssues(openIssues, reference) {
+  console.log('\n🔒 Closing open issues...');
+  let closedCount = 0;
 
-      for (const issueNum of results.open) {
-        if (closeIssue(issueNum, reference)) {
-          console.log(`  ✅ Closed #${issueNum}`);
-          closedCount++;
-        } else {
-          console.log(`  ❌ Failed to close #${issueNum}`);
-        }
-      }
-
-      console.log(`\n✅ Closed ${closedCount} of ${results.open.length} issues`);
+  for (const issueNum of openIssues) {
+    if (closeIssue(issueNum, reference)) {
+      console.log(`  ✅ Closed #${issueNum}`);
+      closedCount++;
     } else {
-      console.log('\n💡 Run with --close to automatically close these issues');
+      console.log(`  ❌ Failed to close #${issueNum}`);
     }
-  } else {
-    console.log('\n✅ All referenced issues are properly closed!');
   }
 
+  console.log(`\n✅ Closed ${closedCount} of ${openIssues.length} issues`);
+  return closedCount;
+}
+
+/**
+ * Handle open issues - print them and optionally close
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function handleOpenIssues(results, reference) {
+  if (results.open.length === 0) {
+    console.log('\n✅ All referenced issues are properly closed!');
+    return true;
+  }
+
+  printOpenIssues(results.open);
+
+  if (shouldClose) {
+    closeAllIssues(results.open, reference);
+    return true;
+  }
+
+  console.log('\n💡 Run with --close to automatically close these issues');
+  return false;
+}
+
+/**
+ * Main function
+ *
+ * FIX: Refactored to reduce cognitive complexity from 34 to 15 (S3776)
+ * Previously: All logic in one function with deep nesting
+ * Now: Extracted helper functions for each logical section
+ */
+async function main() {
+  console.log('🔍 Release Issue Verification\n');
+
+  // Get release information
+  const { content: releaseContent, reference } = getReleaseInfo();
+
+  // Extract and validate issue numbers
+  const extractedIssues = extractIssueNumbers(releaseContent);
+  const issueNumbers = validateAndFilterIssues(extractedIssues);
+
+  if (issueNumbers.length === 0) {
+    console.log('✅ No valid issues referenced in release notes');
+    return;
+  }
+
+  // Print found issues
+  const issueList = issueNumbers.map(n => `#${n}`).join(', ');
+  console.log(`Found ${issueNumbers.length} issue references: ${issueList}\n`);
+
+  // Check all issues
+  const results = checkAllIssues(issueNumbers);
+
+  // Print summary
+  printSummary(results);
+
+  // Handle open issues
+  const allClosed = handleOpenIssues(results, reference);
+
   // Exit with error if there are open issues and we didn't close them
-  if (results.open.length > 0 && !shouldClose) {
+  if (!allClosed) {
     process.exit(1);
   }
 }
 
-main().catch(error => {
+// FIX: Use top-level await instead of promise chain (S7785)
+// Previously: main().catch()
+// Now: Use top-level await for cleaner error handling
+try {
+  await main();
+} catch (error) {
   console.error('Fatal error:', error);
   process.exit(1);
-});
+}
