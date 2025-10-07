@@ -272,6 +272,25 @@ function validateAndFilterIssues(extractedIssues) {
 }
 
 /**
+ * Check if an issue is closed (CLOSED or MERGED state)
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ * GitHub PRs have state "MERGED" when merged, issues have "CLOSED" when closed
+ */
+function isIssueClosed(issue) {
+  return issue.state === 'CLOSED' || issue.state === 'MERGED';
+}
+
+/**
+ * Get the appropriate label for a closed issue
+ *
+ * FIX: Extracted to reduce cognitive complexity (S3776)
+ */
+function getClosedLabel(issue) {
+  return issue.state === 'MERGED' ? 'merged' : 'closed';
+}
+
+/**
  * Check all issues and categorize them
  *
  * FIX: Extracted to reduce cognitive complexity (S3776)
@@ -294,10 +313,10 @@ function checkAllIssues(issueNumbers) {
       continue;
     }
 
-    if (issue.state === 'CLOSED') {
+    if (isIssueClosed(issue)) {
       results.closed.push(issueNum);
       if (verbose) {
-        console.log(`✅ #${issueNum}: ${issue.title} (already closed)`);
+        console.log(`✅ #${issueNum}: ${issue.title} (already ${getClosedLabel(issue)})`);
       }
     } else {
       results.open.push(issueNum);
