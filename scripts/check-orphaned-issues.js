@@ -213,7 +213,10 @@ async function main() {
   }
 }
 
-main().catch(error => {
+// FIX: Use top-level await instead of promise chain (S7785)
+try {
+  await main();
+} catch (error) {
   console.error('Error:', error.message);
   process.exit(1);
-});
+}
