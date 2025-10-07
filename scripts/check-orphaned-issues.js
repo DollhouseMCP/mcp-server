@@ -196,7 +196,9 @@ async function main() {
       console.log(`#${issue.number}: ${issue.title}`);
       console.log(`  Created: ${issue.createdAt.substring(0, 10)}`);
       if (issue.prs) {
-        console.log(`  Mentioned in PRs: ${issue.prs.map(pr => `#${pr.number}`).join(', ')}`);
+        // FIX: Avoid nested template literals (S4624)
+        const prNumbers = issue.prs.map(pr => '#' + pr.number).join(', ');
+        console.log(`  Mentioned in PRs: ${prNumbers}`);
       }
       if (issue.release) {
         console.log(`  Mentioned in release: ${issue.release}`);
