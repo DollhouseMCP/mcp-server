@@ -33,8 +33,31 @@ if (!prNumber && !tag) {
   process.exit(1);
 }
 
+// FIX: Input validation to prevent command injection (DMCP-SEC-XXX)
+// Validate PR number is a positive integer
+if (prNumber) {
+  const prNum = Number(prNumber);
+  if (!Number.isInteger(prNum) || prNum <= 0) {
+    console.error(`Error: Invalid PR number "${prNumber}". Must be a positive integer.`);
+    process.exit(1);
+  }
+}
+
+// Validate tag follows expected format (v1.2.3 or v1.2.3-pre)
+if (tag) {
+  const tagPattern = /^v\d+\.\d+\.\d+(-[a-z0-9]+)?$/i;
+  if (!tagPattern.test(tag)) {
+    console.error(`Error: Invalid tag format "${tag}". Expected format: v1.9.16 or v1.9.16-pre`);
+    process.exit(1);
+  }
+}
+
 /**
  * Execute gh command and return output
+ *
+ * SECURITY: All inputs are validated before being passed to this function.
+ * PR numbers must be positive integers.
+ * Tags must match v1.2.3 format.
  */
 function gh(command) {
   try {
