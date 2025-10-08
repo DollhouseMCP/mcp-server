@@ -6,23 +6,10 @@ const config = {
   testMatch: [
     '<rootDir>/test/__tests__/performance/**/*.test.ts'
   ],
-  // Override to only ignore base paths, not performance tests
-  testPathIgnorePatterns: [
-    '/node_modules/',
-    '/test/__tests__/integration/',
-    // Temporarily ignore tests with ES module mocking issues
-    'convertToGit\\.test\\.ts$',
-    'UpdateManager\\.npm\\.test\\.ts$',
-    'BackupManager\\.npm\\.test\\.ts$',
-    'InstallationDetector\\.test\\.ts$',
-    'GitHubAuthManager\\.test\\.ts$',
-    'CollectionCache\\.test\\.ts$',
-    'EnhancedIndexManager\\.extractActionTriggers\\.test\\.ts$',
-    'EnhancedIndexManager\\.telemetry\\.test\\.ts$',
-    'EnhancedIndexManager\\.triggerMetrics\\.test\\.ts$',
-    'memory-enhanced-index\\.test\\.ts$',
-    'skill-enhanced-index\\.test\\.ts$'
-  ],
+  // Remove performance test exclusion from base config's ignore patterns
+  testPathIgnorePatterns: baseConfig.testPathIgnorePatterns.filter(
+    pattern => pattern !== '/test/__tests__/performance/'
+  ),
   // Run in band (single worker) to avoid resource contention
   maxWorkers: 1,
   // Increase timeout for performance tests
