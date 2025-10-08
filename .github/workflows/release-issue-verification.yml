@@ -35,6 +35,7 @@ jobs:
 
       - name: Verify release issues (dry-run)
         id: verify
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,6 +79,7 @@ jobs:
             });
 
       - name: Close open issues
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
