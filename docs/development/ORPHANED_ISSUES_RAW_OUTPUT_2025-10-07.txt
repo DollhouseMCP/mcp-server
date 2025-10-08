@@ -1,0 +1,861 @@
+🔍 Checking for orphaned issues...
+
+Found 505 open issues
+
+Checked 10/505...Checked 20/505...Checked 30/505...Checked 40/505...Checked 50/505...Checked 60/505...Checked 70/505...Checked 80/505...Checked 90/505...Checked 100/505...Checked 110/505...Checked 120/505...Checked 130/505...Checked 140/505...Checked 150/505...Checked 160/505...Checked 170/505...Checked 180/505...Checked 190/505...Checked 200/505...Checked 210/505...Checked 220/505...Checked 230/505...Checked 240/505...Checked 250/505...Checked 260/505...Checked 270/505...Checked 280/505...Checked 290/505...Checked 300/505...Checked 310/505...Checked 320/505...Checked 330/505...Checked 340/505...Checked 350/505...Checked 360/505...Checked 370/505...Checked 380/505...Checked 390/505...Checked 400/505...Checked 410/505...Checked 420/505...Checked 430/505...Checked 440/505...Checked 450/505...Checked 460/505...Checked 470/505...Checked 480/505...Checked 490/505...Checked 500/505...
+
+📊 Results:
+
+Total checked: 505
+Orphaned issues found: 211
+
+🔴 Orphaned Issues:
+
+#29: [TESTING] Add MCP protocol integration tests
+  Created: 2025-07-04
+  Mentioned in PRs: #1244, #918, #1243, #728, #229
+
+#30: [RESEARCH] Multi-platform MCP compatibility investigation
+  Created: 2025-07-04
+  Mentioned in PRs: #1202, #1204, #1218, #1030, #1235
+
+#32: [FEATURE] Create universal installer for multi-platform support
+  Created: 2025-07-04
+  Mentioned in PRs: #1037, #899, #895, #260, #161
+
+#33: [DOCKER] Add custom persona directory mounting verification
+  Created: 2025-07-04
+  Mentioned in PRs: #834, #700, #886, #108
+
+#34: [FEATURE] Marketplace bi-directional sync infrastructure
+  Created: 2025-07-04
+  Mentioned in PRs: #1036, #870, #867, #798, #349
+
+#47: Test Coverage: Enhanced JSON parsing and cache corruption tests
+  Created: 2025-07-05
+  Mentioned in PRs: #904, #511
+
+#48: Test Coverage: File system race conditions and error recovery
+  Created: 2025-07-05
+  Mentioned in PRs: #1186, #121, #358, #514, #275
+
+#49: Test Coverage: Concurrent request handling improvements
+  Created: 2025-07-05
+  Mentioned in PRs: #1154, #745
+
+#50: Security Tests: Unicode edge cases and homograph assertions
+  Created: 2025-07-05
+  Mentioned in PRs: #1125, #1137, #1156, #991, #1138
+
+#52: Performance regression test suite
+  Created: 2025-07-05
+  Mentioned in PRs: #525, #75, #108
+
+#63: Verify and document actual test coverage metrics
+  Created: 2025-07-05
+  Mentioned in PRs: #884, #136, #637
+
+#66: Enhance auto-update test coverage and reliability
+  Created: 2025-07-05
+  Mentioned in PRs: #884, #838, #645, #67, #108
+
+#72: Add rate limiting for UpdateChecker to prevent abuse
+  Created: 2025-07-06
+  Mentioned in PRs: #386
+
+#73: Add signature verification for GitHub releases
+  Created: 2025-07-06
+  Mentioned in PRs: #389
+
+#74: Security enhancement ideas from PR reviews
+  Created: 2025-07-06
+  Mentioned in PRs: #1138, #57
+
+#77: Implement CI environment detection and production monitoring for security tests
+  Created: 2025-07-06
+  Mentioned in PRs: #854
+
+#84: CI: Improve diagnostic approach based on PR #82 review
+  Created: 2025-07-06
+  Mentioned in PRs: #954, #719
+
+#87: Future Enhancements from PR #86 Review - BackupManager Security and Flexibility
+  Created: 2025-07-06
+  Mentioned in PRs: #442, #637
+
+#94: Enhance debug output with more structured information in CI workflows
+  Created: 2025-07-06
+  Mentioned in PRs: #700, #689, #676, #606
+
+#95: Add workflow status badges to README for transparency
+  Created: 2025-07-06
+  Mentioned in PRs: #1249, #594, #248
+
+#97: Add ShellCheck linting to CI workflows
+  Created: 2025-07-06
+  Mentioned in PRs: #511, #951, #752
+
+#98: Add performance timing to CI debug output
+  Created: 2025-07-06
+  Mentioned in PRs: #1143, #700, #637, #21, #41
+
+#99: Create comprehensive CI troubleshooting guide
+  Created: 2025-07-06
+  Mentioned in PRs: #700, #89
+
+#103: Create Test Personas Directory for CI Environment
+  Created: 2025-07-06
+  Mentioned in PRs: #1215
+
+#109: Add Windows runner testing to validate shell compatibility fixes
+  Created: 2025-07-07
+  Mentioned in PRs: #110
+
+#111: Implement secure environment variable logging in CI workflows
+  Created: 2025-07-07
+  Mentioned in PRs: #228, #116
+
+#112: Improve CI error messages with actionable guidance
+  Created: 2025-07-07
+  Mentioned in PRs: #1195, #228
+
+#114: Monitor and improve error handling for silent failures
+  Created: 2025-07-07
+  Mentioned in PRs: #595, #116
+
+#119: Monitor and enhance Docker path detection flexibility
+  Created: 2025-07-07
+  Mentioned in PRs: #641
+
+#120: Clean up root directory organization
+  Created: 2025-07-07
+  Mentioned in PRs: #958, #411, #59
+
+#127: Enhancement: Implement v1.2.0 review suggestions for UpdateChecker
+  Created: 2025-07-07
+  Mentioned in PRs: #275, #57, #229
+
+#139: Review Node.js 24 Upgrade Impact
+  Created: 2025-07-08
+  Mentioned in PRs: #593, #150
+
+#140: Extract constants for repeated strings in test files
+  Created: 2025-07-08
+  Mentioned in PRs: #640
+
+#142: Use Jest's test.skip() instead of early returns for CI-only tests
+  Created: 2025-07-08
+  Mentioned in PRs: #1227
+
+#146: Audit all MCP tools to verify implementation matches documentation
+  Created: 2025-07-08
+  Mentioned in PRs: #1227
+
+#168: [SECURITY] Create security monitoring dashboard
+  Created: 2025-07-10
+  Mentioned in PRs: #275, #229
+
+#169: [SECURITY] Implement rate limiting for validation operations
+  Created: 2025-07-10
+  Mentioned in PRs: #275, #229
+
+#170: [SECURITY] Address additional security gaps from Claude review
+  Created: 2025-07-10
+  Mentioned in PRs: #1229
+
+#172: [SECURITY] Optimize regex compilation and error messaging in security validators
+  Created: 2025-07-10
+  Mentioned in PRs: #1234, #275, #229
+
+#175: Consider Async Cache Refresh
+  Created: 2025-07-10
+  Mentioned in PRs: #373
+
+#177: Enhance Permission Granularity
+  Created: 2025-07-10
+  Mentioned in PRs: #1237, #1238
+
+#178: Parameterize Cache Keys
+  Created: 2025-07-10
+  Mentioned in PRs: #1212
+
+#179: Add Metrics Collection
+  Created: 2025-07-10
+  Mentioned in PRs: #373
+
+#180: Address Timing Attack in Token Format Validation
+  Created: 2025-07-10
+  Mentioned in PRs: #1156, #752
+
+#182: Review tmpfs size limits for production workloads
+  Created: 2025-07-10
+  Mentioned in PRs: #835
+
+#186: Enhance CI environment detection in timing tests
+  Created: 2025-07-10
+  Mentioned in PRs: #934
+
+#188: Follow-up improvements for personas directory path resolution
+  Created: 2025-07-10
+  Mentioned in PRs: #884
+
+#192: Feature: Export all personas to JSON bundle
+  Created: 2025-07-11
+  Mentioned in PRs: #1207, #886, #197, #275, #229
+
+#193: Feature: Import persona from file or JSON
+  Created: 2025-07-11
+  Mentioned in PRs: #373, #197
+
+#194: Feature: Share persona via URL
+  Created: 2025-07-11
+  Mentioned in PRs: #197
+
+#195: Feature: Import persona from shared URL
+  Created: 2025-07-11
+  Mentioned in PRs: #197
+
+#196: Epic: Persona Export/Import/Sharing System
+  Created: 2025-07-11
+  Mentioned in PRs: #197, #278
+
+#207: MEDIUM SECURITY: Add Rate Limiting to GitHub API Operations
+  Created: 2025-07-11
+  Mentioned in PRs: #209
+
+#208: MEDIUM SECURITY: Implement Session Management for SSE Transport
+  Created: 2025-07-11
+  Mentioned in PRs: #209
+
+#211: Add integration tests for security validators
+  Created: 2025-07-11
+  Mentioned in PRs: #75
+
+#212: Implement performance monitoring for security validators
+  Created: 2025-07-11
+  Mentioned in PRs: #1015, #863, #108
+
+#214: Add security metrics and attack tracking
+  Created: 2025-07-11
+  Mentioned in PRs: #71
+
+#218: Implement performance monitoring for security validators
+  Created: 2025-07-11
+  Mentioned in PRs: #71
+
+#223: Improve YamlValidator error handling and type safety
+  Created: 2025-07-11
+  Mentioned in PRs: #71
+
+#226: Fix PathValidator atomic write test failure in CI environments
+  Created: 2025-07-12
+  Mentioned in PRs: #225, #228
+
+#227: Post-Integration Validation: Comprehensive testing after PR #225 and CI fixes
+  Created: 2025-07-12
+  Mentioned in PRs: #228, #71, #225
+
+#230: Add Unicode normalization for homograph attack prevention
+  Created: 2025-07-12
+  Mentioned in PRs: #71, #234
+
+#233: Document rationale for input validation length limits
+  Created: 2025-07-12
+  Mentioned in PRs: #71, #234
+
+#235: Add JSDoc @throws annotations for better IDE support
+  Created: 2025-07-12
+  Mentioned in PRs: #89, #71
+
+#236: Extract long parameter lists to options objects
+  Created: 2025-07-12
+  Mentioned in PRs: #1229, #100, #89
+
+#237: Add GitHub API integration tests
+  Created: 2025-07-12
+  Mentioned in PRs: #71
+
+#238: Implement token validation caching to reduce API calls
+  Created: 2025-07-12
+  Mentioned in PRs: #108
+
+#244: Standardize validation error message format across validators
+  Created: 2025-07-12
+  Mentioned in PRs: #248, #275
+
+#245: Add security monitoring for input length validation rejections
+  Created: 2025-07-12
+  Mentioned in PRs: #1025
+
+#254: [SECURITY] Implement audit logging for security operations
+  Created: 2025-07-13
+  Mentioned in PRs: #1158, #1229, #275, #229
+
+#256: [SECURITY] Address 11 CodeQL ReDoS alerts in test files
+  Created: 2025-07-13
+  Mentioned in PRs: #1002, #1000
+
+#259: Add security metrics monitoring for Unicode events
+  Created: 2025-07-13
+  Mentioned in PRs: #1229
+
+#264: Consolidate dual suppression logic in SecurityAuditor
+  Created: 2025-07-13
+  Mentioned in PRs: #71
+
+#266: Add error handling for shouldSuppress exceptions
+  Created: 2025-07-13
+  Mentioned in PRs: #248
+
+#272: Establish security audit maintenance framework
+  Created: 2025-07-13
+  Mentioned in PRs: #71
+
+#274: Security Audit: PersonaSharer Export/Import Feature - Critical Findings
+  Created: 2025-07-14
+  Mentioned in PRs: #275
+
+#283: Add validation to ensure collection repository structure matches expectations
+  Created: 2025-07-19
+  Mentioned in PRs: #745
+
+#284: Create migration guide for users updating from old marketplace tool names
+  Created: 2025-07-19
+  Mentioned in PRs: #278
+
+#291: Implement Portfolio Directory Structure for Multiple Content Types
+  Created: 2025-07-20
+  Mentioned in PRs: #301
+
+#292: Create Abstract Content Type Interface for Portfolio System
+  Created: 2025-07-20
+  Mentioned in PRs: #1153, #1162, #310
+
+#293: Refactor Personas as Specific Element in Portfolio System
+  Created: 2025-07-20
+  Mentioned in PRs: #301, #310
+
+#297: Implement Ensembles as Portfolio Element Type
+  Created: 2025-07-20
+  Mentioned in PRs: #331
+
+#298: Implement Agents as Portfolio Element Type
+  Created: 2025-07-20
+  Mentioned in PRs: #816
+
+#299: Implement Memories as Portfolio Element Type
+  Created: 2025-07-20
+  Mentioned in PRs: #334, #301
+
+#300: Implement Ensemble Runtime Management System
+  Created: 2025-07-20
+  Mentioned in PRs: #386, #301, #606
+
+#303: Implement atomic file operations for portfolio system
+  Created: 2025-07-20
+  Mentioned in PRs: #280
+
+#307: Add performance testing and benchmarks for portfolio system
+  Created: 2025-07-20
+  Mentioned in PRs: #248
+
+#308: Implement robust recovery from partial migration failures
+  Created: 2025-07-20
+  Mentioned in PRs: #1026
+
+#309: Enhance backup system with incremental and automated features
+  Created: 2025-07-20
+  Mentioned in PRs: #385, #745, #128, #137
+
+#313: Implement batch feedback processing for high-volume scenarios
+  Created: 2025-07-20
+  Mentioned in PRs: #386
+
+#314: Implement feedback aggregation across elements
+  Created: 2025-07-20
+  Mentioned in PRs: #45
+
+#316: Consider pagination for large element collections
+  Created: 2025-07-20
+  Mentioned in PRs: #1108
+
+#317: Update PersonaInstaller to use portfolio paths
+  Created: 2025-07-20
+  Mentioned in PRs: #816, #319
+
+#318: Begin refactoring personas to implement IElement - Issue #293
+  Created: 2025-07-20
+  Mentioned in PRs: #278, #319
+
+#323: Add JSDoc documentation to all public methods in element system
+  Created: 2025-07-20
+  Mentioned in PRs: #1107
+
+#324: Extract magic numbers to configuration constants
+  Created: 2025-07-20
+  Mentioned in PRs: #275
+
+#325: Add integration tests for PersonaElementManager
+  Created: 2025-07-20
+  Mentioned in PRs: #745
+
+#326: Optimize legacy conversion methods to reduce object copying
+  Created: 2025-07-20
+  Mentioned in PRs: #1219
+
+#328: Add Unicode normalization to IElementManager interface methods
+  Created: 2025-07-20
+  Mentioned in PRs: #275
+
+#341: Memory Element: Search Performance Optimization
+  Created: 2025-07-21
+  Mentioned in PRs: #1234, #745
+
+#343: Memory Element: Code Organization and Style Improvements
+  Created: 2025-07-21
+  Mentioned in PRs: #373
+
+#344: Memory Element: Advanced Security Features
+  Created: 2025-07-21
+  Mentioned in PRs: #280
+
+#345: Collection Integration: Add Support for All Element Types
+  Created: 2025-07-21
+  Mentioned in PRs: #1227
+
+#347: Allow authors to anonymize their attribution on elements they created
+  Created: 2025-07-22
+  Mentioned in PRs: #373
+
+#365: Improve path validation to better handle cross-platform absolute paths
+  Created: 2025-07-23
+  Mentioned in PRs: #229
+
+#377: Fix missing memories directory in collection (404 error)
+  Created: 2025-07-23
+  Mentioned in PRs: #378
+
+#380: Update security suppression patterns for ElementInstaller
+  Created: 2025-07-23
+  Mentioned in PRs: #45
+
+#387: Implement GitHub Actions workflow for automated documentation archiving
+  Created: 2025-07-25
+  Mentioned in PRs: #640, #248
+
+#393: Add JSDoc comments for updated method signatures
+  Created: 2025-07-25
+  Mentioned in PRs: #278
+
+#394: Integration testing with Claude Desktop for flat directory structure
+  Created: 2025-07-25
+  Mentioned in PRs: #278
+
+#403: Implement automatic tag creation for GitFlow releases
+  Created: 2025-07-30
+  Mentioned in PRs: #846, #234
+
+#409: Add performance benchmarks for element operations
+  Created: 2025-08-01
+  Mentioned in PRs: #954, #958, #1001, #962, #959
+
+#420: End-to-end deployment validation for complete element system workflow
+  Created: 2025-08-02
+  Mentioned in PRs: #433
+
+#426: Enhancement: Data File Pattern Registration System
+  Created: 2025-08-02
+  Mentioned in PRs: #800
+
+#428: Feature: Privacy-First Analytics System Architecture
+  Created: 2025-08-02
+  Mentioned in PRs: #209
+
+#446: Improve DefaultElementProvider test coverage
+  Created: 2025-08-04
+  Mentioned in PRs: #278
+
+#453: Performance Testing workflow has been failing consistently
+  Created: 2025-08-04
+  Mentioned in PRs: #640
+
+#487: Add seed data validation tests
+  Created: 2025-08-06
+  Mentioned in PRs: #181
+
+#488: Add memoization for search term normalization
+  Created: 2025-08-06
+  Mentioned in PRs: #275
+
+#498: Improve error handling consistency in submitToPortfolioTool
+  Created: 2025-08-08
+  Mentioned in PRs: #1229, #508, #552
+
+#499: Optimize file discovery performance in submitToPortfolioTool
+  Created: 2025-08-08
+  Mentioned in PRs: #1008, #1007
+
+#500: Standardize logging patterns across codebase
+  Created: 2025-08-08
+  Mentioned in PRs: #1229, #1251, #1249, #442, #596
+
+#505: Extract element ID generation to utility function
+  Created: 2025-08-08
+  Mentioned in PRs: #1251
+
+#509: Replace 250 bare throw statements with ErrorHandler across 39 files
+  Created: 2025-08-08
+  Mentioned in PRs: #511
+
+#512: Refactor: Clean up root directory clutter and split massive index.ts file
+  Created: 2025-08-08
+  Mentioned in PRs: #1251, #611
+
+#521: Implement ConfigManager for persistent configuration storage
+  Created: 2025-08-09
+  Mentioned in PRs: #1072, #525
+
+#522: Update OAuth system to use ConfigManager
+  Created: 2025-08-09
+  Mentioned in PRs: #525
+
+#523: Create OAuth setup tool for easy configuration
+  Created: 2025-08-09
+  Mentioned in PRs: #641, #525
+
+#528: Portfolio uploads all elements to personas directory regardless of type
+  Created: 2025-08-09
+  Mentioned in PRs: #532, #474, #472
+
+#530: OAuth and submission workflow needs better UX explanations
+  Created: 2025-08-09
+  Mentioned in PRs: #532
+
+#531: Add bulk sync capability for portfolio content
+  Created: 2025-08-09
+  Mentioned in PRs: #1212, #532
+
+#533: Fix: Elements saved to GitHub portfolio are JSON instead of markdown
+  Created: 2025-08-10
+  Mentioned in PRs: #535
+
+#546: Consolidate MCP tools to reduce overhead and improve performance
+  Created: 2025-08-11
+  Mentioned in PRs: #630
+
+#567: Add randomization to test data names to prevent conflicts
+  Created: 2025-08-11
+  Mentioned in PRs: #569
+
+#571: Implement test result collection and metrics
+  Created: 2025-08-11
+  Mentioned in PRs: #132
+
+#579: Add automated tests for GitFlow hooks
+  Created: 2025-08-11
+  Mentioned in PRs: #222
+
+#589: Optimize backtick detection regex patterns for performance
+  Created: 2025-08-11
+  Mentioned in PRs: #224
+
+#592: Refactor: Consolidate version storage to single source of truth
+  Created: 2025-08-12
+  Mentioned in PRs: #593
+
+#598: [HIGH PRIORITY] Fix E2E Roundtrip Workflow Tests - Platform-Specific Failures & Need Atomic Testing
+  Created: 2025-08-13
+  Mentioned in PRs: #132
+
+#600: Add index for parallel element type search optimization
+  Created: 2025-08-14
+  Mentioned in PRs: #605, #442, #597
+
+#602: File I/O and cache warming optimizations
+  Created: 2025-08-14
+  Mentioned in PRs: #605
+
+#603: Refactor element detection logic into dedicated service
+  Created: 2025-08-14
+  Mentioned in PRs: #605
+
+#610: Fix race condition in server initialization causing MCP commands to fail
+  Created: 2025-08-16
+  Mentioned in PRs: #611
+
+#613: Review and improve GitFlow Guardian capabilities
+  Created: 2025-08-17
+  Mentioned in PRs: #614
+
+#617: Add multiple fallback paths for version.json in BuildInfoService
+  Created: 2025-08-17
+  Mentioned in PRs: #593
+
+#628: 📚 Documentation Update Required: Sync with v1.5.2+ Changes (main vs develop)
+  Created: 2025-08-19
+  Mentioned in PRs: #630
+
+#629: Establish Comprehensive QA Testing Process for Complete Roundtrip Workflow
+  Created: 2025-08-19
+  Mentioned in PRs: #662
+
+#632: Remove UpdateTools - 5 Auto-Update Tools Removal
+  Created: 2025-08-19
+  Mentioned in PRs: #634
+
+#633: PersonaTools Partial Removal - Remove 9 Redundant Tools, Keep 5 Export/Import Tools
+  Created: 2025-08-19
+  Mentioned in PRs: #637, #597
+
+#642: Enhancement: Implement confidence-based production detection scoring
+  Created: 2025-08-20
+  Mentioned in PRs: #646, #593
+
+#643: Performance: Optimize regex pattern compilation and caching
+  Created: 2025-08-20
+  Mentioned in PRs: #646
+
+#644: UX: Add friendly notification and suggestions for reserved test pattern names
+  Created: 2025-08-20
+  Mentioned in PRs: #1207, #646
+
+#647: Improve GitFlow Guardian messaging to explicitly list valid bypass scenarios
+  Created: 2025-08-20
+  Mentioned in PRs: #934
+
+#651: Add buffer pool optimization for metadata reading
+  Created: 2025-08-21
+  Mentioned in PRs: #637
+
+#652: Add metadata caching for repeated file operations
+  Created: 2025-08-21
+  Mentioned in PRs: #1207
+
+#653: Enhance error logging with YAML content preview for debugging
+  Created: 2025-08-21
+  Mentioned in PRs: #637
+
+#658: Improve CI debugging capabilities for cross-platform issues
+  Created: 2025-08-21
+  Mentioned in PRs: #934
+
+#661: Tool Timeout Issue: get_build_info tool consistently times out
+  Created: 2025-08-21
+  Mentioned in PRs: #132, #331, #662
+
+#663: Add QA automation scripts to CI/CD pipeline
+  Created: 2025-08-21
+  Mentioned in PRs: #677, #689, #672, #671
+
+#666: QA Scripts: Use centralized config instead of hardcoded timeouts
+  Created: 2025-08-21
+  Mentioned in PRs: #672, #671
+
+#667: QA Scripts: Add tool validation before testing
+  Created: 2025-08-21
+  Mentioned in PRs: #671
+
+#668: QA Scripts: Implement connection pooling and resource management
+  Created: 2025-08-21
+  Mentioned in PRs: #593
+
+#669: Complete removal of deprecated tool references in QA scripts
+  Created: 2025-08-21
+  Mentioned in PRs: #676, #672, #671
+
+#670: QA Framework: Priority tasks for v1.6.0 release
+  Created: 2025-08-21
+  Mentioned in PRs: #672, #671, #132
+
+#680: Add performance benchmarking metrics to QA tests
+  Created: 2025-08-22
+  Mentioned in PRs: #689
+
+#681: Plan transition from non-blocking to blocking QA tests in CI
+  Created: 2025-08-22
+  Mentioned in PRs: #700
+
+#695: Make server startup timeout configurable via environment variables
+  Created: 2025-08-22
+  Mentioned in PRs: #228
+
+#696: Implement metrics retention policy to prevent indefinite file growth
+  Created: 2025-08-22
+  Mentioned in PRs: #228, #225
+
+#698: Implement concurrent test execution for faster CI runs
+  Created: 2025-08-22
+  Mentioned in PRs: #132
+
+#707: Add OAuth token status tool for debugging authentication state
+  Created: 2025-08-23
+  Mentioned in PRs: #1197
+
+#709: Implement session state management for OAuth across MCP calls
+  Created: 2025-08-23
+  Mentioned in PRs: #1197
+
+#713: feat: Add MCP tool support for prompts
+  Created: 2025-08-23
+  Mentioned in PRs: #278
+
+#715: Add MCP Inspector integration tests for external client validation
+  Created: 2025-08-23
+  Mentioned in PRs: #724
+
+#717: test: Add comprehensive tests for prompt elements
+  Created: 2025-08-23
+  Mentioned in PRs: #916, #132
+
+#723: Implement PAT-based testing for OAuth and update QA scripts
+  Created: 2025-08-23
+  Mentioned in PRs: #724
+
+#737: Add integration tests for default OAuth Client ID fallback
+  Created: 2025-08-25
+  Mentioned in PRs: #1218
+
+#738: Implement OAuth token refresh logic for long-lived sessions
+  Created: 2025-08-25
+  Mentioned in PRs: #729
+
+#739: Monitor OAuth app usage and implement telemetry
+  Created: 2025-08-25
+  Mentioned in PRs: #597
+
+#749: Template: Version Update Checklist
+  Created: 2025-08-25
+  Mentioned in PRs: #750, #278
+
+#799: Add test coverage and metrics for duplicate detection feature
+  Created: 2025-08-27
+  Mentioned in PRs: #940
+
+#809: QA: Enhance GitHub integration test to validate submission content
+  Created: 2025-08-27
+  Mentioned in PRs: #812
+
+#811: Monitoring: Create dashboard for collection submission metrics
+  Created: 2025-08-27
+  Mentioned in PRs: #19
+
+#912: Add tests to ensure wizard defaults stay in sync with actual defaults
+  Created: 2025-09-09
+  Mentioned in PRs: #1243
+
+#922: Implement sync_portfolio pull functionality
+  Created: 2025-09-10
+  Mentioned in PRs: #942
+
+#933: Add regression test for filename transformation in GitHubPortfolioIndexer
+  Created: 2025-09-11
+  Mentioned in PRs: #1199
+
+#936: 🚨 CRITICAL: MCP Server Process Leak - 94 zombie processes accumulated
+  Created: 2025-09-11
+  Mentioned in PRs: #942
+
+#937: Element Creation and Activation System Cleanup
+  Created: 2025-09-12
+  Mentioned in PRs: #942
+
+#970: LLM-Based Capability Description Generation
+  Created: 2025-09-15
+  Mentioned in PRs: #1199
+
+#972: 🧠 Epic: Implement Advanced Memory System with Failure Pattern Detection
+  Created: 2025-09-17
+  Mentioned in PRs: #980
+
+#973: Implement basic Memory element type
+  Created: 2025-09-17
+  Mentioned in PRs: #980, #942
+
+#979: Integrate memory system with Capability Index (#966)
+  Created: 2025-09-17
+  Mentioned in PRs: #980
+
+#983: Implement background memory capacity management
+  Created: 2025-09-17
+  Mentioned in PRs: #597
+
+#985: Implement configurable background cleanup for Memory retention
+  Created: 2025-09-17
+  Mentioned in PRs: #991
+
+#1083: Enhanced Capability Index: Server-side semantic intelligence
+  Created: 2025-09-22
+  Mentioned in PRs: #1093, #1091
+
+#1085: Add NLP scoring with Jaccard similarity and Shannon entropy
+  Created: 2025-09-22
+  Mentioned in PRs: #1091
+
+#1087: Implement verb-based action triggers
+  Created: 2025-09-22
+  Mentioned in PRs: #1091
+
+#1090: Create smart context injection system
+  Created: 2025-09-22
+  Mentioned in PRs: #798
+
+#1101: Investigate and fix remaining Enhanced Index test failures
+  Created: 2025-09-24
+  Mentioned in PRs: #1106
+
+#1112: feat: Implement test skip tracking and validation system
+  Created: 2025-09-26
+  Mentioned in PRs: #1115, #1114
+
+#1113: chore: Standardize test skip patterns and timeouts across test suite
+  Created: 2025-09-26
+  Mentioned in PRs: #1115, #1114
+
+#1120: Enhanced Index: Implement verb trigger extraction for all element types
+  Created: 2025-09-26
+  Mentioned in PRs: #1133, #1125
+
+#1122: Enhanced Index: Add trigger extraction to TemplateManager
+  Created: 2025-09-26
+  Mentioned in PRs: #1137, #1135, #1133, #1125
+
+#1123: Enhanced Index: Add trigger extraction to AgentManager
+  Created: 2025-09-26
+  Mentioned in PRs: #1138, #1135, #1137, #1133, #1125
+
+#1128: Enhanced Index: Telemetry dashboard and metrics visualization
+  Created: 2025-09-26
+  Mentioned in PRs: #798
+
+#1131: Rewrite ESM-incompatible tests with proper mocking patterns
+  Created: 2025-09-26
+  Mentioned in PRs: #1134
+
+#1132: Audit codebase for jest.unstable_mockModule usage
+  Created: 2025-09-26
+  Mentioned in PRs: #1134
+
+#1150: 📊 SonarCloud: Address 55 MAJOR bugs and improve reliability rating
+  Created: 2025-09-27
+  Mentioned in PRs: #1153, #1155, #1154
+
+#1165: Optimize GitHubRateLimiter initialization - only create when needed
+  Created: 2025-09-28
+  Mentioned in PRs: #1233, #1234
+
+#1169: 🎯 [SonarCloud] Master Tracking Issue - Reduce Technical Debt to Zero
+  Created: 2025-09-28
+  Mentioned in PRs: #1187, #1186, #1185
+
+#1192: Feature: Add progress reporting for large portfolio scans
+  Created: 2025-09-28
+  Mentioned in PRs: #1193
+
+#1240: Add Jeet Singh to NPM package contributors list
+  Created: 2025-10-03
+  Mentioned in PRs: #1248
+
+
+💡 To close these issues, run:
+node scripts/close-orphaned-issues.js
+
