@@ -138,6 +138,11 @@ jobs:
         run: npm test
         continue-on-error: true
 
+      - name: Run performance tests (separate process)
+        id: performance_tests
+        run: npm run test:performance
+        continue-on-error: true
+
       - name: Debug failed tests environment
         if: steps.original_tests.outcome == 'failure'
         shell: bash

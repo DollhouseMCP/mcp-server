@@ -31,7 +31,7 @@ cd /Users/mick/Developer/MCP-Servers/DollhouseMCP
 cat docs/development/QUICK_START_NPM_v1.2.1.md
 
 # Full checklist
-cat docs/archive/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md
+cat docs/session-history/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md
 ```
 
 ## Key Changes Since v1.2.0
@@ -43,9 +43,9 @@ cat docs/archive/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md
 
 ## Files to Reference
 1. `QUICK_START_NPM_v1.2.1.md` - Start here!
-2. `docs/archive/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md` - Detailed steps
-3. `docs/archive/2025/07/SESSION_SUMMARY_2025_07_08_v1.2.1_READY.md` - What we did today
-4. `docs/archive/2025/07/NPM_PUBLISH_QUICK_REFERENCE.md` - Original publishing guide
+2. `docs/session-history/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md` - Detailed steps
+3. `docs/session-history/2025/07/SESSION_SUMMARY_2025_07_08_v1.2.1_READY.md` - What we did today
+4. `docs/session-history/2025/07/NPM_PUBLISH_QUICK_REFERENCE.md` - Original publishing guide
 
 ## Critical Notes
 - First npm publish requires `--access public`

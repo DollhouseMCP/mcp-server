@@ -80,9 +80,9 @@ For NPM installation:
 
 #### Documentation Files
 All files currently referencing `@mickdarling/dollhousemcp`:
-- `docs/archive/2025/07/NPM_AND_GITHUB_URLS_REFERENCE.md`
-- `docs/archive/2025/07/QUICK_REFERENCE_JULY_10_2025.md`
-- `docs/archive/2025/07/ORGANIZATION_MIGRATION_REFERENCE.md`
+- `docs/session-history/2025/07/NPM_AND_GITHUB_URLS_REFERENCE.md`
+- `docs/session-history/2025/07/QUICK_REFERENCE_JULY_10_2025.md`
+- `docs/session-history/2025/07/ORGANIZATION_MIGRATION_REFERENCE.md`
 - Various session summaries
 
 ### Testing Checklist

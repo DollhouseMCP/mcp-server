@@ -8,7 +8,7 @@ echo "🗂️  Starting documentation archiving process..."
 # Configuration
 DAYS_OLD=7
 DOCS_DIR="docs/development"
-ARCHIVE_BASE="docs/archive"
+ARCHIVE_BASE="docs/session-history"
 CURRENT_YEAR=$(date +%Y)
 CURRENT_MONTH=$(date +%m)
 ARCHIVE_DIR="$ARCHIVE_BASE/$CURRENT_YEAR/$CURRENT_MONTH"

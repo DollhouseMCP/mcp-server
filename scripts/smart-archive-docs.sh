@@ -8,7 +8,7 @@ echo "🧠 Starting smart documentation archiving..."
 # Configuration
 DAYS_OLD=7
 DOCS_DIR="docs/development"
-ARCHIVE_BASE="docs/archive"
+ARCHIVE_BASE="docs/session-history"
 CURRENT_DATE=$(date +%Y-%m-%d)
 CUTOFF_DATE=$(date -d "$DAYS_OLD days ago" +%Y-%m-%d 2>/dev/null || date -v -${DAYS_OLD}d +%Y-%m-%d)
 CUTOFF_TIMESTAMP=$(date -d "$CUTOFF_DATE" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$CUTOFF_DATE" +%s)

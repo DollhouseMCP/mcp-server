@@ -161,9 +161,9 @@ sanitized = unicodeResult.normalizedContent;
 - `__tests__/security/tests/unicode-normalization.test.ts` - Integration tests
 
 ### Documentation Files
-- `docs/archive/2025/07/UNICODE_IMPLEMENTATION_COMPLETE_2025_07_12.md`
-- `docs/archive/2025/07/NEXT_SESSION_IMMEDIATE_ACTIONS_2025_07_12.md`
-- `docs/archive/2025/07/SESSION_HANDOFF_UNICODE_2025_07_12.md`
+- `docs/session-history/2025/07/UNICODE_IMPLEMENTATION_COMPLETE_2025_07_12.md`
+- `docs/session-history/2025/07/NEXT_SESSION_IMMEDIATE_ACTIONS_2025_07_12.md`
+- `docs/session-history/2025/07/SESSION_HANDOFF_UNICODE_2025_07_12.md`
 
 ## 🎯 Success Metrics Achieved This Session
 
