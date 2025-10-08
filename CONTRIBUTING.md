@@ -199,12 +199,71 @@ git push origin feature/your-feature-name
 ```
 DollhouseMCP/
 ├── src/              # TypeScript source code
+│   ├── elements/     # Element system (personas, skills, memories, etc.)
+│   ├── portfolio/    # Local storage and GitHub sync
+│   ├── security/     # Input validation and path security
+│   ├── collection/   # Community element browsing
+│   ├── auth/         # GitHub OAuth and token management
+│   └── index.ts      # Main MCP server implementation
 ├── dist/             # Compiled JavaScript
 ├── __tests__/        # Test files
 ├── personas/         # Built-in personas
 ├── .github/          # GitHub Actions and templates
 └── docs/             # Documentation
+    ├── CONVENTIONS.md              # Naming and style standards
+    └── development/
+        ├── SESSION_MANAGEMENT.md   # Session workflow guide
+        ├── GITFLOW_GUARDIAN.md     # Git workflow enforcement
+        └── ...                     # Other development guides
 ```
+
+## 🏗️ Architecture Overview
+
+### MCP Server Implementation
+
+- **Transport**: StdioServerTransport (standard I/O for MCP integration)
+- **Protocol**: JSON-RPC 2.0 communication
+- **Tools**: 41+ MCP tools for element management
+- **Entry Point**: `src/index.ts` - Main server class is `DollhouseMCPServer`
+
+### Element System
+
+DollhouseMCP supports six element types:
+
+- **Personas** - AI behavioral profiles
+- **Skills** - Discrete capabilities
+- **Templates** - Reusable content structures
+- **Agents** - Goal-oriented decision makers
+- **Memories** - Persistent context storage
+- **Ensembles** - Combined element orchestration (under development)
+
+### Portfolio Structure
+
+Elements are stored in `~/.dollhouse/portfolio/`:
+
+```
+~/.dollhouse/portfolio/
+├── personas/         # Markdown files with YAML frontmatter
+├── skills/           # Markdown files with YAML frontmatter
+├── templates/        # Markdown files with YAML frontmatter
+├── agents/           # Markdown files with YAML frontmatter
+├── memories/         # YAML files organized by date
+│   ├── 2025-10-08/   # Automatic YYYY-MM-DD folder structure
+│   │   └── notes.yaml
+│   └── 2025-10-09/
+│       └── context.yaml
+└── ensembles/        # Markdown files with YAML frontmatter
+```
+
+**Note**: Memories use YAML format exclusively and are organized in date-based folders for scalability.
+
+### Data Flow
+
+1. Client Request → MCP Server (StdioServerTransport)
+2. Tool Routing → Appropriate handler in DollhouseMCPServer
+3. Element Processing → Element-specific manager (PersonaManager, SkillManager, etc.)
+4. Storage → PortfolioManager (local files or GitHub sync)
+5. Response → Client via JSON-RPC
 
 ## 🧪 Testing Guidelines
 
