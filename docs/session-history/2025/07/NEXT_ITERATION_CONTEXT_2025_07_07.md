@@ -122,8 +122,8 @@ rm -rf dir/ || true
 
 ### Documentation
 - `docs/development/PR_BEST_PRACTICES.md` - PR creation guide
-- `docs/archive/2025/07/REMAINING_CI_ISSUES.md` - Historical CI problems
-- `docs/archive/2025/07/CI_FIX_PR86_SUMMARY.md` - File deletion fix context
+- `docs/session-history/2025/07/REMAINING_CI_ISSUES.md` - Historical CI problems
+- `docs/session-history/2025/07/CI_FIX_PR86_SUMMARY.md` - File deletion fix context
 
 ## Testing Commands
 

@@ -111,7 +111,7 @@ The UpdateTools removal (~7,000 lines) successfully removed the implementation b
 
 #### Files to Remove Entirely
 1. `/docs/AUTO_UPDATE_ARCHITECTURE.md` - Complete auto-update architecture documentation
-2. `/docs/archive/2025/07/QUICK_REFERENCE_AUTO_UPDATE.md` - Auto-update quick reference
+2. `/docs/session-history/2025/07/QUICK_REFERENCE_AUTO_UPDATE.md` - Auto-update quick reference
 
 #### Files Requiring Updates
 1. `/README.md` - Multiple references to auto-update system and tool counts
@@ -146,7 +146,7 @@ The UpdateTools removal (~7,000 lines) successfully removed the implementation b
 #### Documentation Cleanup
 1. **Removed obsolete files**:
    - `/docs/AUTO_UPDATE_ARCHITECTURE.md` - Complete auto-update documentation 
-   - `/docs/archive/2025/07/QUICK_REFERENCE_AUTO_UPDATE.md` - Auto-update quick reference
+   - `/docs/session-history/2025/07/QUICK_REFERENCE_AUTO_UPDATE.md` - Auto-update quick reference
 
 #### Summary of Changes
 - **Test failures**: Fixed by removing obsolete test and updating mocks

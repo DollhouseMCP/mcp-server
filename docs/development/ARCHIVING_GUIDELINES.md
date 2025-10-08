@@ -5,7 +5,7 @@ To maintain a clean and efficient `docs/development` directory by archiving hist
 
 ## Archive Structure
 ```
-docs/archive/
+docs/session-history/
 ├── YYYY/
 │   └── MM/
 │       └── [archived files]
@@ -34,9 +34,9 @@ grep -r -B2 -A2 "filename.md" docs/development/
 
 ### 2. Update References
 Update references to point to the archive location:
-- Change `/docs/development/FILENAME.md` to `/docs/archive/YYYY/MM/FILENAME.md`
-- Change `docs/development/FILENAME.md` to `docs/archive/YYYY/MM/FILENAME.md`
-- Update relative paths like `./FILENAME.md` to `../archive/YYYY/MM/FILENAME.md`
+- Change `/docs/development/FILENAME.md` to `/docs/session-history/YYYY/MM/FILENAME.md`
+- Change `docs/development/FILENAME.md` to `docs/session-history/YYYY/MM/FILENAME.md`
+- Update relative paths like `./FILENAME.md` to `../session-history/YYYY/MM/FILENAME.md`
 
 ### 3. Consider Reference Relevance
 Before updating a reference, consider:
@@ -109,11 +109,11 @@ Certain files should always remain in `docs/development` for easy access. These 
    # Example: Archive files older than 7 days
    YEAR=$(date +%Y)
    MONTH=$(date +%m)
-   mkdir -p docs/archive/$YEAR/$MONTH
-   
+   mkdir -p docs/session-history/$YEAR/$MONTH
+
    # Archive session files
-   find docs/development -name "SESSION_*" -mtime +7 -exec mv {} docs/archive/$YEAR/$MONTH/ \;
-   find docs/development -name "CONTEXT_*" -mtime +7 -exec mv {} docs/archive/$YEAR/$MONTH/ \;
+   find docs/development -name "SESSION_*" -mtime +7 -exec mv {} docs/session-history/$YEAR/$MONTH/ \;
+   find docs/development -name "CONTEXT_*" -mtime +7 -exec mv {} docs/session-history/$YEAR/$MONTH/ \;
    
    # Fix references after archiving
    ./scripts/fix-archived-references.sh
@@ -121,7 +121,7 @@ Certain files should always remain in `docs/development` for easy access. These 
 
 ## Accessing Archived Documents
 Archived documents remain in the git history and can be accessed at:
-- `docs/archive/YYYY/MM/[filename]`
+- `docs/session-history/YYYY/MM/[filename]`
 
 ## Automation
 
