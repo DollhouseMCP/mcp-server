@@ -35,6 +35,9 @@ scripts/validation/run-sync-test-with-pat.sh
 *.swp
 *.swo
 
+# Personal development notes (user-specific workflow docs)
+dev-notes/
+
 # OS files
 .DS_Store
 Thumbs.db
