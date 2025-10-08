@@ -383,7 +383,9 @@ Structure troubleshooting information clearly:
 
 ### Cross-References
 
-Link to related documentation:
+Link to related documentation to help readers find additional information.
+
+**Basic cross-reference section:**
 
 ```markdown
 For more details, see:
@@ -391,6 +393,42 @@ For more details, see:
 - [API reference](./API.md#createElement)
 - [GitHub issue #123](https://github.com/DollhouseMCP/mcp-server/issues/123)
 ```
+
+**Example of a good cross-reference section:**
+
+```markdown
+## Related Documentation
+
+### Prerequisites
+Before using this feature, ensure you understand:
+- [Element system architecture](./ELEMENT_IMPLEMENTATION_GUIDE.md) - Overview of element types and structure
+- [Portfolio management](./PORTFOLIO_GUIDE.md#setup) - Setting up your local portfolio
+
+### Next Steps
+After completing this guide:
+- [Create your first persona](./tutorials/FIRST_PERSONA.md) - Hands-on tutorial
+- [Advanced element composition](./ENSEMBLES.md) - Combining multiple elements
+- [Element best practices](./ELEMENT_BEST_PRACTICES.md) - Tips for effective elements
+
+### Troubleshooting
+If you encounter issues:
+- [Common errors](./TROUBLESHOOTING.md#element-creation) - Solutions for frequent problems
+- [GitHub issue #1234](https://github.com/DollhouseMCP/mcp-server/issues/1234) - Known issue with workaround
+- [Community discussions](https://github.com/DollhouseMCP/mcp-server/discussions) - Ask questions
+
+### Technical Reference
+For developers:
+- [API documentation](./API.md#createElement) - Complete API reference
+- [Element file format spec](./development/MANUAL_ELEMENT_CONSTRUCTION.md) - File format details
+- [Source code](../src/elements/PersonaManager.ts) - Implementation reference
+```
+
+**Guidelines**:
+- **Group by purpose**: Prerequisites, Next Steps, Troubleshooting, Technical Reference
+- **Be specific**: Link to exact sections when possible (`#createElement`)
+- **Add context**: Brief description helps readers decide whether to click
+- **Mix link types**: Documentation, issues, discussions, source code as appropriate
+- **Keep it relevant**: Only link to directly related content
 
 ## Common Mistakes to Avoid
 
