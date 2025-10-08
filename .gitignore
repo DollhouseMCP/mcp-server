@@ -20,6 +20,12 @@ src/generated/
 .env.production.local
 test/e2e/.env.test.local
 
+# Docker environment files (user-specific configs)
+# The .example files should be committed as templates
+docker/test-environment.env
+docker/*.env
+!docker/*.env.example
+
 # Scripts with credentials (should use environment variables)
 scripts/validation/run-sync-test-with-pat.sh
 
