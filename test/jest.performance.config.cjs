@@ -10,8 +10,9 @@ const config = {
   testPathIgnorePatterns: baseConfig.testPathIgnorePatterns.filter(
     pattern => pattern !== '/test/__tests__/performance/'
   ),
-  // Run in band (single worker) to avoid resource contention
-  maxWorkers: 1,
+  // Use 4 workers to batch test files (5 files total) for faster execution
+  // Reduces setup overhead while maintaining isolation
+  maxWorkers: 4,
   // Increase timeout for performance tests
   testTimeout: 30000,
   // Display individual test results
