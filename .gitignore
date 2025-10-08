@@ -34,6 +34,7 @@ scripts/validation/run-sync-test-with-pat.sh
 .idea/
 *.swp
 *.swo
+.obsidian/
 
 # Personal development notes (user-specific workflow docs)
 dev-notes/
@@ -46,6 +47,9 @@ Thumbs.db
 test/coverage/
 test/coverage-integration/
 *.lcov
+
+# Test results
+test-results/
 
 # Integration test temporary files
 .test-tmp/
