@@ -116,9 +116,9 @@ gh release create v1.2.X --title "..." --notes "..."
 - MCP protocol no longer broken
 
 ## 🔗 Reference Documents
-- `docs/archive/2025/07/SESSION_SUMMARY_JULY_10_2025_EVENING.md`
+- `docs/session-history/2025/07/SESSION_SUMMARY_JULY_10_2025_EVENING.md`
 - `docs/JSON_MERGE_GUIDE.md`
-- `docs/archive/2025/07/PR_189_TEST_FAILURE_ANALYSIS.md`
+- `docs/session-history/2025/07/PR_189_TEST_FAILURE_ANALYSIS.md`
 
 ## Remember
 - User is on Pacific time (Thursday evening, July 10)

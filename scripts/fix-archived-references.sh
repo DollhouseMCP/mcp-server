@@ -6,7 +6,7 @@
 echo "🔍 Finding and fixing references to archived files..."
 
 # Get list of archived files (just filenames)
-ARCHIVED_FILES=$(ls docs/archive/2025/07/ | grep -E "\.md$")
+ARCHIVED_FILES=$(ls docs/session-history/2025/07/ | grep -E "\.md$")
 
 # Counter for fixed references
 FIXED_COUNT=0
@@ -39,10 +39,10 @@ for doc_file in docs/development/*.md; do
                 # 4. Backtick references: `path/file.md`
                 
                 # Direct path references (with or without leading slash)
-                sed -i.bak -E "s|/?docs/development/${archived}|docs/archive/2025/07/${archived}|g" "$doc_file"
-                
+                sed -i.bak -E "s|/?docs/development/${archived}|docs/session-history/2025/07/${archived}|g" "$doc_file"
+
                 # Relative path references (e.g., ./file.md or ../development/file.md)
-                sed -i.bak -E "s|\.\.?/+([^/]*/)*(${archived})|../archive/2025/07/\\2|g" "$doc_file"
+                sed -i.bak -E "s|\.\.?/+([^/]*/)*(${archived})|../session-history/2025/07/\\2|g" "$doc_file"
                 
                 # Check if file was actually modified
                 if ! cmp -s "$doc_file" "$doc_file.bak"; then

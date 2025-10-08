@@ -133,7 +133,7 @@ See `/scripts/never-archive-list.txt` for the complete list.
 ## How to Access
 These files remain in the git history and can be accessed:
 1. Through this archive directory
-2. Via git history: `git log --follow docs/archive/2025/07/FILENAME.md`
+2. Via git history: `git log --follow docs/session-history/2025/07/FILENAME.md`
 3. By checking out older commits
 
 ## Reference Updates

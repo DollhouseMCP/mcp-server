@@ -183,7 +183,7 @@ gh pr checks 225 --watch
 ls docs/development/
 
 # Read specific status
-cat docs/archive/2025/07/SESSION_SUMMARY_JULY_12_10AM.md
+cat docs/session-history/2025/07/SESSION_SUMMARY_JULY_12_10AM.md
 
 # Check current issues
 gh issue list --label "area: security" --limit 5

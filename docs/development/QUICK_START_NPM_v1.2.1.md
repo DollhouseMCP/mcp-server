@@ -32,9 +32,9 @@ gh release create v1.2.1 --title "v1.2.1 - Critical Data Protection Release" --n
 ```
 
 ## Key Files
-- Full checklist: `docs/archive/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md`
-- Session summary: `docs/archive/2025/07/SESSION_SUMMARY_2025_07_08_v1.2.1_READY.md`
-- Original guide: `docs/archive/2025/07/NPM_PUBLISH_QUICK_REFERENCE.md`
+- Full checklist: `docs/session-history/2025/07/NPM_RELEASE_CHECKLIST_v1.2.1.md`
+- Session summary: `docs/session-history/2025/07/SESSION_SUMMARY_2025_07_08_v1.2.1_READY.md`
+- Original guide: `docs/session-history/2025/07/NPM_PUBLISH_QUICK_REFERENCE.md`
 
 ## What's New in v1.2.1
 1. **Copy-on-write protection** - Default personas preserved
