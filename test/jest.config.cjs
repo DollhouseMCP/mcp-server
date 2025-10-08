@@ -21,6 +21,7 @@ const config = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/test/__tests__/integration/',
+    '/test/__tests__/performance/',  // Performance tests run separately to avoid resource contention
     // Temporarily ignore tests with ES module mocking issues
     'convertToGit\\.test\\.ts$',
     'UpdateManager\\.npm\\.test\\.ts$',
