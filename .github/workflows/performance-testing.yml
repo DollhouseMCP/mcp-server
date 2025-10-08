@@ -177,14 +177,14 @@ jobs:
 
           if [ "$HAS_PYTHON3" = "true" ]; then
             START_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
-            # Run test and capture exit code separately to handle Windows properly
-            npm test -- test/__tests__/performance/ --no-coverage > test-perf.log 2>&1 || TEST_EXIT_CODE=$?
+            # Run performance tests in separate process to avoid resource contention
+            npm run test:performance > test-perf.log 2>&1 || TEST_EXIT_CODE=$?
             END_TIME=$(python3 -c "import time; print(int(time.time() * 1000))")
             TEST_TIME=$((END_TIME - START_TIME))
           else
             START_TIME=$(date +%s)
-            # Run test and capture exit code separately to handle Windows properly
-            npm test -- test/__tests__/performance/ --no-coverage > test-perf.log 2>&1 || TEST_EXIT_CODE=$?
+            # Run performance tests in separate process to avoid resource contention
+            npm run test:performance > test-perf.log 2>&1 || TEST_EXIT_CODE=$?
             END_TIME=$(date +%s)
             TEST_TIME=$(((END_TIME - START_TIME) * 1000))
           fi
