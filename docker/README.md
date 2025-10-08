@@ -26,7 +26,15 @@ This directory contains Docker configuration files for running and testing the D
    TEST_GITHUB_REPO=your-test-repo-name
    ```
 
-3. **Build and run:**
+3. **Validate your configuration:**
+   ```bash
+   # Verify all environment variables are properly set
+   docker-compose config --quiet
+   ```
+
+   If validation fails, check your `test-environment.env` for syntax errors or missing variables.
+
+4. **Build and run:**
    ```bash
    docker-compose up --build
    ```
@@ -37,6 +45,11 @@ If you've already set up your `test-environment.env` file:
 
 ```bash
 docker-compose up
+```
+
+**Tip:** Before major updates, backup your configuration:
+```bash
+cp docker/test-environment.env docker/test-environment.env.backup
 ```
 
 ## ⚙️ Environment Configuration
@@ -209,6 +222,7 @@ chmod 644 docker/test-environment.env
 3. **Test in containers** - Match production environment
 4. **Document custom changes** - Add comments to your `test-environment.env`
 5. **Use specific tags** - Pin versions for reproducibility
+6. **Enable IDE support** - Most IDEs (VS Code, JetBrains) have plugins for `.env` file syntax highlighting and validation. Install the "DotENV" extension for better developer experience.
 
 ## 🤝 Contributing
 
