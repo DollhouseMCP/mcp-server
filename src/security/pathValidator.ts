@@ -33,13 +33,38 @@ export class PathValidator {
     // Normalize and resolve path
     const normalizedPath = path.normalize(cleanPath);
     const resolvedPath = path.resolve(normalizedPath);
-    
+
     // Check for path traversal attempts
     if (normalizedPath.includes('..') || cleanPath.includes('..')) {
       logger.warn('Path traversal attempt detected', { userPath });
       throw new Error('Path traversal detected');
     }
-    
+
+    // SECURITY FIX #1290: Resolve symlinks to prevent path traversal
+    // path.resolve() does not follow symlinks, allowing bypass via symlinked files
+    // pointing to sensitive locations outside allowed directories
+    let realPath: string;
+    try {
+      // Try to resolve symlinks in the full path
+      realPath = await fs.realpath(resolvedPath);
+    } catch (err) {
+      // If path doesn't exist (e.g., creating new file), resolve parent directory
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        const parentDir = path.dirname(resolvedPath);
+        try {
+          const realParent = await fs.realpath(parentDir);
+          // Reconstruct path with resolved parent and original filename
+          realPath = path.join(realParent, path.basename(resolvedPath));
+        } catch {
+          // Parent directory doesn't exist - use resolved path
+          // (will fail later in file operations, but not a security issue)
+          realPath = resolvedPath;
+        }
+      } else {
+        throw err;
+      }
+    }
+
     // Check if path is within allowed directories
     if (this.ALLOWED_DIRECTORIES.length === 0) {
       // If not initialized, allow paths under current working directory's personas folder
@@ -47,9 +72,9 @@ export class PathValidator {
         path.resolve('./personas'),
         path.resolve(process.env.PERSONAS_DIR || './personas')
       ];
-      const isAllowed = defaultAllowed.some(allowedDir => 
-        resolvedPath.startsWith(allowedDir + path.sep) || 
-        resolvedPath === allowedDir
+      const isAllowed = defaultAllowed.some(allowedDir =>
+        realPath.startsWith(allowedDir + path.sep) ||
+        realPath === allowedDir
       );
       if (!isAllowed) {
         // SECURITY FIX #206: Don't expose user paths in error messages
@@ -57,11 +82,11 @@ export class PathValidator {
         throw new Error('Path access denied');
       }
     } else {
-      const isAllowed = this.ALLOWED_DIRECTORIES.some(allowedDir => 
-        resolvedPath.startsWith(allowedDir + path.sep) || 
-        resolvedPath === allowedDir
+      const isAllowed = this.ALLOWED_DIRECTORIES.some(allowedDir =>
+        realPath.startsWith(allowedDir + path.sep) ||
+        realPath === allowedDir
       );
-      
+
       if (!isAllowed) {
         // SECURITY FIX #206: Don't expose user paths in error messages
         logger.error('Path access denied', { path: userPath });
@@ -70,22 +95,23 @@ export class PathValidator {
     }
     
     // Validate filename if it's a file
-    if (path.extname(resolvedPath)) {
-      const filename = path.basename(resolvedPath);
+    if (path.extname(realPath)) {
+      const filename = path.basename(realPath);
       const ext = path.extname(filename).toLowerCase();
-      
+
       // Check if extension is allowed
       if (!this.ALLOWED_EXTENSIONS.includes(ext)) {
         throw new Error(`File extension not allowed: ${ext}. Allowed: ${this.ALLOWED_EXTENSIONS.join(', ')}`);
       }
-      
+
       // Validate filename format (alphanumeric, dash, underscore, dot)
       if (!RegexValidator.validate(filename, /^[a-zA-Z0-9\-_.]+$/i, { maxLength: 255 })) {
         throw new Error(`Invalid filename format: ${filename}`);
       }
     }
-    
-    return resolvedPath;
+
+    // Return the real path (with symlinks resolved) for safe file operations
+    return realPath;
   }
 
   static async safeReadFile(filePath: string): Promise<string> {
