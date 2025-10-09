@@ -137,6 +137,50 @@ name: !!python/object/apply:subprocess.call
         expect(ContentValidator.validateYamlContent(pattern)).toBe(false);
       });
     });
+
+    // SECURITY FIX #1298: Tests for YAML bomb amplification detection
+    // Tightened threshold from 10:1 to 5:1 for better protection
+    describe('YAML bomb amplification detection', () => {
+      it('should block YAML with 6× amplification (exceeds 5:1 threshold)', () => {
+        // 1 anchor, 6 aliases = 6× amplification (exceeds new 5× threshold)
+        const yamlBomb = `
+name: "Test"
+base: &ref1 "value"
+list1: [*ref1, *ref1, *ref1]
+list2: [*ref1, *ref1, *ref1]
+        `;
+
+        expect(ContentValidator.validateYamlContent(yamlBomb)).toBe(false);
+      });
+
+      it('should block YAML with 10× amplification (well over threshold)', () => {
+        // 2 anchors, 20 aliases = 10× amplification (well over 5× threshold)
+        const highAmplification = `
+name: "Test"
+ref1: &a "x"
+ref2: &b "y"
+d1: [*a, *a, *a, *a, *a]
+d2: [*a, *a, *a, *a, *a]
+d3: [*b, *b, *b, *b, *b]
+d4: [*b, *b, *b, *b, *b]
+        `;
+
+        expect(ContentValidator.validateYamlContent(highAmplification)).toBe(false);
+      });
+
+      it('should allow YAML with no anchors or aliases', () => {
+        const noAnchors = `
+name: "Simple"
+description: "No YAML anchors here"
+data:
+  - item1
+  - item2
+  - item3
+        `;
+
+        expect(ContentValidator.validateYamlContent(noAnchors)).toBe(true);
+      });
+    });
   });
 
   describe('validateMetadata', () => {

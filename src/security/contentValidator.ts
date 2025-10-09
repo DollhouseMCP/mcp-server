@@ -290,11 +290,12 @@ export class ContentValidator {
     }
     
     // SECURITY FIX #364: Count anchor/alias ratio for amplification detection
+    // SECURITY FIX #1298: Use configurable threshold for easier tuning
     const anchorMatches = yamlContent.match(/&\w+/g) || [];
     const aliasMatches = yamlContent.match(/\*\w+/g) || [];
     const amplificationRatio = anchorMatches.length > 0 ? aliasMatches.length / anchorMatches.length : 0;
-    
-    if (amplificationRatio > 10) {  // More than 10 aliases per anchor is suspicious
+
+    if (amplificationRatio > SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'HIGH',
