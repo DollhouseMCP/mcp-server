@@ -47,6 +47,15 @@ export class PathValidator {
     try {
       // Try to resolve symlinks in the full path
       realPath = await fs.realpath(resolvedPath);
+
+      // Log symlink resolution for security auditing
+      if (realPath !== resolvedPath) {
+        logger.warn('Symlink detected and resolved', {
+          requestedPath: userPath,
+          resolvedPath,
+          realPath
+        });
+      }
     } catch (err) {
       // If path doesn't exist (e.g., creating new file), resolve parent directory
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -55,6 +64,15 @@ export class PathValidator {
           const realParent = await fs.realpath(parentDir);
           // Reconstruct path with resolved parent and original filename
           realPath = path.join(realParent, path.basename(resolvedPath));
+
+          // Log parent symlink resolution for security auditing
+          if (realParent !== parentDir) {
+            logger.warn('Parent directory symlink detected and resolved', {
+              requestedPath: userPath,
+              parentDir,
+              realParent
+            });
+          }
         } catch {
           // Parent directory doesn't exist - use resolved path
           // (will fail later in file operations, but not a security issue)
