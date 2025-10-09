@@ -294,7 +294,7 @@ export class ContentValidator {
     const aliasMatches = yamlContent.match(/\*\w+/g) || [];
     const amplificationRatio = anchorMatches.length > 0 ? aliasMatches.length / anchorMatches.length : 0;
     
-    if (amplificationRatio > 10) {  // More than 10 aliases per anchor is suspicious
+    if (amplificationRatio > 5) {  // More than 5 aliases per anchor is suspicious
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'HIGH',
