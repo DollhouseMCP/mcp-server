@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import * as path from 'path';
-import * as fs from 'fs/promises';
-import * as os from 'os';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import { PathValidator } from '../../../../src/security/pathValidator.js';
 
 /**
@@ -17,6 +17,49 @@ import { PathValidator } from '../../../../src/security/pathValidator.js';
  * 2. Without fix: path.resolve() returns /allowed/personas/evil.md (passes check)
  * 3. With fix: fs.realpath() returns /etc/passwd (fails check)
  */
+
+/**
+ * Helper function to create a symlink with proper error handling
+ * @param target - The target path the symlink should point to
+ * @param linkPath - The path where the symlink should be created
+ * @returns true if symlink was created, false if skipped due to permissions
+ */
+async function createTestSymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, linkPath);
+    return true;
+  } catch (err) {
+    // On some systems (Windows), symlink creation may require admin privileges
+    if ((err as NodeJS.ErrnoException).code === 'EPERM') {
+      console.warn('Skipping symlink creation - insufficient permissions');
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Helper function to set up test directory structure
+ */
+async function setupTestDirectories(): Promise<{
+  tempDir: string;
+  allowedDir: string;
+  disallowedDir: string;
+}> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-symlink-test-'));
+  const allowedDir = path.join(tempDir, 'allowed-personas');
+  const disallowedDir = path.join(tempDir, 'sensitive');
+
+  await fs.mkdir(allowedDir, { recursive: true });
+  await fs.mkdir(disallowedDir, { recursive: true });
+
+  // Resolve real paths (important on macOS where /tmp -> /private/var/folders)
+  const realAllowedDir = await fs.realpath(allowedDir);
+  const realDisallowedDir = await fs.realpath(disallowedDir);
+
+  return { tempDir, allowedDir: realAllowedDir, disallowedDir: realDisallowedDir };
+}
+
 describe('PathValidator - Symlink Security Tests (#1290)', () => {
   let tempDir: string;
   let allowedDir: string;
@@ -25,17 +68,11 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
   let symlinkPath: string;
 
   beforeAll(async () => {
-    // Create temporary directory structure
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-symlink-test-'));
-    allowedDir = path.join(tempDir, 'allowed-personas');
-    disallowedDir = path.join(tempDir, 'sensitive');
-
-    await fs.mkdir(allowedDir, { recursive: true });
-    await fs.mkdir(disallowedDir, { recursive: true });
-
-    // Resolve real paths (important on macOS where /tmp -> /private/var/folders)
-    allowedDir = await fs.realpath(allowedDir);
-    disallowedDir = await fs.realpath(disallowedDir);
+    // Set up test directory structure
+    const dirs = await setupTestDirectories();
+    tempDir = dirs.tempDir;
+    allowedDir = dirs.allowedDir;
+    disallowedDir = dirs.disallowedDir;
 
     // Create a sensitive file outside allowed directory
     sensitiveFile = path.join(disallowedDir, 'secrets.txt');
@@ -43,17 +80,7 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
 
     // Create a symlink inside allowed directory pointing to sensitive file
     symlinkPath = path.join(allowedDir, 'innocent-looking.md');
-    try {
-      await fs.symlink(sensitiveFile, symlinkPath);
-    } catch (err) {
-      // On some systems (Windows), symlink creation may require admin privileges
-      // Skip the test if we can't create symlinks
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping symlink tests - insufficient permissions');
-        return;
-      }
-      throw err;
-    }
+    await createTestSymlink(sensitiveFile, symlinkPath);
 
     // Initialize PathValidator with allowed directory (only this directory, no defaults)
     PathValidator.initialize(allowedDir, ['.md', '.markdown', '.txt', '.yml', '.yaml']);
@@ -118,15 +145,8 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
   test('should handle symlinks in parent directories correctly', async () => {
     // Create a symlink to the allowed directory itself
     const symlinkToAllowedDir = path.join(tempDir, 'symlink-to-allowed');
-    try {
-      await fs.symlink(allowedDir, symlinkToAllowedDir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping parent symlink test - insufficient permissions');
-        return;
-      }
-      throw err;
-    }
+    const created = await createTestSymlink(allowedDir, symlinkToAllowedDir);
+    if (!created) return; // Skip test if symlink creation failed
 
     // Create a file inside the symlinked directory
     const fileInSymlinkedDir = path.join(symlinkToAllowedDir, 'test.md');
@@ -144,15 +164,8 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
   test('should handle non-existent paths with symlinked parent directories', async () => {
     // Create a symlink to the allowed directory
     const symlinkToAllowedDir = path.join(tempDir, 'symlink-to-allowed-2');
-    try {
-      await fs.symlink(allowedDir, symlinkToAllowedDir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping non-existent path test - insufficient permissions');
-        return;
-      }
-      throw err;
-    }
+    const created = await createTestSymlink(allowedDir, symlinkToAllowedDir);
+    if (!created) return; // Skip test if symlink creation failed
 
     // Reference a non-existent file inside the symlinked directory
     const nonExistentFile = path.join(symlinkToAllowedDir, 'new-file.md');
@@ -173,17 +186,15 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
     const intermediateSymlink = path.join(allowedDir, 'intermediate.md');
     const finalSymlink = path.join(allowedDir, 'innocent.md');
 
-    try {
-      // First symlink points to sensitive file
-      await fs.symlink(sensitiveFile, intermediateSymlink);
-      // Second symlink points to first symlink
-      await fs.symlink(intermediateSymlink, finalSymlink);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping double symlink test - insufficient permissions');
-        return;
-      }
-      throw err;
+    // Create first symlink
+    const created1 = await createTestSymlink(sensitiveFile, intermediateSymlink);
+    if (!created1) return; // Skip test if symlink creation failed
+
+    // Create second symlink
+    const created2 = await createTestSymlink(intermediateSymlink, finalSymlink);
+    if (!created2) {
+      await fs.unlink(intermediateSymlink);
+      return; // Skip test if second symlink creation failed
     }
 
     // Verify the symlink chain resolves to sensitive file
@@ -210,14 +221,10 @@ describe('PathValidator - Symlink Security Tests (#1290)', () => {
     await fs.writeFile(txtFile, 'CONFIG DATA');
 
     const symlinkWithMdExt = path.join(allowedDir, 'looks-safe.md');
-    try {
-      await fs.symlink(txtFile, symlinkWithMdExt);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EPERM') {
-        console.warn('Skipping extension validation test - insufficient permissions');
-        return;
-      }
-      throw err;
+    const created = await createTestSymlink(txtFile, symlinkWithMdExt);
+    if (!created) {
+      await fs.unlink(txtFile);
+      return; // Skip test if symlink creation failed
     }
 
     // Should be rejected because target is outside allowed directory
