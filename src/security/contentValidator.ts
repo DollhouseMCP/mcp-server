@@ -20,6 +20,19 @@ export interface ContentValidationResult {
   severity?: 'low' | 'medium' | 'high' | 'critical';
 }
 
+export interface ContentValidationOptions {
+  /**
+   * Skip size limit checks - useful for memory content that can be large
+   * @default false
+   */
+  skipSizeCheck?: boolean;
+  /**
+   * Custom max length override
+   * @default SECURITY_LIMITS.MAX_CONTENT_LENGTH
+   */
+  maxLength?: number;
+}
+
 export class ContentValidator {
   /**
    * Pattern-based detection system for prompt injection attacks.
@@ -187,13 +200,17 @@ export class ContentValidator {
 
   /**
    * Validates and sanitizes persona content for security threats
+   * FIX #1269: Added options to support large memory content
    */
-  static validateAndSanitize(content: string): ContentValidationResult {
-    // Length validation before pattern matching
-    if (content.length > SECURITY_LIMITS.MAX_CONTENT_LENGTH) {
-      throw new SecurityError(
-        `Content exceeds maximum length of ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${content.length} provided)`
-      );
+  static validateAndSanitize(content: string, options: ContentValidationOptions = {}): ContentValidationResult {
+    // Length validation before pattern matching (unless explicitly skipped for memories)
+    if (!options.skipSizeCheck) {
+      const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+      if (content.length > maxLength) {
+        throw new SecurityError(
+          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
+        );
+      }
     }
 
     const detectedPatterns: string[] = [];

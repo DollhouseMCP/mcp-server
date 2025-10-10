@@ -21,7 +21,8 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
+import { ContentValidator } from '../../security/contentValidator.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
 import { logger } from '../../utils/logger.js';
@@ -98,6 +99,10 @@ export interface MemoryEntry {
   metadata?: Record<string, any>;
   expiresAt?: Date;
   privacyLevel?: PrivacyLevel;
+  // FIX #1269: Trust level for content security
+  trustLevel?: TrustLevel;
+  // Source information for trust decisions
+  source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
 }
 
 export interface MemorySearchOptions {
@@ -230,13 +235,20 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Add a new memory entry
    * SECURITY: Validates and sanitizes all input, enforces size limits
+   * FIX #1269: Added ContentValidator to prevent prompt injection attacks
+   * All content starts as UNTRUSTED by default until validated
    */
-  public async addEntry(content: string, tags?: string[], metadata?: Record<string, any>): Promise<MemoryEntry> {
+  public async addEntry(
+    content: string,
+    tags?: string[],
+    metadata?: Record<string, any>,
+    source: string = 'unknown'
+  ): Promise<MemoryEntry> {
     // Validate memory size limits
     if (this.entries.size >= this.maxEntries) {
       // SECURITY FIX: Enforce retention policy when at capacity
       await this.enforceRetentionPolicy();
-      
+
       // If still at capacity after retention, remove oldest to make room
       if (this.entries.size >= this.maxEntries) {
         const oldestEntry = Array.from(this.entries.values())
@@ -251,17 +263,78 @@ export class Memory extends BaseElement implements IElement {
         }
       }
     }
-    
-    // SECURITY FIX: Validate and sanitize content
-    const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-    
+
+    // SECURITY FIX #1269: Validate content for prompt injection attacks
+    // Memory content can be large, so skip size checks but keep injection protection
+    const validationResult = ContentValidator.validateAndSanitize(content, {
+      skipSizeCheck: true  // Memories support large content via sharding
+    });
+
+    if (!validationResult.isValid && (validationResult.severity === 'critical' || validationResult.severity === 'high')) {
+      // Log critical security event
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
+        source: 'Memory.addEntry',
+        details: `Blocked memory creation for "${this.metadata.name}": Prompt injection detected`,
+        additionalData: {
+          patterns: validationResult.detectedPatterns,
+          originalLength: content.length,
+          memoryName: this.metadata.name
+        }
+      });
+
+      // Throw error to prevent memory creation
+      const patterns = validationResult.detectedPatterns?.join(', ') || 'unknown patterns';
+      throw new Error(
+        `Cannot add memory content: ${validationResult.severity} security threat detected (${patterns}). ` +
+        'This protects your multi-agent swarm from prompt injection attacks.'
+      );
+    }
+
+    // Use sanitized content from ContentValidator if available
+    let processedContent = validationResult.sanitizedContent || content;
+
+    // SECURITY FIX: Additional sanitization for memory-specific concerns
+    const sanitizedContent = sanitizeMemoryContent(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+
     if (!sanitizedContent || sanitizedContent.trim().length === 0) {
       throw new Error('Memory content cannot be empty');
+    }
+
+    // Log warning for medium risk content
+    if (validationResult.severity === 'medium') {
+      logger.warn('Medium risk patterns sanitized in memory content', {
+        memoryName: this.metadata.name,
+        patterns: validationResult.detectedPatterns,
+        sanitized: true
+      });
     }
     
     // SECURITY FIX: Validate and sanitize tags
     const sanitizedTags = tags ? this.sanitizeTags(tags) : [];
-    
+
+    // FIX #1269: Determine trust level based on validation results
+    // DEFAULT: All content starts as UNTRUSTED
+    let trustLevel: TrustLevel = TRUST_LEVELS.UNTRUSTED;
+
+    if (!validationResult.isValid) {
+      // Content had issues but was sanitized
+      trustLevel = TRUST_LEVELS.UNTRUSTED;
+    } else if (validationResult.detectedPatterns && validationResult.detectedPatterns.length === 0) {
+      // Content passed all validation checks
+      trustLevel = TRUST_LEVELS.VALIDATED;
+    }
+
+    // Mark web-scraped content as extra untrusted
+    if (source === 'web-scrape' || source === 'external') {
+      trustLevel = TRUST_LEVELS.UNTRUSTED;
+      logger.info(`Memory from ${source} marked as UNTRUSTED by default`, {
+        memoryName: this.metadata.name,
+        source
+      });
+    }
+
     // Create memory entry with generated ID
     const entry: MemoryEntry = {
       id: generateMemoryId(),
@@ -270,7 +343,9 @@ export class Memory extends BaseElement implements IElement {
       tags: sanitizedTags,
       metadata: this.sanitizeMetadata(metadata),
       privacyLevel: this.privacyLevel,
-      expiresAt: this.calculateExpiryDate()
+      expiresAt: this.calculateExpiryDate(),
+      trustLevel,  // FIX #1269: Include trust level
+      source      // FIX #1269: Track content source
     };
     
     // Store entry
@@ -446,6 +521,7 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Get formatted content of all memory entries
    * Returns entries as a readable string for display
+   * FIX #1269: Sandboxes untrusted content to prevent prompt injection
    */
   get content(): string {
     if (this.entries.size === 0) {
@@ -465,8 +541,40 @@ export class Memory extends BaseElement implements IElement {
       // FIX #1069: Ensure timestamp is Date object before calling toISOString
       const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
       const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
-      return `[${timestamp}]${tags}: ${entry.content}`;
+
+      // FIX #1269: Sandbox untrusted content
+      const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+      let displayContent = entry.content;
+
+      if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
+        // Clearly mark untrusted content
+        displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
+      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+        // Don't display quarantined content at all
+        displayContent = '[CONTENT QUARANTINED: Security threat detected]';
+      }
+
+      const trustIndicator = trustLevel === TRUST_LEVELS.VALIDATED ? '✓' :
+                             trustLevel === TRUST_LEVELS.TRUSTED ? '✓✓' :
+                             trustLevel === TRUST_LEVELS.QUARANTINED ? '⚠️' : '⚠';
+
+      return `[${timestamp}]${tags} ${trustIndicator}: ${displayContent}`;
     }).join('\n\n');
+  }
+
+  /**
+   * Sandbox untrusted content with clear delimiters
+   * FIX #1269: Prevents AI from interpreting user content as instructions
+   */
+  private sandboxUntrustedContent(content: string, source: string): string {
+    return [
+      '┌─── UNTRUSTED CONTENT START ───┐',
+      `│ Source: ${source}`,
+      `│ Status: NOT VALIDATED`,
+      '├────────────────────────────────┤',
+      content.split('\n').map(line => `│ ${line}`).join('\n'),
+      '└─── UNTRUSTED CONTENT END ─────┘'
+    ].join('\n');
   }
 
   /**
@@ -683,41 +791,105 @@ export class Memory extends BaseElement implements IElement {
   }
   
   /**
+   * Process and validate a single memory entry during deserialization
+   * FIX #1269: Extracted to reduce cognitive complexity
+   * Returns true if entry was loaded, false if quarantined
+   */
+  private processDeserializedEntry(entry: any): boolean {
+    if (!this.isValidEntry(entry)) {
+      return false;
+    }
+
+    // SECURITY FIX #1269: Validate content for prompt injection on load
+    // Memory content can be large, so skip size checks but keep injection protection
+    const validationResult = ContentValidator.validateAndSanitize(entry.content, {
+      skipSizeCheck: true  // Memories support large content via sharding
+    });
+
+    if (!validationResult.isValid && (validationResult.severity === 'critical' || validationResult.severity === 'high')) {
+      // Log quarantine event
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
+        source: 'Memory.deserialize',
+        details: `Quarantined infected entry in memory "${this.metadata.name}" on read`,
+        additionalData: {
+          entryId: entry.id,
+          patterns: validationResult.detectedPatterns,
+          memoryName: this.metadata.name,
+          action: 'quarantine_on_read'
+        }
+      });
+      return false; // Entry quarantined
+    }
+
+    // Use sanitized content from validator
+    const processedContent = validationResult.sanitizedContent || entry.content;
+
+    // Determine trust level based on validation
+    let trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED; // Default to untrusted
+    if (validationResult.isValid && (!validationResult.detectedPatterns || validationResult.detectedPatterns.length === 0)) {
+      trustLevel = TRUST_LEVELS.VALIDATED;
+    }
+
+    // Use optimized sanitization with caching
+    entry.content = this.sanitizeWithCache(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    entry.tags = this.sanitizeTags(entry.tags || []);
+    entry.timestamp = new Date(entry.timestamp);
+    entry.trustLevel = trustLevel;
+    entry.source = entry.source || 'loaded';
+
+    if (entry.expiresAt) {
+      entry.expiresAt = new Date(entry.expiresAt);
+    }
+
+    this.entries.set(entry.id, entry);
+    return true; // Entry loaded successfully
+  }
+
+  /**
    * Deserialize memory from string
    * SECURITY: Validates all loaded data
+   * FIX #1269: Added ContentValidator to prevent loading infected memories
    */
   public override deserialize(data: string): void {
     try {
       const parsed = JSON.parse(data);
-      
+
       // Validate basic structure
       if (!parsed.id || !parsed.type || parsed.type !== ElementType.MEMORY) {
         throw new Error('Invalid memory data format');
       }
-      
+
       // Update properties
       this.id = parsed.id;
       this.version = parsed.version || '1.0.0';
       this.metadata = parsed.metadata || {};
       this.extensions = parsed.extensions || {};
-      
+
       // Clear and reload entries
       this.entries.clear();
+      let quarantinedCount = 0;
+
       if (Array.isArray(parsed.entries)) {
         for (const entry of parsed.entries) {
-          if (this.isValidEntry(entry)) {
-            // Use optimized sanitization with caching
-            entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-            entry.tags = this.sanitizeTags(entry.tags || []);
-            entry.timestamp = new Date(entry.timestamp);
-            if (entry.expiresAt) {
-              entry.expiresAt = new Date(entry.expiresAt);
-            }
-            this.entries.set(entry.id, entry);
+          const loaded = this.processDeserializedEntry(entry);
+          if (!loaded) {
+            quarantinedCount++;
           }
         }
       }
-      
+
+      // Log warning if entries were quarantined
+      if (quarantinedCount > 0) {
+        logger.warn(`Quarantined ${quarantinedCount} infected entries from memory "${this.metadata.name}"`, {
+          memoryName: this.metadata.name,
+          totalEntries: parsed.entries?.length || 0,
+          quarantined: quarantinedCount,
+          loaded: this.entries.size
+        });
+      }
+
       // Enforce retention policy after loading
       this.enforceRetentionPolicy();
       
