@@ -554,9 +554,17 @@ export class Memory extends BaseElement implements IElement {
         displayContent = '[CONTENT QUARANTINED: Security threat detected]';
       }
 
-      const trustIndicator = trustLevel === TRUST_LEVELS.VALIDATED ? '✓' :
-                             trustLevel === TRUST_LEVELS.TRUSTED ? '✓✓' :
-                             trustLevel === TRUST_LEVELS.QUARANTINED ? '⚠️' : '⚠';
+      // FIX: Extract nested ternary to improve readability (SonarCloud S3358)
+      let trustIndicator: string;
+      if (trustLevel === TRUST_LEVELS.VALIDATED) {
+        trustIndicator = '✓';
+      } else if (trustLevel === TRUST_LEVELS.TRUSTED) {
+        trustIndicator = '✓✓';
+      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+        trustIndicator = '⚠️';
+      } else {
+        trustIndicator = '⚠';
+      }
 
       return `[${timestamp}]${tags} ${trustIndicator}: ${displayContent}`;
     }).join('\n\n');

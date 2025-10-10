@@ -5,7 +5,7 @@
  * @jest-environment node
  */
 
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach } from '@jest/globals';
 import { SecurityTelemetry } from '../../../../../src/security/telemetry/SecurityTelemetry.js';
 
 describe('SecurityTelemetry', () => {

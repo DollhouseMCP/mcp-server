@@ -137,7 +137,7 @@ Content`;
     test('should reject files outside allowed paths', async () => {
       // Test that PathValidator properly rejects paths outside allowed directories
       const outsidePath = '/etc/passwd';
-      const tempPath = '/tmp/outside-test-personas/test.md';
+      const tempPath = '/tmp/outside-test-personas/test.md'; // NOSONAR - Test input string for security validation, not actual file operation
 
       // Both should be rejected as they're outside the allowed base directory
       await expect(
@@ -149,7 +149,7 @@ Content`;
       ).rejects.toThrow('Path access denied');
 
       // Test within the initialized base directory
-      const withinBasePath = '/tmp/test-personas/test-file.md';
+      const withinBasePath = '/tmp/test-personas/test-file.md'; // NOSONAR - Test input string for security validation, not actual file operation
 
       // PathValidator may be strict about exact paths, so we expect it to be defined or throw
       // depending on implementation. Since it's throwing, let's verify that behavior.

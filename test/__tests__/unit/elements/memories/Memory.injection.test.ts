@@ -5,7 +5,7 @@
  * @jest-environment node
  */
 
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach } from '@jest/globals';
 import { Memory } from '../../../../../src/elements/memories/Memory.js';
 import { TRUST_LEVELS } from '../../../../../src/elements/memories/constants.js';
 
@@ -82,9 +82,10 @@ describe('Memory Injection Protection', () => {
 
     it('should handle file access attempts appropriately', async () => {
       // File paths in content are not necessarily malicious by themselves
+      // FIX: Use String.raw to avoid escaping backslashes (SonarCloud S7780)
       const filePathContent = [
         'The config file is at /etc/app/config',
-        'Windows users can find it in C:\\Program Files',
+        String.raw`Windows users can find it in C:\Program Files`,
         'Check the .env file for configuration'
       ];
 

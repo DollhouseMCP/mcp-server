@@ -43,7 +43,7 @@ export class SecurityTelemetry {
   private static attackHistory: AttackTelemetryEntry[] = [];
   private static readonly MAX_HISTORY = 10000; // Keep last 10k attack attempts
   private static readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
-  private static attackVectorMap: Map<string, AttackVector> = new Map();
+  private static readonly attackVectorMap: Map<string, AttackVector> = new Map();
 
   /**
    * Records a blocked attack attempt
@@ -139,7 +139,8 @@ export class SecurityTelemetry {
 
     // Get top attack vectors
     const vectorArray = Array.from(this.attackVectorMap.values());
-    const topVectors = vectorArray
+    // FIX: Create copy before sorting to avoid mutation (SonarCloud S4043)
+    const topVectors = [...vectorArray]
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
 
