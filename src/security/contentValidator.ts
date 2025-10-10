@@ -58,14 +58,17 @@ export class ContentValidator {
     { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /ignore\s+(all\s+)?prior\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /disregard\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /disregard\s+everything\s+above/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /you\s+are\s+now\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
     { pattern: /act\s+as\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
     
     // Data exfiltration attempts
-    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials)/gi, severity: 'critical', description: 'Data exfiltration' },
-    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials)\s+to/gi, severity: 'critical', description: 'Data exfiltration' },
-    { pattern: /list\s+all\s+(files|tokens|credentials|secrets)/gi, severity: 'high', description: 'Information disclosure' },
+    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: 'critical', description: 'Data exfiltration' },
+    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)\s+to/gi, severity: 'critical', description: 'Data exfiltration' },
+    { pattern: /list\s+all\s+(files|tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Information disclosure' },
     { pattern: /show\s+me\s+all\s+(tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Credential disclosure' },
     
     // Command execution patterns
@@ -220,11 +223,29 @@ export class ContentValidator {
     // Unicode normalization preprocessing to prevent bypass attacks
     const unicodeResult = UnicodeValidator.normalize(sanitized);
     sanitized = unicodeResult.normalizedContent;
-    
+
     if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
       detectedPatterns.push(...unicodeResult.detectedIssues.map(issue => `Unicode: ${issue}`));
       if (unicodeResult.severity) {
         highestSeverity = unicodeResult.severity;
+      }
+
+      // Reject content with high/critical Unicode attacks (e.g., direction overrides)
+      if (unicodeResult.severity === 'critical' || unicodeResult.severity === 'high') {
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: unicodeResult.severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          source: 'content_validation',
+          details: `Unicode attack detected: ${unicodeResult.detectedIssues.join(', ')}`,
+        });
+
+        // Return immediately for critical Unicode threats
+        return {
+          isValid: false,
+          sanitizedContent: sanitized,
+          detectedPatterns,
+          severity: unicodeResult.severity
+        };
       }
     }
 

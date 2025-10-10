@@ -129,8 +129,15 @@ export class UnicodeValidator {
 
       // 3. Remove zero-width and non-printable characters
       if (this.ZERO_WIDTH_CHARS.test(normalized) || this.NON_PRINTABLE_CHARS.test(normalized)) {
-        issues.push('Zero-width or non-printable characters detected');
-        severity = this.escalateSeverity(severity, 'medium');
+        // Check if the zero-width chars include direction marks (U+200E, U+200F)
+        const hasDirectionMarks = /[\u200E\u200F]/.test(normalized);
+        if (hasDirectionMarks) {
+          issues.push('Direction marks (LRM/RLM) detected');
+          severity = this.escalateSeverity(severity, 'high');
+        } else {
+          issues.push('Zero-width or non-printable characters detected');
+          severity = this.escalateSeverity(severity, 'medium');
+        }
         normalized = normalized
           .replace(this.ZERO_WIDTH_CHARS, '')
           .replace(this.NON_PRINTABLE_CHARS, '');
