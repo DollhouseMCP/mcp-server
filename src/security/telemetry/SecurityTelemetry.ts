@@ -47,6 +47,7 @@ export class SecurityTelemetry {
 
   /**
    * Records a blocked attack attempt
+   * FIX (PR #1313 review): Use UTC timestamps for consistency across timezones
    */
   static recordBlockedAttack(
     attackType: string,
@@ -56,7 +57,7 @@ export class SecurityTelemetry {
     metadata?: Record<string, any>
   ): void {
     const entry: AttackTelemetryEntry = {
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toISOString(), // ISO string is always UTC
       attackType,
       pattern,
       severity,
@@ -128,11 +129,14 @@ export class SecurityTelemetry {
     }
 
     // Calculate attacks per hour
+    // FIX (PR #1313 review): Ensure consistent UTC timezone handling for metrics
     const attacksPerHour: number[] = new Array(24).fill(0);
+    const nowUTC = Date.now(); // Unix timestamp in UTC
     for (const attack of recentAttacks) {
-      const attackDate = new Date(attack.timestamp);
-      const hoursAgo = Math.floor((now.getTime() - attackDate.getTime()) / (60 * 60 * 1000));
-      if (hoursAgo < 24) {
+      // attack.timestamp is ISO string (UTC), parse to get UTC time
+      const attackTimeUTC = new Date(attack.timestamp).getTime();
+      const hoursAgo = Math.floor((nowUTC - attackTimeUTC) / (60 * 60 * 1000));
+      if (hoursAgo >= 0 && hoursAgo < 24) {
         attacksPerHour[23 - hoursAgo]++;
       }
     }

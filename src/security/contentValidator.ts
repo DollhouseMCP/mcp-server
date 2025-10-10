@@ -76,13 +76,16 @@ export class ContentValidator {
     { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
-    // SECURITY: More refined backtick pattern - distinguishes between dangerous commands and documentation
-    // Only block truly dangerous shell commands, not educational examples
-    { pattern: /`[^`]*(?:rm\s+-r[f]?|cat\s+\/etc\/|ls\s+\/etc\/|chmod\s+777|chown\s+root|bash\s+-c\s+[\"']|sh\s+-c\s+[\"']|sudo\s+rm|sudo\s+chmod|passwd\s+|shadow\s+|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]*`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
-    // Block actual malicious file operations and network commands with pipes/redirects
-    { pattern: /`[^`]*(?:rm\s+-rf\s+\/|\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su|>\s*\/dev\/null.*\||curl\s+.*\|\s*sh|wget\s+.*\|\s*bash|bash\s+.*\.sh\s*\|)[^`]*`/gi, severity: 'critical', description: 'Malicious backtick command' },
-    // Only block actual script execution, not documentation showing syntax
-    { pattern: /`[^`]*(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[\"'](?:import\s+os|exec|eval|system|subprocess)[^`]+`/gi, severity: 'critical', description: 'Malicious script evaluation in backticks' },
+    // SECURITY: Backtick command detection with ReDoS mitigation
+    // FIX (PR #1313 review): Simplified patterns to reduce catastrophic backtracking risk
+    // Split complex pattern into multiple simpler patterns for better performance
+    { pattern: /`.*(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root).*`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
+    { pattern: /`.*(?:cat|ls)\s+\/etc\/.*`/gi, severity: 'critical', description: 'Sensitive file access in backticks' },
+    { pattern: /`.*(?:bash|sh)\s+-c\s+['"].*`/gi, severity: 'critical', description: 'Shell execution in backticks' },
+    { pattern: /`.*(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@).*`/gi, severity: 'critical', description: 'Dangerous command in backticks' },
+    { pattern: /`.*(?:curl|wget)\s+.*\|\s*(?:sh|bash).*`/gi, severity: 'critical', description: 'Pipe to shell in backticks' },
+    { pattern: /`.*(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su).*`/gi, severity: 'critical', description: 'Sensitive file or privilege escalation in backticks' },
+    { pattern: /`.*(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+.*(?:exec|eval|system|subprocess).*`/gi, severity: 'critical', description: 'Script interpreter with dangerous function in backticks' },
     { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
     { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
     { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
@@ -189,8 +192,8 @@ export class ContentValidator {
     /ogg:\/\//,
     
     // YAML-specific dangerous features
-    /&[a-zA-Z0-9_]+\s*!!/, // Anchor with tag combination
-    /\*[a-zA-Z0-9_]+\s*!!/, // Alias with tag combination
+    /&\w+\s*!!/, // Anchor with tag combination
+    /\*\w+\s*!!/, // Alias with tag combination
     /!!merge/,
     /!!binary/,
     /!!timestamp/,

@@ -21,7 +21,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator } from '../../security/contentValidator.js';
+import { ContentValidator, ContentValidationResult } from '../../security/contentValidator.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
@@ -237,6 +237,9 @@ export class Memory extends BaseElement implements IElement {
    * SECURITY: Validates and sanitizes all input, enforces size limits
    * FIX #1269: Added ContentValidator to prevent prompt injection attacks
    * All content starts as UNTRUSTED by default until validated
+   *
+   * FIX: Refactored to reduce cognitive complexity (SonarCloud S3776)
+   * FIX (PR #1313 review): Sanitize source parameter for log injection prevention
    */
   public async addEntry(
     content: string,
@@ -244,96 +247,17 @@ export class Memory extends BaseElement implements IElement {
     metadata?: Record<string, any>,
     source: string = 'unknown'
   ): Promise<MemoryEntry> {
-    // Validate memory size limits
-    if (this.entries.size >= this.maxEntries) {
-      // SECURITY FIX: Enforce retention policy when at capacity
-      await this.enforceRetentionPolicy();
+    // Ensure we have capacity for new entry
+    await this.ensureCapacity();
 
-      // If still at capacity after retention, remove oldest to make room
-      if (this.entries.size >= this.maxEntries) {
-        const oldestEntry = Array.from(this.entries.values())
-          .sort((a, b) => {
-            // FIX #1069: Ensure timestamps are Date objects for sorting
-            const aTime = this.ensureDateObject(a.timestamp).getTime();
-            const bTime = this.ensureDateObject(b.timestamp).getTime();
-            return aTime - bTime;
-          })[0];
-        if (oldestEntry) {
-          this.entries.delete(oldestEntry.id);
-        }
-      }
-    }
+    // SECURITY: Sanitize source parameter before use
+    const sanitizedSource = sanitizeInput(source, 50);
 
-    // SECURITY FIX #1269: Validate content for prompt injection attacks
-    // Memory content can be large, so skip size checks but keep injection protection
-    const validationResult = ContentValidator.validateAndSanitize(content, {
-      skipSizeCheck: true  // Memories support large content via sharding
-    });
+    // Validate and sanitize content for security threats
+    const { sanitizedContent, trustLevel } = await this.validateContentSecurity(content, sanitizedSource);
 
-    if (!validationResult.isValid && (validationResult.severity === 'critical' || validationResult.severity === 'high')) {
-      // Log critical security event
-      SecurityMonitor.logSecurityEvent({
-        type: 'CONTENT_INJECTION_ATTEMPT',
-        severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
-        source: 'Memory.addEntry',
-        details: `Blocked memory creation for "${this.metadata.name}": Prompt injection detected`,
-        additionalData: {
-          patterns: validationResult.detectedPatterns,
-          originalLength: content.length,
-          memoryName: this.metadata.name
-        }
-      });
-
-      // Throw error to prevent memory creation
-      const patterns = validationResult.detectedPatterns?.join(', ') || 'unknown patterns';
-      throw new Error(
-        `Cannot add memory content: ${validationResult.severity} security threat detected (${patterns}). ` +
-        'This protects your multi-agent swarm from prompt injection attacks.'
-      );
-    }
-
-    // Use sanitized content from ContentValidator if available
-    let processedContent = validationResult.sanitizedContent || content;
-
-    // SECURITY FIX: Additional sanitization for memory-specific concerns
-    const sanitizedContent = sanitizeMemoryContent(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-
-    if (!sanitizedContent || sanitizedContent.trim().length === 0) {
-      throw new Error('Memory content cannot be empty');
-    }
-
-    // Log warning for medium risk content
-    if (validationResult.severity === 'medium') {
-      logger.warn('Medium risk patterns sanitized in memory content', {
-        memoryName: this.metadata.name,
-        patterns: validationResult.detectedPatterns,
-        sanitized: true
-      });
-    }
-    
     // SECURITY FIX: Validate and sanitize tags
     const sanitizedTags = tags ? this.sanitizeTags(tags) : [];
-
-    // FIX #1269: Determine trust level based on validation results
-    // DEFAULT: All content starts as UNTRUSTED
-    let trustLevel: TrustLevel = TRUST_LEVELS.UNTRUSTED;
-
-    if (!validationResult.isValid) {
-      // Content had issues but was sanitized
-      trustLevel = TRUST_LEVELS.UNTRUSTED;
-    } else if (validationResult.detectedPatterns && validationResult.detectedPatterns.length === 0) {
-      // Content passed all validation checks
-      trustLevel = TRUST_LEVELS.VALIDATED;
-    }
-
-    // Mark web-scraped content as extra untrusted
-    if (source === 'web-scrape' || source === 'external') {
-      trustLevel = TRUST_LEVELS.UNTRUSTED;
-      logger.info(`Memory from ${source} marked as UNTRUSTED by default`, {
-        memoryName: this.metadata.name,
-        source
-      });
-    }
 
     // Create memory entry with generated ID
     const entry: MemoryEntry = {
@@ -344,10 +268,10 @@ export class Memory extends BaseElement implements IElement {
       metadata: this.sanitizeMetadata(metadata),
       privacyLevel: this.privacyLevel,
       expiresAt: this.calculateExpiryDate(),
-      trustLevel,  // FIX #1269: Include trust level
-      source      // FIX #1269: Track content source
+      trustLevel,
+      source: sanitizedSource // Use sanitized source
     };
-    
+
     // Store entry
     this.entries.set(entry.id, entry);
     this._isDirty = true;
@@ -373,6 +297,131 @@ export class Memory extends BaseElement implements IElement {
     });
 
     return entry;
+  }
+
+  /**
+   * Ensure there is capacity for a new entry
+   * FIX: Extracted to reduce cognitive complexity
+   */
+  private async ensureCapacity(): Promise<void> {
+    if (this.entries.size < this.maxEntries) {
+      return; // Early return if we have capacity
+    }
+
+    // SECURITY FIX: Enforce retention policy when at capacity
+    await this.enforceRetentionPolicy();
+
+    // If still at capacity after retention, remove oldest to make room
+    if (this.entries.size >= this.maxEntries) {
+      const oldestEntry = Array.from(this.entries.values())
+        .sort((a, b) => {
+          const aTime = this.ensureDateObject(a.timestamp).getTime();
+          const bTime = this.ensureDateObject(b.timestamp).getTime();
+          return aTime - bTime;
+        })[0];
+
+      if (oldestEntry) {
+        this.entries.delete(oldestEntry.id);
+      }
+    }
+  }
+
+  /**
+   * Validate content for security threats and determine trust level
+   * FIX: Extracted to reduce cognitive complexity
+   * FIX (PR #1313 review): Sanitize source parameter to prevent log injection
+   */
+  private async validateContentSecurity(
+    content: string,
+    source: string
+  ): Promise<{ sanitizedContent: string; trustLevel: TrustLevel }> {
+    // SECURITY FIX: Sanitize source parameter before use in logging
+    const sanitizedSource = sanitizeInput(source, 50);
+    // SECURITY FIX #1269: Validate content for prompt injection attacks
+    const validationResult = ContentValidator.validateAndSanitize(content, {
+      skipSizeCheck: true  // Memories support large content via sharding
+    });
+
+    // Check for critical/high severity threats
+    const isCriticalThreat = !validationResult.isValid &&
+      (validationResult.severity === 'critical' || validationResult.severity === 'high');
+
+    if (isCriticalThreat) {
+      this.logSecurityThreat(validationResult, content);
+      const patterns = validationResult.detectedPatterns?.join(', ') || 'unknown patterns';
+      throw new Error(
+        `Cannot add memory content: ${validationResult.severity} security threat detected (${patterns}). ` +
+        'This protects your multi-agent swarm from prompt injection attacks.'
+      );
+    }
+
+    // Use sanitized content from ContentValidator
+    const processedContent = validationResult.sanitizedContent || content;
+    const sanitizedContent = sanitizeMemoryContent(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+
+    if (!sanitizedContent || sanitizedContent.trim().length === 0) {
+      throw new Error('Memory content cannot be empty');
+    }
+
+    // Log warning for medium risk content
+    if (validationResult.severity === 'medium') {
+      logger.warn('Medium risk patterns sanitized in memory content', {
+        memoryName: this.metadata.name,
+        patterns: validationResult.detectedPatterns,
+        sanitized: true
+      });
+    }
+
+    // Determine trust level based on validation (using sanitized source)
+    const trustLevel = this.determineTrustLevel(validationResult, sanitizedSource);
+
+    return { sanitizedContent, trustLevel };
+  }
+
+  /**
+   * Log critical security threat detection
+   * FIX: Extracted to reduce cognitive complexity
+   */
+  private logSecurityThreat(validationResult: ContentValidationResult, content: string): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_INJECTION_ATTEMPT',
+      severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
+      source: 'Memory.addEntry',
+      details: `Blocked memory creation for "${this.metadata.name}": Prompt injection detected`,
+      additionalData: {
+        patterns: validationResult.detectedPatterns,
+        originalLength: content.length,
+        memoryName: this.metadata.name
+      }
+    });
+  }
+
+  /**
+   * Determine trust level based on validation results and source
+   * FIX: Extracted to reduce cognitive complexity
+   */
+  private determineTrustLevel(validationResult: ContentValidationResult, source: string): TrustLevel {
+    // Mark web-scraped/external content as untrusted
+    if (source === 'web-scrape' || source === 'external') {
+      logger.info(`Memory from ${source} marked as UNTRUSTED by default`, {
+        memoryName: this.metadata.name,
+        source
+      });
+      return TRUST_LEVELS.UNTRUSTED;
+    }
+
+    // Content with issues defaults to untrusted
+    if (!validationResult.isValid) {
+      return TRUST_LEVELS.UNTRUSTED;
+    }
+
+    // Content with no detected patterns is validated
+    if (validationResult.detectedPatterns && validationResult.detectedPatterns.length === 0) {
+      return TRUST_LEVELS.VALIDATED;
+    }
+
+    // Default to untrusted
+    return TRUST_LEVELS.UNTRUSTED;
   }
   
   /**
