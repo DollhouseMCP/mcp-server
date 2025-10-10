@@ -9,6 +9,9 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { ContextTracker } from '../../../../../src/security/encryption/ContextTracker.js';
 
+// FIX: Helper to reduce nesting depth in async tests
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe('ContextTracker', () => {
   beforeEach(() => {
     // Clear any existing context
@@ -75,11 +78,14 @@ describe('ContextTracker', () => {
     it('should propagate exceptions', () => {
       const context = ContextTracker.createContext('test');
 
-      expect(() => {
+      // FIX: Extract nested function to reduce nesting depth
+      const throwingFn = () => {
         ContextTracker.run(context, () => {
           throw new Error('Test error');
         });
-      }).toThrow('Test error');
+      };
+
+      expect(throwingFn).toThrow('Test error');
     });
   });
 
@@ -98,17 +104,17 @@ describe('ContextTracker', () => {
     it('should maintain context across async operations', async () => {
       const context = ContextTracker.createContext('background-task');
 
-      await ContextTracker.runAsync(context, async () => {
+      // FIX: Extract async function to reduce nesting depth
+      const testAsyncContext = async () => {
         const ctx1 = ContextTracker.getContext();
-
-        // Simulate async operation
-        await new Promise((resolve) => setTimeout(resolve, 10));
-
+        await delay(10);
         const ctx2 = ContextTracker.getContext();
 
         expect(ctx1).toEqual(ctx2);
         expect(ctx1).toEqual(context);
-      });
+      };
+
+      await ContextTracker.runAsync(context, testAsyncContext);
     });
 
     it('should return promise result', async () => {
@@ -179,33 +185,38 @@ describe('ContextTracker', () => {
       const outerContext = ContextTracker.createContext('background-task');
       const innerContext = ContextTracker.createContext('llm-request');
 
-      ContextTracker.run(outerContext, () => {
-        expect(ContextTracker.isLLMContext()).toBe(false);
+      // FIX: Extract nested context functions to reduce nesting depth
+      const testInnerContext = () => {
+        expect(ContextTracker.isLLMContext()).toBe(true);
+      };
 
-        ContextTracker.run(innerContext, () => {
-          expect(ContextTracker.isLLMContext()).toBe(true);
-        });
-
-        // Should revert to outer context
+      const testOuterContext = () => {
         expect(ContextTracker.isLLMContext()).toBe(false);
-      });
+        ContextTracker.run(innerContext, testInnerContext);
+        expect(ContextTracker.isLLMContext()).toBe(false);
+      };
+
+      ContextTracker.run(outerContext, testOuterContext);
     });
 
     it('should handle nested async contexts', async () => {
       const outerContext = ContextTracker.createContext('test');
       const innerContext = ContextTracker.createContext('llm-request');
 
-      await ContextTracker.runAsync(outerContext, async () => {
+      // FIX: Extract nested async functions to reduce nesting depth
+      const testInnerAsync = async () => {
+        const ctx2 = ContextTracker.getContext();
+        expect(ctx2).toEqual(innerContext);
+      };
+
+      const testOuterAsync = async () => {
         const ctx1 = ContextTracker.getContext();
-
-        await ContextTracker.runAsync(innerContext, async () => {
-          const ctx2 = ContextTracker.getContext();
-          expect(ctx2).toEqual(innerContext);
-        });
-
+        await ContextTracker.runAsync(innerContext, testInnerAsync);
         const ctx3 = ContextTracker.getContext();
         expect(ctx3).toEqual(ctx1);
-      });
+      };
+
+      await ContextTracker.runAsync(outerContext, testOuterAsync);
     });
   });
 
@@ -214,15 +225,14 @@ describe('ContextTracker', () => {
       const context1 = ContextTracker.createContext('background-task', { id: '1' });
       const context2 = ContextTracker.createContext('llm-request', { id: '2' });
 
-      const promise1 = ContextTracker.runAsync(context1, async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+      // FIX: Extract async functions to reduce nesting depth
+      const delayAndGetId = async (ms: number) => {
+        await delay(ms);
         return ContextTracker.getContext()?.metadata?.id;
-      });
+      };
 
-      const promise2 = ContextTracker.runAsync(context2, async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        return ContextTracker.getContext()?.metadata?.id;
-      });
+      const promise1 = ContextTracker.runAsync(context1, () => delayAndGetId(20));
+      const promise2 = ContextTracker.runAsync(context2, () => delayAndGetId(10));
 
       const [result1, result2] = await Promise.all([promise1, promise2]);
 

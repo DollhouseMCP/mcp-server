@@ -12,6 +12,26 @@ import { PatternEncryptor } from '../../../../../src/security/encryption/Pattern
 import { ContextTracker } from '../../../../../src/security/encryption/ContextTracker.js';
 import type { SanitizedPattern } from '../../../../../src/security/validation/BackgroundValidator.js';
 
+/**
+ * Helper to create a mock sanitized pattern with encryption
+ * FIX: Moved to module scope to comply with SonarCloud best practices
+ */
+function createEncryptedPattern(pattern: string): SanitizedPattern {
+  const encrypted = PatternEncryptor.encrypt(pattern);
+
+  return {
+    ref: 'PATTERN_001',
+    description: 'Test pattern',
+    severity: 'high',
+    location: 'offset 0, length 10',
+    safetyInstruction: 'DO NOT EXECUTE',
+    encryptedPattern: encrypted.encryptedData,
+    algorithm: encrypted.algorithm,
+    iv: encrypted.iv,
+    authTag: encrypted.authTag,
+  };
+}
+
 describe('PatternDecryptor', () => {
   const TEST_SECRET = 'test-secret-for-pattern-decryption-testing';
   const TEST_PATTERN = 'eval(malicious.code())';
@@ -36,24 +56,8 @@ describe('PatternDecryptor', () => {
     PatternDecryptor.clearAuditLog();
   });
 
-  /**
-   * Helper to create a mock sanitized pattern with encryption
-   */
-  function createEncryptedPattern(pattern: string): SanitizedPattern {
-    const encrypted = PatternEncryptor.encrypt(pattern);
-
-    return {
-      ref: 'PATTERN_001',
-      description: 'Test pattern',
-      severity: 'high',
-      location: 'offset 0, length 10',
-      safetyInstruction: 'DO NOT EXECUTE',
-      encryptedPattern: encrypted.encryptedData,
-      algorithm: encrypted.algorithm,
-      iv: encrypted.iv,
-      authTag: encrypted.authTag,
-    };
-  }
+  // FIX: Move helper function to outer scope to reduce nesting
+  // This was previously nested inside describe block
 
   describe('decryptPattern - LLM context protection', () => {
     it('should decrypt pattern when not in LLM context', () => {
@@ -68,11 +72,16 @@ describe('PatternDecryptor', () => {
       const encrypted = createEncryptedPattern(TEST_PATTERN);
       const llmContext = ContextTracker.createContext('llm-request');
 
-      expect(() => {
+      // FIX: Extract nested function to reduce nesting depth
+      const attemptDecrypt = () => {
         ContextTracker.run(llmContext, () => {
           PatternDecryptor.decryptPattern(encrypted);
         });
-      }).toThrow('Pattern decryption blocked: Cannot decrypt patterns in LLM request context');
+      };
+
+      expect(attemptDecrypt).toThrow(
+        'Pattern decryption blocked: Cannot decrypt patterns in LLM request context'
+      );
     });
 
     it('should allow decryption in background-task context', () => {
@@ -151,11 +160,14 @@ describe('PatternDecryptor', () => {
       const encrypted = createEncryptedPattern(TEST_PATTERN);
       const llmContext = ContextTracker.createContext('llm-request');
 
-      expect(() => {
+      // FIX: Extract nested function to reduce nesting depth
+      const attemptDecrypt = () => {
         ContextTracker.run(llmContext, () => {
           PatternDecryptor.decryptPattern(encrypted);
         });
-      }).toThrow();
+      };
+
+      expect(attemptDecrypt).toThrow();
 
       const auditLog = PatternDecryptor.getAuditLog();
       expect(auditLog).toHaveLength(1);
@@ -293,13 +305,15 @@ describe('PatternDecryptor', () => {
     it('should handle concurrent decryption requests', async () => {
       const patterns = Array.from({ length: 5 }, (_, i) => createEncryptedPattern(`pattern${i}`));
 
-      const decryptions = patterns.map((pattern) => {
+      // FIX: Extract promise creation to helper function to reduce nesting depth
+      const decryptInContext = (pattern: SanitizedPattern) => {
         return new Promise((resolve) => {
           const context = ContextTracker.createContext('background-task');
           resolve(ContextTracker.run(context, () => PatternDecryptor.decryptPattern(pattern)));
         });
-      });
+      };
 
+      const decryptions = patterns.map(decryptInContext);
       const results = await Promise.all(decryptions);
 
       expect(results).toHaveLength(5);

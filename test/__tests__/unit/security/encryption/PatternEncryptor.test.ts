@@ -150,9 +150,7 @@ describe('PatternEncryptor', () => {
     });
 
     it('should handle decryption when disabled', async () => {
-      // First encrypt with encryption enabled
-      const encrypted = PatternEncryptor.encrypt(TEST_PATTERN);
-
+      // FIX: Remove useless assignment - encryption is disabled immediately after
       // Then disable encryption
       PatternEncryptor.reset();
       await PatternEncryptor.initialize({
@@ -281,8 +279,8 @@ describe('PatternEncryptor', () => {
         secret: TEST_SECRET,
       });
 
+      // FIX: Remove useless encrypted2 assignment - only encrypted1 is used
       // Should be able to decrypt pattern encrypted with first key
-      const encrypted2 = PatternEncryptor.encrypt(TEST_PATTERN);
       const decrypted = PatternEncryptor.decrypt(encrypted1);
 
       expect(decrypted).toBe(TEST_PATTERN);
