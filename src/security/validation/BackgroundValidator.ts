@@ -80,6 +80,9 @@ export interface SanitizedPattern {
   /** Initialization vector for decryption - Phase 2 */
   iv?: string;
 
+  /** GCM authentication tag for integrity verification - Phase 2 */
+  authTag?: string;
+
   /** Safety instruction for pattern usage */
   safetyInstruction: string;
 }

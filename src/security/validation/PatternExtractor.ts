@@ -2,10 +2,11 @@
  * Pattern Extraction for Memory Security
  *
  * Part of Issue #1314 Phase 1: Memory Security Architecture
+ * Enhanced in Issue #1321 Phase 2: Pattern Encryption
  *
  * PURPOSE:
  * Identifies and extracts dangerous patterns from memory content for
- * sanitized display and future encryption (Phase 2).
+ * sanitized display with AES-256-GCM encryption (Phase 2).
  *
  * PHASE 1 SCOPE:
  * - Identify pattern locations in content
@@ -13,10 +14,11 @@
  * - Create sanitized content with pattern references
  * - Prepare structure for Phase 2 encryption
  *
- * PHASE 2 (Future):
+ * PHASE 2 SCOPE:
  * - AES-256-GCM encryption of extracted patterns
  * - Key derivation from system secret
  * - Secure pattern storage and retrieval
+ * - GCM authentication tags for integrity
  *
  * @module PatternExtractor
  */
@@ -24,6 +26,7 @@
 import { logger } from '../../utils/logger.js';
 import type { ContentValidationResult } from '../contentValidator.js';
 import type { SanitizedPattern } from './BackgroundValidator.js';
+import { PatternEncryptor } from '../encryption/PatternEncryptor.js';
 
 /**
  * Pattern match information from validation
@@ -222,11 +225,35 @@ export class PatternExtractor {
 
   /**
    * Create a sanitized pattern object with metadata
+   *
+   * Phase 2: Now encrypts patterns using AES-256-GCM
    */
   private static createSanitizedPattern(
     match: PatternMatch
   ): SanitizedPattern {
     const patternId = `PATTERN_${String(++this.patternCounter).padStart(3, '0')}`;
+
+    // Phase 2: Encrypt the pattern using AES-256-GCM
+    let encrypted = null;
+    try {
+      if (PatternEncryptor.isEnabled()) {
+        encrypted = PatternEncryptor.encrypt(match.pattern);
+        logger.debug('Pattern encrypted successfully', {
+          patternId,
+          algorithm: encrypted.algorithm,
+        });
+      } else {
+        logger.debug('Pattern encryption disabled, storing without encryption', {
+          patternId,
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to encrypt pattern, storing without encryption', {
+        patternId,
+        error,
+      });
+      // Continue without encryption rather than failing
+    }
 
     return {
       ref: patternId,
@@ -234,10 +261,11 @@ export class PatternExtractor {
       severity: match.severity,
       location: `offset ${match.startOffset}, length ${match.length}`,
       safetyInstruction: this.getSafetyInstruction(match.severity),
-      // Phase 2: Encryption fields will be added here
-      // encryptedPattern: undefined,
-      // algorithm: undefined,
-      // iv: undefined,
+      // Phase 2: Encryption fields (populated if encryption successful)
+      encryptedPattern: encrypted?.encryptedData,
+      algorithm: encrypted?.algorithm,
+      iv: encrypted?.iv,
+      authTag: encrypted?.authTag,
     };
   }
 
