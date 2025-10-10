@@ -33,8 +33,9 @@ describe('Memory API Integration (Issue #1320)', () => {
         }
       }
     } catch (error) {
-      // Ignore cleanup errors - test memories are temporary
-      // SonarCloud: This is acceptable for test cleanup
+      // Log cleanup errors for debugging but don't fail tests
+      // Test memories are temporary and cleanup is best-effort
+      console.debug('Test cleanup warning:', error instanceof Error ? error.message : String(error));
     }
   });
 
@@ -144,6 +145,21 @@ describe('Memory API Integration (Issue #1320)', () => {
       const memory = new Memory({ name: 'Test Memory' });
 
       expect(memory.getFilePath()).toBeUndefined();
+    });
+
+    it('should reject empty string path', () => {
+      const memory = new Memory({ name: 'Test Memory' });
+
+      expect(() => memory.setFilePath('')).toThrow('Memory file path cannot be empty');
+      expect(() => memory.setFilePath('   ')).toThrow('Memory file path cannot be empty');
+    });
+
+    it('should reject non-string path', () => {
+      const memory = new Memory({ name: 'Test Memory' });
+
+      expect(() => memory.setFilePath(null as any)).toThrow('Memory file path must be a string');
+      expect(() => memory.setFilePath(undefined as any)).toThrow('Memory file path must be a string');
+      expect(() => memory.setFilePath(123 as any)).toThrow('Memory file path must be a string');
     });
   });
 
