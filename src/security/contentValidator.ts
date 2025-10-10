@@ -14,11 +14,14 @@ import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
 import { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
 
+// FIX: SonarCloud typescript:S4323 - Extract union type to type alias for maintainability
+export type SecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
+
 export interface ContentValidationResult {
   isValid: boolean;
   sanitizedContent?: string;
   detectedPatterns?: string[];
-  severity?: 'low' | 'medium' | 'high' | 'critical';
+  severity?: SecuritySeverity;
 }
 
 export interface ContentValidatorOptions {
@@ -217,11 +220,11 @@ export class ContentValidator {
     detectedPatterns: string[]
   ): {
     sanitized: string;
-    highestSeverity: 'low' | 'medium' | 'high' | 'critical';
+    highestSeverity: SecuritySeverity;
   } {
     const unicodeResult = UnicodeValidator.normalize(content);
     const sanitized = unicodeResult.normalizedContent;
-    let highestSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low';
+    let highestSeverity: SecuritySeverity = 'low';
 
     if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
       detectedPatterns.push(...unicodeResult.detectedIssues.map(issue => `Unicode: ${issue}`));
@@ -264,10 +267,10 @@ export class ContentValidator {
     originalContent: string,
     normalizedContent: string,
     detectedPatterns: string[],
-    currentSeverity: 'low' | 'medium' | 'high' | 'critical'
+    currentSeverity: SecuritySeverity
   ): {
     sanitized: string;
-    highestSeverity: 'low' | 'medium' | 'high' | 'critical';
+    highestSeverity: SecuritySeverity;
   } {
     let sanitized = normalizedContent;
     let highestSeverity = currentSeverity;
