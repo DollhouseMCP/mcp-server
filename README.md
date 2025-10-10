@@ -10,6 +10,7 @@
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
 [![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
+[![SonarCloud Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
 [![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/SECURITY.md)
 
 ## Platform Support
