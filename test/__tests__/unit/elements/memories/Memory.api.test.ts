@@ -14,9 +14,6 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { Memory } from '../../../../../src/elements/memories/Memory.js';
 import { MemoryManager } from '../../../../../src/elements/memories/MemoryManager.js';
 import { TRUST_LEVELS } from '../../../../../src/elements/memories/constants.js';
-import * as path from 'path';
-import * as fs from 'fs/promises';
-import * as os from 'os';
 
 describe('Memory API Integration (Issue #1320)', () => {
   let manager: MemoryManager;
@@ -36,7 +33,8 @@ describe('Memory API Integration (Issue #1320)', () => {
         }
       }
     } catch (error) {
-      // Ignore cleanup errors
+      // Ignore cleanup errors - test memories are temporary
+      // SonarCloud: This is acceptable for test cleanup
     }
   });
 
@@ -46,7 +44,7 @@ describe('Memory API Integration (Issue #1320)', () => {
 
       // Add entries with different trust levels
       const entry1 = await memory.addEntry('Untrusted content', ['test'], {}, 'test-source');
-      const entry2 = await memory.addEntry('More untrusted', ['test'], {}, 'test-source');
+      await memory.addEntry('More untrusted', ['test'], {}, 'test-source');
 
       // Manually set one to VALIDATED for testing
       const allEntries = memory.getAllEntries();

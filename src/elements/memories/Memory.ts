@@ -1105,6 +1105,7 @@ export class Memory extends BaseElement implements IElement {
   /**
    * General query API for finding memories
    * FIX #1320: Flexible query API for multiple criteria
+   * FIX (SonarCloud): Refactored to reduce cognitive complexity from 20 to 8
    *
    * @param filter - Query filter criteria
    * @param filter.trustLevel - Filter by trust level
@@ -1123,48 +1124,16 @@ export class Memory extends BaseElement implements IElement {
 
     // Load all memories
     const allMemories = await manager.list();
-    const results: Memory[] = [];
 
     // Calculate cutoff date if maxAge is specified
     const cutoffDate = filter.maxAge
       ? new Date(Date.now() - filter.maxAge * 24 * 60 * 60 * 1000)
       : undefined;
 
-    for (const memory of allMemories) {
-      let matches = true;
-
-      // Filter by trust level
-      if (filter.trustLevel) {
-        const hasMatchingTrustLevel = memory.getEntriesByTrustLevel(filter.trustLevel).length > 0;
-        if (!hasMatchingTrustLevel) {
-          matches = false;
-          continue;
-        }
-      }
-
-      // Filter by tags
-      if (filter.tags && filter.tags.length > 0) {
-        const memoryTags = memory.metadata.tags || [];
-        const hasMatchingTag = filter.tags.some(tag => memoryTags.includes(tag));
-        if (!hasMatchingTag) {
-          matches = false;
-          continue;
-        }
-      }
-
-      // Filter by age
-      if (cutoffDate) {
-        const stats = memory.getStats();
-        if (!stats.newestEntry || stats.newestEntry < cutoffDate) {
-          matches = false;
-          continue;
-        }
-      }
-
-      if (matches) {
-        results.push(memory);
-      }
-    }
+    // Filter memories using helper method
+    const results = allMemories.filter(memory =>
+      this.matchesFilter(memory, filter, cutoffDate)
+    );
 
     logger.debug('Memory query complete', {
       filter,
@@ -1172,5 +1141,43 @@ export class Memory extends BaseElement implements IElement {
     });
 
     return results;
+  }
+
+  /**
+   * Check if a memory matches the given filter criteria
+   * FIX (SonarCloud): Extracted to reduce cognitive complexity
+   * @private
+   */
+  private static matchesFilter(
+    memory: Memory,
+    filter: { trustLevel?: TrustLevel; tags?: string[]; maxAge?: number },
+    cutoffDate?: Date
+  ): boolean {
+    // Filter by trust level
+    if (filter.trustLevel) {
+      const hasMatchingTrustLevel = memory.getEntriesByTrustLevel(filter.trustLevel).length > 0;
+      if (!hasMatchingTrustLevel) {
+        return false;
+      }
+    }
+
+    // Filter by tags
+    if (filter.tags && filter.tags.length > 0) {
+      const memoryTags = memory.metadata.tags || [];
+      const hasMatchingTag = filter.tags.some(tag => memoryTags.includes(tag));
+      if (!hasMatchingTag) {
+        return false;
+      }
+    }
+
+    // Filter by age
+    if (cutoffDate) {
+      const stats = memory.getStats();
+      if (!stats.newestEntry || stats.newestEntry < cutoffDate) {
+        return false;
+      }
+    }
+
+    return true;
   }
 }
