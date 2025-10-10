@@ -1027,13 +1027,14 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Set the file path for this memory
    * FIX #1320: Used by MemoryManager after loading
-   * FIX (SonarCloud): Added input validation
+   * FIX (SonarCloud): Added input validation with proper error types
    * @param path - The file path where this memory is stored
-   * @throws {Error} If path is not a valid string
+   * @throws {TypeError} If path is not a string
+   * @throws {Error} If path is empty
    */
   public setFilePath(path: string): void {
     if (typeof path !== 'string') {
-      throw new Error('Memory file path must be a string');
+      throw new TypeError('Memory file path must be a string');
     }
     if (path.trim().length === 0) {
       throw new Error('Memory file path cannot be empty');

@@ -154,12 +154,15 @@ describe('Memory API Integration (Issue #1320)', () => {
       expect(() => memory.setFilePath('   ')).toThrow('Memory file path cannot be empty');
     });
 
-    it('should reject non-string path', () => {
+    it('should reject non-string path with TypeError', () => {
       const memory = new Memory({ name: 'Test Memory' });
 
+      expect(() => memory.setFilePath(null as any)).toThrow(TypeError);
+      expect(() => memory.setFilePath(undefined as any)).toThrow(TypeError);
+      expect(() => memory.setFilePath(123 as any)).toThrow(TypeError);
+
+      // Verify error messages
       expect(() => memory.setFilePath(null as any)).toThrow('Memory file path must be a string');
-      expect(() => memory.setFilePath(undefined as any)).toThrow('Memory file path must be a string');
-      expect(() => memory.setFilePath(123 as any)).toThrow('Memory file path must be a string');
     });
   });
 
