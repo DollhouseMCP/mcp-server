@@ -9,8 +9,16 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { ContextTracker } from '../../../../../src/security/encryption/ContextTracker.js';
 
-// FIX: Helper to reduce nesting depth in async tests
+// FIX: Helpers to reduce nesting depth in tests (moved to module scope)
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Helper that throws error - avoids deep nesting in test
+const throwError = () => {
+  throw new Error('Test error');
+};
+
+// Helper to check if in LLM context - avoids deep nesting
+const checkIsLLMContext = () => ContextTracker.isLLMContext();
 
 describe('ContextTracker', () => {
   beforeEach(() => {
@@ -78,12 +86,8 @@ describe('ContextTracker', () => {
     it('should propagate exceptions', () => {
       const context = ContextTracker.createContext('test');
 
-      // FIX: Extract nested function to reduce nesting depth
-      const throwingFn = () => {
-        ContextTracker.run(context, () => {
-          throw new Error('Test error');
-        });
-      };
+      // FIX: Use module-scope helper to reduce nesting depth
+      const throwingFn = () => ContextTracker.run(context, throwError);
 
       expect(throwingFn).toThrow('Test error');
     });
@@ -160,9 +164,9 @@ describe('ContextTracker', () => {
     it('should return true for llm-request context', () => {
       const context = ContextTracker.createContext('llm-request');
 
-      ContextTracker.run(context, () => {
-        expect(ContextTracker.isLLMContext()).toBe(true);
-      });
+      // FIX: Use module-scope helper to reduce nesting depth
+      const result = ContextTracker.run(context, checkIsLLMContext);
+      expect(result).toBe(true);
     });
 
     it('should return false for non-LLM contexts', () => {

@@ -32,6 +32,28 @@ function createEncryptedPattern(pattern: string): SanitizedPattern {
   };
 }
 
+/**
+ * Helper to attempt decryption in an LLM context (should throw)
+ * FIX: Extracted to module scope to reduce nesting and eliminate duplication
+ */
+function attemptDecryptInLLMContext(
+  encrypted: SanitizedPattern,
+  llmContext: ReturnType<typeof ContextTracker.createContext>
+): void {
+  ContextTracker.run(llmContext, () => {
+    PatternDecryptor.decryptPattern(encrypted);
+  });
+}
+
+/**
+ * Helper for concurrent decryption in context
+ * FIX: Extracted to module scope to reduce nesting depth
+ */
+function decryptInContext(pattern: SanitizedPattern): Promise<string> {
+  const context = ContextTracker.createContext('background-task');
+  return Promise.resolve(ContextTracker.run(context, () => PatternDecryptor.decryptPattern(pattern)));
+}
+
 describe('PatternDecryptor', () => {
   const TEST_SECRET = 'test-secret-for-pattern-decryption-testing';
   const TEST_PATTERN = 'eval(malicious.code())';
@@ -56,9 +78,6 @@ describe('PatternDecryptor', () => {
     PatternDecryptor.clearAuditLog();
   });
 
-  // FIX: Move helper function to outer scope to reduce nesting
-  // This was previously nested inside describe block
-
   describe('decryptPattern - LLM context protection', () => {
     it('should decrypt pattern when not in LLM context', () => {
       const encrypted = createEncryptedPattern(TEST_PATTERN);
@@ -72,14 +91,8 @@ describe('PatternDecryptor', () => {
       const encrypted = createEncryptedPattern(TEST_PATTERN);
       const llmContext = ContextTracker.createContext('llm-request');
 
-      // FIX: Extract nested function to reduce nesting depth
-      const attemptDecrypt = () => {
-        ContextTracker.run(llmContext, () => {
-          PatternDecryptor.decryptPattern(encrypted);
-        });
-      };
-
-      expect(attemptDecrypt).toThrow(
+      // FIX: Use module-scope helper to reduce nesting depth
+      expect(() => attemptDecryptInLLMContext(encrypted, llmContext)).toThrow(
         'Pattern decryption blocked: Cannot decrypt patterns in LLM request context'
       );
     });
@@ -160,14 +173,8 @@ describe('PatternDecryptor', () => {
       const encrypted = createEncryptedPattern(TEST_PATTERN);
       const llmContext = ContextTracker.createContext('llm-request');
 
-      // FIX: Extract nested function to reduce nesting depth
-      const attemptDecrypt = () => {
-        ContextTracker.run(llmContext, () => {
-          PatternDecryptor.decryptPattern(encrypted);
-        });
-      };
-
-      expect(attemptDecrypt).toThrow();
+      // FIX: Use module-scope helper to reduce nesting and eliminate duplication
+      expect(() => attemptDecryptInLLMContext(encrypted, llmContext)).toThrow();
 
       const auditLog = PatternDecryptor.getAuditLog();
       expect(auditLog).toHaveLength(1);
@@ -305,14 +312,7 @@ describe('PatternDecryptor', () => {
     it('should handle concurrent decryption requests', async () => {
       const patterns = Array.from({ length: 5 }, (_, i) => createEncryptedPattern(`pattern${i}`));
 
-      // FIX: Extract promise creation to helper function to reduce nesting depth
-      const decryptInContext = (pattern: SanitizedPattern) => {
-        return new Promise((resolve) => {
-          const context = ContextTracker.createContext('background-task');
-          resolve(ContextTracker.run(context, () => PatternDecryptor.decryptPattern(pattern)));
-        });
-      };
-
+      // FIX: Use module-scope helper to reduce nesting depth
       const decryptions = patterns.map(decryptInContext);
       const results = await Promise.all(decryptions);
 
