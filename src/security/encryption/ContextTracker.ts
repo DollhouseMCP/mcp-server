@@ -43,7 +43,7 @@ export interface ExecutionContext {
  * LLM request handling and prevent pattern decryption in those contexts.
  */
 export class ContextTracker {
-  private static storage = new AsyncLocalStorage<ExecutionContext>();
+  private static readonly storage = new AsyncLocalStorage<ExecutionContext>();
 
   /**
    * Run a function within a specific execution context
