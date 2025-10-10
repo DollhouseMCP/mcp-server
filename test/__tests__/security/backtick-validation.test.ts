@@ -61,14 +61,16 @@ describe('Backtick Validation', () => {
         expect(result.isValid).toBe(false);
         expect(result.severity).toBe('critical');
         // Should match at least one dangerous pattern (could be different ones)
-        const hasExpectedPattern = 
-          result.detectedPatterns?.includes('Shell command in backticks') ||
-          result.detectedPatterns?.includes('Dangerous backtick command') ||
+        // Updated for PR #1313 - these are the actual pattern descriptions in contentValidator.ts
+        const hasExpectedPattern =
           result.detectedPatterns?.includes('Dangerous shell command in backticks') ||
-          result.detectedPatterns?.includes('Malicious backtick command') ||
-          result.detectedPatterns?.includes('Malicious script evaluation in backticks') ||
-          result.detectedPatterns?.includes('External command execution') ||
-          result.detectedPatterns?.includes('Script evaluation in backticks');
+          result.detectedPatterns?.includes('Sensitive file access in backticks') ||
+          result.detectedPatterns?.includes('Shell execution in backticks') ||
+          result.detectedPatterns?.includes('Dangerous command in backticks') ||
+          result.detectedPatterns?.includes('Pipe to shell in backticks') ||
+          result.detectedPatterns?.includes('Sensitive file or privilege escalation in backticks') ||
+          result.detectedPatterns?.includes('Script interpreter with dangerous function in backticks') ||
+          result.detectedPatterns?.includes('External command execution');
         expect(hasExpectedPattern).toBe(true);
       });
     });
@@ -108,11 +110,14 @@ describe('Backtick Validation', () => {
         const result = ContentValidator.validateAndSanitize(content);
         expect(result.isValid).toBe(false);
         // Update to check for any of the dangerous patterns
-        const hasExpectedPattern = 
-          result.detectedPatterns?.includes('Shell command in backticks') ||
+        // Updated for PR #1313 - these are the actual pattern descriptions in contentValidator.ts
+        const hasExpectedPattern =
           result.detectedPatterns?.includes('Dangerous shell command in backticks') ||
-          result.detectedPatterns?.includes('Malicious backtick command') ||
-          result.detectedPatterns?.includes('Malicious script evaluation in backticks');
+          result.detectedPatterns?.includes('Sensitive file access in backticks') ||
+          result.detectedPatterns?.includes('Shell execution in backticks') ||
+          result.detectedPatterns?.includes('Dangerous command in backticks') ||
+          result.detectedPatterns?.includes('Sensitive file or privilege escalation in backticks') ||
+          result.detectedPatterns?.includes('Script interpreter with dangerous function in backticks');
         expect(hasExpectedPattern).toBe(true);
       });
     });
@@ -161,12 +166,14 @@ describe('Backtick Validation', () => {
     it('should provide specific error messages for backtick violations', () => {
       const content = '`cat /etc/passwd`';
       const result = ContentValidator.validateAndSanitize(content);
-      
+
       expect(result.isValid).toBe(false);
       // Check for any of the dangerous backtick patterns
-      const hasBacktickPattern = 
-        result.detectedPatterns?.includes('Dangerous shell command in backticks') ||
-        result.detectedPatterns?.includes('Malicious backtick command');
+      // Updated for PR #1313 - `cat /etc/passwd` matches multiple patterns
+      const hasBacktickPattern =
+        result.detectedPatterns?.includes('Sensitive file access in backticks') ||
+        result.detectedPatterns?.includes('Dangerous command in backticks') ||
+        result.detectedPatterns?.includes('Sensitive file or privilege escalation in backticks');
       expect(hasBacktickPattern).toBe(true);
       expect(result.sanitizedContent).toContain('[CONTENT_BLOCKED]');
     });

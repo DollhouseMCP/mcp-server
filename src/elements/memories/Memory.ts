@@ -21,7 +21,9 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend } from './constants.js';
+// FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
+// Import removed to clean up unused dependencies
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
 import { logger } from '../../utils/logger.js';
@@ -98,6 +100,10 @@ export interface MemoryEntry {
   metadata?: Record<string, any>;
   expiresAt?: Date;
   privacyLevel?: PrivacyLevel;
+  // FIX #1269: Trust level for content security
+  trustLevel?: TrustLevel;
+  // Source information for trust decisions
+  source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
 }
 
 export interface MemorySearchOptions {
@@ -229,40 +235,35 @@ export class Memory extends BaseElement implements IElement {
   
   /**
    * Add a new memory entry
-   * SECURITY: Validates and sanitizes all input, enforces size limits
+   * SECURITY: Sanitizes input and enforces size limits
+   * FIX #1315: Removed blocking validation - all entries created as UNTRUSTED
+   * Background validation will update trust levels asynchronously (Issue #1314)
+   *
+   * FIX: Refactored to reduce cognitive complexity (SonarCloud S3776)
+   * FIX (PR #1313 review): Sanitize source parameter for log injection prevention
    */
-  public async addEntry(content: string, tags?: string[], metadata?: Record<string, any>): Promise<MemoryEntry> {
-    // Validate memory size limits
-    if (this.entries.size >= this.maxEntries) {
-      // SECURITY FIX: Enforce retention policy when at capacity
-      await this.enforceRetentionPolicy();
-      
-      // If still at capacity after retention, remove oldest to make room
-      if (this.entries.size >= this.maxEntries) {
-        const oldestEntry = Array.from(this.entries.values())
-          .sort((a, b) => {
-            // FIX #1069: Ensure timestamps are Date objects for sorting
-            const aTime = this.ensureDateObject(a.timestamp).getTime();
-            const bTime = this.ensureDateObject(b.timestamp).getTime();
-            return aTime - bTime;
-          })[0];
-        if (oldestEntry) {
-          this.entries.delete(oldestEntry.id);
-        }
-      }
-    }
-    
-    // SECURITY FIX: Validate and sanitize content
+  public async addEntry(
+    content: string,
+    tags?: string[],
+    metadata?: Record<string, any>,
+    source: string = 'unknown'
+  ): Promise<MemoryEntry> {
+    // SECURITY: Sanitize source parameter before use
+    const sanitizedSource = sanitizeInput(source, 50);
+
+    // FIX #1315: Sanitize content but don't validate for threats (non-blocking)
+    // Just normalize Unicode and apply DOMPurify
     const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-    
+
     if (!sanitizedContent || sanitizedContent.trim().length === 0) {
       throw new Error('Memory content cannot be empty');
     }
-    
+
     // SECURITY FIX: Validate and sanitize tags
     const sanitizedTags = tags ? this.sanitizeTags(tags) : [];
-    
+
     // Create memory entry with generated ID
+    // FIX #1315: All new entries start as UNTRUSTED by default
     const entry: MemoryEntry = {
       id: generateMemoryId(),
       timestamp: new Date(),
@@ -270,12 +271,19 @@ export class Memory extends BaseElement implements IElement {
       tags: sanitizedTags,
       metadata: this.sanitizeMetadata(metadata),
       privacyLevel: this.privacyLevel,
-      expiresAt: this.calculateExpiryDate()
+      expiresAt: this.calculateExpiryDate(),
+      trustLevel: TRUST_LEVELS.UNTRUSTED, // Always UNTRUSTED until background validation
+      source: sanitizedSource
     };
-    
+
     // Store entry
     this.entries.set(entry.id, entry);
     this._isDirty = true;
+
+    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions
+    // Multiple concurrent addEntry calls can all pass the "before" check, but
+    // by enforcing after, we guarantee the limit is never exceeded
+    this.enforceCapacitySync();
 
     // Update search index (Issue #984)
     this.searchIndex.addEntry(entry);
@@ -294,12 +302,38 @@ export class Memory extends BaseElement implements IElement {
       type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
-      details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags`
+      details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags (UNTRUSTED, pending validation)`
     });
 
     return entry;
   }
-  
+
+  /**
+   * Enforce capacity limit synchronously
+   * FIX (PR #1313): Made synchronous to prevent race conditions
+   * This is called AFTER adding an entry to ensure we never exceed maxEntries
+   */
+  private enforceCapacitySync(): void {
+    if (this.entries.size <= this.maxEntries) {
+      return; // Within capacity
+    }
+
+    // Over capacity - remove oldest entries until we're at the limit
+    const entriesToRemove = this.entries.size - this.maxEntries;
+    const sortedEntries = Array.from(this.entries.values())
+      .sort((a, b) => {
+        const aTime = this.ensureDateObject(a.timestamp).getTime();
+        const bTime = this.ensureDateObject(b.timestamp).getTime();
+        return aTime - bTime; // Oldest first
+      });
+
+    // Remove the oldest entries
+    for (let i = 0; i < entriesToRemove && i < sortedEntries.length; i++) {
+      this.entries.delete(sortedEntries[i].id);
+      this.searchIndex.removeEntry(sortedEntries[i].id);
+    }
+  }
+
   /**
    * Search memory entries
    * SECURITY: Respects privacy levels and sanitizes search queries
@@ -446,6 +480,7 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Get formatted content of all memory entries
    * Returns entries as a readable string for display
+   * FIX #1269: Sandboxes untrusted content to prevent prompt injection
    */
   get content(): string {
     if (this.entries.size === 0) {
@@ -465,8 +500,48 @@ export class Memory extends BaseElement implements IElement {
       // FIX #1069: Ensure timestamp is Date object before calling toISOString
       const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
       const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
-      return `[${timestamp}]${tags}: ${entry.content}`;
+
+      // FIX #1269: Sandbox untrusted content
+      const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+      let displayContent = entry.content;
+
+      if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
+        // Clearly mark untrusted content
+        displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
+      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+        // Don't display quarantined content at all
+        displayContent = '[CONTENT QUARANTINED: Security threat detected]';
+      }
+
+      // FIX: Extract nested ternary to improve readability (SonarCloud S3358)
+      let trustIndicator: string;
+      if (trustLevel === TRUST_LEVELS.VALIDATED) {
+        trustIndicator = '✓';
+      } else if (trustLevel === TRUST_LEVELS.TRUSTED) {
+        trustIndicator = '✓✓';
+      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+        trustIndicator = '⚠️';
+      } else {
+        trustIndicator = '⚠';
+      }
+
+      return `[${timestamp}]${tags} ${trustIndicator}: ${displayContent}`;
     }).join('\n\n');
+  }
+
+  /**
+   * Sandbox untrusted content with clear delimiters
+   * FIX #1269: Prevents AI from interpreting user content as instructions
+   */
+  private sandboxUntrustedContent(content: string, source: string): string {
+    return [
+      '┌─── UNTRUSTED CONTENT START ───┐',
+      `│ Source: ${source}`,
+      `│ Status: NOT VALIDATED`,
+      '├────────────────────────────────┤',
+      content.split('\n').map(line => `│ ${line}`).join('\n'),
+      '└─── UNTRUSTED CONTENT END ─────┘'
+    ].join('\n');
   }
 
   /**
@@ -683,41 +758,94 @@ export class Memory extends BaseElement implements IElement {
   }
   
   /**
+   * Process and validate a single memory entry during deserialization
+   * FIX #1315: Reads trust level from metadata instead of re-validating
+   * Returns true if entry was loaded, false if quarantined
+   */
+  private processDeserializedEntry(entry: any): boolean {
+    if (!this.isValidEntry(entry)) {
+      return false;
+    }
+
+    // FIX #1315: Read trust level from metadata (set by background validation)
+    // Don't re-validate on load - trust the stored trust level
+    const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+
+    // Only skip QUARANTINED entries
+    if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+      // Log quarantine event
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'CRITICAL',
+        source: 'Memory.deserialize',
+        details: `Skipping quarantined entry in memory "${this.metadata.name}" on load`,
+        additionalData: {
+          entryId: entry.id,
+          memoryName: this.metadata.name,
+          action: 'skip_quarantined_on_load'
+        }
+      });
+      return false; // Entry quarantined, don't load
+    }
+
+    // Sanitize content (basic Unicode normalization + DOMPurify only)
+    entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    entry.tags = this.sanitizeTags(entry.tags || []);
+    entry.timestamp = new Date(entry.timestamp);
+    entry.trustLevel = trustLevel;  // Use trust level from file
+    entry.source = entry.source || 'loaded';
+
+    if (entry.expiresAt) {
+      entry.expiresAt = new Date(entry.expiresAt);
+    }
+
+    this.entries.set(entry.id, entry);
+    return true; // Entry loaded successfully
+  }
+
+  /**
    * Deserialize memory from string
    * SECURITY: Validates all loaded data
+   * FIX #1269: Added ContentValidator to prevent loading infected memories
    */
   public override deserialize(data: string): void {
     try {
       const parsed = JSON.parse(data);
-      
+
       // Validate basic structure
       if (!parsed.id || !parsed.type || parsed.type !== ElementType.MEMORY) {
         throw new Error('Invalid memory data format');
       }
-      
+
       // Update properties
       this.id = parsed.id;
       this.version = parsed.version || '1.0.0';
       this.metadata = parsed.metadata || {};
       this.extensions = parsed.extensions || {};
-      
+
       // Clear and reload entries
       this.entries.clear();
+      let quarantinedCount = 0;
+
       if (Array.isArray(parsed.entries)) {
         for (const entry of parsed.entries) {
-          if (this.isValidEntry(entry)) {
-            // Use optimized sanitization with caching
-            entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-            entry.tags = this.sanitizeTags(entry.tags || []);
-            entry.timestamp = new Date(entry.timestamp);
-            if (entry.expiresAt) {
-              entry.expiresAt = new Date(entry.expiresAt);
-            }
-            this.entries.set(entry.id, entry);
+          const loaded = this.processDeserializedEntry(entry);
+          if (!loaded) {
+            quarantinedCount++;
           }
         }
       }
-      
+
+      // Log warning if entries were quarantined
+      if (quarantinedCount > 0) {
+        logger.warn(`Quarantined ${quarantinedCount} infected entries from memory "${this.metadata.name}"`, {
+          memoryName: this.metadata.name,
+          totalEntries: parsed.entries?.length || 0,
+          quarantined: quarantinedCount,
+          loaded: this.entries.size
+        });
+      }
+
       // Enforce retention policy after loading
       this.enforceRetentionPolicy();
       

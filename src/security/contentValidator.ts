@@ -12,12 +12,29 @@ import { SecurityMonitor } from './securityMonitor.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
+import { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
+
+// FIX: SonarCloud typescript:S4323 - Extract union type to type alias for maintainability
+export type SecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface ContentValidationResult {
   isValid: boolean;
   sanitizedContent?: string;
   detectedPatterns?: string[];
-  severity?: 'low' | 'medium' | 'high' | 'critical';
+  severity?: SecuritySeverity;
+}
+
+export interface ContentValidatorOptions {
+  /**
+   * Skip size limit checks - useful for memory content that can be large
+   * @default false
+   */
+  skipSizeCheck?: boolean;
+  /**
+   * Custom max length override
+   * @default SECURITY_LIMITS.MAX_CONTENT_LENGTH
+   */
+  maxLength?: number;
 }
 
 export class ContentValidator {
@@ -45,27 +62,35 @@ export class ContentValidator {
     { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /ignore\s+(all\s+)?prior\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /disregard\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /disregard\s+everything\s+above/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
+    { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /you\s+are\s+now\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
     { pattern: /act\s+as\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
     
     // Data exfiltration attempts
-    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials)/gi, severity: 'critical', description: 'Data exfiltration' },
-    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials)\s+to/gi, severity: 'critical', description: 'Data exfiltration' },
-    { pattern: /list\s+all\s+(files|tokens|credentials|secrets)/gi, severity: 'high', description: 'Information disclosure' },
+    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: 'critical', description: 'Data exfiltration' },
+    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)\s+to/gi, severity: 'critical', description: 'Data exfiltration' },
+    { pattern: /list\s+all\s+(files|tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Information disclosure' },
     { pattern: /show\s+me\s+all\s+(tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Credential disclosure' },
     
     // Command execution patterns
     { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
-    // SECURITY: More refined backtick pattern - distinguishes between dangerous commands and documentation
-    // Only block truly dangerous shell commands, not educational examples
-    { pattern: /`[^`]*(?:rm\s+-r[f]?|cat\s+\/etc\/|ls\s+\/etc\/|chmod\s+777|chown\s+root|bash\s+-c\s+[\"']|sh\s+-c\s+[\"']|sudo\s+rm|sudo\s+chmod|passwd\s+|shadow\s+|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]*`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
-    // Block actual malicious file operations and network commands with pipes/redirects
-    { pattern: /`[^`]*(?:rm\s+-rf\s+\/|\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su|>\s*\/dev\/null.*\||curl\s+.*\|\s*sh|wget\s+.*\|\s*bash|bash\s+.*\.sh\s*\|)[^`]*`/gi, severity: 'critical', description: 'Malicious backtick command' },
-    // Only block actual script execution, not documentation showing syntax
-    { pattern: /`[^`]*(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[\"'](?:import\s+os|exec|eval|system|subprocess)[^`]+`/gi, severity: 'critical', description: 'Malicious script evaluation in backticks' },
+    // SECURITY: Backtick command detection with ReDoS mitigation
+    // FIX (PR #1313): Fixed ReDoS vulnerabilities by replacing .* with [^`]*
+    // FIX (PR #1313 - SonarCloud): Added explicit bounds {0,200} to prevent backtracking
+    // Multiple unbounded quantifiers in same pattern can still cause backtracking even with [^`]*
+    // Bounded quantifiers prevent exponential time complexity while matching realistic commands
+    { pattern: /`[^`]{0,200}(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
+    { pattern: /`[^`]{0,200}(?:cat|ls)\s+\/etc\/[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file access in backticks' },
+    { pattern: /`[^`]{0,200}(?:bash|sh)\s+-c\s+['"][^`]{0,200}`/gi, severity: 'critical', description: 'Shell execution in backticks' },
+    { pattern: /`[^`]{0,200}(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous command in backticks' },
+    { pattern: /`[^`]{0,200}(?:curl|wget)\s+[^`]{0,200}\|\s*(?:sh|bash)[^`]{0,200}`/gi, severity: 'critical', description: 'Pipe to shell in backticks' },
+    { pattern: /`[^`]{0,200}(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su)[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file or privilege escalation in backticks' },
+    { pattern: /`[^`]{0,200}(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]{0,200}(?:exec|eval|system|subprocess)[^`]{0,200}`/gi, severity: 'critical', description: 'Script interpreter with dangerous function in backticks' },
     { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
     { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
     { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
@@ -172,8 +197,8 @@ export class ContentValidator {
     /ogg:\/\//,
     
     // YAML-specific dangerous features
-    /&[a-zA-Z0-9_]+\s*!!/, // Anchor with tag combination
-    /\*[a-zA-Z0-9_]+\s*!!/, // Alias with tag combination
+    /&\w+\s*!!/, // Anchor with tag combination
+    /\*\w+\s*!!/, // Alias with tag combination
     /!!merge/,
     /!!binary/,
     /!!timestamp/,
@@ -186,41 +211,79 @@ export class ContentValidator {
   ];
 
   /**
-   * Validates and sanitizes persona content for security threats
+   * Handles Unicode validation and threat detection
+   * REFACTOR: Extracted from validateAndSanitize() to reduce cognitive complexity
+   * Returns normalized content and Unicode severity without aborting early
    */
-  static validateAndSanitize(content: string): ContentValidationResult {
-    // Length validation before pattern matching
-    if (content.length > SECURITY_LIMITS.MAX_CONTENT_LENGTH) {
-      throw new SecurityError(
-        `Content exceeds maximum length of ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${content.length} provided)`
-      );
-    }
+  private static handleUnicodeValidation(
+    content: string,
+    detectedPatterns: string[]
+  ): {
+    sanitized: string;
+    highestSeverity: SecuritySeverity;
+  } {
+    const unicodeResult = UnicodeValidator.normalize(content);
+    const sanitized = unicodeResult.normalizedContent;
+    let highestSeverity: SecuritySeverity = 'low';
 
-    const detectedPatterns: string[] = [];
-    let sanitized = content;
-    let highestSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low';
-
-    // Unicode normalization preprocessing to prevent bypass attacks
-    const unicodeResult = UnicodeValidator.normalize(sanitized);
-    sanitized = unicodeResult.normalizedContent;
-    
     if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
       detectedPatterns.push(...unicodeResult.detectedIssues.map(issue => `Unicode: ${issue}`));
       if (unicodeResult.severity) {
         highestSeverity = unicodeResult.severity;
       }
+
+      // Log high/critical Unicode attacks
+      if (unicodeResult.severity === 'critical' || unicodeResult.severity === 'high') {
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: unicodeResult.severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          source: 'content_validation',
+          details: `Unicode attack detected: ${unicodeResult.detectedIssues.join(', ')}`,
+        });
+
+        SecurityTelemetry.recordBlockedAttack(
+          'UNICODE_ATTACK',
+          unicodeResult.detectedIssues.join(', '),
+          unicodeResult.severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          'unicode_validation',
+          { issues: unicodeResult.detectedIssues }
+        );
+      }
     }
 
-    // Check for injection patterns
+    return { sanitized, highestSeverity };
+  }
+
+  /**
+   * Checks content for injection patterns and logs/sanitizes threats
+   * REFACTOR: Extracted from validateAndSanitize() to reduce cognitive complexity
+   *
+   * @param originalContent - Original content to check patterns against
+   * @param normalizedContent - Normalized content to apply replacements to
+   * @param detectedPatterns - Array to accumulate detected pattern descriptions
+   * @param currentSeverity - Current highest severity level
+   */
+  private static checkInjectionPatterns(
+    originalContent: string,
+    normalizedContent: string,
+    detectedPatterns: string[],
+    currentSeverity: SecuritySeverity
+  ): {
+    sanitized: string;
+    highestSeverity: SecuritySeverity;
+  } {
+    let sanitized = normalizedContent;
+    let highestSeverity = currentSeverity;
+
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      // These are trusted internal patterns, so we disable ReDoS rejection
-      if (RegexValidator.validate(content, pattern, { 
-        maxLength: 50000, 
+      // Check pattern on original content (before normalization) to catch encoded attacks
+      if (RegexValidator.validate(originalContent, pattern, {
+        maxLength: 50000,
         rejectDangerousPatterns: false,
-        logEvents: false  // Don't log our own security patterns as dangerous
+        logEvents: false
       })) {
         detectedPatterns.push(description);
-        
+
         // Update highest severity
         if (severity === 'critical' || (severity === 'high' && highestSeverity !== 'critical')) {
           highestSeverity = severity;
@@ -234,16 +297,71 @@ export class ContentValidator {
           details: `Detected pattern: ${description}`,
         });
 
-        // Sanitize by replacing with safe placeholder
+        // Record in telemetry
+        SecurityTelemetry.recordBlockedAttack(
+          'CONTENT_INJECTION',
+          description,
+          severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          'content_validation',
+          { pattern: pattern.source }
+        );
+
+        // Apply replacement to normalized content
         sanitized = sanitized.replace(pattern, '[CONTENT_BLOCKED]');
       }
     }
 
+    return { sanitized, highestSeverity };
+  }
+
+  /**
+   * Validates and sanitizes persona content for security threats
+   * FIX #1269: Added options to support large memory content
+   * REFACTOR: Reduced cognitive complexity by extracting helper methods
+   */
+  static validateAndSanitize(content: string, options: ContentValidatorOptions = {}): ContentValidationResult {
+    // Length validation before pattern matching (unless explicitly skipped for memories)
+    if (!options.skipSizeCheck) {
+      const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+      if (content.length > maxLength) {
+        throw new SecurityError(
+          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
+        );
+      }
+    }
+
+    const detectedPatterns: string[] = [];
+
+    // Handle Unicode validation (normalizes content but doesn't abort)
+    const unicodeCheck = this.handleUnicodeValidation(content, detectedPatterns);
+
+    // Check for injection patterns on ORIGINAL content (to catch encoded attacks)
+    // but apply replacements to NORMALIZED content (to preserve normalization)
+    const injectionCheck = this.checkInjectionPatterns(
+      content,
+      unicodeCheck.sanitized,
+      detectedPatterns,
+      unicodeCheck.highestSeverity
+    );
+
+    // Use highest severity from either Unicode or injection checks
+    const finalSeverity = injectionCheck.highestSeverity;
+
+    // Abort if high/critical threats detected
+    if (finalSeverity === 'high' || finalSeverity === 'critical') {
+      return {
+        isValid: false,
+        sanitizedContent: injectionCheck.sanitized,
+        detectedPatterns,
+        severity: finalSeverity
+      };
+    }
+
     return {
       isValid: detectedPatterns.length === 0,
-      sanitizedContent: sanitized,
+      sanitizedContent: injectionCheck.sanitized,
       detectedPatterns,
-      severity: highestSeverity
+      severity: finalSeverity
     };
   }
 
@@ -285,6 +403,16 @@ export class ContentValidator {
             contentLength: yamlContent.length
           }
         });
+
+        // Record in telemetry
+        SecurityTelemetry.recordBlockedAttack(
+          'YAML_BOMB',
+          `YAML bomb pattern: ${pattern.source}`,
+          'CRITICAL',
+          'yaml_validation',
+          { patternType: 'YAML_BOMB', contentLength: yamlContent.length }
+        );
+
         return false;
       }
     }
