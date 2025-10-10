@@ -247,9 +247,6 @@ export class Memory extends BaseElement implements IElement {
     metadata?: Record<string, any>,
     source: string = 'unknown'
   ): Promise<MemoryEntry> {
-    // Ensure we have capacity for new entry
-    await this.ensureCapacity();
-
     // SECURITY: Sanitize source parameter before use
     const sanitizedSource = sanitizeInput(source, 50);
 
@@ -276,6 +273,11 @@ export class Memory extends BaseElement implements IElement {
     this.entries.set(entry.id, entry);
     this._isDirty = true;
 
+    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions
+    // Multiple concurrent addEntry calls can all pass the "before" check, but
+    // by enforcing after, we guarantee the limit is never exceeded
+    this.enforceCapacitySync();
+
     // Update search index (Issue #984)
     this.searchIndex.addEntry(entry);
 
@@ -300,29 +302,28 @@ export class Memory extends BaseElement implements IElement {
   }
 
   /**
-   * Ensure there is capacity for a new entry
-   * FIX: Extracted to reduce cognitive complexity
+   * Enforce capacity limit synchronously
+   * FIX (PR #1313): Made synchronous to prevent race conditions
+   * This is called AFTER adding an entry to ensure we never exceed maxEntries
    */
-  private async ensureCapacity(): Promise<void> {
-    if (this.entries.size < this.maxEntries) {
-      return; // Early return if we have capacity
+  private enforceCapacitySync(): void {
+    if (this.entries.size <= this.maxEntries) {
+      return; // Within capacity
     }
 
-    // SECURITY FIX: Enforce retention policy when at capacity
-    await this.enforceRetentionPolicy();
+    // Over capacity - remove oldest entries until we're at the limit
+    const entriesToRemove = this.entries.size - this.maxEntries;
+    const sortedEntries = Array.from(this.entries.values())
+      .sort((a, b) => {
+        const aTime = this.ensureDateObject(a.timestamp).getTime();
+        const bTime = this.ensureDateObject(b.timestamp).getTime();
+        return aTime - bTime; // Oldest first
+      });
 
-    // If still at capacity after retention, remove oldest to make room
-    if (this.entries.size >= this.maxEntries) {
-      const oldestEntry = Array.from(this.entries.values())
-        .sort((a, b) => {
-          const aTime = this.ensureDateObject(a.timestamp).getTime();
-          const bTime = this.ensureDateObject(b.timestamp).getTime();
-          return aTime - bTime;
-        })[0];
-
-      if (oldestEntry) {
-        this.entries.delete(oldestEntry.id);
-      }
+    // Remove the oldest entries
+    for (let i = 0; i < entriesToRemove && i < sortedEntries.length; i++) {
+      this.entries.delete(sortedEntries[i].id);
+      this.searchIndex.removeEntry(sortedEntries[i].id);
     }
   }
 
