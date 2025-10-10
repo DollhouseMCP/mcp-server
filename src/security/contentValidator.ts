@@ -203,27 +203,20 @@ export class ContentValidator {
   ];
 
   /**
-   * Validates and sanitizes persona content for security threats
-   * FIX #1269: Added options to support large memory content
+   * Handles Unicode validation and threat detection
+   * REFACTOR: Extracted from validateAndSanitize() to reduce cognitive complexity
+   * Returns normalized content and Unicode severity without aborting early
    */
-  static validateAndSanitize(content: string, options: ContentValidatorOptions = {}): ContentValidationResult {
-    // Length validation before pattern matching (unless explicitly skipped for memories)
-    if (!options.skipSizeCheck) {
-      const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
-      if (content.length > maxLength) {
-        throw new SecurityError(
-          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
-        );
-      }
-    }
-
-    const detectedPatterns: string[] = [];
-    let sanitized = content;
+  private static handleUnicodeValidation(
+    content: string,
+    detectedPatterns: string[]
+  ): {
+    sanitized: string;
+    highestSeverity: 'low' | 'medium' | 'high' | 'critical';
+  } {
+    const unicodeResult = UnicodeValidator.normalize(content);
+    const sanitized = unicodeResult.normalizedContent;
     let highestSeverity: 'low' | 'medium' | 'high' | 'critical' = 'low';
-
-    // Unicode normalization preprocessing to prevent bypass attacks
-    const unicodeResult = UnicodeValidator.normalize(sanitized);
-    sanitized = unicodeResult.normalizedContent;
 
     if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
       detectedPatterns.push(...unicodeResult.detectedIssues.map(issue => `Unicode: ${issue}`));
@@ -231,7 +224,7 @@ export class ContentValidator {
         highestSeverity = unicodeResult.severity;
       }
 
-      // Reject content with high/critical Unicode attacks (e.g., direction overrides)
+      // Log high/critical Unicode attacks
       if (unicodeResult.severity === 'critical' || unicodeResult.severity === 'high') {
         SecurityMonitor.logSecurityEvent({
           type: 'CONTENT_INJECTION_ATTEMPT',
@@ -240,7 +233,6 @@ export class ContentValidator {
           details: `Unicode attack detected: ${unicodeResult.detectedIssues.join(', ')}`,
         });
 
-        // Record in telemetry
         SecurityTelemetry.recordBlockedAttack(
           'UNICODE_ATTACK',
           unicodeResult.detectedIssues.join(', '),
@@ -248,27 +240,42 @@ export class ContentValidator {
           'unicode_validation',
           { issues: unicodeResult.detectedIssues }
         );
-
-        // Return immediately for critical Unicode threats
-        return {
-          isValid: false,
-          sanitizedContent: sanitized,
-          detectedPatterns,
-          severity: unicodeResult.severity
-        };
       }
     }
 
-    // Check for injection patterns
+    return { sanitized, highestSeverity };
+  }
+
+  /**
+   * Checks content for injection patterns and logs/sanitizes threats
+   * REFACTOR: Extracted from validateAndSanitize() to reduce cognitive complexity
+   *
+   * @param originalContent - Original content to check patterns against
+   * @param normalizedContent - Normalized content to apply replacements to
+   * @param detectedPatterns - Array to accumulate detected pattern descriptions
+   * @param currentSeverity - Current highest severity level
+   */
+  private static checkInjectionPatterns(
+    originalContent: string,
+    normalizedContent: string,
+    detectedPatterns: string[],
+    currentSeverity: 'low' | 'medium' | 'high' | 'critical'
+  ): {
+    sanitized: string;
+    highestSeverity: 'low' | 'medium' | 'high' | 'critical';
+  } {
+    let sanitized = normalizedContent;
+    let highestSeverity = currentSeverity;
+
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      // These are trusted internal patterns, so we disable ReDoS rejection
-      if (RegexValidator.validate(content, pattern, { 
-        maxLength: 50000, 
+      // Check pattern on original content (before normalization) to catch encoded attacks
+      if (RegexValidator.validate(originalContent, pattern, {
+        maxLength: 50000,
         rejectDangerousPatterns: false,
-        logEvents: false  // Don't log our own security patterns as dangerous
+        logEvents: false
       })) {
         detectedPatterns.push(description);
-        
+
         // Update highest severity
         if (severity === 'critical' || (severity === 'high' && highestSeverity !== 'critical')) {
           highestSeverity = severity;
@@ -291,16 +298,62 @@ export class ContentValidator {
           { pattern: pattern.source }
         );
 
-        // Sanitize by replacing with safe placeholder
+        // Apply replacement to normalized content
         sanitized = sanitized.replace(pattern, '[CONTENT_BLOCKED]');
       }
     }
 
+    return { sanitized, highestSeverity };
+  }
+
+  /**
+   * Validates and sanitizes persona content for security threats
+   * FIX #1269: Added options to support large memory content
+   * REFACTOR: Reduced cognitive complexity by extracting helper methods
+   */
+  static validateAndSanitize(content: string, options: ContentValidatorOptions = {}): ContentValidationResult {
+    // Length validation before pattern matching (unless explicitly skipped for memories)
+    if (!options.skipSizeCheck) {
+      const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+      if (content.length > maxLength) {
+        throw new SecurityError(
+          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
+        );
+      }
+    }
+
+    const detectedPatterns: string[] = [];
+
+    // Handle Unicode validation (normalizes content but doesn't abort)
+    const unicodeCheck = this.handleUnicodeValidation(content, detectedPatterns);
+
+    // Check for injection patterns on ORIGINAL content (to catch encoded attacks)
+    // but apply replacements to NORMALIZED content (to preserve normalization)
+    const injectionCheck = this.checkInjectionPatterns(
+      content,
+      unicodeCheck.sanitized,
+      detectedPatterns,
+      unicodeCheck.highestSeverity
+    );
+
+    // Use highest severity from either Unicode or injection checks
+    const finalSeverity = injectionCheck.highestSeverity;
+
+    // Abort if high/critical threats detected
+    if (finalSeverity === 'high' || finalSeverity === 'critical') {
+      return {
+        isValid: false,
+        sanitizedContent: injectionCheck.sanitized,
+        detectedPatterns,
+        severity: finalSeverity
+      };
+    }
+
     return {
       isValid: detectedPatterns.length === 0,
-      sanitizedContent: sanitized,
+      sanitizedContent: injectionCheck.sanitized,
       detectedPatterns,
-      severity: highestSeverity
+      severity: finalSeverity
     };
   }
 
