@@ -225,7 +225,7 @@ export class BackgroundValidator {
         await this.validateMemory(memory);
       } catch (error) {
         logger.error('Error validating memory', {
-          memoryId: (memory as any).id,
+          memoryId: memory.id,
           error,
         });
       }
@@ -235,9 +235,10 @@ export class BackgroundValidator {
   /**
    * Validate all UNTRUSTED entries in a memory
    * FIX #1320: Now uses public Memory API and saves changes
+   * FIX (Claude Bot Review): Removed type casting for memory.id
    */
   private async validateMemory(memory: Memory): Promise<void> {
-    logger.debug('Validating memory', { memoryId: (memory as any).id });
+    logger.debug('Validating memory', { memoryId: memory.id });
 
     let updatedCount = 0;
 
@@ -260,7 +261,7 @@ export class BackgroundValidator {
 
     if (updatedCount > 0) {
       logger.info('Updated trust levels in memory', {
-        memoryId: (memory as any).id,
+        memoryId: memory.id,
         updatedCount,
       });
 
@@ -268,11 +269,11 @@ export class BackgroundValidator {
       try {
         await memory.save();
         logger.debug('Memory saved successfully', {
-          memoryId: (memory as any).id
+          memoryId: memory.id
         });
       } catch (error) {
         logger.error('Failed to save memory after validation', {
-          memoryId: (memory as any).id,
+          memoryId: memory.id,
           error
         });
         // Don't throw - continue with other memories
