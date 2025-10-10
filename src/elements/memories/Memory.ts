@@ -170,6 +170,9 @@ export class Memory extends BaseElement implements IElement {
 
   // Sanitization cache to avoid redundant processing
   private sanitizationCache: Map<string, string> = new Map();
+
+  // FIX #1320: Store file path for persistence
+  private filePath?: string;
   
   constructor(metadata: Partial<MemoryMetadata> = {}) {
     // SECURITY FIX: Sanitize all inputs during construction
@@ -985,5 +988,189 @@ export class Memory extends BaseElement implements IElement {
 
     // If we get here, all retries failed
     throw lastError || new Error('Failed to build search index');
+  }
+
+  /**
+   * Get all entries with a specific trust level
+   * FIX #1320: Public API for accessing entries by trust level
+   * Used by BackgroundValidator to find untrusted entries
+   *
+   * @param trustLevel - The trust level to filter by
+   * @returns Array of memory entries matching the trust level
+   */
+  public getEntriesByTrustLevel(trustLevel: TrustLevel): MemoryEntry[] {
+    return Array.from(this.entries.values())
+      .filter(entry => entry.trustLevel === trustLevel);
+  }
+
+  /**
+   * Get all entries in this memory
+   * FIX #1320: Public API for accessing all entries
+   * Replaces the need for `(memory as any).entries` hacks
+   *
+   * @returns Array of all memory entries
+   */
+  public getAllEntries(): MemoryEntry[] {
+    return Array.from(this.entries.values());
+  }
+
+  /**
+   * Get an iterator over all entries
+   * FIX #1320: Memory-efficient way to iterate entries
+   *
+   * @returns Iterator over memory entries
+   */
+  public *getEntriesIterator(): IterableIterator<MemoryEntry> {
+    yield* this.entries.values();
+  }
+
+  /**
+   * Set the file path for this memory
+   * FIX #1320: Used by MemoryManager after loading
+   * @param path - The file path where this memory is stored
+   */
+  public setFilePath(path: string): void {
+    this.filePath = path;
+  }
+
+  /**
+   * Get the file path for this memory
+   * FIX #1320: Returns the path where this memory is stored
+   * @returns The file path, or undefined if not yet persisted
+   */
+  public getFilePath(): string | undefined {
+    return this.filePath;
+  }
+
+  /**
+   * Save this memory to disk
+   * FIX #1320: Instance method for persisting memory changes
+   * Used by BackgroundValidator to save updated trust levels
+   *
+   * @returns Promise that resolves when save is complete
+   * @throws {Error} If memory has not been loaded from file and no path is set
+   */
+  public async save(): Promise<void> {
+    // Dynamically import MemoryManager to avoid circular dependency
+    const { MemoryManager } = await import('./MemoryManager.js');
+    const manager = new MemoryManager();
+    await manager.save(this, this.filePath);
+  }
+
+  /**
+   * Find all memories that have entries with a specific trust level
+   * FIX #1320: Static query API for finding memories by trust level
+   * Used by BackgroundValidator to discover untrusted memories
+   *
+   * @param trustLevel - The trust level to filter by
+   * @param options - Optional query options
+   * @param options.limit - Maximum number of memories to return
+   * @returns Promise resolving to array of memories with matching entries
+   */
+  public static async findByTrustLevel(
+    trustLevel: TrustLevel,
+    options?: { limit?: number }
+  ): Promise<Memory[]> {
+    // Dynamically import MemoryManager to avoid circular dependency
+    const { MemoryManager } = await import('./MemoryManager.js');
+    const manager = new MemoryManager();
+
+    // Load all memories and filter by trust level
+    const allMemories = await manager.list();
+    const matchingMemories: Memory[] = [];
+
+    for (const memory of allMemories) {
+      // Check if this memory has any entries with the specified trust level
+      const hasMatchingEntries = memory.getEntriesByTrustLevel(trustLevel).length > 0;
+
+      if (hasMatchingEntries) {
+        matchingMemories.push(memory);
+
+        // Apply limit if specified
+        if (options?.limit && matchingMemories.length >= options.limit) {
+          break;
+        }
+      }
+    }
+
+    logger.debug('Found memories with trust level', {
+      trustLevel,
+      count: matchingMemories.length,
+      limit: options?.limit
+    });
+
+    return matchingMemories;
+  }
+
+  /**
+   * General query API for finding memories
+   * FIX #1320: Flexible query API for multiple criteria
+   *
+   * @param filter - Query filter criteria
+   * @param filter.trustLevel - Filter by trust level
+   * @param filter.tags - Filter by tags
+   * @param filter.maxAge - Filter by age in days
+   * @returns Promise resolving to array of matching memories
+   */
+  public static async find(filter: {
+    trustLevel?: TrustLevel;
+    tags?: string[];
+    maxAge?: number;
+  }): Promise<Memory[]> {
+    // Dynamically import MemoryManager to avoid circular dependency
+    const { MemoryManager } = await import('./MemoryManager.js');
+    const manager = new MemoryManager();
+
+    // Load all memories
+    const allMemories = await manager.list();
+    const results: Memory[] = [];
+
+    // Calculate cutoff date if maxAge is specified
+    const cutoffDate = filter.maxAge
+      ? new Date(Date.now() - filter.maxAge * 24 * 60 * 60 * 1000)
+      : undefined;
+
+    for (const memory of allMemories) {
+      let matches = true;
+
+      // Filter by trust level
+      if (filter.trustLevel) {
+        const hasMatchingTrustLevel = memory.getEntriesByTrustLevel(filter.trustLevel).length > 0;
+        if (!hasMatchingTrustLevel) {
+          matches = false;
+          continue;
+        }
+      }
+
+      // Filter by tags
+      if (filter.tags && filter.tags.length > 0) {
+        const memoryTags = memory.metadata.tags || [];
+        const hasMatchingTag = filter.tags.some(tag => memoryTags.includes(tag));
+        if (!hasMatchingTag) {
+          matches = false;
+          continue;
+        }
+      }
+
+      // Filter by age
+      if (cutoffDate) {
+        const stats = memory.getStats();
+        if (!stats.newestEntry || stats.newestEntry < cutoffDate) {
+          matches = false;
+          continue;
+        }
+      }
+
+      if (matches) {
+        results.push(memory);
+      }
+    }
+
+    logger.debug('Memory query complete', {
+      filter,
+      resultCount: results.length
+    });
+
+    return results;
   }
 }

@@ -191,14 +191,27 @@ export class BackgroundValidator {
   /**
    * Find all memories that have UNTRUSTED entries
    *
-   * PHASE 1 INCOMPLETE: Deferred to follow-up PR (Issue #1314)
-   * Requires Memory.find() API to query by trust level.
-   * Returns empty array until memory discovery API is available.
+   * FIX #1320: Now uses Memory.findByTrustLevel() API
+   * Loads memories from filesystem and filters by trust level
    */
   private async findMemoriesWithUntrustedEntries(): Promise<Memory[]> {
-    // Placeholder - will be implemented when Memory.find() API is ready
-    logger.debug('Finding memories with untrusted entries (not yet implemented)');
-    return [];
+    // FIX #1320: Use new Memory query API to find untrusted entries
+    const { Memory } = await import('../../elements/memories/Memory.js');
+
+    // Fetch multiple batches worth of memories to ensure we have work to do
+    const limit = this.config.batchSize * 10;
+
+    const untrustedMemories = await Memory.findByTrustLevel(
+      TRUST_LEVELS.UNTRUSTED,
+      { limit }
+    );
+
+    logger.debug('Found memories with untrusted entries', {
+      count: untrustedMemories.length,
+      limit
+    });
+
+    return untrustedMemories;
   }
 
   /**
@@ -221,19 +234,17 @@ export class BackgroundValidator {
 
   /**
    * Validate all UNTRUSTED entries in a memory
+   * FIX #1320: Now uses public Memory API and saves changes
    */
   private async validateMemory(memory: Memory): Promise<void> {
     logger.debug('Validating memory', { memoryId: (memory as any).id });
 
     let updatedCount = 0;
 
-    // Access entries via any type since they're private
-    const entries = (memory as any).entries as Map<string, any>;
-    for (const entry of entries.values()) {
-      if (entry.trustLevel !== TRUST_LEVELS.UNTRUSTED) {
-        continue;
-      }
+    // FIX #1320: Use public API instead of casting to any
+    const entries = memory.getEntriesByTrustLevel(TRUST_LEVELS.UNTRUSTED);
 
+    for (const entry of entries) {
       try {
         const updated = await this.validateEntry(entry);
         if (updated) {
@@ -253,9 +264,19 @@ export class BackgroundValidator {
         updatedCount,
       });
 
-      // PHASE 1 INCOMPLETE: Memory persistence deferred (Issue #1314)
-      // Will be enabled when Memory.save() API is finalized
-      // await memory.save();
+      // FIX #1320: Save memory using new instance method
+      try {
+        await memory.save();
+        logger.debug('Memory saved successfully', {
+          memoryId: (memory as any).id
+        });
+      } catch (error) {
+        logger.error('Failed to save memory after validation', {
+          memoryId: (memory as any).id,
+          error
+        });
+        // Don't throw - continue with other memories
+      }
     }
   }
 
