@@ -78,15 +78,16 @@ export class ContentValidator {
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
     // SECURITY: Backtick command detection with ReDoS mitigation
     // FIX (PR #1313): Fixed ReDoS vulnerabilities by replacing .* with [^`]*
-    // This prevents catastrophic backtracking by limiting matches to non-backtick characters
-    // [^`]* is semantically correct (matches content within backticks) and performs in O(n) time
-    { pattern: /`[^`]*(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root)[^`]*`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
-    { pattern: /`[^`]*(?:cat|ls)\s+\/etc\/[^`]*`/gi, severity: 'critical', description: 'Sensitive file access in backticks' },
-    { pattern: /`[^`]*(?:bash|sh)\s+-c\s+['"][^`]*`/gi, severity: 'critical', description: 'Shell execution in backticks' },
-    { pattern: /`[^`]*(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]*`/gi, severity: 'critical', description: 'Dangerous command in backticks' },
-    { pattern: /`[^`]*(?:curl|wget)\s+[^`]*\|\s*(?:sh|bash)[^`]*`/gi, severity: 'critical', description: 'Pipe to shell in backticks' },
-    { pattern: /`[^`]*(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su)[^`]*`/gi, severity: 'critical', description: 'Sensitive file or privilege escalation in backticks' },
-    { pattern: /`[^`]*(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]*(?:exec|eval|system|subprocess)[^`]*`/gi, severity: 'critical', description: 'Script interpreter with dangerous function in backticks' },
+    // FIX (PR #1313 - SonarCloud): Added explicit bounds {0,200} to prevent backtracking
+    // Multiple unbounded quantifiers in same pattern can still cause backtracking even with [^`]*
+    // Bounded quantifiers prevent exponential time complexity while matching realistic commands
+    { pattern: /`[^`]{0,200}(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
+    { pattern: /`[^`]{0,200}(?:cat|ls)\s+\/etc\/[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file access in backticks' },
+    { pattern: /`[^`]{0,200}(?:bash|sh)\s+-c\s+['"][^`]{0,200}`/gi, severity: 'critical', description: 'Shell execution in backticks' },
+    { pattern: /`[^`]{0,200}(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous command in backticks' },
+    { pattern: /`[^`]{0,200}(?:curl|wget)\s+[^`]{0,200}\|\s*(?:sh|bash)[^`]{0,200}`/gi, severity: 'critical', description: 'Pipe to shell in backticks' },
+    { pattern: /`[^`]{0,200}(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su)[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file or privilege escalation in backticks' },
+    { pattern: /`[^`]{0,200}(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]{0,200}(?:exec|eval|system|subprocess)[^`]{0,200}`/gi, severity: 'critical', description: 'Script interpreter with dangerous function in backticks' },
     { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
     { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
     { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
