@@ -21,7 +21,7 @@ export interface ContentValidationResult {
   severity?: 'low' | 'medium' | 'high' | 'critical';
 }
 
-export interface ContentValidationOptions {
+export interface ContentValidatorOptions {
   /**
    * Skip size limit checks - useful for memory content that can be large
    * @default false
@@ -206,7 +206,7 @@ export class ContentValidator {
    * Validates and sanitizes persona content for security threats
    * FIX #1269: Added options to support large memory content
    */
-  static validateAndSanitize(content: string, options: ContentValidationOptions = {}): ContentValidationResult {
+  static validateAndSanitize(content: string, options: ContentValidatorOptions = {}): ContentValidationResult {
     // Length validation before pattern matching (unless explicitly skipped for memories)
     if (!options.skipSizeCheck) {
       const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
