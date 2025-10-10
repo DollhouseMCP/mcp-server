@@ -12,6 +12,7 @@ import { SecurityMonitor } from './securityMonitor.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
+import { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
 
 export interface ContentValidationResult {
   isValid: boolean;
@@ -239,6 +240,15 @@ export class ContentValidator {
           details: `Unicode attack detected: ${unicodeResult.detectedIssues.join(', ')}`,
         });
 
+        // Record in telemetry
+        SecurityTelemetry.recordBlockedAttack(
+          'UNICODE_ATTACK',
+          unicodeResult.detectedIssues.join(', '),
+          unicodeResult.severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          'unicode_validation',
+          { issues: unicodeResult.detectedIssues }
+        );
+
         // Return immediately for critical Unicode threats
         return {
           isValid: false,
@@ -271,6 +281,15 @@ export class ContentValidator {
           source: 'content_validation',
           details: `Detected pattern: ${description}`,
         });
+
+        // Record in telemetry
+        SecurityTelemetry.recordBlockedAttack(
+          'CONTENT_INJECTION',
+          description,
+          severity.toUpperCase() as 'HIGH' | 'CRITICAL',
+          'content_validation',
+          { pattern: pattern.source }
+        );
 
         // Sanitize by replacing with safe placeholder
         sanitized = sanitized.replace(pattern, '[CONTENT_BLOCKED]');
@@ -323,6 +342,16 @@ export class ContentValidator {
             contentLength: yamlContent.length
           }
         });
+
+        // Record in telemetry
+        SecurityTelemetry.recordBlockedAttack(
+          'YAML_BOMB',
+          `YAML bomb pattern: ${pattern.source}`,
+          'CRITICAL',
+          'yaml_validation',
+          { patternType: 'YAML_BOMB', contentLength: yamlContent.length }
+        );
+
         return false;
       }
     }

@@ -42,6 +42,13 @@ DollhouseMCP implements comprehensive security measures to protect users, their 
   - External resource validation
   - Automated security analysis
 
+- **Memory Injection Protection (Issue #1269)**
+  - 30+ injection pattern detections
+  - Unicode attack prevention (bidirectional text, homographs)
+  - YAML bomb protection with circular reference detection
+  - Multi-layer validation pipeline
+  - Automatic content sanitization
+
 - **URL Security**
   - Comprehensive URL validation
   - Protection against local network access
@@ -75,6 +82,15 @@ DollhouseMCP implements comprehensive security measures to protect users, their 
   - Behavioral analysis
   - Community reporting
   - Automated responses
+
+- **Security Telemetry (New)**
+  - Real-time attack metrics tracking
+  - Attack vector aggregation and analysis
+  - Hourly attack distribution monitoring
+  - Top attack patterns identification
+  - Export capabilities for external SIEM integration
+  - 24-hour rolling window metrics
+  - Severity-based categorization
 
 ### 🔄 Update Security
 
