@@ -21,7 +21,8 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator, ContentValidationResult } from '../../security/contentValidator.js';
+// FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
+// Import removed to clean up unused dependencies
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
@@ -234,9 +235,9 @@ export class Memory extends BaseElement implements IElement {
   
   /**
    * Add a new memory entry
-   * SECURITY: Validates and sanitizes all input, enforces size limits
-   * FIX #1269: Added ContentValidator to prevent prompt injection attacks
-   * All content starts as UNTRUSTED by default until validated
+   * SECURITY: Sanitizes input and enforces size limits
+   * FIX #1315: Removed blocking validation - all entries created as UNTRUSTED
+   * Background validation will update trust levels asynchronously (Issue #1314)
    *
    * FIX: Refactored to reduce cognitive complexity (SonarCloud S3776)
    * FIX (PR #1313 review): Sanitize source parameter for log injection prevention
@@ -250,13 +251,19 @@ export class Memory extends BaseElement implements IElement {
     // SECURITY: Sanitize source parameter before use
     const sanitizedSource = sanitizeInput(source, 50);
 
-    // Validate and sanitize content for security threats
-    const { sanitizedContent, trustLevel } = await this.validateContentSecurity(content, sanitizedSource);
+    // FIX #1315: Sanitize content but don't validate for threats (non-blocking)
+    // Just normalize Unicode and apply DOMPurify
+    const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+
+    if (!sanitizedContent || sanitizedContent.trim().length === 0) {
+      throw new Error('Memory content cannot be empty');
+    }
 
     // SECURITY FIX: Validate and sanitize tags
     const sanitizedTags = tags ? this.sanitizeTags(tags) : [];
 
     // Create memory entry with generated ID
+    // FIX #1315: All new entries start as UNTRUSTED by default
     const entry: MemoryEntry = {
       id: generateMemoryId(),
       timestamp: new Date(),
@@ -265,8 +272,8 @@ export class Memory extends BaseElement implements IElement {
       metadata: this.sanitizeMetadata(metadata),
       privacyLevel: this.privacyLevel,
       expiresAt: this.calculateExpiryDate(),
-      trustLevel,
-      source: sanitizedSource // Use sanitized source
+      trustLevel: TRUST_LEVELS.UNTRUSTED, // Always UNTRUSTED until background validation
+      source: sanitizedSource
     };
 
     // Store entry
@@ -295,7 +302,7 @@ export class Memory extends BaseElement implements IElement {
       type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
-      details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags`
+      details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags (UNTRUSTED, pending validation)`
     });
 
     return entry;
@@ -327,104 +334,6 @@ export class Memory extends BaseElement implements IElement {
     }
   }
 
-  /**
-   * Validate content for security threats and determine trust level
-   * FIX: Extracted to reduce cognitive complexity
-   * FIX (PR #1313 review): Sanitize source parameter to prevent log injection
-   */
-  private async validateContentSecurity(
-    content: string,
-    source: string
-  ): Promise<{ sanitizedContent: string; trustLevel: TrustLevel }> {
-    // SECURITY FIX: Sanitize source parameter before use in logging
-    const sanitizedSource = sanitizeInput(source, 50);
-    // SECURITY FIX #1269: Validate content for prompt injection attacks
-    const validationResult = ContentValidator.validateAndSanitize(content, {
-      skipSizeCheck: true  // Memories support large content via sharding
-    });
-
-    // Check for critical/high severity threats
-    const isCriticalThreat = !validationResult.isValid &&
-      (validationResult.severity === 'critical' || validationResult.severity === 'high');
-
-    if (isCriticalThreat) {
-      this.logSecurityThreat(validationResult, content);
-      const patterns = validationResult.detectedPatterns?.join(', ') || 'unknown patterns';
-      throw new Error(
-        `Cannot add memory content: ${validationResult.severity} security threat detected (${patterns}). ` +
-        'This protects your multi-agent swarm from prompt injection attacks.'
-      );
-    }
-
-    // Use sanitized content from ContentValidator
-    const processedContent = validationResult.sanitizedContent || content;
-    const sanitizedContent = sanitizeMemoryContent(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
-
-    if (!sanitizedContent || sanitizedContent.trim().length === 0) {
-      throw new Error('Memory content cannot be empty');
-    }
-
-    // Log warning for medium risk content
-    if (validationResult.severity === 'medium') {
-      logger.warn('Medium risk patterns sanitized in memory content', {
-        memoryName: this.metadata.name,
-        patterns: validationResult.detectedPatterns,
-        sanitized: true
-      });
-    }
-
-    // Determine trust level based on validation (using sanitized source)
-    const trustLevel = this.determineTrustLevel(validationResult, sanitizedSource);
-
-    return { sanitizedContent, trustLevel };
-  }
-
-  /**
-   * Log critical security threat detection
-   * FIX: Extracted to reduce cognitive complexity
-   */
-  private logSecurityThreat(validationResult: ContentValidationResult, content: string): void {
-    SecurityMonitor.logSecurityEvent({
-      type: 'CONTENT_INJECTION_ATTEMPT',
-      severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
-      source: 'Memory.addEntry',
-      details: `Blocked memory creation for "${this.metadata.name}": Prompt injection detected`,
-      additionalData: {
-        patterns: validationResult.detectedPatterns,
-        originalLength: content.length,
-        memoryName: this.metadata.name
-      }
-    });
-  }
-
-  /**
-   * Determine trust level based on validation results and source
-   * FIX: Extracted to reduce cognitive complexity
-   */
-  private determineTrustLevel(validationResult: ContentValidationResult, source: string): TrustLevel {
-    // Mark web-scraped/external content as untrusted
-    if (source === 'web-scrape' || source === 'external') {
-      logger.info(`Memory from ${source} marked as UNTRUSTED by default`, {
-        memoryName: this.metadata.name,
-        source
-      });
-      return TRUST_LEVELS.UNTRUSTED;
-    }
-
-    // Content with issues defaults to untrusted
-    if (!validationResult.isValid) {
-      return TRUST_LEVELS.UNTRUSTED;
-    }
-
-    // Content with no detected patterns is validated
-    if (validationResult.detectedPatterns && validationResult.detectedPatterns.length === 0) {
-      return TRUST_LEVELS.VALIDATED;
-    }
-
-    // Default to untrusted
-    return TRUST_LEVELS.UNTRUSTED;
-  }
-  
   /**
    * Search memory entries
    * SECURITY: Respects privacy levels and sanitizes search queries
@@ -850,7 +759,7 @@ export class Memory extends BaseElement implements IElement {
   
   /**
    * Process and validate a single memory entry during deserialization
-   * FIX #1269: Extracted to reduce cognitive complexity
+   * FIX #1315: Reads trust level from metadata instead of re-validating
    * Returns true if entry was loaded, false if quarantined
    */
   private processDeserializedEntry(entry: any): boolean {
@@ -858,43 +767,32 @@ export class Memory extends BaseElement implements IElement {
       return false;
     }
 
-    // SECURITY FIX #1269: Validate content for prompt injection on load
-    // Memory content can be large, so skip size checks but keep injection protection
-    const validationResult = ContentValidator.validateAndSanitize(entry.content, {
-      skipSizeCheck: true  // Memories support large content via sharding
-    });
+    // FIX #1315: Read trust level from metadata (set by background validation)
+    // Don't re-validate on load - trust the stored trust level
+    const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
 
-    if (!validationResult.isValid && (validationResult.severity === 'critical' || validationResult.severity === 'high')) {
+    // Only skip QUARANTINED entries
+    if (trustLevel === TRUST_LEVELS.QUARANTINED) {
       // Log quarantine event
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
-        severity: validationResult.severity === 'critical' ? 'CRITICAL' : 'HIGH',
+        severity: 'CRITICAL',
         source: 'Memory.deserialize',
-        details: `Quarantined infected entry in memory "${this.metadata.name}" on read`,
+        details: `Skipping quarantined entry in memory "${this.metadata.name}" on load`,
         additionalData: {
           entryId: entry.id,
-          patterns: validationResult.detectedPatterns,
           memoryName: this.metadata.name,
-          action: 'quarantine_on_read'
+          action: 'skip_quarantined_on_load'
         }
       });
-      return false; // Entry quarantined
+      return false; // Entry quarantined, don't load
     }
 
-    // Use sanitized content from validator
-    const processedContent = validationResult.sanitizedContent || entry.content;
-
-    // Determine trust level based on validation
-    let trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED; // Default to untrusted
-    if (validationResult.isValid && (!validationResult.detectedPatterns || validationResult.detectedPatterns.length === 0)) {
-      trustLevel = TRUST_LEVELS.VALIDATED;
-    }
-
-    // Use optimized sanitization with caching
-    entry.content = this.sanitizeWithCache(processedContent, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    // Sanitize content (basic Unicode normalization + DOMPurify only)
+    entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
     entry.tags = this.sanitizeTags(entry.tags || []);
     entry.timestamp = new Date(entry.timestamp);
-    entry.trustLevel = trustLevel;
+    entry.trustLevel = trustLevel;  // Use trust level from file
     entry.source = entry.source || 'loaded';
 
     if (entry.expiresAt) {
