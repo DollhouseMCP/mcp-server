@@ -111,8 +111,8 @@ export class PatternExtractor {
     logger.info('Found pattern matches', { count: matches.length });
 
     // Create sanitized patterns with references
-    const sanitizedPatterns = matches.map((match, index) =>
-      this.createSanitizedPattern(match, index)
+    const sanitizedPatterns = matches.map((match) =>
+      this.createSanitizedPattern(match)
     );
 
     // Create sanitized content by replacing patterns with references
@@ -143,7 +143,9 @@ export class PatternExtractor {
 
     for (const patternType of detectedPatterns) {
       // Use heuristics to find likely pattern locations
-      const patternMatches = this.searchForPattern(content, patternType, validationResult.severity);
+      // FIX: Provide default severity 'low' when undefined
+      const severity = validationResult.severity || 'low';
+      const patternMatches = this.searchForPattern(content, patternType, severity);
 
       matches.push(...patternMatches);
     }
@@ -222,8 +224,7 @@ export class PatternExtractor {
    * Create a sanitized pattern object with metadata
    */
   private static createSanitizedPattern(
-    match: PatternMatch,
-    index: number
+    match: PatternMatch
   ): SanitizedPattern {
     const patternId = `PATTERN_${String(++this.patternCounter).padStart(3, '0')}`;
 

@@ -91,7 +91,7 @@ export interface SanitizedPattern {
  * memory entries and update their trust levels based on security analysis.
  */
 export class BackgroundValidator {
-  private config: BackgroundValidatorConfig;
+  private readonly config: BackgroundValidatorConfig;
   private intervalHandle?: NodeJS.Timeout;
   private isProcessing: boolean = false;
 
@@ -158,11 +158,9 @@ export class BackgroundValidator {
     try {
       logger.debug('Starting validation pass');
 
-      // TODO Phase 1: Implement memory discovery
-      // Find all memories with UNTRUSTED entries
-      // For now, this is a placeholder that will be implemented
-      // when we integrate with the Memory loading system
-
+      // PHASE 1 INCOMPLETE: Memory discovery integration pending
+      // Issue #1314 Phase 1 - This will be connected to Memory loading system
+      // in a follow-up PR once Memory.find() API is available
       const untrustedMemories = await this.findMemoriesWithUntrustedEntries();
 
       if (untrustedMemories.length === 0) {
@@ -193,11 +191,12 @@ export class BackgroundValidator {
   /**
    * Find all memories that have UNTRUSTED entries
    *
-   * TODO Phase 1: This needs to be implemented when we integrate
-   * with the Memory loading system. For now returns empty array.
+   * PHASE 1 INCOMPLETE: Deferred to follow-up PR (Issue #1314)
+   * Requires Memory.find() API to query by trust level.
+   * Returns empty array until memory discovery API is available.
    */
   private async findMemoriesWithUntrustedEntries(): Promise<Memory[]> {
-    // Placeholder - Phase 1 implementation needed
+    // Placeholder - will be implemented when Memory.find() API is ready
     logger.debug('Finding memories with untrusted entries (not yet implemented)');
     return [];
   }
@@ -254,7 +253,8 @@ export class BackgroundValidator {
         updatedCount,
       });
 
-      // TODO Phase 1: Save memory after trust level updates
+      // PHASE 1 INCOMPLETE: Memory persistence deferred (Issue #1314)
+      // Will be enabled when Memory.save() API is finalized
       // await memory.save();
     }
   }
@@ -309,8 +309,8 @@ export class BackgroundValidator {
 
       // Store sanitized patterns and content in entry metadata
       // Phase 2 will add encryption to these patterns
-      (entry as any).sanitizedPatterns = extractionResult.patterns;
-      (entry as any).sanitizedContent = extractionResult.sanitizedContent;
+      entry.sanitizedPatterns = extractionResult.patterns;
+      entry.sanitizedContent = extractionResult.sanitizedContent;
 
       logger.info('Patterns extracted from entry', {
         entryId: entry.id,
@@ -332,7 +332,8 @@ export class BackgroundValidator {
 
     // If critical/high severity threats detected, mark as FLAGGED
     if (validationResult.severity === 'critical' || validationResult.severity === 'high') {
-      // TODO Phase 1: Add logic to distinguish FLAGGED vs QUARANTINED
+      // PHASE 1 INCOMPLETE: QUARANTINED trust level logic deferred (Issue #1314)
+      // Will add distinction between FLAGGED (dangerous) vs QUARANTINED (malicious)
       // For now, all high/critical severity goes to FLAGGED
       return TRUST_LEVELS.FLAGGED;
     }
