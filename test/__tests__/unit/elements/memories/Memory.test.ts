@@ -360,10 +360,11 @@ describe('Memory Element', () => {
     });
     
     it('should handle Unicode attacks', async () => {
-      // Direction override attack - should be blocked
-      await expect(
-        memory.addEntry('\u202E\u202D\u202Ctest')
-      ).rejects.toThrow('security threat detected');
+      // FIX #1315: Non-blocking validation - Unicode attacks are now accepted as UNTRUSTED
+      // Direction override attack - creates entry as UNTRUSTED (background validation will process later)
+      const attackEntry = await memory.addEntry('\u202E\u202D\u202Ctest');
+      expect(attackEntry).toBeDefined();
+      expect(attackEntry.trustLevel).toBe('untrusted'); // Marked as untrusted until validated
 
       // Multiple combining characters - should be normalized
       const safeUnicode = 'A\u0301\u0302test'; // Some combining chars are OK
@@ -377,18 +378,20 @@ describe('Memory Element', () => {
     });
     
     it('should enforce content size limits', async () => {
-      // Test that huge content is rejected by ContentValidator
+      // FIX #1315: Non-blocking validation - huge content creates entry as UNTRUSTED
+      // Background validation will later flag or quarantine based on size
       const hugeContent = 'x'.repeat(200 * 1024); // 200KB - exceeds validation limit
 
-      await expect(
-        memory.addEntry(hugeContent)
-      ).rejects.toThrow('Content too large for validation');
+      const hugeEntry = await memory.addEntry(hugeContent);
+      expect(hugeEntry).toBeDefined();
+      expect(hugeEntry.trustLevel).toBe('untrusted'); // Marked as untrusted until validated
 
       // Test that content within limits works
       const safeContent = 'x'.repeat(10 * 1024); // 10KB - safe size
       const entry = await memory.addEntry(safeContent);
       expect(entry.content).toBeDefined();
       expect(entry.content.length).toBeGreaterThan(0);
+      expect(entry.trustLevel).toBe('untrusted'); // All new entries start as untrusted
     });
     
     it('should sanitize metadata', async () => {
