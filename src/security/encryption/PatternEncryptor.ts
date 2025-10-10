@@ -68,7 +68,9 @@ const DEFAULT_CONFIG: EncryptionConfig = {
   enabled: process.env.NODE_ENV === 'production',
   secret: process.env.DOLLHOUSE_ENCRYPTION_SECRET,
   iterations: 100000,
-  salt: 'dollhouse-pattern-encryption-v1',
+  // SECURITY FIX: Configurable salt to prevent rainbow table attacks
+  // Falls back to default only if not configured
+  salt: process.env.DOLLHOUSE_ENCRYPTION_SALT || 'dollhouse-pattern-encryption-v1',
 };
 
 /**
@@ -325,13 +327,46 @@ export class PatternEncryptor {
   }
 
   /**
+   * Securely clear encryption key from memory
+   * SECURITY FIX: Overwrites key buffer with zeros before releasing
+   *
+   * This prevents key recovery from memory dumps or process inspection.
+   * Should be called when encryption is no longer needed.
+   */
+  private static secureKeyClear(): void {
+    if (this.encryptionKey) {
+      // Overwrite key material with zeros
+      this.encryptionKey.fill(0);
+      this.encryptionKey = undefined;
+      logger.debug('Encryption key securely cleared from memory');
+    }
+  }
+
+  /**
    * Reset the encryptor (useful for testing)
-   * WARNING: This will clear the encryption key from memory
+   * SECURITY FIX: Now performs secure key clearing
+   * WARNING: This will securely clear the encryption key from memory
    */
   static reset(): void {
-    this.encryptionKey = undefined;
+    this.secureKeyClear();
     this.isInitialized = false;
     this.config = DEFAULT_CONFIG;
     logger.debug('PatternEncryptor reset');
+  }
+
+  /**
+   * Securely reset the encryptor and clear all sensitive data
+   * SECURITY: Explicitly clears encryption keys from memory
+   *
+   * Use this when:
+   * - Shutting down the application
+   * - Rotating encryption keys
+   * - Responding to security incidents
+   */
+  static secureReset(): void {
+    this.secureKeyClear();
+    this.isInitialized = false;
+    this.config = DEFAULT_CONFIG;
+    logger.info('PatternEncryptor securely reset - all sensitive data cleared');
   }
 }

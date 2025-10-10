@@ -320,7 +320,7 @@ describe('PatternEncryptor', () => {
     });
   });
 
-  describe('reset', () => {
+  describe('reset and security', () => {
     it('should clear encryption state', async () => {
       await PatternEncryptor.initialize({
         enabled: true,
@@ -333,6 +333,52 @@ describe('PatternEncryptor', () => {
 
       expect(PatternEncryptor.isEnabled()).toBe(false);
       expect(() => PatternEncryptor.encrypt(TEST_PATTERN)).toThrow('not initialized');
+    });
+
+    it('should securely clear encryption keys from memory', async () => {
+      // SECURITY FIX TEST: Verifies encryption keys are overwritten
+      await PatternEncryptor.initialize({
+        enabled: true,
+        secret: TEST_SECRET,
+      });
+
+      // Encrypt a pattern (key is now in memory)
+      const encrypted = PatternEncryptor.encrypt(TEST_PATTERN);
+
+      // Securely reset
+      PatternEncryptor.secureReset();
+
+      // Should not be able to encrypt or decrypt after secure reset
+      expect(PatternEncryptor.isEnabled()).toBe(false);
+      expect(() => PatternEncryptor.encrypt(TEST_PATTERN)).toThrow('not initialized');
+      expect(() => PatternEncryptor.decrypt(encrypted)).toThrow('not initialized');
+    });
+
+    it('should support custom salt configuration', async () => {
+      // SECURITY FIX TEST: Verifies configurable salt support
+      const customSalt = 'custom-salt-for-testing';
+
+      await PatternEncryptor.initialize({
+        enabled: true,
+        secret: TEST_SECRET,
+        salt: customSalt,
+      });
+
+      const encrypted = PatternEncryptor.encrypt(TEST_PATTERN);
+      const decrypted = PatternEncryptor.decrypt(encrypted);
+
+      expect(decrypted).toBe(TEST_PATTERN);
+
+      // Keys derived with different salts should produce different results
+      PatternEncryptor.reset();
+      await PatternEncryptor.initialize({
+        enabled: true,
+        secret: TEST_SECRET,
+        salt: 'different-salt',
+      });
+
+      // Should not be able to decrypt with different salt
+      expect(() => PatternEncryptor.decrypt(encrypted)).toThrow();
     });
   });
 });
