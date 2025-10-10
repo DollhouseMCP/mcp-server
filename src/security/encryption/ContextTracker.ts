@@ -16,6 +16,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomBytes } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
 
 /**
@@ -128,12 +129,14 @@ export class ContextTracker {
   }
 
   /**
-   * Generate a unique request ID
+   * Generate a unique request ID using cryptographically secure random bytes
    *
    * @returns Unique request ID
    */
   private static generateRequestId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    // Use cryptographically secure random bytes instead of Math.random()
+    const randomId = randomBytes(4).toString('hex');
+    return `${Date.now()}-${randomId}`;
   }
 
   /**
