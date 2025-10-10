@@ -478,6 +478,26 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
+    file: 'src/elements/memories/constants.ts',
+    reason: 'Constants file - contains only type definitions and constants, no security operations'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/src/elements/memories/constants.ts',
+    reason: 'Constants file - contains only type definitions and constants, no security operations'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/elements/memories/constants.ts',
+    reason: 'Constants file - CI path variant, contains only type definitions and constants'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'elements/memories/constants.ts',
+    reason: 'Constants file - src-stripped path variant, contains only type definitions and constants'
+  },
+  {
+    rule: 'DMCP-SEC-006',
     file: 'src/errors/*.ts',
     reason: 'Error classes are not security operations requiring audit'
   },
