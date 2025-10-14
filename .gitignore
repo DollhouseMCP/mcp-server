@@ -44,6 +44,7 @@ dev-notes/
 Thumbs.db
 
 # Test coverage
+coverage/
 test/coverage/
 test/coverage-integration/
 *.lcov
