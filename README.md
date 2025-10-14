@@ -3,7 +3,7 @@
 ## Project Status
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
 [![npm version](https://img.shields.io/npm/v/@dollhousemcp/mcp-server.svg)](https://www.npmjs.com/package/@dollhousemcp/mcp-server)
-[![License: Dual](https://img.shields.io/badge/License-AGPL--3.0%20%7C%20Commercial-blue.svg)](COMMERCIAL_LICENSE.md)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![GitHub Views](https://komarev.com/ghpvc/?username=DollhouseMCP&repo=mcp-server&label=Repository+Views&style=flat)](https://github.com/DollhouseMCP/mcp-server/graphs/traffic)
 
 ## Build & Quality
@@ -1457,26 +1457,6 @@ For complete release history prior to v1.6.0, see the [GitHub Releases](https://
 
 ## 📜 License
 
-### Dual Licensing
-
-DollhouseMCP™ is available under **dual licensing**:
-
-1. **[AGPL-3.0](LICENSE)** (Open Source) - Free for personal, educational, and open source projects
-2. **[Commercial License](COMMERCIAL_LICENSE.md)** - For proprietary/commercial use without AGPL obligations
-
-**Need a commercial license?** You need one if you want to:
-- Use DollhouseMCP in proprietary/closed-source applications
-- Avoid AGPL's source code disclosure requirements
-- Deploy in closed-source SaaS applications
-- Distribute as part of proprietary software
-
-📧 **Commercial Licensing**: <contact@dollhousemcp.com>
-📄 **Details**: See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for complete information
-
----
-
-### AGPL-3.0 Open Source License
-
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** with Platform Stability Commitments.
 
 ### What This Means
@@ -1495,11 +1475,11 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 - Use the same AGPL-3.0 license for derivatives
 - **Make network use source available** (AGPL requirement)
 
-#### ❌ You CANNOT (under AGPL-3.0):
+#### ❌ You CANNOT:
 - Hold us liable for damages
 - Use our trademarks without permission
 - Claim warranty or guarantee of fitness
-- Use in closed-source proprietary software (requires Commercial License)
+- Resell commercially
 
 ### Platform Stability Commitments
 
@@ -1517,12 +1497,10 @@ By contributing to DollhouseMCP, you agree that:
 
 1. You have the right to grant us license to your contribution
 2. Your contribution is licensed under AGPL-3.0
-3. You grant DollhouseMCP rights to distribute your contribution under both AGPL-3.0 and commercial licenses
-4. **You retain copyright** to your contribution
+3. You grant us additional rights to use your contribution in our commercial offerings
+4. You retain copyright to your contribution
 
-This is standard practice in dual-licensed projects like Qt and MySQL. Your contributions remain open source under AGPL-3.0, while enabling the project to offer commercial licenses that fund continued development.
-
-For complete details, see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) and [LICENSE](LICENSE).
+For the complete license text, see [LICENSE](LICENSE).
 
 ### Questions?
 
