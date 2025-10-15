@@ -11,12 +11,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import type { Mock } from 'jest-mock';
-import * as path from 'path';
-import * as os from 'os';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 // Mock dependencies BEFORE imports using ESM approach
-// NOTE: OperationalTelemetry imports from 'fs' not 'fs/promises', so we mock 'fs' with a promises property
-jest.unstable_mockModule('fs', () => ({
+// NOTE: OperationalTelemetry imports from 'node:fs' not 'node:fs/promises', so we mock 'node:fs' with a promises property
+jest.unstable_mockModule('node:fs', () => ({
   promises: {
     readFile: jest.fn().mockResolvedValue(''),
     writeFile: jest.fn().mockResolvedValue(undefined),
@@ -43,7 +43,7 @@ jest.unstable_mockModule('../../../../src/constants/version.js', () => ({
 }));
 
 // Import after mocking
-const fs = await import('fs');
+const fs = await import('node:fs');
 const { OperationalTelemetry } = await import('../../../../src/telemetry/OperationalTelemetry.js');
 
 // Type-safe mock helpers - access the promises property from the fs mock

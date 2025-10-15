@@ -12,9 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import os from 'node:os';
 import { OperationalTelemetry } from '../../../src/telemetry/OperationalTelemetry.js';
 import type { InstallationEvent } from '../../../src/telemetry/types.js';
 
@@ -57,22 +57,22 @@ describe('Telemetry Integration Tests', () => {
 
   afterEach(async () => {
     // Restore original environment variables
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    } else {
+    if (originalHome === undefined) {
       delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
     }
 
-    if (originalUserProfile !== undefined) {
-      process.env.USERPROFILE = originalUserProfile;
-    } else {
+    if (originalUserProfile === undefined) {
       delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = originalUserProfile;
     }
 
-    if (originalTelemetryEnv !== undefined) {
-      process.env.DOLLHOUSE_TELEMETRY = originalTelemetryEnv;
-    } else {
+    if (originalTelemetryEnv === undefined) {
       delete process.env.DOLLHOUSE_TELEMETRY;
+    } else {
+      process.env.DOLLHOUSE_TELEMETRY = originalTelemetryEnv;
     }
 
     // Clean up test files
@@ -447,7 +447,7 @@ describe('Telemetry Integration Tests', () => {
       // The important part is that telemetry doesn't crash regardless
       try {
         await fs.chmod(TEST_TELEMETRY_DIR, 0o444);
-      } catch (chmodError) {
+      } catch {
         // If chmod fails, skip this test (may not have permission to change permissions)
         return;
       }
@@ -494,7 +494,7 @@ describe('Telemetry Integration Tests', () => {
       expect(lines.length).toBeGreaterThanOrEqual(2);
 
       // Last line should be valid JSON
-      const lastLine = lines[lines.length - 1];
+      const lastLine = lines.at(-1);
       expect(() => JSON.parse(lastLine)).not.toThrow();
 
       // Parse and validate last event

@@ -32,7 +32,7 @@ export interface InstallationEvent {
   version: string;
 
   /** Operating system platform */
-  os: 'darwin' | 'win32' | 'linux' | string;
+  os: string;
 
   /** Node.js version string */
   node_version: string;

@@ -124,7 +124,7 @@ export function detectMCPClient(): MCPClientType {
     // Fallback: Unknown client
     return 'unknown';
 
-  } catch (error) {
+  } catch {
     // Never throw errors - always return a valid result
     // If detection fails, default to unknown
     return 'unknown';
@@ -179,7 +179,7 @@ export function getClientDetectionInfo(): {
       processTitle: process.title,
       execPath: process.execPath
     };
-  } catch (error) {
+  } catch {
     // Never throw - return minimal safe info
     return {
       client: 'unknown',
@@ -206,7 +206,7 @@ export function getClientDetectionInfo(): {
 export function isRunningInClient(client: MCPClientType): boolean {
   try {
     return detectMCPClient() === client;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

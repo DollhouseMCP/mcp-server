@@ -28,9 +28,9 @@
  * - Check opt-out early: no file operations if disabled
  */
 
-import { promises as fs } from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../constants/version.js';
@@ -101,7 +101,7 @@ export class OperationalTelemetry {
           logger.debug(`Telemetry: Loaded existing installation ID: ${trimmedId.substring(0, 8)}...`);
           return this.installId;
         }
-      } catch (error) {
+      } catch {
         // File doesn't exist or is unreadable, will generate new UUID
         logger.debug('Telemetry: No existing installation ID found, generating new one');
       }
@@ -154,7 +154,7 @@ export class OperationalTelemetry {
               logger.debug(`Telemetry: Found existing installation event for version ${VERSION}`);
               return false;
             }
-          } catch (parseError) {
+          } catch {
             // Skip malformed lines
             continue;
           }
@@ -163,7 +163,7 @@ export class OperationalTelemetry {
         // No matching install event found
         logger.debug(`Telemetry: No installation event found for version ${VERSION}`);
         return true;
-      } catch (readError) {
+      } catch {
         // Log file doesn't exist or is unreadable - treat as first run
         logger.debug('Telemetry: No existing log file, treating as first run');
         return true;
