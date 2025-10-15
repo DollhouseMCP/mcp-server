@@ -54,6 +54,20 @@ describe('OperationalTelemetry', () => {
   const testUUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const testVersion = '1.9.19';
 
+  // FIX (S2004): Extract mock implementation helpers to reduce function nesting
+  // Helper: Mock readFile for multiple events scenario
+  function createMultipleEventsMockReadFile(events: Array<Record<string, unknown>>) {
+    return (filePath: string) => {
+      if (filePath.endsWith('.telemetry-id')) {
+        return Promise.resolve(testUUID);
+      }
+      if (filePath.endsWith('telemetry.log')) {
+        return Promise.resolve(events.map(e => JSON.stringify(e)).join('\n') + '\n');
+      }
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+  }
+
   beforeEach(() => {
     // Reset all mocks
     jest.clearAllMocks();
@@ -445,15 +459,8 @@ describe('OperationalTelemetry', () => {
         { event: 'install', install_id: testUUID, version: '1.9.18', os: 'darwin', node_version: 'v20.0.0', mcp_client: 'claude-code', timestamp: '2025-10-14T10:00:00.000Z' }
       ];
 
-      (fsMock.readFile as Mock).mockImplementation((filePath: string) => {
-        if (filePath.endsWith('.telemetry-id')) {
-          return Promise.resolve(testUUID);
-        }
-        if (filePath.endsWith('telemetry.log')) {
-          return Promise.resolve(events.map(e => JSON.stringify(e)).join('\n') + '\n');
-        }
-        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      });
+      // FIX (S2004): Use extracted helper to reduce nesting
+      (fsMock.readFile as Mock).mockImplementation(createMultipleEventsMockReadFile(events));
 
       await OperationalTelemetry.initialize();
 
@@ -756,15 +763,8 @@ describe('OperationalTelemetry', () => {
         { event: 'install', install_id: testUUID, version: '1.9.17', os: 'darwin', node_version: 'v18.0.0', mcp_client: 'unknown', timestamp: '2025-10-01T10:00:00.000Z' }
       ];
 
-      (fsMock.readFile as Mock).mockImplementation((filePath: string) => {
-        if (filePath.endsWith('.telemetry-id')) {
-          return Promise.resolve(testUUID);
-        }
-        if (filePath.endsWith('telemetry.log')) {
-          return Promise.resolve(events.map(e => JSON.stringify(e)).join('\n') + '\n');
-        }
-        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      });
+      // FIX (S2004): Use extracted helper to reduce nesting
+      (fsMock.readFile as Mock).mockImplementation(createMultipleEventsMockReadFile(events));
 
       await OperationalTelemetry.initialize();
 

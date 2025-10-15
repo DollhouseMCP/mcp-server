@@ -10,13 +10,121 @@
 export type MCPClientType = 'claude-desktop' | 'claude-code' | 'vscode' | 'unknown';
 
 /**
+ * Detect client from environment variables (most reliable)
+ * @internal
+ */
+function detectFromEnvironmentVariables(): MCPClientType | null {
+  // Claude Desktop detection
+  if (process.env.CLAUDE_DESKTOP === 'true' || process.env.CLAUDE_DESKTOP_VERSION) {
+    return 'claude-desktop';
+  }
+
+  // Claude Code detection
+  if (process.env.CLAUDE_CODE === 'true' || process.env.TERM_PROGRAM === 'claude-code') {
+    return 'claude-code';
+  }
+
+  // VS Code detection
+  if (process.env.VSCODE_CWD || process.env.VSCODE_PID ||
+      process.env.VSCODE_IPC_HOOK || process.env.VSCODE_NLS_CONFIG ||
+      process.env.TERM_PROGRAM === 'vscode') {
+    return 'vscode';
+  }
+
+  return null;
+}
+
+/**
+ * Detect client from process arguments
+ * @internal
+ */
+function detectFromProcessArguments(): MCPClientType | null {
+  const argv = process.argv.join(' ').toLowerCase();
+
+  if (argv.includes('claude') && argv.includes('desktop')) {
+    return 'claude-desktop';
+  }
+
+  if (argv.includes('claude') && argv.includes('code')) {
+    return 'claude-code';
+  }
+
+  if (argv.includes('vscode') || argv.includes('code.exe')) {
+    return 'vscode';
+  }
+
+  return null;
+}
+
+/**
+ * Detect client from process metadata (execPath and title)
+ * @internal
+ */
+function detectFromProcessMetadata(): MCPClientType | null {
+  const execPath = process.execPath?.toLowerCase() ?? '';
+  const processTitle = process.title?.toLowerCase() ?? '';
+
+  // Check execPath
+  if (execPath.includes('claude') && execPath.includes('desktop')) {
+    return 'claude-desktop';
+  }
+  if (execPath.includes('claude') && execPath.includes('code')) {
+    return 'claude-code';
+  }
+  if (execPath.includes('vscode') || execPath.includes('visual studio code')) {
+    return 'vscode';
+  }
+
+  // Check process title
+  if (processTitle.includes('claude desktop')) {
+    return 'claude-desktop';
+  }
+  if (processTitle.includes('claude code')) {
+    return 'claude-code';
+  }
+  if (processTitle.includes('vscode') || processTitle.includes('visual studio code')) {
+    return 'vscode';
+  }
+
+  return null;
+}
+
+/**
+ * Detect client from TERM_PROGRAM environment variable
+ * @internal
+ */
+function detectFromTermProgram(): MCPClientType | null {
+  if (!process.env.TERM_PROGRAM) {
+    return null;
+  }
+
+  const termProgram = process.env.TERM_PROGRAM.toLowerCase();
+
+  if (termProgram.includes('claude')) {
+    if (termProgram.includes('desktop')) {
+      return 'claude-desktop';
+    }
+    if (termProgram.includes('code')) {
+      return 'claude-code';
+    }
+  }
+
+  if (termProgram.includes('vscode')) {
+    return 'vscode';
+  }
+
+  return null;
+}
+
+/**
  * Detect which MCP client is running the server
  *
- * Detection heuristics:
- * 1. Claude Desktop: CLAUDE_DESKTOP env var or parent process containing "Claude"
- * 2. Claude Code: TERM_PROGRAM=claude-code or CLAUDE_CODE env var
- * 3. VS Code: VSCODE_* env vars or TERM_PROGRAM=vscode
- * 4. Unknown: Fallback for unrecognized clients
+ * Detection heuristics (in priority order):
+ * 1. Environment variables (most reliable)
+ * 2. Process arguments
+ * 3. Process metadata (execPath and title)
+ * 4. TERM_PROGRAM environment variable
+ * 5. Unknown (fallback)
  *
  * @returns The detected MCP client type
  *
@@ -29,104 +137,15 @@ export type MCPClientType = 'claude-desktop' | 'claude-code' | 'vscode' | 'unkno
  */
 export function detectMCPClient(): MCPClientType {
   try {
-    // Check for explicit MCP client environment variables first
-    // These are the most reliable indicators
-
-    // Claude Desktop detection
-    if (process.env.CLAUDE_DESKTOP === 'true' ||
-        process.env.CLAUDE_DESKTOP_VERSION) {
-      return 'claude-desktop';
-    }
-
-    // Claude Code detection (specific to Claude's CLI tool)
-    if (process.env.CLAUDE_CODE === 'true' ||
-        process.env.TERM_PROGRAM === 'claude-code') {
-      return 'claude-code';
-    }
-
-    // VS Code detection
-    if (process.env.VSCODE_CWD ||
-        process.env.VSCODE_PID ||
-        process.env.VSCODE_IPC_HOOK ||
-        process.env.VSCODE_NLS_CONFIG ||
-        process.env.TERM_PROGRAM === 'vscode') {
-      return 'vscode';
-    }
-
-    // Secondary detection: Check process arguments for hints
-    // process.argv may contain paths or flags that reveal the client
-    const argv = process.argv.join(' ').toLowerCase();
-
-    if (argv.includes('claude') && argv.includes('desktop')) {
-      return 'claude-desktop';
-    }
-
-    if (argv.includes('claude') && argv.includes('code')) {
-      return 'claude-code';
-    }
-
-    if (argv.includes('vscode') || argv.includes('code.exe')) {
-      return 'vscode';
-    }
-
-    // Tertiary detection: Check process.execPath and process.title
-    const execPath = process.execPath?.toLowerCase() ?? '';
-    const processTitle = process.title?.toLowerCase() ?? '';
-
-    // Check execPath for client-specific paths
-    if (execPath.includes('claude') && execPath.includes('desktop')) {
-      return 'claude-desktop';
-    }
-
-    if (execPath.includes('claude') && execPath.includes('code')) {
-      return 'claude-code';
-    }
-
-    if (execPath.includes('vscode') || execPath.includes('visual studio code')) {
-      return 'vscode';
-    }
-
-    // Check process title
-    if (processTitle.includes('claude desktop')) {
-      return 'claude-desktop';
-    }
-
-    if (processTitle.includes('claude code')) {
-      return 'claude-code';
-    }
-
-    if (processTitle.includes('vscode') || processTitle.includes('visual studio code')) {
-      return 'vscode';
-    }
-
-    // Quaternary detection: Parent process detection (if available)
-    // Note: process.ppid is available but we can't easily get parent process name
-    // without external tools. We rely on env vars set by parent processes.
-
-    // Check for known IDE/editor environment variables
-    if (process.env.TERM_PROGRAM) {
-      const termProgram = process.env.TERM_PROGRAM.toLowerCase();
-
-      if (termProgram.includes('claude')) {
-        if (termProgram.includes('desktop')) {
-          return 'claude-desktop';
-        }
-        if (termProgram.includes('code')) {
-          return 'claude-code';
-        }
-      }
-
-      if (termProgram.includes('vscode')) {
-        return 'vscode';
-      }
-    }
-
-    // Fallback: Unknown client
-    return 'unknown';
-
+    // FIX: Reduced cognitive complexity by extracting detection stages into helper functions
+    // Previously: 28 (limit 15) - Now: much lower due to early returns in helpers
+    return detectFromEnvironmentVariables() ??
+           detectFromProcessArguments() ??
+           detectFromProcessMetadata() ??
+           detectFromTermProgram() ??
+           'unknown';
   } catch {
     // Never throw errors - always return a valid result
-    // If detection fails, default to unknown
     return 'unknown';
   }
 }
