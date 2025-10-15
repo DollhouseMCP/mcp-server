@@ -36,6 +36,8 @@ import { logger } from '../utils/logger.js';
 import { VERSION } from '../constants/version.js';
 import type { InstallationEvent, TelemetryConfig } from './types.js';
 import { detectMCPClient } from './clientDetector.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export class OperationalTelemetry {
   private static installId: string | null = null;
@@ -93,13 +95,33 @@ export class OperationalTelemetry {
       // Check if UUID file exists
       try {
         const existingId = await fs.readFile(config.installIdPath, 'utf-8');
-        const trimmedId = existingId.trim();
 
+        // FIX: DMCP-SEC-004 - Normalize Unicode in file content to prevent attacks
+        const normalizedResult = UnicodeValidator.normalize(existingId);
+        const trimmedId = normalizedResult.normalizedContent.trim();
+
+        // FIX: DMCP-SEC-006 - Log security-relevant UUID validation operation
         // Validate UUID format (basic check)
         if (trimmedId && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmedId)) {
           this.installId = trimmedId;
           logger.debug(`Telemetry: Loaded existing installation ID: ${trimmedId.substring(0, 8)}...`);
+
+          SecurityMonitor.logSecurityEvent({
+            type: 'TOKEN_VALIDATION_SUCCESS',
+            severity: 'LOW',
+            source: 'telemetry',
+            details: 'Installation UUID validated successfully from persistent storage'
+          });
+
           return this.installId;
+        } else {
+          // Log validation failure if UUID format is invalid
+          SecurityMonitor.logSecurityEvent({
+            type: 'TOKEN_VALIDATION_FAILURE',
+            severity: 'MEDIUM',
+            source: 'telemetry',
+            details: 'Invalid UUID format detected in telemetry ID file'
+          });
         }
       } catch {
         // File doesn't exist or is unreadable, will generate new UUID
@@ -136,7 +158,10 @@ export class OperationalTelemetry {
       // Check if telemetry log exists
       try {
         const logContent = await fs.readFile(config.logPath, 'utf-8');
-        const lines = logContent.trim().split('\n');
+
+        // FIX: DMCP-SEC-004 - Normalize Unicode in log content before processing
+        const normalizedResult = UnicodeValidator.normalize(logContent);
+        const lines = normalizedResult.normalizedContent.trim().split('\n');
 
         // Check if any line contains an install event with current UUID and version
         for (const line of lines) {
