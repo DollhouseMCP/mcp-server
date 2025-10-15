@@ -194,6 +194,16 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/telemetry/types.ts',
+    reason: 'Telemetry type definition file - contains only TypeScript interfaces, no runtime code or user input processing'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/telemetry/types.ts',
+    reason: 'Telemetry type definition file - CI path variant, contains only TypeScript interfaces'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/types/elements/*.ts',
     reason: 'Element interface files are type definitions that do not process user input'
   },

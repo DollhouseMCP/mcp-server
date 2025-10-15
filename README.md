@@ -1455,6 +1455,50 @@ This release introduces the complete portfolio management system with GitHub OAu
 
 For complete release history prior to v1.6.0, see the [GitHub Releases](https://github.com/DollhouseMCP/mcp-server/releases) page.
 
+## Operational Telemetry
+
+DollhouseMCP collects minimal operational telemetry to understand installation counts and platform distribution. This helps us prioritize platform support and understand actual adoption.
+
+### What's Collected
+
+On first run, we record a single installation event containing:
+- Anonymous installation ID (UUID generated locally)
+- DollhouseMCP version
+- Operating system (darwin/win32/linux)
+- Node.js version
+- MCP client type (Claude Desktop, Claude Code, VS Code, or unknown)
+- Timestamp
+
+**We do NOT collect:**
+- Personal information (names, emails, IP addresses)
+- User content (personas, skills, templates, memories)
+- Behavioral data (tool usage, conversations, activity patterns)
+- File paths or directory structures
+
+### Privacy Commitment
+
+- All data is stored locally in `~/.dollhouse/telemetry.log`
+- No network transmission occurs (not yet implemented)
+- Anonymous by design - no way to identify users
+- Transparent - you can inspect the log file anytime
+- See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete details
+
+### Opt Out
+
+Telemetry is enabled by default but easily disabled:
+
+```bash
+export DOLLHOUSE_TELEMETRY=false
+```
+
+Add this to your shell profile (~/.bashrc, ~/.zshrc) to disable permanently.
+
+You can also manually delete the telemetry files:
+```bash
+rm ~/.dollhouse/.telemetry-id
+rm ~/.dollhouse/telemetry.log
+```
+
 ## 📜 License
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** with Platform Stability Commitments.

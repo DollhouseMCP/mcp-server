@@ -35,6 +35,7 @@ import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSear
 import { ServerSetup, IToolHandler } from './server/index.js';
 import { GitHubAuthManager, type DeviceCodeResponse } from './auth/GitHubAuthManager.js';
 import { logger } from './utils/logger.js';
+import { OperationalTelemetry } from './telemetry/index.js';
 import { PersonaExporter, PersonaImporter } from './persona/export-import/index.js';
 import { isDefaultPersona } from './constants/defaultPersonas.js';
 import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
@@ -6003,6 +6004,11 @@ const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
 
 async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promise<void> {
   try {
+    // Initialize operational telemetry (async, non-blocking, never throws)
+    OperationalTelemetry.initialize().catch(() => {
+      // Telemetry errors are logged internally, safe to ignore here
+    });
+
     const server = new DollhouseMCPServer();
     await server.run();
   } catch (error) {

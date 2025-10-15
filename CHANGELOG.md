@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.19] - 2025-10-XX
+
+### Added
+
+- **Minimal operational telemetry for installation tracking** (#1358)
+  - Tracks single installation event on first run (version, OS, Node version, MCP client)
+  - Local-only logging to `~/.dollhouse/telemetry.log` (no network transmission)
+  - Simple opt-out via `DOLLHOUSE_TELEMETRY=false` environment variable
+  - Privacy-first design: no PII, no behavioral data, no user content
+  - Anonymous UUID generated locally for installation identification
+  - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
+  - Graceful error handling (never crashes if files can't be written)
+  - Zero performance impact when opted out
+
 ## [1.9.17] - 2025-10-08
 
 Test isolation and repository cleanup patch
