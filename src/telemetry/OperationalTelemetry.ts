@@ -47,7 +47,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 // PostHog Project API Key (safe to expose publicly - write-only)
 // Used for opt-in telemetry when DOLLHOUSE_TELEMETRY_OPTIN=true
 // Can be overridden with POSTHOG_API_KEY for custom installations
-const DEFAULT_POSTHOG_PROJECT_KEY = 'phc_YOUR_PROJECT_KEY_HERE'; // TODO: Add real key when ready
+const DEFAULT_POSTHOG_PROJECT_KEY = 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
 export class OperationalTelemetry {
   private static installId: string | null = null;
