@@ -28,26 +28,39 @@ Starting in v1.9.18, DollhouseMCP supports **optional** remote telemetry via Pos
 
 ### Key Features
 
-- **Opt-in only**: Requires explicit API key configuration in `.env.local` file
+- **Opt-in only**: Requires explicit environment variable to enable
 - **Anonymous**: Uses same UUID system as local telemetry, no PII collected
 - **Additional opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable only remote sending while keeping local logs
 - **Free tier**: PostHog offers 1M events/month free
 - **Data location**: Can use US or EU servers (GDPR compliant)
 - **Same data**: Remote telemetry sends the exact same data as local logs (no additional fields)
 
-### Configuration
+### Simple Opt-In (Recommended)
 
-1. Create a free account at https://app.posthog.com
-2. Get your API key (starts with `phc_`)
-3. Add to `.env.local` file in project root:
+Enable remote telemetry with a single environment variable:
 
 ```bash
-# PostHog Configuration (Optional)
-POSTHOG_API_KEY=phc_YOUR_KEY_HERE
-POSTHOG_HOST=https://app.posthog.com  # Or use EU: https://eu.posthog.com
+export DOLLHOUSE_TELEMETRY_OPTIN=true
 ```
 
-4. Restart the MCP server
+This uses DollhouseMCP's shared PostHog project for community-wide analytics. The PostHog project key is embedded in the code and safe to share publicly (it's write-only and provides no access to data).
+
+**Why is the project key safe to expose?**
+- PostHog project keys (starting with `phc_`) are **write-only** - they can only send events, not read data
+- Public exposure is a standard practice (similar to Google Analytics IDs)
+- No sensitive data access or account control possible
+- Community benefits from aggregated, anonymous usage insights
+
+### Custom PostHog Project (Advanced)
+
+For enterprise deployments or custom analytics, you can use your own PostHog instance:
+
+```bash
+export POSTHOG_API_KEY=phc_your_custom_key
+export POSTHOG_HOST=https://app.posthog.com  # Optional: Use EU server https://eu.posthog.com
+```
+
+This overrides the default shared project and routes telemetry to your own PostHog account.
 
 ### What's Sent to PostHog
 
@@ -79,9 +92,9 @@ When configured, the same installation event stored locally is also sent to Post
 
 ### Disabling Remote Telemetry
 
-Three ways to disable remote telemetry:
+Multiple ways to control telemetry:
 
-1. **Don't configure API key** (default) - Remote telemetry never activates
+1. **Don't set `DOLLHOUSE_TELEMETRY_OPTIN=true`** (default) - Remote telemetry never activates
 2. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
 3. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
 
@@ -91,6 +104,9 @@ export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
 
 # Option 2: Disable all telemetry
 export DOLLHOUSE_TELEMETRY=false
+
+# Option 3: Simple opt-in for incentive programs (when available)
+export DOLLHOUSE_TELEMETRY_OPTIN=true
 ```
 
 ### Why PostHog?
@@ -356,7 +372,7 @@ You can disable telemetry at different levels:
 
 1. **Remote only**: `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Keeps local logs, disables PostHog
 2. **All telemetry**: `DOLLHOUSE_TELEMETRY=false` - Disables both local and remote
-3. **No configuration**: Default behavior (local telemetry enabled, remote requires API key)
+3. **No configuration**: Default behavior (local telemetry enabled, remote requires `DOLLHOUSE_TELEMETRY_OPTIN=true`)
 
 ### Method 1: Environment Variable (Recommended)
 

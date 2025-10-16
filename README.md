@@ -1481,22 +1481,24 @@ We're planning a future incentive program where users who opt in to share anonym
 
 **The telemetry infrastructure is already built and ready** - when we launch the incentive program, you'll be able to opt in easily through your MCP configuration.
 
-### How to Opt In (When Available)
+### How to Opt In (Simple)
 
-To help us by sharing anonymous usage statistics, you can add this to your MCP configuration:
+When the incentive program launches, enable telemetry with one environment variable:
 
-```json
-{
-  "mcpServers": {
-    "dollhousemcp": {
-      "command": "node",
-      "args": ["/path/to/@dollhousemcp/mcp-server/dist/index.js"],
-      "env": {
-        "POSTHOG_API_KEY": "provided-when-program-launches"
-      }
-    }
-  }
-}
+```bash
+# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+export DOLLHOUSE_TELEMETRY_OPTIN=true
+
+# Then restart Claude Desktop/Claude Code
+```
+
+That's it! You'll be enrolled in the telemetry program and eligible for future incentives.
+
+**Advanced**: For enterprise or custom analytics, you can use your own PostHog instance:
+
+```bash
+export POSTHOG_API_KEY=phc_your_custom_key
+export POSTHOG_HOST=https://app.posthog.com  # Optional: EU server
 ```
 
 ### What Would Be Collected (If You Opt In)
@@ -1521,6 +1523,7 @@ Only on first run after opting in:
 - GDPR compliant - opt-in by design
 - Anonymous by design - no user identification possible
 - Open source - audit the code anytime
+- PostHog project keys are safe to expose publicly (write-only, no data access)
 - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete details
 
 ## 📜 License

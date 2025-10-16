@@ -14,20 +14,22 @@
  * - Usage patterns, commands, or interactions
  * - Network data, file paths, or system details beyond OS type
  *
- * Opt-out:
- * - Set environment variable: DOLLHOUSE_TELEMETRY=false (disables all telemetry)
- * - Set environment variable: DOLLHOUSE_TELEMETRY_NO_REMOTE=true (local only, no PostHog)
+ * Telemetry control:
+ * - DOLLHOUSE_TELEMETRY=false - Disables all telemetry (local and remote)
+ * - DOLLHOUSE_TELEMETRY_OPTIN=true - Enables remote telemetry with default PostHog project
+ * - DOLLHOUSE_TELEMETRY_NO_REMOTE=true - Local telemetry only, no PostHog
+ * - POSTHOG_API_KEY - Custom PostHog project key (overrides default)
  * - Delete telemetry files: rm ~/.dollhouse/.telemetry-id ~/.dollhouse/telemetry.log
  *
  * Data storage:
  * - Local: ~/.dollhouse/.telemetry-id (UUID) and ~/.dollhouse/telemetry.log (events)
- * - Remote (opt-in): PostHog analytics if POSTHOG_API_KEY is configured
+ * - Remote (opt-in): PostHog analytics when DOLLHOUSE_TELEMETRY_OPTIN=true or POSTHOG_API_KEY is set
  *
  * Design principles:
  * - Fail gracefully: errors never crash the server
  * - Debug-only logging: no user-facing telemetry noise
  * - Check opt-out early: no file operations if disabled
- * - Remote telemetry is opt-in: requires explicit POSTHOG_API_KEY configuration
+ * - Remote telemetry is opt-in: requires DOLLHOUSE_TELEMETRY_OPTIN=true or explicit POSTHOG_API_KEY
  */
 
 import { promises as fs } from 'node:fs';
@@ -41,6 +43,11 @@ import type { InstallationEvent, TelemetryConfig } from './types.js';
 import { detectMCPClient } from './clientDetector.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+
+// PostHog Project API Key (safe to expose publicly - write-only)
+// Used for opt-in telemetry when DOLLHOUSE_TELEMETRY_OPTIN=true
+// Can be overridden with POSTHOG_API_KEY for custom installations
+const DEFAULT_POSTHOG_PROJECT_KEY = 'phc_YOUR_PROJECT_KEY_HERE'; // TODO: Add real key when ready
 
 export class OperationalTelemetry {
   private static installId: string | null = null;
@@ -71,8 +78,16 @@ export class OperationalTelemetry {
 
   /**
    * Initialize PostHog client for remote telemetry
-   * Only initializes if POSTHOG_API_KEY is set and remote telemetry is not disabled
-   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE environment variable
+   *
+   * Three ways to enable remote telemetry:
+   * 1. DOLLHOUSE_TELEMETRY_OPTIN=true - Uses default PostHog project (simplest opt-in)
+   * 2. POSTHOG_API_KEY=<key> - Uses custom PostHog project (backward compatibility)
+   * 3. DOLLHOUSE_TELEMETRY_OPTIN=true with POSTHOG_API_KEY=<key> - Custom key takes precedence
+   *
+   * PostHog project keys are safe to expose publicly - they are write-only and cannot
+   * be used to read data. This allows embedding a default key for simple opt-in telemetry.
+   *
+   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE=true to disable all remote telemetry
    */
   private static initPostHog(): void {
     try {
@@ -87,10 +102,23 @@ export class OperationalTelemetry {
         return;
       }
 
-      // Skip if no API key configured (opt-in for remote)
-      const apiKey = process.env.POSTHOG_API_KEY;
+      // Determine if user has opted in and which API key to use
+      const optedIn = process.env.DOLLHOUSE_TELEMETRY_OPTIN === 'true';
+      const customApiKey = process.env.POSTHOG_API_KEY;
+
+      // Select API key: custom key takes precedence, then default if opted in
+      let apiKey: string | null = null;
+      if (customApiKey) {
+        apiKey = customApiKey;
+        logger.debug('Telemetry: Using custom POSTHOG_API_KEY');
+      } else if (optedIn) {
+        apiKey = DEFAULT_POSTHOG_PROJECT_KEY;
+        logger.debug('Telemetry: Using default PostHog project key (opted in via DOLLHOUSE_TELEMETRY_OPTIN)');
+      }
+
+      // Skip if no API key available (not opted in and no custom key)
       if (!apiKey) {
-        logger.debug('Telemetry: PostHog not configured (no POSTHOG_API_KEY)');
+        logger.debug('Telemetry: Remote telemetry not enabled (no opt-in or API key)');
         return;
       }
 
