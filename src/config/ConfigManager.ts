@@ -82,6 +82,15 @@ export interface CollectionConfig {
   add_attribution: boolean;
 }
 
+export interface CapabilityIndexResourcesConfig {
+  advertise_resources: boolean; // Default: false - safe, don't advertise
+  variants: {
+    summary: boolean;  // ~1,254 tokens - Opt-in
+    full: boolean;     // ~48,306 tokens - Opt-in
+    stats: boolean;    // ~50 tokens - Safe to enable by default
+  };
+}
+
 export interface EnhancedIndexConfig {
   enabled: boolean;
   limits: {
@@ -104,6 +113,7 @@ export interface EnhancedIndexConfig {
     scanInterval: number;
     maxConcurrentScans: number;
   };
+  resources?: CapabilityIndexResourcesConfig;
 }
 
 export interface ElementsConfig {
@@ -306,6 +316,14 @@ export class ConfigManager {
             enabled: false,  // Opt-in only
             sampleRate: 0.1,
             metricsInterval: 60000
+          },
+          resources: {
+            advertise_resources: false, // Default: safe, disabled
+            variants: {
+              summary: false,  // ~1,254 tokens - Opt-in required
+              full: false,     // ~48,306 tokens - Opt-in required
+              stats: true      // ~50 tokens - Safe by default
+            }
           }
         }
       },
@@ -755,90 +773,162 @@ export class ConfigManager {
       this.config.wizard.completed = fixBoolean(this.config.wizard.completed);
       this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
     }
+
+    // Fix capability index resources settings
+    if (this.config.elements?.enhanced_index?.resources) {
+      const resources = this.config.elements.enhanced_index.resources;
+      resources.advertise_resources = fixBoolean(resources.advertise_resources);
+      if (resources.variants) {
+        resources.variants.summary = fixBoolean(resources.variants.summary);
+        resources.variants.full = fixBoolean(resources.variants.full);
+        resources.variants.stats = fixBoolean(resources.variants.stats);
+      }
+    }
   }
 
   /**
    * Merge partial config with defaults
-   * 
+   *
+   * FIX: Reduced cognitive complexity by extracting helper methods
+   * Previously: Cognitive complexity of 17 (exceeded max of 15)
+   * Now: Split into focused helper methods for each config section
+   *
    * IMPORTANT: This function preserves unknown fields for forward compatibility.
    * If a future version adds new config fields, older versions won't lose them.
    */
   private mergeWithDefaults(partial: Partial<DollhouseConfig>): DollhouseConfig {
     const defaults = this.getDefaultConfig();
-    
+
     // Start with a deep clone of partial to preserve all unknown fields
     const result: any = JSON.parse(JSON.stringify(partial));
-    
+
     // Ensure all required fields exist with defaults
     result.version = result.version || defaults.version;
-    
-    // User section - preserve unknown fields while ensuring required fields
-    result.user = {
-      ...result.user,
-      username: result.user?.username ?? defaults.user.username,
-      email: result.user?.email ?? defaults.user.email,
-      display_name: result.user?.display_name ?? defaults.user.display_name
-    };
-    
-    // GitHub section - deep merge preserving unknown fields
-    if (!result.github) result.github = {};
-    result.github.portfolio = {
-      ...defaults.github.portfolio,
-      ...result.github.portfolio
-    };
-    result.github.auth = {
-      ...defaults.github.auth,
-      ...result.github.auth
-    };
-    
-    // Sync section - preserve unknown fields at all levels
-    if (!result.sync) result.sync = {};
-    result.sync.enabled = result.sync.enabled ?? defaults.sync.enabled;
-    result.sync.individual = {
-      ...defaults.sync.individual,
-      ...result.sync.individual
-    };
-    result.sync.bulk = {
-      ...defaults.sync.bulk,
-      ...result.sync.bulk
-    };
-    result.sync.privacy = {
-      ...defaults.sync.privacy,
-      ...result.sync.privacy,
-      // Special handling for arrays - use provided or default
-      excluded_patterns: result.sync.privacy?.excluded_patterns || defaults.sync.privacy.excluded_patterns
-    };
-    
-    // Collection section
-    result.collection = {
-      ...defaults.collection,
-      ...result.collection
-    };
-    
-    // Elements section
-    if (!result.elements) result.elements = {};
-    result.elements = {
-      ...result.elements,
-      auto_activate: result.elements.auto_activate || defaults.elements.auto_activate,
-      default_element_dir: result.elements.default_element_dir || defaults.elements.default_element_dir
-    };
-    
-    // Display section
-    if (!result.display) result.display = {};
-    result.display.persona_indicators = {
-      ...defaults.display.persona_indicators,
-      ...result.display.persona_indicators
-    };
-    result.display.verbose_logging = result.display.verbose_logging ?? defaults.display.verbose_logging;
-    result.display.show_progress = result.display.show_progress ?? defaults.display.show_progress;
-    
-    // Wizard section
-    result.wizard = {
-      ...defaults.wizard,
-      ...result.wizard
-    };
-    
+
+    // Merge each section using helper methods
+    result.user = this.mergeUserConfig(result.user, defaults.user);
+    result.github = this.mergeGitHubConfig(result.github, defaults.github);
+    result.sync = this.mergeSyncConfig(result.sync, defaults.sync);
+    result.collection = { ...defaults.collection, ...result.collection };
+    result.elements = this.mergeElementsConfig(result.elements, defaults.elements);
+    result.display = this.mergeDisplayConfig(result.display, defaults.display);
+    result.wizard = { ...defaults.wizard, ...result.wizard };
+
     return result as DollhouseConfig;
+  }
+
+  /**
+   * Merge user configuration section
+   */
+  private mergeUserConfig(userConfig: any, defaults: UserConfig): UserConfig {
+    return {
+      ...userConfig,
+      username: userConfig?.username ?? defaults.username,
+      email: userConfig?.email ?? defaults.email,
+      display_name: userConfig?.display_name ?? defaults.display_name
+    };
+  }
+
+  /**
+   * Merge GitHub configuration section
+   */
+  private mergeGitHubConfig(githubConfig: any, defaults: GitHubConfig): GitHubConfig {
+    const result = githubConfig || {};
+    result.portfolio = {
+      ...defaults.portfolio,
+      ...result.portfolio
+    };
+    result.auth = {
+      ...defaults.auth,
+      ...result.auth
+    };
+    return result;
+  }
+
+  /**
+   * Merge sync configuration section
+   */
+  private mergeSyncConfig(syncConfig: any, defaults: SyncConfig): SyncConfig {
+    const result = syncConfig || {};
+    result.enabled = result.enabled ?? defaults.enabled;
+    result.individual = { ...defaults.individual, ...result.individual };
+    result.bulk = { ...defaults.bulk, ...result.bulk };
+    result.privacy = {
+      ...defaults.privacy,
+      ...result.privacy,
+      excluded_patterns: result.privacy?.excluded_patterns || defaults.privacy.excluded_patterns
+    };
+    return result;
+  }
+
+  /**
+   * Merge elements configuration section
+   */
+  private mergeElementsConfig(elementsConfig: any, defaults: ElementsConfig): ElementsConfig {
+    const result = elementsConfig || {};
+    result.auto_activate = result.auto_activate || defaults.auto_activate;
+    result.default_element_dir = result.default_element_dir || defaults.default_element_dir;
+    result.enhanced_index = this.mergeEnhancedIndexConfig(result.enhanced_index, defaults.enhanced_index);
+    return result;
+  }
+
+  /**
+   * Merge enhanced index configuration
+   */
+  private mergeEnhancedIndexConfig(userIndex: any, defaultIndex: EnhancedIndexConfig | undefined): EnhancedIndexConfig | undefined {
+    // FIX: Inverted negated condition for better readability
+    // Previously: if (userIndex || defaultIndex)
+    // Now: Early return for clear logic flow
+    if (!userIndex && !defaultIndex) {
+      return undefined;
+    }
+
+    if (!userIndex) {
+      return defaultIndex;
+    }
+
+    if (!defaultIndex) {
+      return userIndex;
+    }
+
+    const result: any = {
+      ...defaultIndex,
+      ...userIndex,
+      limits: { ...defaultIndex.limits, ...userIndex.limits },
+      telemetry: { ...defaultIndex.telemetry, ...userIndex.telemetry },
+      resources: userIndex.resources ? {
+        ...defaultIndex.resources,
+        ...userIndex.resources,
+        variants: {
+          ...defaultIndex.resources?.variants,
+          ...userIndex.resources?.variants
+        }
+      } : defaultIndex.resources
+    };
+
+    // Preserve optional fields if they exist
+    if (userIndex.verbPatterns) {
+      result.verbPatterns = { ...defaultIndex.verbPatterns, ...userIndex.verbPatterns };
+    }
+    if (userIndex.backgroundAnalysis) {
+      result.backgroundAnalysis = { ...defaultIndex.backgroundAnalysis, ...userIndex.backgroundAnalysis };
+    }
+
+    return result;
+  }
+
+  /**
+   * Merge display configuration section
+   */
+  private mergeDisplayConfig(displayConfig: any, defaults: DisplayConfig): DisplayConfig {
+    const result = displayConfig || {};
+    result.persona_indicators = {
+      ...defaults.persona_indicators,
+      ...result.persona_indicators
+    };
+    result.verbose_logging = result.verbose_logging ?? defaults.verbose_logging;
+    result.show_progress = result.show_progress ?? defaults.show_progress;
+    return result;
   }
 
   /**

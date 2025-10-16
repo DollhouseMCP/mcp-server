@@ -52,6 +52,7 @@ import { MemoryManager } from './elements/memories/MemoryManager.js';
 import { Memory } from './elements/memories/Memory.js';
 import { generateMemoryId } from './elements/memories/utils.js';
 import { ConfigManager } from './config/ConfigManager.js';
+import { CapabilityIndexResource } from './server/resources/CapabilityIndexResource.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -104,18 +105,50 @@ export class DollhouseMCPServer implements IToolHandler {
   private templateRenderer: TemplateRenderer;
   private agentManager: AgentManager;
   private memoryManager: MemoryManager;
+  private capabilityIndexResource?: CapabilityIndexResource;
+  // FIX: Added readonly modifier for immutable reference
+  // Previously: Missing readonly modifier
+  // Now: Marked as readonly since configManager is never reassigned
+  private readonly configManager: ConfigManager;
   // ConfigWizardCheck removed - not included in hotfix
 
   constructor() {
+    // Initialize ConfigManager to check resource settings
+    this.configManager = ConfigManager.getInstance();
+
+    // Build capabilities object conditionally
+    // Note: Config may not be fully initialized yet, so we check synchronously
+    // If config is not initialized, defaults (advertise_resources: false) apply
+    const capabilities: any = {
+      tools: {},
+    };
+
+    // CONDITIONAL: Only advertise resources capability if explicitly enabled
+    // Default is false (safe, future-proof implementation)
+    // FIX: Properly handle exception in catch block
+    // Previously: Empty catch block with comment only
+    // Now: Log the error for debugging purposes
+    try {
+      const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
+      if (resourcesConfig?.advertise_resources === true) {
+        capabilities.resources = {};
+        logger.info('MCP Resources capability advertised (enabled via config)');
+      } else {
+        logger.info('MCP Resources capability NOT advertised (disabled by default - future-proof implementation)');
+      }
+    } catch (error) {
+      // Config not initialized yet - use safe default (no resources)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug(`Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
+    }
+
     this.server = new Server(
       {
         name: "dollhousemcp",
         version: "1.0.0-build-20250817-1630-pr606",
       },
       {
-        capabilities: {
-          tools: {},
-        },
+        capabilities,
       }
     );
 
@@ -283,6 +316,67 @@ export class DollhouseMCPServer implements IToolHandler {
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.initializeCollectionCache', error);
       // Don't throw - cache failures shouldn't prevent server startup
+    }
+  }
+
+  /**
+   * Setup MCP resource handlers (CONDITIONAL)
+   *
+   * IMPORTANT: Resources are DISABLED by default (advertise_resources: false)
+   * This is a future-proof implementation for when MCP clients fully support resources.
+   *
+   * Current status (October 2025):
+   * - Claude Code: Discovery only, never reads
+   * - Claude Desktop/VS Code: Manual attachment only
+   *
+   * Only register handlers if explicitly enabled in config.
+   */
+  private async setupResourceHandlers(): Promise<void> {
+    try {
+      const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
+
+      if (!resourcesConfig?.advertise_resources) {
+        logger.info('MCP Resources disabled (future-proof implementation, opt-in required)');
+        return;
+      }
+
+      // Import schemas from MCP SDK
+      const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+
+      // Initialize resource handler
+      this.capabilityIndexResource = new CapabilityIndexResource();
+
+      // Determine which variants are enabled
+      const enabledVariants: string[] = [];
+      if (resourcesConfig.variants?.summary) enabledVariants.push('summary');
+      if (resourcesConfig.variants?.full) enabledVariants.push('full');
+      if (resourcesConfig.variants?.stats) enabledVariants.push('stats');
+
+      logger.info(`MCP Resources enabled: capability-index (variants: ${enabledVariants.join(', ') || 'none'})`);
+
+      // Register ListResourcesRequest handler
+      this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+        if (!this.capabilityIndexResource) {
+          throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
+        }
+        const result = await this.capabilityIndexResource.listResources();
+        return result as any; // Type assertion needed for MCP SDK compatibility
+      });
+
+      // Register ReadResourceRequest handler
+      this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+        if (!this.capabilityIndexResource) {
+          throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
+        }
+        const result = await this.capabilityIndexResource.readResource(request.params.uri);
+        return result as any; // Type assertion needed for MCP SDK compatibility
+      });
+
+      logger.debug('MCP resource handlers registered successfully');
+    } catch (error) {
+      ErrorHandler.logError('DollhouseMCPServer.setupResourceHandlers', error);
+      // Don't throw - resource setup failures shouldn't prevent server startup
+      logger.warn('Failed to setup MCP resource handlers, continuing without resources');
     }
   }
 
@@ -5942,20 +6036,27 @@ Placeholders for custom format:
     logger.info("Starting DollhouseMCP server...");
     // Docker build verification - proves we're running fresh code
     logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
-    
+
     // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
     // This ensures personas and portfolio are ready when MCP commands arrive
     try {
+      // Initialize ConfigManager to load user settings
+      await this.configManager.initialize();
+
       await this.initializePortfolio();
       await this.completeInitialization();
       logger.info("Portfolio and personas initialized successfully");
+
+      // Setup MCP resource handlers (conditional based on config)
+      await this.setupResourceHandlers();
+
       // Output message that Docker tests can detect
       logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
       throw error; // Re-throw to prevent server from starting with incomplete initialization
     }
-    
+
     const transport = new StdioServerTransport();
     
     // Set up graceful shutdown handlers

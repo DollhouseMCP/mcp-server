@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **MCP Resources Support** - Future-proof implementation of MCP Resources protocol
+  - Three resource variants exposed: summary (~3K tokens), full (~40K tokens), and stats (JSON)
+  - Capability index exposed as MCP resources for intelligent element discovery
+  - **Status**: Non-functional in Claude Code (Oct 2025) - discovery only, not read
+  - **Default**: Disabled for safety - zero overhead when not enabled
+  - Manual attachment works in Claude Desktop and VS Code
+  - Comprehensive user documentation at `docs/configuration/MCP_RESOURCES.md`
+  - Research document at `docs/development/MCP_RESOURCES_SUPPORT_RESEARCH_2025-10-16.md`
+  - Configuration options: `resources.enabled`, `resources.expose[]`, `resources.cache_ttl`
+  - Early adopter advantage - ready when MCP clients implement full resource reading
+
 ## [1.9.19] - 2025-10-XX
 
 ### Added
