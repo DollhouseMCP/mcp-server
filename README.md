@@ -1455,49 +1455,91 @@ This release introduces the complete portfolio management system with GitHub OAu
 
 For complete release history prior to v1.6.0, see the [GitHub Releases](https://github.com/DollhouseMCP/mcp-server/releases) page.
 
-## Operational Telemetry
+## 📊 Anonymous Telemetry
 
-DollhouseMCP collects minimal operational telemetry to understand installation counts and platform distribution. This helps us prioritize platform support and understand actual adoption.
+DollhouseMCP collects minimal, anonymous telemetry to prioritize platform support and ensure compatibility. We follow industry standards like Next.js, Nuxt, and npm.
 
 ### What's Collected
 
-On first run, we record a single installation event containing:
-- Anonymous installation ID (UUID generated locally)
-- DollhouseMCP version
+**One installation event per version containing:**
+- Anonymous installation UUID (generated locally)
+- Version number
 - Operating system (darwin/win32/linux)
 - Node.js version
-- MCP client type (Claude Desktop, Claude Code, VS Code, or unknown)
+- MCP client type (Claude Desktop, Claude Code, etc.)
 - Timestamp
 
-**We do NOT collect:**
-- Personal information (names, emails, IP addresses)
-- User content (personas, skills, templates, memories)
-- Behavioral data (tool usage, conversations, activity patterns)
-- File paths or directory structures
+**Example data:**
+```json
+{
+  "install_id": "550e8400-e29b-41d4-a716-446655440000",
+  "version": "1.9.18",
+  "os": "darwin",
+  "node_version": "20.11.0",
+  "mcp_client": "claude-desktop",
+  "timestamp": "2025-10-16T18:00:00.000Z"
+}
+```
 
-### Privacy Commitment
+### What's NOT Collected
 
-- All data is stored locally in `~/.dollhouse/telemetry.log`
-- No network transmission occurs (not yet implemented)
-- Anonymous by design - no way to identify users
-- Transparent - you can inspect the log file anytime
-- See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete details
+❌ Personal information (names, emails, IP addresses)
+❌ User content (personas, skills, templates, memories)
+❌ Usage patterns (commands, interactions, conversations)
+❌ File paths or system details beyond OS type
+❌ Any data that could identify you
 
-### Opt Out
+### Why We Collect This
 
-Telemetry is enabled by default but easily disabled:
+**Platform Prioritization:**
+- Which OS to focus testing on? (macOS, Windows, Linux)
+- Which Node.js versions to support? (Node 18, 20, 22)
+- Which MCP clients to optimize for? (Claude Desktop, Claude Code)
 
+**Real Benefits for Users:**
+- ✅ Better testing on platforms you actually use
+- ✅ Compatibility with Node.js versions you run
+- ✅ Performance optimizations for your MCP client
+- ✅ Bug fixes prioritized by impact
+
+### Transparency
+
+**Local-first:** All data written to `~/.dollhouse/telemetry.log` (inspect anytime)
+
+**Debug mode** (see exactly what's sent):
+```bash
+export DOLLHOUSE_TELEMETRY_DEBUG=true
+```
+
+**Open source:** Audit our implementation in `src/telemetry/OperationalTelemetry.ts`
+
+**Complete privacy policy:** [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md)
+
+### Opt Out (Easy!)
+
+**Disable all telemetry:**
 ```bash
 export DOLLHOUSE_TELEMETRY=false
 ```
 
-Add this to your shell profile (~/.bashrc, ~/.zshrc) to disable permanently.
+**Disable remote only (keep local logs):**
+```bash
+export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
+```
 
-You can also manually delete the telemetry files:
+Add to your shell profile (~/.bashrc, ~/.zshrc, ~/.config/fish/config.fish) to make permanent.
+
+**Or delete telemetry files:**
 ```bash
 rm ~/.dollhouse/.telemetry-id
 rm ~/.dollhouse/telemetry.log
 ```
+
+### Security Note
+
+The PostHog API key visible in our code (`phc_*`) is a **public project key** designed by PostHog to be safe for client-side use. It can only send events (write-only) and cannot read analytics data. This is the same security model as Google Analytics tracking IDs, Sentry DSNs, and Mixpanel tokens.
+
+For complete details, see [docs/development/TELEMETRY_RESPONSE.md](docs/development/TELEMETRY_RESPONSE.md).
 
 ## 📜 License
 

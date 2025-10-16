@@ -70,9 +70,62 @@ export class OperationalTelemetry {
   }
 
   /**
+   * Check if debug mode is enabled
+   * Debug mode shows telemetry events before transmission (like Next.js and Nuxt)
+   * @returns true if DOLLHOUSE_TELEMETRY_DEBUG=true
+   */
+  private static isDebugMode(): boolean {
+    return process.env.DOLLHOUSE_TELEMETRY_DEBUG === 'true';
+  }
+
+  /**
+   * Log debug information about telemetry events
+   * Only outputs if debug mode is enabled
+   * Uses console.error to avoid interfering with stdout (MCP protocol uses stdout)
+   * @param message - Debug message to display
+   * @param data - Optional data object to display (will be JSON.stringified)
+   */
+  private static debugLog(message: string, data?: unknown): void {
+    if (this.isDebugMode()) {
+      console.error(`[Telemetry Debug] ${message}`);
+      if (data) {
+        console.error(JSON.stringify(data, null, 2));
+      }
+    }
+  }
+
+  /**
    * Initialize PostHog client for remote telemetry
-   * Uses default project key for basic metrics unless overridden or disabled
-   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE environment variable for opt-out
+   *
+   * PostHog Project API Key Security (phc_*):
+   * This is a PUBLIC PROJECT KEY that is safe to expose in code. PostHog project keys are
+   * designed by PostHog to be client-side safe and are used in browser JavaScript, mobile apps,
+   * and public repositories across the industry.
+   *
+   * What it CAN do (write-only):
+   * - Send telemetry events
+   * - Evaluate feature flags
+   *
+   * What it CANNOT do:
+   * - Read existing analytics data
+   * - Access user information or private data
+   * - Modify project settings
+   * - Compromise security in any way
+   *
+   * This is the same security model as:
+   * - Google Analytics tracking IDs (visible in every website's source)
+   * - Sentry public DSNs (embedded in client-side error reporting)
+   * - Mixpanel project tokens (standard client-side analytics)
+   *
+   * For more details, see:
+   * - PostHog docs: https://posthog.com/docs/api
+   * - Project documentation: docs/development/TELEMETRY_RESPONSE.md
+   *
+   * User control options:
+   * - Opt out of remote: DOLLHOUSE_TELEMETRY_NO_REMOTE=true
+   * - Use own key: POSTHOG_API_KEY=phc_your_key_here
+   * - Debug mode: DOLLHOUSE_TELEMETRY_DEBUG=true (see what's sent)
+   * - Disable all: DOLLHOUSE_TELEMETRY=false
    */
   private static initPostHog(): void {
     try {
@@ -87,8 +140,9 @@ export class OperationalTelemetry {
         return;
       }
 
-      // Use environment variable if set, otherwise use default project key for basic metrics
-      // This provides automatic installation metrics for project sustainability/funding
+      // PostHog Project API Key (public, write-only)
+      // This provides automatic installation metrics for platform support and optimization.
+      // Helps us prioritize testing platforms, Node.js versions, and MCP client compatibility.
       // Users can override with their own key or disable with DOLLHOUSE_TELEMETRY_NO_REMOTE=true
       const apiKey = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
@@ -261,6 +315,11 @@ export class OperationalTelemetry {
    * Record installation event to telemetry log
    * Appends JSON line to log file (JSONL format)
    * Also sends to PostHog if configured
+   *
+   * Debug mode (DOLLHOUSE_TELEMETRY_DEBUG=true):
+   * - Shows exactly what's being logged locally
+   * - Shows exactly what's being sent to PostHog
+   * - Displays transmission status
    */
   private static async recordInstallation(): Promise<void> {
     try {
@@ -282,6 +341,11 @@ export class OperationalTelemetry {
         timestamp: new Date().toISOString(),
       };
 
+      // Debug mode: Show what will be logged locally
+      if (this.isDebugMode()) {
+        this.debugLog('Local event (writing to ~/.dollhouse/telemetry.log):', event);
+      }
+
       // Ensure directory exists
       await fs.mkdir(path.dirname(config.logPath), { recursive: true });
 
@@ -296,7 +360,7 @@ export class OperationalTelemetry {
       // Send to PostHog if enabled and remote telemetry not disabled
       if (this.posthog && process.env.DOLLHOUSE_TELEMETRY_NO_REMOTE !== 'true') {
         try {
-          this.posthog.capture({
+          const posthogEvent = {
             distinctId: this.installId,
             event: 'server_installation',
             properties: {
@@ -305,16 +369,37 @@ export class OperationalTelemetry {
               node_version: process.version,
               mcp_client: this.getMCPClient(),
             },
-          });
+          };
+
+          // Debug mode: Show what will be sent to PostHog
+          if (this.isDebugMode()) {
+            this.debugLog('Remote event (sending to PostHog):', posthogEvent);
+          }
+
+          this.posthog.capture(posthogEvent);
 
           // Flush immediately to ensure event is sent
           await this.posthog.flush();
+
+          if (this.isDebugMode()) {
+            this.debugLog('Event sent to PostHog successfully');
+          }
+
           logger.debug('Telemetry: Sent installation event to PostHog');
         } catch (posthogError) {
           // Fail gracefully - PostHog errors shouldn't break telemetry
-          logger.debug(
-            `Telemetry: Failed to send to PostHog: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`
-          );
+          const errorMsg = posthogError instanceof Error ? posthogError.message : String(posthogError);
+          logger.debug(`Telemetry: Failed to send to PostHog: ${errorMsg}`);
+
+          if (this.isDebugMode()) {
+            this.debugLog(`Failed to send to PostHog: ${errorMsg}`);
+          }
+        }
+      } else if (this.isDebugMode()) {
+        if (process.env.DOLLHOUSE_TELEMETRY_NO_REMOTE === 'true') {
+          this.debugLog('Remote telemetry disabled (DOLLHOUSE_TELEMETRY_NO_REMOTE=true)');
+        } else {
+          this.debugLog('PostHog not configured (no POSTHOG_API_KEY)');
         }
       }
     } catch (error) {
