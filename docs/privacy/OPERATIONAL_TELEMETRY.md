@@ -2,7 +2,7 @@
 
 **Version**: 1.0
 **Last Updated**: October 15, 2025
-**Effective**: v1.9.19
+**Effective**: v1.9.18
 **Status**: Active
 
 ---
@@ -24,7 +24,7 @@ DollhouseMCP includes minimal, privacy-respecting operational telemetry to help 
 
 ## Remote Telemetry (Optional)
 
-Starting in v1.9.19, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
+Starting in v1.9.18, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
 
 ### Key Features
 
@@ -58,7 +58,7 @@ When configured, the same installation event stored locally is also sent to Post
   "distinctId": "550e8400-e29b-41d4-a716-446655440000",
   "event": "server_installation",
   "properties": {
-    "version": "1.9.19",
+    "version": "1.9.18",
     "os": "darwin",
     "node_version": "20.11.0",
     "mcp_client": "claude-desktop"
@@ -108,13 +108,13 @@ export DOLLHOUSE_TELEMETRY=false
 
 ### Installation Event (One-Time)
 
-On first run, a single installation event is recorded. This is the **only** data collected in v1.9.19:
+On first run, a single installation event is recorded. This is the **only** data collected in v1.9.18:
 
 ```json
 {
   "event": "install",
   "install_id": "550e8400-e29b-41d4-a716-446655440000",
-  "version": "1.9.19",
+  "version": "1.9.18",
   "os": "darwin",
   "node_version": "20.11.0",
   "mcp_client": "claude-desktop",
@@ -128,7 +128,7 @@ On first run, a single installation event is recorded. This is the **only** data
 |-------|-------------|-------------------|----------------|
 | `event` | Event type identifier | To distinguish event types in future versions | `"install"` |
 | `install_id` | Anonymous UUID v4 | To count unique installations without identifying users | `"550e8400-e29b-41d4-a716-446655440000"` |
-| `version` | DollhouseMCP version | To track version adoption and update success rates | `"1.9.19"` |
+| `version` | DollhouseMCP version | To track version adoption and update success rates | `"1.9.18"` |
 | `os` | Operating system type | To prioritize platform-specific support and testing | `"darwin"`, `"win32"`, `"linux"` |
 | `node_version` | Node.js version (major.minor) | To understand runtime compatibility and set minimum requirements | `"20.11"`, `"18.17"` |
 | `mcp_client` | MCP client being used | To optimize for most common clients (Claude Desktop, Claude Code, etc.) | `"claude-desktop"`, `"claude-code"`, `"unknown"` |
@@ -242,12 +242,12 @@ The installation event is written to a local log file:
 Example log file content:
 
 ```json
-{"event":"install","install_id":"550e8400-e29b-41d4-a716-446655440000","version":"1.9.19","os":"darwin","node_version":"20.11.0","mcp_client":"claude-desktop","timestamp":"2025-10-15T18:45:00.000Z"}
+{"event":"install","install_id":"550e8400-e29b-41d4-a716-446655440000","version":"1.9.18","os":"darwin","node_version":"20.11.0","mcp_client":"claude-desktop","timestamp":"2025-10-15T18:45:00.000Z"}
 ```
 
 ### 4. Local Storage Only
 
-**Current Status (v1.9.19)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
+**Current Status (v1.9.18)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
 
 **Future Plans**: Server infrastructure will be implemented in a separate issue. When ready:
 - You will be able to inspect local logs before any transmission
@@ -305,7 +305,7 @@ Only you can access these files:
 
 ### Current Status: Local Only
 
-**v1.9.19 does NOT transmit any data over the network.**
+**v1.9.18 does NOT transmit any data over the network.**
 
 All telemetry events are:
 - Generated locally
@@ -465,7 +465,7 @@ cat ~/.dollhouse/telemetry.log
 - May break platforms we didn't know were widely used
 
 **Solution**: Minimal installation telemetry tells us:
-- "200 macOS users installed v1.9.19 this week"
+- "200 macOS users installed v1.9.18 this week"
 - "80% of installations are Claude Desktop, 15% Claude Code"
 - "Linux installations are growing 20% month-over-month"
 
@@ -515,7 +515,7 @@ This helps us prioritize bug fixes, optimize for common platforms, and make bett
    - No hidden or encrypted data
 
 3. **Monitor Network Traffic**
-   - In v1.9.19, there's NO network transmission
+   - In v1.9.18, there's NO network transmission
    - Use tools like Wireshark or Little Snitch to verify
    - When network transmission is added, you can still monitor it
 
@@ -588,7 +588,7 @@ cat ~/.dollhouse/.telemetry-id
 {
   "event": "install",
   "install_id": "550e8400-e29b-41d4-a716-446655440000",
-  "version": "1.9.19",
+  "version": "1.9.18",
   "os": "darwin",
   "node_version": "20.11.0",
   "mcp_client": "claude-desktop",
@@ -607,7 +607,7 @@ cat ~/.dollhouse/.telemetry-id
 
 **Upgrade (update to newer version):**
 - Installation ID is preserved (same UUID)
-- No new installation event in v1.9.19 (only recorded on first install)
+- No new installation event in v1.9.18 (only recorded on first install)
 - Future versions may add upgrade events
 
 ### Will features be locked behind telemetry?
@@ -639,7 +639,7 @@ rm ~/.dollhouse/telemetry.log
 
 ### Can I partially opt-in?
 
-**In v1.9.19**: No, it's all-or-nothing (just installation event).
+**In v1.9.18**: No, it's all-or-nothing (just installation event).
 
 **Future versions** may support granular control:
 ```bash
@@ -776,7 +776,7 @@ We follow telemetry best practices from leading open source projects:
 DollhouseMCP telemetry is **more conservative** than these projects:
 
 - **No behavioral tracking** (unlike VS Code's feature usage tracking)
-- **Installation only** in v1.9.19 (no heartbeats, session tracking, etc.)
+- **Installation only** in v1.9.18 (no heartbeats, session tracking, etc.)
 - **Local-first** (no network transmission yet)
 - **AGPL-3.0** (requires open source server, allows self-hosting)
 
@@ -880,7 +880,7 @@ This privacy policy applies to **AGPL-3.0 users**. Commercial license users shou
 - **What we collect**: One installation event with platform info and anonymous UUID
 - **What we don't collect**: Personal information, user content, file paths, IP addresses
 - **Where it's stored**: `~/.dollhouse/telemetry.log` (local only)
-- **Network transmission**: None in v1.9.19 (future: separate opt-in)
+- **Network transmission**: None in v1.9.18 (future: separate opt-in)
 - **How to opt-out**: `export DOLLHOUSE_TELEMETRY=false`
 - **How to inspect**: `cat ~/.dollhouse/telemetry.log`
 - **How to delete**: `rm ~/.dollhouse/telemetry.log ~/.dollhouse/.telemetry-id`
@@ -899,7 +899,7 @@ This privacy policy applies to **AGPL-3.0 users**. Commercial license users shou
 We encourage you to:
 - Read the telemetry implementation code
 - Inspect your local log files
-- Monitor network traffic (will be none in v1.9.19)
+- Monitor network traffic (will be none in v1.9.18)
 - Ask questions in GitHub Issues
 - Report privacy concerns
 - Fork and modify if desired
@@ -911,7 +911,7 @@ We encourage you to:
 **Document Version**: 1.0
 **Last Updated**: October 15, 2025
 **Next Review**: January 15, 2026
-**Effective Version**: 1.9.19+
+**Effective Version**: 1.9.18+
 
 For the most current version of this policy, see:
 https://github.com/DollhouseMCP/mcp-server/blob/main/docs/privacy/OPERATIONAL_TELEMETRY.md
