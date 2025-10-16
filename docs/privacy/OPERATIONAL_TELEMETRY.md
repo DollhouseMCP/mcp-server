@@ -22,6 +22,88 @@ DollhouseMCP includes minimal, privacy-respecting operational telemetry to help 
 
 ---
 
+## Remote Telemetry (Optional)
+
+Starting in v1.9.19, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
+
+### Key Features
+
+- **Opt-in only**: Requires explicit API key configuration in `.env.local` file
+- **Anonymous**: Uses same UUID system as local telemetry, no PII collected
+- **Additional opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable only remote sending while keeping local logs
+- **Free tier**: PostHog offers 1M events/month free
+- **Data location**: Can use US or EU servers (GDPR compliant)
+- **Same data**: Remote telemetry sends the exact same data as local logs (no additional fields)
+
+### Configuration
+
+1. Create a free account at https://app.posthog.com
+2. Get your API key (starts with `phc_`)
+3. Add to `.env.local` file in project root:
+
+```bash
+# PostHog Configuration (Optional)
+POSTHOG_API_KEY=phc_YOUR_KEY_HERE
+POSTHOG_HOST=https://app.posthog.com  # Or use EU: https://eu.posthog.com
+```
+
+4. Restart the MCP server
+
+### What's Sent to PostHog
+
+When configured, the same installation event stored locally is also sent to PostHog:
+
+```json
+{
+  "distinctId": "550e8400-e29b-41d4-a716-446655440000",
+  "event": "server_installation",
+  "properties": {
+    "version": "1.9.19",
+    "os": "darwin",
+    "node_version": "20.11.0",
+    "mcp_client": "claude-desktop"
+  }
+}
+```
+
+**No additional data** is sent beyond what's in your local `~/.dollhouse/telemetry.log`.
+
+### PostHog Privacy
+
+- **Anonymous tracking**: Uses same random UUID as local telemetry
+- **No cookies**: PostHog session tracking disabled
+- **No IP collection**: PostHog IP capture disabled
+- **GDPR compliant**: Can use EU servers
+- **Data retention**: Configurable (default: 90 days)
+- **Self-hosting**: PostHog can be self-hosted if desired
+
+### Disabling Remote Telemetry
+
+Three ways to disable remote telemetry:
+
+1. **Don't configure API key** (default) - Remote telemetry never activates
+2. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
+3. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
+
+```bash
+# Option 1: Only disable remote (keep local logs)
+export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
+
+# Option 2: Disable all telemetry
+export DOLLHOUSE_TELEMETRY=false
+```
+
+### Why PostHog?
+
+- **Open source**: PostHog is open source (MIT license)
+- **Privacy-first**: Built with GDPR compliance in mind
+- **Generous free tier**: 1M events/month free
+- **Self-hostable**: Can run your own PostHog instance
+- **EU servers available**: GDPR data residency compliance
+- **No vendor lock-in**: Standard events API, easy to migrate
+
+---
+
 ## What We Collect
 
 ### Installation Event (One-Time)
@@ -268,26 +350,43 @@ When server infrastructure is implemented (separate issue), we will:
 
 Telemetry is **enabled by default** (industry standard for open source projects like VS Code, npm, Homebrew). However, opting out is simple and immediate.
 
+### Opt-Out Levels
+
+You can disable telemetry at different levels:
+
+1. **Remote only**: `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Keeps local logs, disables PostHog
+2. **All telemetry**: `DOLLHOUSE_TELEMETRY=false` - Disables both local and remote
+3. **No configuration**: Default behavior (local telemetry enabled, remote requires API key)
+
 ### Method 1: Environment Variable (Recommended)
 
 Set the `DOLLHOUSE_TELEMETRY` environment variable to `false`:
 
 **Bash/Zsh:**
 ```bash
+# Disable all telemetry
 # Add to ~/.bashrc or ~/.zshrc for persistence
 export DOLLHOUSE_TELEMETRY=false
+
+# Or disable only remote telemetry (keep local logs)
+export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
 ```
 
 **Fish Shell:**
 ```fish
 # Add to ~/.config/fish/config.fish
 set -x DOLLHOUSE_TELEMETRY false
+# Or disable only remote:
+set -x DOLLHOUSE_TELEMETRY_NO_REMOTE true
 ```
 
 **Windows PowerShell:**
 ```powershell
-# User-level (recommended)
+# Disable all telemetry - User-level (recommended)
 [Environment]::SetEnvironmentVariable("DOLLHOUSE_TELEMETRY", "false", "User")
+
+# Or disable only remote telemetry
+[Environment]::SetEnvironmentVariable("DOLLHOUSE_TELEMETRY_NO_REMOTE", "true", "User")
 
 # Session-level only
 $env:DOLLHOUSE_TELEMETRY = "false"
@@ -295,8 +394,11 @@ $env:DOLLHOUSE_TELEMETRY = "false"
 
 **Windows Command Prompt:**
 ```cmd
-REM User-level (recommended)
+REM Disable all - User-level (recommended)
 setx DOLLHOUSE_TELEMETRY false
+
+REM Or disable only remote
+setx DOLLHOUSE_TELEMETRY_NO_REMOTE true
 
 REM Session-level only
 set DOLLHOUSE_TELEMETRY=false

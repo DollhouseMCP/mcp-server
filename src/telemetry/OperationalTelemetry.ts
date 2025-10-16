@@ -15,23 +15,26 @@
  * - Network data, file paths, or system details beyond OS type
  *
  * Opt-out:
- * - Set environment variable: DOLLHOUSE_TELEMETRY=false
+ * - Set environment variable: DOLLHOUSE_TELEMETRY=false (disables all telemetry)
+ * - Set environment variable: DOLLHOUSE_TELEMETRY_NO_REMOTE=true (local only, no PostHog)
  * - Delete telemetry files: rm ~/.dollhouse/.telemetry-id ~/.dollhouse/telemetry.log
  *
  * Data storage:
- * - Local only: ~/.dollhouse/.telemetry-id (UUID) and ~/.dollhouse/telemetry.log (events)
- * - No network transmission (reserved for future opt-in feature)
+ * - Local: ~/.dollhouse/.telemetry-id (UUID) and ~/.dollhouse/telemetry.log (events)
+ * - Remote (opt-in): PostHog analytics if POSTHOG_API_KEY is configured
  *
  * Design principles:
  * - Fail gracefully: errors never crash the server
  * - Debug-only logging: no user-facing telemetry noise
  * - Check opt-out early: no file operations if disabled
+ * - Remote telemetry is opt-in: requires explicit POSTHOG_API_KEY configuration
  */
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
+import { PostHog } from 'posthog-node';
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../constants/version.js';
 import type { InstallationEvent, TelemetryConfig } from './types.js';
@@ -42,6 +45,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 export class OperationalTelemetry {
   private static installId: string | null = null;
   private static initialized = false;
+  private static posthog: PostHog | null = null;
 
   /**
    * Check if telemetry is enabled
@@ -63,6 +67,47 @@ export class OperationalTelemetry {
 
     // Default: enabled (opt-out model)
     return true;
+  }
+
+  /**
+   * Initialize PostHog client for remote telemetry
+   * Only initializes if POSTHOG_API_KEY is set and remote telemetry is not disabled
+   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE environment variable
+   */
+  private static initPostHog(): void {
+    try {
+      // Skip if PostHog already initialized
+      if (this.posthog) {
+        return;
+      }
+
+      // Skip if remote telemetry is explicitly disabled
+      if (process.env.DOLLHOUSE_TELEMETRY_NO_REMOTE === 'true') {
+        logger.debug('Telemetry: Remote telemetry disabled via DOLLHOUSE_TELEMETRY_NO_REMOTE');
+        return;
+      }
+
+      // Skip if no API key configured (opt-in for remote)
+      const apiKey = process.env.POSTHOG_API_KEY;
+      if (!apiKey) {
+        logger.debug('Telemetry: PostHog not configured (no POSTHOG_API_KEY)');
+        return;
+      }
+
+      // Initialize PostHog client
+      const host = process.env.POSTHOG_HOST || 'https://app.posthog.com';
+      this.posthog = new PostHog(apiKey, {
+        host,
+        flushAt: 1, // Flush immediately for server environments
+        flushInterval: 10000, // Flush every 10 seconds as backup
+      });
+
+      logger.debug(`Telemetry: PostHog initialized with host: ${host}`);
+    } catch (error) {
+      // Fail gracefully - log but don't throw
+      logger.debug(`Telemetry: Failed to initialize PostHog: ${error instanceof Error ? error.message : String(error)}`);
+      this.posthog = null;
+    }
   }
 
   /**
@@ -212,6 +257,7 @@ export class OperationalTelemetry {
   /**
    * Record installation event to telemetry log
    * Appends JSON line to log file (JSONL format)
+   * Also sends to PostHog if configured
    */
   private static async recordInstallation(): Promise<void> {
     try {
@@ -236,13 +282,38 @@ export class OperationalTelemetry {
       // Ensure directory exists
       await fs.mkdir(path.dirname(config.logPath), { recursive: true });
 
-      // Append event as JSON line (JSONL format)
+      // Append event as JSON line (JSONL format) to local log
       const logLine = JSON.stringify(event) + '\n';
       await fs.appendFile(config.logPath, logLine, 'utf-8');
 
       logger.debug(
         `Telemetry: Recorded installation event - version=${event.version}, os=${event.os}, client=${event.mcp_client}`
       );
+
+      // Send to PostHog if enabled and remote telemetry not disabled
+      if (this.posthog && process.env.DOLLHOUSE_TELEMETRY_NO_REMOTE !== 'true') {
+        try {
+          this.posthog.capture({
+            distinctId: this.installId,
+            event: 'server_installation',
+            properties: {
+              version: VERSION,
+              os: os.platform(),
+              node_version: process.version,
+              mcp_client: this.getMCPClient(),
+            },
+          });
+
+          // Flush immediately to ensure event is sent
+          await this.posthog.flush();
+          logger.debug('Telemetry: Sent installation event to PostHog');
+        } catch (posthogError) {
+          // Fail gracefully - PostHog errors shouldn't break telemetry
+          logger.debug(
+            `Telemetry: Failed to send to PostHog: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`
+          );
+        }
+      }
     } catch (error) {
       // Fail gracefully - log but don't throw
       logger.debug(
@@ -296,6 +367,9 @@ export class OperationalTelemetry {
 
       logger.debug('Telemetry: Initializing operational telemetry system');
 
+      // Initialize PostHog for remote telemetry (optional, opt-in)
+      this.initPostHog();
+
       // Ensure installation UUID exists
       const uuid = await this.ensureUUID();
       if (!uuid) {
@@ -319,6 +393,24 @@ export class OperationalTelemetry {
       // Fail gracefully - log error but mark as initialized to prevent retry loops
       logger.debug(`Telemetry: Initialization error: ${error instanceof Error ? error.message : String(error)}`);
       this.initialized = true;
+    }
+  }
+
+  /**
+   * Shutdown telemetry system
+   * Flushes any pending PostHog events and cleans up resources
+   * Safe to call even if not initialized
+   */
+  public static async shutdown(): Promise<void> {
+    try {
+      if (this.posthog) {
+        logger.debug('Telemetry: Shutting down PostHog client');
+        await this.posthog.shutdown();
+        this.posthog = null;
+      }
+    } catch (error) {
+      // Fail gracefully - log but don't throw
+      logger.debug(`Telemetry: Error during shutdown: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

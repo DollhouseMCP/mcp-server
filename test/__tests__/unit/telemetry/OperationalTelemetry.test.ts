@@ -42,6 +42,15 @@ jest.unstable_mockModule('../../../../src/constants/version.js', () => ({
   VERSION: '1.9.19'
 }));
 
+// Mock PostHog
+jest.unstable_mockModule('posthog-node', () => ({
+  PostHog: jest.fn().mockImplementation(() => ({
+    capture: jest.fn(),
+    flush: jest.fn().mockResolvedValue(undefined),
+    shutdown: jest.fn().mockResolvedValue(undefined)
+  }))
+}));
+
 // Import after mocking
 const fs = await import('node:fs');
 const { OperationalTelemetry } = await import('../../../../src/telemetry/OperationalTelemetry.js');
@@ -78,6 +87,7 @@ describe('OperationalTelemetry', () => {
     // Reset static state (using any to access private members for testing)
     (OperationalTelemetry as any).installId = null;
     (OperationalTelemetry as any).initialized = false;
+    (OperationalTelemetry as any).posthog = null;
 
     // Default mock implementations
     fsMock.mkdir.mockResolvedValue(undefined);
