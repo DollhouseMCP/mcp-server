@@ -11,7 +11,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import * as path from 'path';
+// FIX: Added node: prefix to built-in Node.js imports
+// Previously: import * as path from 'path';
+// Now: import * as path from 'node:path'; for Node.js convention
+import * as path from 'node:path';
 
 // Mock filesystem operations with proper implementations
 jest.unstable_mockModule('fs/promises', () => ({
@@ -46,7 +49,9 @@ const { ConfigManager, CapabilityIndexResourcesConfig } = await import('../../..
 describe('Capability Index Resources Configuration', () => {
   let configManager: ConfigManager;
   const mockHomedir = '/home/testuser';
-  const configDir = path.join(mockHomedir, '.dollhouse');
+  // FIX: Removed useless assignment to 'configDir'
+  // Previously: const configDir = path.join(mockHomedir, '.dollhouse'); (never used)
+  // Now: Removed unused variable
 
   beforeEach(async () => {
     // Clear all mocks

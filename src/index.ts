@@ -106,7 +106,10 @@ export class DollhouseMCPServer implements IToolHandler {
   private agentManager: AgentManager;
   private memoryManager: MemoryManager;
   private capabilityIndexResource?: CapabilityIndexResource;
-  private configManager: ConfigManager;
+  // FIX: Added readonly modifier for immutable reference
+  // Previously: Missing readonly modifier
+  // Now: Marked as readonly since configManager is never reassigned
+  private readonly configManager: ConfigManager;
   // ConfigWizardCheck removed - not included in hotfix
 
   constructor() {
@@ -122,6 +125,9 @@ export class DollhouseMCPServer implements IToolHandler {
 
     // CONDITIONAL: Only advertise resources capability if explicitly enabled
     // Default is false (safe, future-proof implementation)
+    // FIX: Properly handle exception in catch block
+    // Previously: Empty catch block with comment only
+    // Now: Log the error for debugging purposes
     try {
       const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
       if (resourcesConfig?.advertise_resources === true) {
@@ -132,7 +138,8 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     } catch (error) {
       // Config not initialized yet - use safe default (no resources)
-      logger.debug('Config not initialized yet, resources capability disabled by default');
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug(`Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
     }
 
     this.server = new Server(

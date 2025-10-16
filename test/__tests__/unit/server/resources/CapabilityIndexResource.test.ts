@@ -367,7 +367,10 @@ describe('CapabilityIndexResource', () => {
     });
 
     it('should estimate ~1,254 tokens correctly', async () => {
-      const summary = await resource.generateSummary();
+      // FIX: Removed useless assignment to 'summary'
+      // Previously: const summary = await resource.generateSummary(); (result never used)
+      // Now: Call method without storing unused result
+      await resource.generateSummary();
       const stats = await resource.getStatistics();
 
       // Token estimate should be in reasonable range for summary
@@ -564,10 +567,13 @@ describe('CapabilityIndexResource', () => {
     it('should include descriptive names', async () => {
       const result = await resource.listResources();
 
-      result.resources.forEach(resource => {
+      // FIX: Use for...of instead of forEach for better performance
+      // Previously: result.resources.forEach(resource => { ... });
+      // Now: for (const resource of result.resources) { ... }
+      for (const resource of result.resources) {
         expect(resource.name).toBeTruthy();
         expect(resource.name.length).toBeGreaterThan(10);
-      });
+      }
     });
 
     it('should include token estimates in descriptions', async () => {
@@ -576,8 +582,11 @@ describe('CapabilityIndexResource', () => {
       const summary = result.resources.find(r => r.uri.includes('summary'));
       const full = result.resources.find(r => r.uri.includes('full'));
 
-      expect(summary?.description).toMatch(/~\d+\.?\d*-?\d*\.?\d*K tokens/);
-      expect(full?.description).toMatch(/~\d+\.?\d*-?\d*\.?\d*K tokens/);
+      // FIX: Security - Prevent ReDoS vulnerability by using more specific regex
+      // Previously: /~\d+\.?\d*-?\d*\.?\d*K tokens/ (vulnerable to catastrophic backtracking)
+      // Now: Uses non-capturing groups and requires at least one digit after dots/hyphens
+      expect(summary?.description).toMatch(/~\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?K tokens/);
+      expect(full?.description).toMatch(/~\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?K tokens/);
     });
 
     it('should include context recommendations', async () => {
@@ -678,7 +687,9 @@ describe('CapabilityIndexResource', () => {
     it('should invalidate cache after TTL expires', async () => {
       // First call
       await resource.generateSummary();
-      const cacheAfterFirst = (resource as any).cachedIndex;
+      // FIX: Removed useless assignment to 'cacheAfterFirst'
+      // Previously: const cacheAfterFirst = (resource as any).cachedIndex; (never used)
+      // Now: Removed unused variable
 
       // Mock time advancement by 61 seconds
       const originalNow = Date.now;

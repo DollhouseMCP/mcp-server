@@ -11,13 +11,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+// FIX: Removed unused imports 'Server' and 'path'
+// Previously: import { Server } from '@modelcontextprotocol/sdk/server/index.js'; (never used)
+// Now: Removed unused imports
 import { CapabilityIndexResource } from '../../../src/server/resources/CapabilityIndexResource.js';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
-import fs from 'fs/promises';
-import os from 'os';
+// FIX: Added node: prefix to built-in Node.js imports
+// Previously: import fs from 'fs/promises';
+// Now: import fs from 'node:fs/promises'; for Node.js convention
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import yaml from 'js-yaml';
-import path from 'path';
 
 // Mock dependencies
 jest.mock('fs/promises');
@@ -44,6 +48,15 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
     debug: jest.fn()
   }
 }));
+
+// FIX: Extract helper function to reduce nesting depth
+// Previously: Function nesting exceeded 4 levels at line 154
+// Now: Extracted filtering logic to separate function
+function filterResourcesByVariants(resources: any[], enabledVariants: string[]): any[] {
+  return resources.filter(r => {
+    return enabledVariants.some(v => r.uri.includes(v));
+  });
+}
 
 describe('Capability Index Resources Integration', () => {
   let resource: CapabilityIndexResource;
@@ -149,10 +162,9 @@ describe('Capability Index Resources Integration', () => {
 
       // In practice, server would filter this
       // This test documents expected behavior
+      // FIX: Use helper function to reduce nesting depth
       const enabledVariants = ['summary', 'stats'];
-      const filteredResources = allResources.resources.filter(r => {
-        return enabledVariants.some(v => r.uri.includes(v));
-      });
+      const filteredResources = filterResourcesByVariants(allResources.resources, enabledVariants);
 
       expect(filteredResources).toHaveLength(2);
       expect(filteredResources.map(r => r.uri)).toEqual([

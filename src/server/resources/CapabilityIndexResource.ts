@@ -32,10 +32,13 @@
  * docs/configuration/MCP_RESOURCES.md
  */
 
-import fs from 'fs/promises';
-import path from 'path';
+// FIX: Added node: prefix to built-in Node.js imports
+// Previously: import fs from 'fs/promises'; etc.
+// Now: import fs from 'node:fs/promises'; for Node.js convention
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import yaml from 'js-yaml';
-import os from 'os';
+import os from 'node:os';
 import { logger } from '../../utils/logger.js';
 
 /**
@@ -319,11 +322,15 @@ export class CapabilityIndexResource {
         mimeType = 'text/yaml';
         break;
 
-      case 'dollhouse://capability-index/stats':
+      case 'dollhouse://capability-index/stats': {
+        // FIX: Wrapped lexical declaration in curly braces
+        // Previously: const declaration in case block without braces
+        // Now: Properly scoped with block statement
         const stats = await this.getStatistics();
         content = JSON.stringify(stats, null, 2);
         mimeType = 'application/json';
         break;
+      }
 
       default:
         throw new Error(`Unknown capability index resource: ${uri}`);
