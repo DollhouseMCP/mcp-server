@@ -22,45 +22,32 @@ DollhouseMCP includes minimal, privacy-respecting operational telemetry to help 
 
 ---
 
-## Remote Telemetry (Automatic)
+## Remote Telemetry (Optional)
 
-Starting in v1.9.18, DollhouseMCP automatically sends **minimal, anonymous** telemetry to help prioritize platform support and ensure compatibility:
+Starting in v1.9.18, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
 
 ### Key Features
 
-- **Automatic by default**: Metrics help prioritize testing platforms and Node.js versions
+- **Opt-in only**: Requires explicit API key configuration in `.env.local` file
 - **Anonymous**: Uses same UUID system as local telemetry, no PII collected
-- **Easy opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable remote sending while keeping local logs
-- **Minimal data**: Only installation events (version, OS, Node version, MCP client)
-- **Platform optimization**: Understand which platforms need most support and testing
+- **Additional opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable only remote sending while keeping local logs
+- **Free tier**: PostHog offers 1M events/month free
+- **Data location**: Can use US or EU servers (GDPR compliant)
 - **Same data**: Remote telemetry sends the exact same data as local logs (no additional fields)
-- **Debug mode**: Set `DOLLHOUSE_TELEMETRY_DEBUG=true` to see exactly what's sent (like Next.js and Nuxt)
 
-### How It Works
+### Configuration
 
-Remote telemetry is **automatic by default** to help us understand platform distribution and prioritize support. No configuration needed - installation metrics are sent automatically to optimize for your platform.
-
-**Why Automatic?**
-
-Unlike web applications, MCP servers have unique constraints:
-- **No User Interface**: Servers run in the background with no GUI for prompts
-- **Installation Timing**: Servers start automatically when MCP clients launch
-- **User Experience**: Interactive prompts would require manual CLI interaction
-- **Industry Standard**: Most CLI tools (npm, Homebrew, Next.js, Nuxt) use opt-out model
-
-This helps us:
-- **Prioritize Testing**: Focus testing on most-used platforms (macOS, Windows, Linux)
-- **Node.js Compatibility**: Understand which Node.js versions to support
-- **MCP Client Optimization**: Optimize for Claude Desktop, Claude Code, or other clients
-- **Support Planning**: Know how many installations need support resources
-
-If you want to **use your own PostHog account** instead:
+1. Create a free account at https://app.posthog.com
+2. Get your API key (starts with `phc_`)
+3. Add to `.env.local` file in project root:
 
 ```bash
-# Optional: Override with your own PostHog API key
+# PostHog Configuration (Optional)
 POSTHOG_API_KEY=phc_YOUR_KEY_HERE
 POSTHOG_HOST=https://app.posthog.com  # Or use EU: https://eu.posthog.com
 ```
+
+4. Restart the MCP server
 
 ### What's Sent to PostHog
 
@@ -92,10 +79,11 @@ When configured, the same installation event stored locally is also sent to Post
 
 ### Disabling Remote Telemetry
 
-Two easy ways to disable remote telemetry:
+Three ways to disable remote telemetry:
 
-1. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
-2. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
+1. **Don't configure API key** (default) - Remote telemetry never activates
+2. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
+3. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
 
 ```bash
 # Option 1: Only disable remote (keep local logs)
@@ -109,69 +97,10 @@ export DOLLHOUSE_TELEMETRY=false
 
 - **Open source**: PostHog is open source (MIT license)
 - **Privacy-first**: Built with GDPR compliance in mind
-- **Public project keys**: Project API keys (phc_*) are designed to be public and safe to expose
-- **Write-only keys**: Cannot read your data, only send events
 - **Generous free tier**: 1M events/month free
 - **Self-hostable**: Can run your own PostHog instance
 - **EU servers available**: GDPR data residency compliance
 - **No vendor lock-in**: Standard events API, easy to migrate
-
-### PostHog Project Key Security
-
-The API key in our code (`phc_*`) is a **PostHog project key**, which is:
-- ✅ **Designed to be public**: Safe to expose in client-side code, mobile apps, browser JavaScript
-- ✅ **Write-only**: Can only send events, cannot read analytics data
-- ✅ **Industry standard**: Same model as Google Analytics tracking IDs, Sentry DSNs, Mixpanel tokens
-- ✅ **No security risk**: Even if someone has this key, they cannot access your data
-
-**This is NOT a secret key.** PostHog has two types of keys:
-- `phc_*` = Project keys (public, client-side, write-only) ← **We use this**
-- `phx_*` = Personal keys (private, admin access, read/write) ← **Never exposed**
-
-For more details, see: https://posthog.com/docs/api
-
-### Debug Mode (See What's Sent)
-
-Enable debug mode to see exactly what telemetry data is collected before transmission:
-
-```bash
-# Enable debug mode (like Next.js and Nuxt)
-export DOLLHOUSE_TELEMETRY_DEBUG=true
-```
-
-**Example output:**
-```
-[Telemetry Debug] Local event (writing to ~/.dollhouse/telemetry.log):
-{
-  "event": "install",
-  "install_id": "550e8400-e29b-41d4-a716-446655440000",
-  "version": "1.9.18",
-  "os": "darwin",
-  "node_version": "20.11.0",
-  "mcp_client": "claude-desktop",
-  "timestamp": "2025-10-16T18:00:00.000Z"
-}
-
-[Telemetry Debug] Remote event (sending to PostHog):
-{
-  "distinctId": "550e8400-e29b-41d4-a716-446655440000",
-  "event": "server_installation",
-  "properties": {
-    "version": "1.9.18",
-    "os": "darwin",
-    "node_version": "20.11.0",
-    "mcp_client": "claude-desktop"
-  }
-}
-
-[Telemetry Debug] Event sent to PostHog successfully
-```
-
-**Benefits:**
-- ✅ Verify exactly what's collected
-- ✅ Confirm no PII is sent
-- ✅ Understand transmission status
-- ✅ Build trust through transparency
 
 ---
 
@@ -318,7 +247,7 @@ Example log file content:
 
 ### 4. Local Storage Only
 
-**Current Status (v1.9.18)**: Telemetry data is stored locally and automatically sent to PostHog (unless opted out) to track adoption for project funding.
+**Current Status (v1.9.18)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
 
 **Future Plans**: Server infrastructure will be implemented in a separate issue. When ready:
 - You will be able to inspect local logs before any transmission
@@ -374,16 +303,15 @@ Only you can access these files:
 
 ## Network Transmission
 
-### Current Status: Automatic Remote Telemetry
+### Current Status: Local Only
 
-**v1.9.18 automatically transmits basic installation metrics to PostHog** to help track adoption for project sustainability.
+**v1.9.18 does NOT transmit any data over the network.**
 
-Telemetry events are:
+All telemetry events are:
 - Generated locally
-- Stored locally (in `~/.dollhouse/telemetry.log`)
-- Sent to PostHog automatically (unless opted out)
-- Anonymous (only UUID, version, OS, Node version)
-- Easy to disable with `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`
+- Stored locally
+- Inspectable locally
+- Deletable locally
 
 ### Future Server Infrastructure
 
@@ -428,7 +356,7 @@ You can disable telemetry at different levels:
 
 1. **Remote only**: `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Keeps local logs, disables PostHog
 2. **All telemetry**: `DOLLHOUSE_TELEMETRY=false` - Disables both local and remote
-3. **Default behavior**: Both local and remote telemetry enabled (helps project sustainability)
+3. **No configuration**: Default behavior (local telemetry enabled, remote requires API key)
 
 ### Method 1: Environment Variable (Recommended)
 
@@ -524,26 +452,24 @@ cat ~/.dollhouse/telemetry.log
 
 ### Why collect telemetry at all?
 
-**The Challenge**: As an open source project, we need to prioritize limited development resources effectively.
+**Problem**: We currently have zero visibility into:
+- How many active installations exist (npm downloads include bots, CI/CD, mirrors)
+- What platforms users are running (macOS, Windows, Linux distributions)
+- Which MCP clients are being used (Claude Desktop, Claude Code, Gemini, etc.)
+- Installation success rates
 
-**Without telemetry, we don't know:**
-- Which platforms need the most testing? (macOS, Windows, Linux, or WSL?)
-- Which Node.js versions to support? (Should we drop Node 16? Support Node 22?)
-- Which MCP clients to optimize for? (Claude Desktop, Claude Code, Gemini, VS Code, or others?)
-- Are installations succeeding? (Is the installation process working across platforms?)
+**Impact**: Without this data, we:
+- Can't prioritize which platforms to optimize for
+- Don't know if installation process has issues
+- Can't make data-driven decisions about where to focus effort
+- May break platforms we didn't know were widely used
 
-**With telemetry, we can make data-driven decisions:**
-- "80% of users are on macOS → Prioritize macOS testing"
-- "15% still on Node 18 → Keep Node 18 support for now"
-- "Claude Desktop dominates at 85% → Optimize for Claude Desktop first"
-- "Windows installations growing fast → Add Windows-specific features"
+**Solution**: Minimal installation telemetry tells us:
+- "200 macOS users installed v1.9.18 this week"
+- "80% of installations are Claude Desktop, 15% Claude Code"
+- "Linux installations are growing 20% month-over-month"
 
-**Real-world benefits for users:**
-- ✅ **Better Testing**: Focus testing efforts on platforms you actually use
-- ✅ **Compatibility**: Support the Node.js versions you actually run
-- ✅ **Performance**: Optimize for the MCP clients you actually use
-- ✅ **Bug Fixes**: Fix issues affecting the most users first
-- ✅ **Support**: Plan support resources based on actual adoption
+This helps us prioritize bug fixes, optimize for common platforms, and make better decisions.
 
 ### Can you identify me from this data?
 
