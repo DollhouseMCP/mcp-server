@@ -11,10 +11,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-// FIX: Added node: prefix to built-in Node.js imports
-// Previously: import * as path from 'path';
-// Now: import * as path from 'node:path'; for Node.js convention
-import * as path from 'node:path';
+// FIX (Issue 1 - MINOR): Removed unused 'path' import
+// Previously: import * as path from 'node:path';
+// Now: Removed (never used in file)
 
 // Mock filesystem operations with proper implementations
 jest.unstable_mockModule('fs/promises', () => ({
@@ -42,8 +41,14 @@ jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
 }));
 
 // Import mocked modules and the class under test after mocking
-const fs = await import('fs/promises');
-const os = await import('os');
+// FIX (Issue 2 - MAJOR): Changed 'fs/promises' to 'node:fs/promises'
+// Previously: const fs = await import('fs/promises');
+// Now: Using node: prefix for Node.js built-in module convention
+const fs = await import('node:fs/promises');
+// FIX (Issue 3 - MAJOR): Changed 'os' to 'node:os'
+// Previously: const os = await import('os');
+// Now: Using node: prefix for Node.js built-in module convention
+const os = await import('node:os');
 const { ConfigManager, CapabilityIndexResourcesConfig } = await import('../../../../src/config/ConfigManager.js');
 
 describe('Capability Index Resources Configuration', () => {
