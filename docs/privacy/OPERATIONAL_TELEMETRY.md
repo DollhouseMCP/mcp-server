@@ -22,32 +22,30 @@ DollhouseMCP includes minimal, privacy-respecting operational telemetry to help 
 
 ---
 
-## Remote Telemetry (Optional)
+## Remote Telemetry (Automatic)
 
-Starting in v1.9.18, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
+Starting in v1.9.18, DollhouseMCP automatically sends **minimal, anonymous** telemetry to help track adoption and secure funding for continued development:
 
 ### Key Features
 
-- **Opt-in only**: Requires explicit API key configuration in `.env.local` file
+- **Automatic by default**: Basic metrics help demonstrate project adoption for funding
 - **Anonymous**: Uses same UUID system as local telemetry, no PII collected
-- **Additional opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable only remote sending while keeping local logs
-- **Free tier**: PostHog offers 1M events/month free
-- **Data location**: Can use US or EU servers (GDPR compliant)
+- **Easy opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable remote sending while keeping local logs
+- **Minimal data**: Only installation events (version, OS, Node version)
+- **Project sustainability**: Metrics help secure resources for continued development
 - **Same data**: Remote telemetry sends the exact same data as local logs (no additional fields)
 
-### Configuration
+### How It Works
 
-1. Create a free account at https://app.posthog.com
-2. Get your API key (starts with `phc_`)
-3. Add to `.env.local` file in project root:
+Remote telemetry is **automatic by default** to help track project adoption. No configuration needed - installation metrics are sent automatically to help demonstrate usage for funding purposes.
+
+If you want to **use your own PostHog account** instead:
 
 ```bash
-# PostHog Configuration (Optional)
+# Optional: Override with your own PostHog API key
 POSTHOG_API_KEY=phc_YOUR_KEY_HERE
 POSTHOG_HOST=https://app.posthog.com  # Or use EU: https://eu.posthog.com
 ```
-
-4. Restart the MCP server
 
 ### What's Sent to PostHog
 
@@ -79,11 +77,10 @@ When configured, the same installation event stored locally is also sent to Post
 
 ### Disabling Remote Telemetry
 
-Three ways to disable remote telemetry:
+Two easy ways to disable remote telemetry:
 
-1. **Don't configure API key** (default) - Remote telemetry never activates
-2. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
-3. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
+1. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
+2. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
 
 ```bash
 # Option 1: Only disable remote (keep local logs)
@@ -247,7 +244,7 @@ Example log file content:
 
 ### 4. Local Storage Only
 
-**Current Status (v1.9.18)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
+**Current Status (v1.9.18)**: Telemetry data is stored locally and automatically sent to PostHog (unless opted out) to track adoption for project funding.
 
 **Future Plans**: Server infrastructure will be implemented in a separate issue. When ready:
 - You will be able to inspect local logs before any transmission
@@ -303,15 +300,16 @@ Only you can access these files:
 
 ## Network Transmission
 
-### Current Status: Local Only
+### Current Status: Automatic Remote Telemetry
 
-**v1.9.18 does NOT transmit any data over the network.**
+**v1.9.18 automatically transmits basic installation metrics to PostHog** to help track adoption for project sustainability.
 
-All telemetry events are:
+Telemetry events are:
 - Generated locally
-- Stored locally
-- Inspectable locally
-- Deletable locally
+- Stored locally (in `~/.dollhouse/telemetry.log`)
+- Sent to PostHog automatically (unless opted out)
+- Anonymous (only UUID, version, OS, Node version)
+- Easy to disable with `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`
 
 ### Future Server Infrastructure
 
@@ -356,7 +354,7 @@ You can disable telemetry at different levels:
 
 1. **Remote only**: `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Keeps local logs, disables PostHog
 2. **All telemetry**: `DOLLHOUSE_TELEMETRY=false` - Disables both local and remote
-3. **No configuration**: Default behavior (local telemetry enabled, remote requires API key)
+3. **Default behavior**: Both local and remote telemetry enabled (helps project sustainability)
 
 ### Method 1: Environment Variable (Recommended)
 

@@ -21,13 +21,13 @@
  *
  * Data storage:
  * - Local: ~/.dollhouse/.telemetry-id (UUID) and ~/.dollhouse/telemetry.log (events)
- * - Remote (opt-in): PostHog analytics if POSTHOG_API_KEY is configured
+ * - Remote (automatic): PostHog analytics for basic installation metrics (opt-out available)
  *
  * Design principles:
  * - Fail gracefully: errors never crash the server
  * - Debug-only logging: no user-facing telemetry noise
  * - Check opt-out early: no file operations if disabled
- * - Remote telemetry is opt-in: requires explicit POSTHOG_API_KEY configuration
+ * - Remote telemetry is automatic: basic metrics sent to help project sustainability (opt-out available)
  */
 
 import { promises as fs } from 'node:fs';
@@ -71,8 +71,8 @@ export class OperationalTelemetry {
 
   /**
    * Initialize PostHog client for remote telemetry
-   * Only initializes if POSTHOG_API_KEY is set and remote telemetry is not disabled
-   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE environment variable
+   * Uses default project key for basic metrics unless overridden or disabled
+   * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE environment variable for opt-out
    */
   private static initPostHog(): void {
     try {
@@ -87,10 +87,13 @@ export class OperationalTelemetry {
         return;
       }
 
-      // Skip if no API key configured (opt-in for remote)
-      const apiKey = process.env.POSTHOG_API_KEY;
+      // Use environment variable if set, otherwise use default project key for basic metrics
+      // This provides automatic installation metrics for project sustainability/funding
+      // Users can override with their own key or disable with DOLLHOUSE_TELEMETRY_NO_REMOTE=true
+      const apiKey = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
+
       if (!apiKey) {
-        logger.debug('Telemetry: PostHog not configured (no POSTHOG_API_KEY)');
+        logger.debug('Telemetry: PostHog not configured');
         return;
       }
 
@@ -367,7 +370,7 @@ export class OperationalTelemetry {
 
       logger.debug('Telemetry: Initializing operational telemetry system');
 
-      // Initialize PostHog for remote telemetry (optional, opt-in)
+      // Initialize PostHog for remote telemetry (automatic with opt-out)
       this.initPostHog();
 
       // Ensure installation UUID exists
