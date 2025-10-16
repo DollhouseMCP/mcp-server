@@ -1,0 +1,289 @@
+# Example Configuration: Enabling MCP Resources
+#
+# ⚠️ IMPORTANT: MCP Resources are currently NON-FUNCTIONAL in Claude Code (October 2025)
+#
+# This configuration example shows how to enable MCP Resources for DollhouseMCP.
+# However, please be aware that as of October 2025:
+#
+# ❌ Claude Code: Discovery only (lists resources but does NOT read or inject them)
+# ⚠️ Claude Desktop: Manual attachment only (user must click + button to attach)
+# ⚠️ VS Code: Manual attachment only (user must use "Add Context" menu)
+#
+# This is a FUTURE-PROOF implementation. Enable resources only if:
+# 1. You're testing/developing for future MCP client versions
+# 2. You're using Claude Desktop/VS Code and willing to manually attach resources
+# 3. You understand the token costs and current limitations
+#
+# For detailed information, see:
+# - docs/configuration/MCP_RESOURCES.md (User documentation)
+# - docs/development/MCP_RESOURCES_SUPPORT_RESEARCH_2025-10-16.md (Technical research)
+
+# =============================================================================
+# OPTION 1: Configuration File (Recommended)
+# =============================================================================
+#
+# Add to your DollhouseMCP configuration file:
+# Location: ~/.dollhouse/config.yaml
+
+resources:
+  # Master switch for resource exposure
+  # Default: false (resources disabled for safety)
+  enabled: true
+
+  # Which resources to expose (array of strings)
+  # Options: "summary", "full", "stats"
+  # Default: [] (none exposed)
+  expose:
+    - summary  # Lightweight ~3K tokens - RECOMMENDED for most use cases
+    # - full   # Heavy ~40K tokens - Only enable for models with 500K+ context
+    # - stats  # Minimal JSON with size metrics - For monitoring only
+
+  # Cache TTL in milliseconds (how long to cache capability index in memory)
+  # Default: 60000 (60 seconds)
+  # Higher values = less file I/O, lower values = fresher data
+  cache_ttl: 60000
+
+# =============================================================================
+# OPTION 2: Environment Variables (Quick Testing)
+# =============================================================================
+#
+# Alternative to configuration file. Add to your shell profile:
+# (~/.bashrc, ~/.zshrc, ~/.profile, etc.)
+
+# Enable resources
+# DOLLHOUSE_RESOURCES_ENABLED=true
+
+# Which resources to expose (comma-separated)
+# DOLLHOUSE_RESOURCES_EXPOSE=summary
+
+# Cache TTL in milliseconds (optional)
+# DOLLHOUSE_RESOURCES_CACHE_TTL=60000
+
+# =============================================================================
+# OPTION 3: MCP Client Configuration (Advanced)
+# =============================================================================
+#
+# You can also pass configuration via environment variables in your MCP client
+# configuration. Example for Claude Desktop (claude_desktop_config.json):
+
+# {
+#   "mcpServers": {
+#     "dollhousemcp": {
+#       "command": "node",
+#       "args": ["/path/to/dollhousemcp/dist/index.js"],
+#       "env": {
+#         "DOLLHOUSE_RESOURCES_ENABLED": "true",
+#         "DOLLHOUSE_RESOURCES_EXPOSE": "summary"
+#       }
+#     }
+#   }
+# }
+
+# =============================================================================
+# TOKEN COST REFERENCE
+# =============================================================================
+#
+# Resources consume LLM context tokens when injected. Consider your model:
+#
+# | Model              | Context  | Recommended | Overhead % |
+# |--------------------|----------|-------------|------------|
+# | Claude Sonnet      | 200K     | summary     | 1.5%       |
+# | Claude Opus        | 200K     | summary     | 1.5%       |
+# | GPT-4 Turbo        | 128K     | summary     | 2.3%       |
+# | Claude 3.5         | 500K     | full        | 8%         |
+# | Gemini 1.5 Pro     | 2M       | full        | 2%         |
+#
+# Summary resource (~3K tokens):
+#   - Contains: Metadata + action verb mappings
+#   - Use case: Lightweight context for most conversations
+#   - Recommended: Models with 200K+ context
+#
+# Full resource (~40K tokens):
+#   - Contains: Complete index with all element details, relationships
+#   - Use case: Deep element discovery and relationship mapping
+#   - Recommended: Models with 500K+ context
+#
+# Stats resource (minimal):
+#   - Contains: Size metrics and token estimates (JSON)
+#   - Use case: Monitoring and measurement
+#   - Recommended: Always safe to enable
+
+# =============================================================================
+# RESOURCE VARIANTS EXPLAINED
+# =============================================================================
+
+# 1. SUMMARY (dollhouse://capability-index/summary)
+#    Size: ~2,500-3,500 tokens (~12KB)
+#    Content:
+#      - Capability index metadata (version, element count, last updated)
+#      - Action verb mappings (analyze → [code-reviewer, data-analyst])
+#    Use case: Quick reference for which elements handle which actions
+#    Format: YAML (human-readable)
+
+# 2. FULL (dollhouse://capability-index/full)
+#    Size: ~35,000-45,000 tokens (~145KB)
+#    Content:
+#      - All metadata
+#      - Complete action trigger mappings
+#      - Element relationships and similarities
+#      - Semantic analysis data
+#      - Full element descriptions
+#    Use case: Comprehensive element discovery, relationship mapping
+#    Format: YAML (human-readable)
+#    ⚠️ WARNING: Large token overhead - only use with big-context models
+
+# 3. STATS (dollhouse://capability-index/stats)
+#    Size: Minimal (~500 bytes)
+#    Content:
+#      - Summary size, word count, line count, token estimates
+#      - Full size, word count, line count, token estimates
+#    Use case: Monitoring resource size, tracking capability index growth
+#    Format: JSON (machine-readable)
+
+# =============================================================================
+# MANUAL ATTACHMENT PROCESS (Claude Desktop / VS Code)
+# =============================================================================
+#
+# Even with resources enabled, current MCP clients require manual attachment:
+#
+# CLAUDE DESKTOP:
+# 1. Start conversation normally
+# 2. Click the "+" button (bottom of chat input)
+# 3. Select "MCP Server" → "References"
+# 4. Choose resource:
+#    - "Capability Index Summary" for lightweight context (~3K tokens)
+#    - "Capability Index (Full)" for comprehensive context (~40K tokens)
+#    - "Capability Index Statistics" for size metrics
+# 5. Resource is now attached to conversation
+#
+# VS CODE:
+# 1. Open chat panel
+# 2. Click "Add Context" button
+# 3. Select "MCP Resources"
+# 4. Choose "DollhouseMCP" server
+# 5. Select resource to attach
+
+# =============================================================================
+# TROUBLESHOOTING
+# =============================================================================
+
+# RESOURCES DON'T APPEAR IN CLAUDE CODE:
+#   This is expected behavior. Claude Code only supports resource discovery,
+#   not reading. Resources will appear in @-mention autocomplete but won't
+#   be injected into conversations.
+#
+#   Solution: Either wait for Claude Code to add resource reading support,
+#   or switch to Claude Desktop and use manual attachment.
+
+# RESOURCES SHOW IN LIST BUT CONTENT NEVER LOADS:
+#   This is the current state of all MCP clients. The resources/list call
+#   succeeds but resources/read is never called.
+#
+#   Verify: Check token usage in Claude Code. Should show ~24K (tools only),
+#   not ~72K (tools + resources).
+
+# MANUAL ATTACHMENT DOESN'T WORK:
+#   1. Verify resources are enabled in config
+#   2. Check capability index exists: ~/.dollhouse/portfolio/capability-index.yaml
+#   3. Verify file permissions (readable by MCP server)
+#   4. Check MCP server logs for errors
+
+# TOKEN LIMIT EXCEEDED:
+#   Solution: Use smaller resource variant:
+#   - Switch from "full" to "summary" resource
+#   - Or disable resources entirely: resources.enabled = false
+
+# =============================================================================
+# SECURITY CONSIDERATIONS
+# =============================================================================
+
+# DATA EXPOSURE:
+#   Resources expose information about your portfolio:
+#   - Element names and descriptions
+#   - Action verb mappings
+#   - Relationship data
+#
+#   Risk: Low. Resources contain only metadata, not actual element content.
+
+# TOKEN COSTS:
+#   Large resources can consume significant context:
+#   - Full resource: ~40K tokens
+#   - May impact API costs for paid models
+#
+#   Mitigation: Default to disabled. Users must explicitly enable.
+
+# CACHE POISONING:
+#   Resources are cached for performance:
+#   - 60-second TTL limits exposure window
+#   - Cache only includes data from trusted local files
+#   - No network data included in resources
+#
+#   Risk: Minimal. All data sourced from user's own portfolio.
+
+# =============================================================================
+# PERFORMANCE CONSIDERATIONS
+# =============================================================================
+
+# WHEN ENABLED:
+#   - Startup: No impact (resources generated on-demand)
+#   - Memory: ~150KB for cached capability index
+#   - CPU: Negligible (60-second cache reduces file reads)
+
+# WHEN DISABLED (DEFAULT):
+#   - Startup: No overhead
+#   - Memory: 0 bytes
+#   - CPU: 0 cycles
+
+# =============================================================================
+# WHEN WILL THIS BE USEFUL?
+# =============================================================================
+#
+# MCP Resources will become useful when:
+# 1. Claude Code adds resource reading (implements resources/read)
+# 2. Clients add automatic injection support (heuristics for when to inject)
+# 3. LLMs can request specific resources based on conversation needs
+#
+# Expected timeline: Unknown. The MCP specification is mature (June 2025),
+# but client implementation is lagging.
+
+# =============================================================================
+# RECOMMENDED CONFIGURATIONS
+# =============================================================================
+
+# FOR MOST USERS (DEFAULT - DISABLED):
+# resources:
+#   enabled: false  # Wait for clients to add full support
+
+# FOR CLAUDE DESKTOP USERS (MANUAL ATTACHMENT):
+# resources:
+#   enabled: true
+#   expose:
+#     - summary  # Lightweight, safe for most models
+
+# FOR BIG-CONTEXT MODELS (Claude 3.5, Gemini 1.5 Pro):
+# resources:
+#   enabled: true
+#   expose:
+#     - summary  # Always include summary
+#     - full     # Add full for comprehensive context
+
+# FOR DEVELOPERS/TESTING:
+# resources:
+#   enabled: true
+#   expose:
+#     - summary
+#     - full
+#     - stats  # Include stats for monitoring
+
+# =============================================================================
+# SUPPORT & DOCUMENTATION
+# =============================================================================
+#
+# For more information:
+# - User Documentation: docs/configuration/MCP_RESOURCES.md
+# - Technical Research: docs/development/MCP_RESOURCES_SUPPORT_RESEARCH_2025-10-16.md
+# - GitHub Issues: https://github.com/DollhouseMCP/mcp-server/issues
+# - GitHub Discussions: https://github.com/DollhouseMCP/mcp-server/discussions
+#
+# Last Updated: October 16, 2025
+# Status: Non-functional in Claude Code, manual attachment only in Claude Desktop/VS Code

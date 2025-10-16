@@ -82,6 +82,15 @@ export interface CollectionConfig {
   add_attribution: boolean;
 }
 
+export interface CapabilityIndexResourcesConfig {
+  advertise_resources: boolean; // Default: false - safe, don't advertise
+  variants: {
+    summary: boolean;  // ~1,254 tokens - Opt-in
+    full: boolean;     // ~48,306 tokens - Opt-in
+    stats: boolean;    // ~50 tokens - Safe to enable by default
+  };
+}
+
 export interface EnhancedIndexConfig {
   enabled: boolean;
   limits: {
@@ -104,6 +113,7 @@ export interface EnhancedIndexConfig {
     scanInterval: number;
     maxConcurrentScans: number;
   };
+  resources?: CapabilityIndexResourcesConfig;
 }
 
 export interface ElementsConfig {
@@ -306,6 +316,14 @@ export class ConfigManager {
             enabled: false,  // Opt-in only
             sampleRate: 0.1,
             metricsInterval: 60000
+          },
+          resources: {
+            advertise_resources: false, // Default: safe, disabled
+            variants: {
+              summary: false,  // ~1,254 tokens - Opt-in required
+              full: false,     // ~48,306 tokens - Opt-in required
+              stats: true      // ~50 tokens - Safe by default
+            }
           }
         }
       },
@@ -755,6 +773,17 @@ export class ConfigManager {
       this.config.wizard.completed = fixBoolean(this.config.wizard.completed);
       this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
     }
+
+    // Fix capability index resources settings
+    if (this.config.elements?.enhanced_index?.resources) {
+      const resources = this.config.elements.enhanced_index.resources;
+      resources.advertise_resources = fixBoolean(resources.advertise_resources);
+      if (resources.variants) {
+        resources.variants.summary = fixBoolean(resources.variants.summary);
+        resources.variants.full = fixBoolean(resources.variants.full);
+        resources.variants.stats = fixBoolean(resources.variants.stats);
+      }
+    }
   }
 
   /**
@@ -822,6 +851,52 @@ export class ConfigManager {
       auto_activate: result.elements.auto_activate || defaults.elements.auto_activate,
       default_element_dir: result.elements.default_element_dir || defaults.elements.default_element_dir
     };
+
+    // Enhanced index section - deep merge with defaults
+    if (result.elements.enhanced_index || defaults.elements.enhanced_index) {
+      if (!result.elements.enhanced_index) {
+        result.elements.enhanced_index = defaults.elements.enhanced_index;
+      } else {
+        const userIndex = result.elements.enhanced_index;
+        const defaultIndex = defaults.elements.enhanced_index!;
+
+        result.elements.enhanced_index = {
+          ...defaultIndex,
+          ...userIndex,
+          limits: {
+            ...defaultIndex.limits,
+            ...userIndex.limits
+          },
+          telemetry: {
+            ...defaultIndex.telemetry,
+            ...userIndex.telemetry
+          },
+          // Merge resources configuration with safe defaults
+          resources: userIndex.resources ? {
+            ...defaultIndex.resources,
+            ...userIndex.resources,
+            variants: {
+              ...defaultIndex.resources?.variants,
+              ...userIndex.resources?.variants
+            }
+          } : defaultIndex.resources
+        };
+
+        // Preserve optional fields if they exist
+        if (userIndex.verbPatterns) {
+          result.elements.enhanced_index.verbPatterns = {
+            ...defaultIndex.verbPatterns,
+            ...userIndex.verbPatterns
+          };
+        }
+        if (userIndex.backgroundAnalysis) {
+          result.elements.enhanced_index.backgroundAnalysis = {
+            ...defaultIndex.backgroundAnalysis,
+            ...userIndex.backgroundAnalysis
+          };
+        }
+      }
+    }
     
     // Display section
     if (!result.display) result.display = {};
