@@ -38,6 +38,7 @@ jobs:
         run: npm run build
 
       - name: Download mcp-publisher CLI
+        shell: bash
         run: |
           # Pinned to v1.3.3 for reproducibility
           curl -L https://github.com/modelcontextprotocol/publish/releases/download/v1.3.3/mcp-publisher-linux-x64 -o /tmp/mcp-publisher
@@ -51,6 +52,7 @@ jobs:
         run: mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
+        shell: bash
         run: |
           if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
             echo "Running in DRY-RUN mode"
