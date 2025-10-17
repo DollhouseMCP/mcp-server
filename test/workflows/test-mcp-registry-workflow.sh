@@ -39,32 +39,41 @@ TESTS_FAILED=0
 
 # Print functions
 print_header() {
+    local header_text="$1"
     echo ""
     echo "=========================================="
-    echo "$1"
+    echo "${header_text}"
     echo "=========================================="
+    return 0
 }
 
 print_test() {
+    local test_name="$1"
     TESTS_RUN=$((TESTS_RUN + 1))
-    echo -n "  Test ${TESTS_RUN}: $1 ... "
+    echo -n "  Test ${TESTS_RUN}: ${test_name} ... "
+    return 0
 }
 
 print_pass() {
     TESTS_PASSED=$((TESTS_PASSED + 1))
     echo -e "${GREEN}PASS${NC}"
+    return 0
 }
 
 print_fail() {
+    local error_msg="${1:-}"
     TESTS_FAILED=$((TESTS_FAILED + 1))
     echo -e "${RED}FAIL${NC}"
-    if [ -n "${1:-}" ]; then
-        echo -e "    ${RED}Error: $1${NC}"
+    if [[ -n "${error_msg}" ]]; then
+        echo -e "    ${RED}Error: ${error_msg}${NC}" >&2
     fi
+    return 0
 }
 
 print_info() {
-    echo -e "    ${YELLOW}Info: $1${NC}"
+    local info_msg="$1"
+    echo -e "    ${YELLOW}Info: ${info_msg}${NC}"
+    return 0
 }
 
 # Validation functions
@@ -73,7 +82,7 @@ validate_file_exists() {
     local name="$2"
 
     print_test "$name exists"
-    if [ -f "$file" ]; then
+    if [[ -f "$file" ]]; then
         print_pass
         return 0
     else
@@ -131,7 +140,7 @@ validate_version_consistency() {
     local server_version=$(jq -r '.version' "$SERVER_JSON")
     local package_version=$(jq -r '.version' "$PACKAGE_JSON")
 
-    if [ "$server_version" = "$package_version" ]; then
+    if [[ "$server_version" = "$package_version" ]]; then
         print_pass
         print_info "Version: $server_version"
         return 0
@@ -149,7 +158,7 @@ validate_server_json_required_fields() {
 
     local value=$(jq -r ".$field" "$SERVER_JSON")
 
-    if [ "$value" != "null" ] && [ -n "$value" ]; then
+    if [[ "$value" != "null" ]] && [[ -n "$value" ]]; then
         print_pass
         print_info "$description: $value"
         return 0
@@ -179,7 +188,7 @@ validate_packages_array() {
 
     local packages_count=$(jq '.packages | length' "$SERVER_JSON")
 
-    if [ "$packages_count" -gt 0 ]; then
+    if [[ "$packages_count" -gt 0 ]]; then
         print_pass
         print_info "Package count: $packages_count"
         return 0
@@ -195,7 +204,7 @@ validate_npm_package_in_packages() {
     local npm_identifier=$(jq -r '.packages[] | select(.registryType == "npm") | .identifier' "$SERVER_JSON")
     local package_name=$(jq -r '.name' "$PACKAGE_JSON")
 
-    if [ "$npm_identifier" = "$package_name" ]; then
+    if [[ "$npm_identifier" = "$package_name" ]]; then
         print_pass
         print_info "NPM package: $npm_identifier"
         return 0
@@ -210,7 +219,7 @@ validate_server_json_in_files() {
 
     local in_files=$(jq '.files[] | select(. == "server.json")' "$PACKAGE_JSON")
 
-    if [ -n "$in_files" ]; then
+    if [[ -n "$in_files" ]]; then
         print_pass
         return 0
     else
@@ -271,7 +280,7 @@ main() {
     validate_file_exists "$PACKAGE_JSON" "package.json" || true
 
     # If critical files don't exist, exit early
-    if [ ! -f "$SERVER_JSON" ] || [ ! -f "$PACKAGE_JSON" ]; then
+    if [[ ! -f "$SERVER_JSON" ]] || [[ ! -f "$PACKAGE_JSON" ]]; then
         echo ""
         echo -e "${RED}Critical files missing. Cannot continue validation.${NC}"
         exit 1
@@ -313,13 +322,14 @@ main() {
     echo -e "  Tests failed:    ${RED}$TESTS_FAILED${NC}"
     echo ""
 
-    if [ $TESTS_FAILED -eq 0 ]; then
+    if [[ $TESTS_FAILED -eq 0 ]]; then
         echo -e "${GREEN}All validations passed!${NC}"
         exit 0
     else
         echo -e "${RED}Some validations failed. Please review the errors above.${NC}"
         exit 1
     fi
+    return 0
 }
 
 # Run main function

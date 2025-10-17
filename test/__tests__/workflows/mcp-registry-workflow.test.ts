@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll } from '@jest/globals';
-import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 
 /**
@@ -276,11 +276,9 @@ describe('MCP Registry Workflow Configuration', () => {
 
   describe('Workflow Best Practices', () => {
     let workflowContent: string;
-    let workflow: WorkflowYaml;
 
     beforeAll(() => {
       workflowContent = readFileSync(WORKFLOW_FILE, 'utf-8');
-      workflow = yaml.load(workflowContent) as WorkflowYaml;
     });
 
     test('should use pinned action versions', () => {
