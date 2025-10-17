@@ -2,9 +2,26 @@
 
 ## [Unreleased]
 
+## [1.9.18] - 2025-10-17
+
+**Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
+
 ### Added
 
-- **MCP Resources Support** - Future-proof implementation of MCP Resources protocol
+- **PostHog Remote Telemetry Integration** (#1357, #1361) - Opt-in remote analytics
+  - **Simple opt-in**: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable remote telemetry
+  - Uses shared PostHog project for community-wide insights
+  - Default PostHog project key embedded (safe to expose - write-only)
+  - Backward compatible with custom `POSTHOG_API_KEY` for enterprise deployments
+  - Multiple control levels:
+    - `DOLLHOUSE_TELEMETRY_OPTIN=true` - Enable remote telemetry
+    - `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Local only, no PostHog
+    - `DOLLHOUSE_TELEMETRY=false` - Disable all telemetry
+  - GDPR compliant - fully opt-in by design
+  - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
+  - Future incentive program planned for community contributors
+
+- **MCP Resources Support** (#1360) - Future-proof implementation of MCP Resources protocol
   - Three resource variants exposed: summary (~3K tokens), full (~40K tokens), and stats (JSON)
   - Capability index exposed as MCP resources for intelligent element discovery
   - **Status**: Non-functional in Claude Code (Oct 2025) - discovery only, not read
@@ -15,19 +32,27 @@
   - Configuration options: `resources.enabled`, `resources.expose[]`, `resources.cache_ttl`
   - Early adopter advantage - ready when MCP clients implement full resource reading
 
-## [1.9.19] - 2025-10-XX
-
-### Added
-
-- **Minimal operational telemetry for installation tracking** (#1358)
+- **Operational Telemetry Foundation** (#1358, #1359) - Minimal installation tracking
   - Tracks single installation event on first run (version, OS, Node version, MCP client)
-  - Local-only logging to `~/.dollhouse/telemetry.log` (no network transmission)
+  - Local-only logging to `~/.dollhouse/telemetry.log` by default
   - Simple opt-out via `DOLLHOUSE_TELEMETRY=false` environment variable
   - Privacy-first design: no PII, no behavioral data, no user content
   - Anonymous UUID generated locally for installation identification
-  - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
   - Graceful error handling (never crashes if files can't be written)
   - Zero performance impact when opted out
+
+### Documentation
+
+- Added comprehensive telemetry incentive strategy guide
+- Updated privacy policy with PostHog opt-in details
+- Added session notes for telemetry implementation
+- Enhanced README with telemetry opt-in section
+
+### Test Results
+
+- 2546 tests passing
+- Test coverage: >96% maintained
+- All CI checks passing across all platforms
 
 ## [1.9.17] - 2025-10-08
 
