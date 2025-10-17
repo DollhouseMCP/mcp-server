@@ -41,9 +41,26 @@ jobs:
         shell: bash
         run: |
           # Pinned to v1.3.3 for reproducibility
-          curl -L https://github.com/modelcontextprotocol/publish/releases/download/v1.3.3/mcp-publisher-linux-x64 -o /tmp/mcp-publisher
-          chmod +x /tmp/mcp-publisher
-          sudo mv /tmp/mcp-publisher /usr/local/bin/mcp-publisher
+          VERSION="v1.3.3"
+          ARCHIVE="mcp-publisher_linux_amd64.tar.gz"
+          EXPECTED_SHA256="1113b9d6bf59b000966c4f17752cf87b51db03dcc5482721421fd843ce3bf048"
+
+          # Download archive and checksums
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}" -o /tmp/mcp-publisher.tar.gz
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/registry_${VERSION#v}_checksums.txt" -o /tmp/checksums.txt
+
+          # Verify checksum
+          cd /tmp
+          echo "${EXPECTED_SHA256}  mcp-publisher.tar.gz" | sha256sum --check --status
+          if [ $? -ne 0 ]; then
+            echo "::error::Checksum verification failed for mcp-publisher"
+            exit 1
+          fi
+
+          # Extract and install
+          tar -xzf mcp-publisher.tar.gz
+          chmod +x mcp-publisher
+          sudo mv mcp-publisher /usr/local/bin/mcp-publisher
 
       - name: Verify mcp-publisher installation
         run: mcp-publisher --version
