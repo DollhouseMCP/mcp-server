@@ -41,7 +41,8 @@ jobs:
         shell: bash
         run: |
           # Pinned to v1.3.3 for reproducibility
-          curl -L https://github.com/modelcontextprotocol/publish/releases/download/v1.3.3/mcp-publisher-linux-x64 -o /tmp/mcp-publisher
+          curl -L https://github.com/modelcontextprotocol/registry/releases/download/v1.3.3/mcp-publisher_linux_amd64.tar.gz -o /tmp/mcp-publisher.tar.gz
+          tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp
           chmod +x /tmp/mcp-publisher
           sudo mv /tmp/mcp-publisher /usr/local/bin/mcp-publisher
 
