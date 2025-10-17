@@ -14,7 +14,14 @@ export const SECURITY_LIMITS = {
   RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
   RATE_LIMIT_WINDOW_MS: 60 * 1000,         // 1 minute window
   CACHE_TTL_MS: 5 * 60 * 1000,             // 5 minute cache TTL
-  MAX_SEARCH_RESULTS: 50                    // Max search results to return
+  MAX_SEARCH_RESULTS: 50,                   // Max search results to return
+
+  // YAML bomb detection threshold (SECURITY FIX #1298)
+  // Maximum allowed alias-to-anchor amplification ratio
+  // Set to 5:1 - balances security (early DoS detection) with usability (legitimate YAML patterns)
+  // Rationale: Most legitimate YAML uses ≤3× amplification; 5× provides safety margin
+  // while blocking exponential expansion attacks that typically start at 10×+
+  YAML_BOMB_AMPLIFICATION_THRESHOLD: 5
 };
 
 // Input validation patterns

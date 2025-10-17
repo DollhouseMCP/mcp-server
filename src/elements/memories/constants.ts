@@ -111,4 +111,18 @@ export const MEMORY_SECURITY_EVENTS = {
   MEMORY_INTEGRITY_VIOLATION: 'MEMORY_INTEGRITY_VIOLATION',
   MEMORY_UNICODE_VALIDATION_FAILED: 'MEMORY_UNICODE_VALIDATION_FAILED',
   MEMORY_DUPLICATE_DETECTED: 'MEMORY_DUPLICATE_DETECTED',
+  // FIX #1269: Prompt injection protection events
+  MEMORY_INJECTION_BLOCKED: 'MEMORY_INJECTION_BLOCKED',
+  MEMORY_INJECTION_DETECTED_ON_READ: 'MEMORY_INJECTION_DETECTED_ON_READ',
 } as const;
+
+// Trust level for memory content - FIX #1269, #1314
+export const TRUST_LEVELS = {
+  UNTRUSTED: 'untrusted',    // Default - all content starts as untrusted
+  VALIDATED: 'validated',    // Content has passed security validation
+  TRUSTED: 'trusted',        // Manually marked as trusted by user
+  FLAGGED: 'flagged',        // Contains dangerous patterns, sanitized display
+  QUARANTINED: 'quarantined' // Content failed validation, isolated
+} as const;
+
+export type TrustLevel = typeof TRUST_LEVELS[keyof typeof TRUST_LEVELS];

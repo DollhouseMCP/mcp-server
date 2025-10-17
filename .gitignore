@@ -44,6 +44,7 @@ dev-notes/
 Thumbs.db
 
 # Test coverage
+coverage/
 test/coverage/
 test/coverage-integration/
 *.lcov
@@ -112,3 +113,7 @@ temp_sonar.json
 # Temporary SonarCloud utility scripts
 mark-*.sh
 hotspots.json
+
+# PostHog configuration (may contain sensitive keys)
+posthog.config.js
+.env.production

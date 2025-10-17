@@ -226,9 +226,13 @@ export class MemoryManager implements IElementManager<Memory> {
         }));
       }
       
+      // FIX #1320: Set file path on memory for persistence (store relative path)
+      const relativePath = path.relative(this.memoriesDir, fullPath);
+      memory.setFilePath(relativePath);
+
       // Cache the loaded memory
       this.memoryCache.set(fullPath, memory);
-      
+
       // Log successful load
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_LOADED,
@@ -236,7 +240,7 @@ export class MemoryManager implements IElementManager<Memory> {
         source: 'MemoryManager.load',
         details: `Loaded memory from ${path.basename(fullPath)}`
       });
-      
+
       return memory;
       
     } catch (error) {
@@ -409,6 +413,10 @@ export class MemoryManager implements IElementManager<Memory> {
       // Now: Uses FileLockManager for atomic write with proper encoding
       await FileLockManager.atomicWriteFile(fullPath, yamlContent, { encoding: 'utf-8' });
       
+      // FIX #1320: Set file path on memory after successful save
+      const relativePath = path.relative(this.memoriesDir, fullPath);
+      element.setFilePath(relativePath);
+
       // Update cache
       this.memoryCache.set(fullPath, element);
 
