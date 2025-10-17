@@ -4,6 +4,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without publishing)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   id-token: write  # Required for OIDC authentication
@@ -33,7 +39,8 @@ jobs:
 
       - name: Download mcp-publisher CLI
         run: |
-          curl -L https://github.com/modelcontextprotocol/publish/releases/latest/download/mcp-publisher-linux-x64 -o /tmp/mcp-publisher
+          # Pinned to v1.3.3 for reproducibility
+          curl -L https://github.com/modelcontextprotocol/publish/releases/download/v1.3.3/mcp-publisher-linux-x64 -o /tmp/mcp-publisher
           chmod +x /tmp/mcp-publisher
           sudo mv /tmp/mcp-publisher /usr/local/bin/mcp-publisher
 
@@ -44,4 +51,10 @@ jobs:
         run: mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
-        run: mcp-publisher publish
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            echo "Running in DRY-RUN mode"
+            mcp-publisher publish --dry-run
+          else
+            mcp-publisher publish
+          fi
