@@ -873,6 +873,70 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
+### v1.9.18 - October 17, 2025
+
+**Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
+
+#### ✨ Features
+- **PostHog Remote Telemetry Integration** - Opt-in remote analytics with community insights
+  - Simple opt-in: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable
+  - Default PostHog project key embedded (safe to expose - write-only)
+  - Multiple control levels for privacy and data management
+  - GDPR compliant - fully opt-in by design
+
+- **MCP Resources Support** - Future-proof capability index (disabled by default)
+  - Server can expose element definitions as MCP Resources
+  - Alternative to tool-based element access for future MCP clients
+  - Disabled by default to maintain stability
+
+- **Operational Telemetry Foundation** - Infrastructure for monitoring and analytics
+  - TelemetryManager with local-first architecture
+  - Event aggregation and buffering (10s intervals)
+  - PostHog integration for remote insights (opt-in only)
+  - Privacy-preserving with PII filtering
+
+#### 🔧 Fixed
+- **SonarCloud Code Quality** - Resolved 6 issues across import management and security
+- **Security Audit** - Fixed 3 MEDIUM/LOW severity issues in dependencies
+
+#### 📊 Impact
+- ✅ Optional remote telemetry for community insights
+- ✅ Future-proof MCP Resources foundation
+- ✅ All SonarCloud quality gates PASSING
+- ✅ Zero HIGH/CRITICAL security issues
+
+---
+
+### v1.9.17 - October 8, 2025
+
+**Patch Release**: Test isolation and repository cleanup
+
+#### 🔧 Fixed
+- **Performance Test Isolation** - Fixed flaky IndexOptimization test with dedicated test suite
+  - Created `jest.performance.config.cjs` with 4 parallel workers
+  - Reduced execution time from 10+ minutes to 18.7 seconds
+  - Main test suite no longer runs performance tests concurrently
+
+- **Repository Cleanup** - Removed ignored files from Git tracking
+  - Removed `.obsidian/` directory and `test-results/` from version control
+  - Files remain available locally but not tracked in repository
+
+- **Flaky Test Management** - Skipped intermittent GitHubRateLimiter tests
+  - Prevents CI failures from external API dependencies
+
+#### 📚 Documentation
+- Enhanced Docker environment file documentation
+- Added README to data/ directory
+- Improved CLAUDE.md organization and clarity
+- Renamed docs/archive/ to docs/session-history/
+
+#### 📊 Impact
+- ✅ Improved CI reliability and test execution speed
+- ✅ Cleaner repository structure
+- ✅ Better documentation organization
+
+---
+
 ### v1.9.16 - October 3, 2025
 
 **Patch Release**: Platform-agnostic MCP client documentation + SonarCloud code quality (19 issues)
