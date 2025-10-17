@@ -115,6 +115,7 @@
     "data/ensembles/**/*.md",
     "!dist/__tests__/**",
     "!dist/**/*.test.*",
+    "server.json",
     "oauth-helper.mjs",
     "README.md",
     "LICENSE",
