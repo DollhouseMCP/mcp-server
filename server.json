@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
-  "name": "io.github.DollhouseMCP/mcp-server",
+  "name": "io.github.dollhousemcp/mcp-server",
   "title": "DollhouseMCP",
   "description": "OSS to create Personas, Skills, Templates, Agents, and Memories to customize your AI experience.",
   "version": "1.9.19",
