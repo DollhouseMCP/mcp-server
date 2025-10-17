@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [1.9.19] - 2025-10-17
+
+### Added
+- MCP registry publishing workflow with OIDC authentication
+- Automated publishing to registry.modelcontextprotocol.io
+- GitHub Actions workflow with manual dry-run mode
+- Comprehensive test suite for workflow validation (50 tests)
+- Pinned mcp-publisher CLI to v1.3.3 for reproducibility
+
+### Fixed
+- OAuth device flow zero-scopes bug (using OIDC instead)
+- 26 SonarCloud code quality issues in test files
+- Correct namespace casing for MCP registry (DollhouseMCP)
+
+### Technical
+- OIDC permissions: id-token:write, contents:read
+- server.json included in NPM package
+- Works with release publish or manual workflow_dispatch
+
 ## [1.9.18] - 2025-10-17
 
 **Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
