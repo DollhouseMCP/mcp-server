@@ -2,7 +2,7 @@
 
 **Version**: 1.0
 **Last Updated**: October 15, 2025
-**Effective**: v1.9.19
+**Effective**: v1.9.18
 **Status**: Active
 
 ---
@@ -22,17 +22,115 @@ DollhouseMCP includes minimal, privacy-respecting operational telemetry to help 
 
 ---
 
+## Remote Telemetry (Optional)
+
+Starting in v1.9.18, DollhouseMCP supports **optional** remote telemetry via PostHog for better usage insights:
+
+### Key Features
+
+- **Opt-in only**: Requires explicit environment variable to enable
+- **Anonymous**: Uses same UUID system as local telemetry, no PII collected
+- **Additional opt-out**: Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to disable only remote sending while keeping local logs
+- **Free tier**: PostHog offers 1M events/month free
+- **Data location**: Can use US or EU servers (GDPR compliant)
+- **Same data**: Remote telemetry sends the exact same data as local logs (no additional fields)
+
+### Simple Opt-In (Recommended)
+
+Enable remote telemetry with a single environment variable:
+
+```bash
+export DOLLHOUSE_TELEMETRY_OPTIN=true
+```
+
+This uses DollhouseMCP's shared PostHog project for community-wide analytics. The PostHog project key is embedded in the code and safe to share publicly (it's write-only and provides no access to data).
+
+**Why is the project key safe to expose?**
+- PostHog project keys (starting with `phc_`) are **write-only** - they can only send events, not read data
+- Public exposure is a standard practice (similar to Google Analytics IDs)
+- No sensitive data access or account control possible
+- Community benefits from aggregated, anonymous usage insights
+
+### Custom PostHog Project (Advanced)
+
+For enterprise deployments or custom analytics, you can use your own PostHog instance:
+
+```bash
+export POSTHOG_API_KEY=phc_your_custom_key
+export POSTHOG_HOST=https://app.posthog.com  # Optional: Use EU server https://eu.posthog.com
+```
+
+This overrides the default shared project and routes telemetry to your own PostHog account.
+
+### What's Sent to PostHog
+
+When configured, the same installation event stored locally is also sent to PostHog:
+
+```json
+{
+  "distinctId": "550e8400-e29b-41d4-a716-446655440000",
+  "event": "server_installation",
+  "properties": {
+    "version": "1.9.18",
+    "os": "darwin",
+    "node_version": "20.11.0",
+    "mcp_client": "claude-desktop"
+  }
+}
+```
+
+**No additional data** is sent beyond what's in your local `~/.dollhouse/telemetry.log`.
+
+### PostHog Privacy
+
+- **Anonymous tracking**: Uses same random UUID as local telemetry
+- **No cookies**: PostHog session tracking disabled
+- **No IP collection**: PostHog IP capture disabled
+- **GDPR compliant**: Can use EU servers
+- **Data retention**: Configurable (default: 90 days)
+- **Self-hosting**: PostHog can be self-hosted if desired
+
+### Disabling Remote Telemetry
+
+Multiple ways to control telemetry:
+
+1. **Don't set `DOLLHOUSE_TELEMETRY_OPTIN=true`** (default) - Remote telemetry never activates
+2. **Set `DOLLHOUSE_TELEMETRY_NO_REMOTE=true`** - Keeps local logs, disables PostHog
+3. **Set `DOLLHOUSE_TELEMETRY=false`** - Disables all telemetry (local and remote)
+
+```bash
+# Option 1: Only disable remote (keep local logs)
+export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
+
+# Option 2: Disable all telemetry
+export DOLLHOUSE_TELEMETRY=false
+
+# Option 3: Simple opt-in for incentive programs (when available)
+export DOLLHOUSE_TELEMETRY_OPTIN=true
+```
+
+### Why PostHog?
+
+- **Open source**: PostHog is open source (MIT license)
+- **Privacy-first**: Built with GDPR compliance in mind
+- **Generous free tier**: 1M events/month free
+- **Self-hostable**: Can run your own PostHog instance
+- **EU servers available**: GDPR data residency compliance
+- **No vendor lock-in**: Standard events API, easy to migrate
+
+---
+
 ## What We Collect
 
 ### Installation Event (One-Time)
 
-On first run, a single installation event is recorded. This is the **only** data collected in v1.9.19:
+On first run, a single installation event is recorded. This is the **only** data collected in v1.9.18:
 
 ```json
 {
   "event": "install",
   "install_id": "550e8400-e29b-41d4-a716-446655440000",
-  "version": "1.9.19",
+  "version": "1.9.18",
   "os": "darwin",
   "node_version": "20.11.0",
   "mcp_client": "claude-desktop",
@@ -46,7 +144,7 @@ On first run, a single installation event is recorded. This is the **only** data
 |-------|-------------|-------------------|----------------|
 | `event` | Event type identifier | To distinguish event types in future versions | `"install"` |
 | `install_id` | Anonymous UUID v4 | To count unique installations without identifying users | `"550e8400-e29b-41d4-a716-446655440000"` |
-| `version` | DollhouseMCP version | To track version adoption and update success rates | `"1.9.19"` |
+| `version` | DollhouseMCP version | To track version adoption and update success rates | `"1.9.18"` |
 | `os` | Operating system type | To prioritize platform-specific support and testing | `"darwin"`, `"win32"`, `"linux"` |
 | `node_version` | Node.js version (major.minor) | To understand runtime compatibility and set minimum requirements | `"20.11"`, `"18.17"` |
 | `mcp_client` | MCP client being used | To optimize for most common clients (Claude Desktop, Claude Code, etc.) | `"claude-desktop"`, `"claude-code"`, `"unknown"` |
@@ -160,12 +258,12 @@ The installation event is written to a local log file:
 Example log file content:
 
 ```json
-{"event":"install","install_id":"550e8400-e29b-41d4-a716-446655440000","version":"1.9.19","os":"darwin","node_version":"20.11.0","mcp_client":"claude-desktop","timestamp":"2025-10-15T18:45:00.000Z"}
+{"event":"install","install_id":"550e8400-e29b-41d4-a716-446655440000","version":"1.9.18","os":"darwin","node_version":"20.11.0","mcp_client":"claude-desktop","timestamp":"2025-10-15T18:45:00.000Z"}
 ```
 
 ### 4. Local Storage Only
 
-**Current Status (v1.9.19)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
+**Current Status (v1.9.18)**: All telemetry data stays on your machine. Nothing is transmitted over the network.
 
 **Future Plans**: Server infrastructure will be implemented in a separate issue. When ready:
 - You will be able to inspect local logs before any transmission
@@ -223,7 +321,7 @@ Only you can access these files:
 
 ### Current Status: Local Only
 
-**v1.9.19 does NOT transmit any data over the network.**
+**v1.9.18 does NOT transmit any data over the network.**
 
 All telemetry events are:
 - Generated locally
@@ -268,26 +366,43 @@ When server infrastructure is implemented (separate issue), we will:
 
 Telemetry is **enabled by default** (industry standard for open source projects like VS Code, npm, Homebrew). However, opting out is simple and immediate.
 
+### Opt-Out Levels
+
+You can disable telemetry at different levels:
+
+1. **Remote only**: `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Keeps local logs, disables PostHog
+2. **All telemetry**: `DOLLHOUSE_TELEMETRY=false` - Disables both local and remote
+3. **No configuration**: Default behavior (local telemetry enabled, remote requires `DOLLHOUSE_TELEMETRY_OPTIN=true`)
+
 ### Method 1: Environment Variable (Recommended)
 
 Set the `DOLLHOUSE_TELEMETRY` environment variable to `false`:
 
 **Bash/Zsh:**
 ```bash
+# Disable all telemetry
 # Add to ~/.bashrc or ~/.zshrc for persistence
 export DOLLHOUSE_TELEMETRY=false
+
+# Or disable only remote telemetry (keep local logs)
+export DOLLHOUSE_TELEMETRY_NO_REMOTE=true
 ```
 
 **Fish Shell:**
 ```fish
 # Add to ~/.config/fish/config.fish
 set -x DOLLHOUSE_TELEMETRY false
+# Or disable only remote:
+set -x DOLLHOUSE_TELEMETRY_NO_REMOTE true
 ```
 
 **Windows PowerShell:**
 ```powershell
-# User-level (recommended)
+# Disable all telemetry - User-level (recommended)
 [Environment]::SetEnvironmentVariable("DOLLHOUSE_TELEMETRY", "false", "User")
+
+# Or disable only remote telemetry
+[Environment]::SetEnvironmentVariable("DOLLHOUSE_TELEMETRY_NO_REMOTE", "true", "User")
 
 # Session-level only
 $env:DOLLHOUSE_TELEMETRY = "false"
@@ -295,8 +410,11 @@ $env:DOLLHOUSE_TELEMETRY = "false"
 
 **Windows Command Prompt:**
 ```cmd
-REM User-level (recommended)
+REM Disable all - User-level (recommended)
 setx DOLLHOUSE_TELEMETRY false
+
+REM Or disable only remote
+setx DOLLHOUSE_TELEMETRY_NO_REMOTE true
 
 REM Session-level only
 set DOLLHOUSE_TELEMETRY=false
@@ -363,7 +481,7 @@ cat ~/.dollhouse/telemetry.log
 - May break platforms we didn't know were widely used
 
 **Solution**: Minimal installation telemetry tells us:
-- "200 macOS users installed v1.9.19 this week"
+- "200 macOS users installed v1.9.18 this week"
 - "80% of installations are Claude Desktop, 15% Claude Code"
 - "Linux installations are growing 20% month-over-month"
 
@@ -413,7 +531,7 @@ This helps us prioritize bug fixes, optimize for common platforms, and make bett
    - No hidden or encrypted data
 
 3. **Monitor Network Traffic**
-   - In v1.9.19, there's NO network transmission
+   - In v1.9.18, there's NO network transmission
    - Use tools like Wireshark or Little Snitch to verify
    - When network transmission is added, you can still monitor it
 
@@ -486,7 +604,7 @@ cat ~/.dollhouse/.telemetry-id
 {
   "event": "install",
   "install_id": "550e8400-e29b-41d4-a716-446655440000",
-  "version": "1.9.19",
+  "version": "1.9.18",
   "os": "darwin",
   "node_version": "20.11.0",
   "mcp_client": "claude-desktop",
@@ -505,7 +623,7 @@ cat ~/.dollhouse/.telemetry-id
 
 **Upgrade (update to newer version):**
 - Installation ID is preserved (same UUID)
-- No new installation event in v1.9.19 (only recorded on first install)
+- No new installation event in v1.9.18 (only recorded on first install)
 - Future versions may add upgrade events
 
 ### Will features be locked behind telemetry?
@@ -537,7 +655,7 @@ rm ~/.dollhouse/telemetry.log
 
 ### Can I partially opt-in?
 
-**In v1.9.19**: No, it's all-or-nothing (just installation event).
+**In v1.9.18**: No, it's all-or-nothing (just installation event).
 
 **Future versions** may support granular control:
 ```bash
@@ -674,7 +792,7 @@ We follow telemetry best practices from leading open source projects:
 DollhouseMCP telemetry is **more conservative** than these projects:
 
 - **No behavioral tracking** (unlike VS Code's feature usage tracking)
-- **Installation only** in v1.9.19 (no heartbeats, session tracking, etc.)
+- **Installation only** in v1.9.18 (no heartbeats, session tracking, etc.)
 - **Local-first** (no network transmission yet)
 - **AGPL-3.0** (requires open source server, allows self-hosting)
 
@@ -778,7 +896,7 @@ This privacy policy applies to **AGPL-3.0 users**. Commercial license users shou
 - **What we collect**: One installation event with platform info and anonymous UUID
 - **What we don't collect**: Personal information, user content, file paths, IP addresses
 - **Where it's stored**: `~/.dollhouse/telemetry.log` (local only)
-- **Network transmission**: None in v1.9.19 (future: separate opt-in)
+- **Network transmission**: None in v1.9.18 (future: separate opt-in)
 - **How to opt-out**: `export DOLLHOUSE_TELEMETRY=false`
 - **How to inspect**: `cat ~/.dollhouse/telemetry.log`
 - **How to delete**: `rm ~/.dollhouse/telemetry.log ~/.dollhouse/.telemetry-id`
@@ -797,7 +915,7 @@ This privacy policy applies to **AGPL-3.0 users**. Commercial license users shou
 We encourage you to:
 - Read the telemetry implementation code
 - Inspect your local log files
-- Monitor network traffic (will be none in v1.9.19)
+- Monitor network traffic (will be none in v1.9.18)
 - Ask questions in GitHub Issues
 - Report privacy concerns
 - Fork and modify if desired
@@ -809,7 +927,7 @@ We encourage you to:
 **Document Version**: 1.0
 **Last Updated**: October 15, 2025
 **Next Review**: January 15, 2026
-**Effective Version**: 1.9.19+
+**Effective Version**: 1.9.18+
 
 For the most current version of this policy, see:
 https://github.com/DollhouseMCP/mcp-server/blob/main/docs/privacy/OPERATIONAL_TELEMETRY.md

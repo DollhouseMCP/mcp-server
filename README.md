@@ -1455,49 +1455,91 @@ This release introduces the complete portfolio management system with GitHub OAu
 
 For complete release history prior to v1.6.0, see the [GitHub Releases](https://github.com/DollhouseMCP/mcp-server/releases) page.
 
-## Operational Telemetry
+## Optional Telemetry (Opt-In)
 
-DollhouseMCP collects minimal operational telemetry to understand installation counts and platform distribution. This helps us prioritize platform support and understand actual adoption.
+DollhouseMCP includes infrastructure for collecting minimal operational telemetry to help us understand platform distribution and prioritize support. **This feature is completely opt-in and requires explicit configuration.**
 
-### What's Collected
+### Current Status: Disabled by Default
 
-On first run, we record a single installation event containing:
-- Anonymous installation ID (UUID generated locally)
-- DollhouseMCP version
-- Operating system (darwin/win32/linux)
-- Node.js version
-- MCP client type (Claude Desktop, Claude Code, VS Code, or unknown)
-- Timestamp
+Telemetry collection is **OFF by default**. Your usage remains completely private unless you choose to help us by opting in.
 
-**We do NOT collect:**
-- Personal information (names, emails, IP addresses)
-- User content (personas, skills, templates, memories)
-- Behavioral data (tool usage, conversations, activity patterns)
-- File paths or directory structures
+### Why Opt-In?
 
-### Privacy Commitment
+Understanding our user base helps us:
+- **Prioritize platform support** - Focus testing on most-used OS/Node versions
+- **Optimize compatibility** - Know which MCP clients to prioritize
+- **Plan resources** - Understand actual adoption for support planning
+- **Make data-driven decisions** - Choose features that benefit the most users
 
-- All data is stored locally in `~/.dollhouse/telemetry.log`
-- No network transmission occurs (not yet implemented)
-- Anonymous by design - no way to identify users
-- Transparent - you can inspect the log file anytime
+### Future: Incentivized Opt-In Program
+
+We're planning a future incentive program where users who opt in to share anonymous stats can receive:
+- 🎁 **Access to premium Dollhouse Collection content**
+- 💳 **LLM credits or API access**
+- ⭐ **Priority support or beta features**
+- 🏅 **Community recognition badges**
+
+**The telemetry infrastructure is already built and ready** - when we launch the incentive program, you'll be able to opt in easily through your MCP configuration.
+
+### How to Opt In
+
+Add the environment variable to your MCP configuration:
+
+**Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/Users/YOU/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_TELEMETRY_OPTIN": "true"
+      }
+    }
+  }
+}
+```
+
+**Claude Code** (MCP Settings → Add Environment Variable):
+- Name: `DOLLHOUSE_TELEMETRY_OPTIN`
+- Value: `true`
+
+Then restart your MCP client.
+
+**Advanced** - Custom PostHog project (enterprise):
+```json
+{
+  "env": {
+    "POSTHOG_API_KEY": "phc_your_custom_key",
+    "POSTHOG_HOST": "https://app.posthog.com"
+  }
+}
+```
+
+### What Would Be Collected (If You Opt In)
+
+Only on first run after opting in:
+- ✅ Anonymous installation ID (UUID)
+- ✅ DollhouseMCP version
+- ✅ Operating system (darwin/win32/linux)
+- ✅ Node.js version
+- ✅ MCP client type
+- ✅ Timestamp
+
+**Never collected:**
+- ❌ Personal information (names, emails, IPs)
+- ❌ User content (your personas, skills, templates, memories)
+- ❌ Behavioral data (what tools you use, conversations)
+- ❌ File paths or system details
+
+### Privacy & Transparency
+
+- All data stored locally in `~/.dollhouse/telemetry.log` (always visible to you)
+- GDPR compliant - opt-in by design
+- Anonymous by design - no user identification possible
+- Open source - audit the code anytime
+- PostHog project keys are safe to expose publicly (write-only, no data access)
 - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete details
-
-### Opt Out
-
-Telemetry is enabled by default but easily disabled:
-
-```bash
-export DOLLHOUSE_TELEMETRY=false
-```
-
-Add this to your shell profile (~/.bashrc, ~/.zshrc) to disable permanently.
-
-You can also manually delete the telemetry files:
-```bash
-rm ~/.dollhouse/.telemetry-id
-rm ~/.dollhouse/telemetry.log
-```
 
 ## 📜 License
 
