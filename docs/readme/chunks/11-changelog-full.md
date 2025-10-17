@@ -1,5 +1,102 @@
 ## 🏷️ Version History
 
+### v1.9.19 - October 17, 2025
+
+**Comprehensive Release**: 90 commits including security fixes, PostHog telemetry, MCP registry support, and major cleanup
+
+#### Added
+- MCP registry publishing workflow with OIDC authentication (#1367)
+- PostHog remote telemetry integration (#1357, #1361) - Opt-in remote analytics
+- MCP Resources support for capability index (#1360) - Future-proof architecture
+- Dual licensing model with commercial option (#1350)
+- Minimal installation telemetry (#1359)
+- Security telemetry tracking for blocked attacks (#1313)
+- Automated release issue verification system (#1249)
+- Orphaned issues checker for systematic cleanup (#1251)
+- Personal development notes directory (#1275)
+
+#### Security
+- Phase 1: Background validation for memory security (#1316, #1320, #1322)
+- Phase 2: AES-256-GCM pattern encryption (#1323)
+- Fixed symlink path traversal vulnerability (#1290, #1306)
+- Fixed command injection in verify-release-issues.js (#1249) - DMCP-SEC-001
+- Tightened YAML bomb detection threshold from 10:1 to 5:1 (#1305)
+
+#### Fixed
+- Missing shell: bash declarations in MCP registry workflow
+- OAuth device flow zero-scopes bug (using OIDC instead)
+- Test isolation to prevent resource contention (#1288)
+- GitHub rate limiter test failures (#1285)
+- Recognition of MERGED state in release verification (#1250)
+- Resolved 26+ SonarCloud code quality issues
+
+#### Changed
+- Updated @modelcontextprotocol/sdk from 1.18.0 to 1.20.0
+- Updated jest from 30.0.5 to 30.2.0
+- Enhanced path traversal protection mechanisms
+- Skip Claude Code Review for Dependabot PRs (#1241)
+
+---
+
+### v1.9.18 - October 17, 2025
+
+**Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
+
+#### Added
+- **PostHog Remote Telemetry Integration** (#1357, #1361) - Opt-in remote analytics
+  - Simple opt-in: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable remote telemetry
+  - Uses shared PostHog project for community-wide insights
+  - Multiple control levels and GDPR compliant by design
+
+- **MCP Resources Support** (#1360) - Future-proof implementation
+  - Three resource variants exposed: summary (~3K tokens), full (~40K tokens), and stats (JSON)
+  - Status: Non-functional in Claude Code (Oct 2025) - discovery only
+  - Default: Disabled for safety - zero overhead when not enabled
+
+- **Operational Telemetry Foundation** (#1358, #1359) - Minimal installation tracking
+  - Tracks single installation event on first run
+  - Privacy-first design: no PII, no behavioral data, no user content
+
+#### Test Results
+- 2546 tests passing
+- Test coverage: >96% maintained
+- All CI checks passing across all platforms
+
+---
+
+### v1.9.17 - October 8, 2025
+
+**Test isolation and repository cleanup patch**
+
+#### Fixed
+- **Performance Test Isolation (#1288)**: Fixed flaky IndexOptimization test
+  - Created dedicated `jest.performance.config.cjs` with 4 parallel workers
+  - Main test suite no longer runs performance tests concurrently
+  - IndexOptimization test now consistently passes at 60-70ms
+
+- **Repository Cleanup (#1287)**: Removed ignored files from Git tracking
+  - Removed `.obsidian/` directory (4 files) and `test-results/` (3 files)
+
+- **Flaky Test Management (#1286)**: Skip flaky GitHubRateLimiter tests
+  - Marked intermittent GitHub API rate limiter tests as skipped
+
+#### Chores
+- Repository Organization (#1276): Added `.obsidian/` and `test-results/` to .gitignore
+- Documentation Structure (#1277): Renamed docs/archive/ to docs/session-history/
+- Documentation Refactor (#1270): Improved CLAUDE.md organization
+
+#### Features
+- Issue Management (#1251): Added orphaned issues checker
+- Developer Experience (#1275): Added dev-notes/ directory
+- CI Improvements: Added automated release issue verification (#1241)
+
+#### Test Results
+- Main suite: 2269 tests passing (performance tests excluded)
+- Performance suite: 62 tests passing (isolated execution)
+- Total: 2331 tests passing
+
+---
+
 ### v1.9.16 - October 3, 2025
 
 **Patch Release**: Platform-agnostic MCP client documentation + SonarCloud code quality (19 issues)

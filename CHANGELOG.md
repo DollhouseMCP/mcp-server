@@ -2,6 +2,85 @@
 
 ## [Unreleased]
 
+## [1.9.19] - 2025-10-17
+
+**Comprehensive Release**: 90 commits including security fixes, PostHog telemetry, MCP registry support, and major cleanup
+
+### Added
+- MCP registry publishing workflow with OIDC authentication (#1367)
+  - Automated publishing to registry.modelcontextprotocol.io
+  - GitHub Actions workflow with manual dry-run mode
+  - Comprehensive test suite for workflow validation (50+ tests)
+  - Pinned mcp-publisher CLI to v1.3.3 for reproducibility
+- PostHog remote telemetry integration (#1357, #1361)
+  - Opt-in remote analytics with DOLLHOUSE_TELEMETRY_OPTIN=true
+  - Usage patterns and error tracking
+  - Privacy-focused with explicit consent
+- MCP Resources support for capability index (#1360)
+  - Future-proof architecture (disabled by default)
+  - Ready for MCP protocol evolution
+- Dual licensing model with commercial option (#1350)
+  - AGPL-3.0 with platform stability commitments
+  - Commercial licensing pathway
+- Minimal installation telemetry (#1359)
+  - Operational metrics for v1.9.19
+  - Installation success tracking
+- Security telemetry tracking for blocked attacks (#1313)
+- Automated release issue verification system (#1249)
+- Orphaned issues checker for systematic cleanup (#1251)
+- Personal development notes directory (#1275)
+
+### Security
+- Phase 1: Background validation for memory security (#1316, #1320, #1322)
+- Phase 2: AES-256-GCM pattern encryption (#1323)
+- Fixed symlink path traversal vulnerability (#1290, #1306)
+  - Resolve symlinks before validation
+  - Enhanced audit logging
+  - Comprehensive path sanitization
+- Fixed command injection in verify-release-issues.js (#1249)
+  - DMCP-SEC-001: Critical vulnerability patched
+  - PATH injection protection with absolute paths
+- Tightened YAML bomb detection threshold from 10:1 to 5:1 (#1305)
+- Fixed multiple security audit issues (3 MEDIUM/LOW severity)
+
+### Fixed
+- Missing shell: bash declarations in MCP registry workflow
+- OAuth device flow zero-scopes bug (using OIDC instead)
+- Test isolation to prevent resource contention (#1288)
+- GitHub rate limiter test failures (#1285)
+- Recognition of MERGED state in release verification (#1250)
+- Resolved 26+ SonarCloud code quality issues across multiple files
+  - Import/export ordering issues
+  - Cognitive complexity reductions
+  - Security hotspot resolutions
+- Cross-platform workflow compatibility improvements
+- Namespace casing for MCP registry (DollhouseMCP)
+
+### Changed
+- Improved whitespace detection performance
+- Enhanced path traversal protection mechanisms
+- Skip Claude Code Review for Dependabot PRs (#1241)
+- Refactored CLAUDE.md into modular documentation (#1270)
+- Renamed docs/archive/ to docs/session-history/ (#1277)
+- Added node: prefix for built-in module imports
+- Reduced cognitive complexity in multiple modules
+
+### Dependencies
+- Updated @modelcontextprotocol/sdk from 1.18.0 to 1.20.0
+- Updated jest from 30.0.5 to 30.2.0
+- Updated @types/node from 24.4.0 to 24.7.0
+- Updated typescript from 5.9.2 to 5.9.3
+- Updated multiple dev dependencies
+- Added PostHog SDK for telemetry
+
+### Technical
+- OIDC permissions: id-token:write, contents:read
+- server.json included in NPM package
+- Docker build optimizations and multi-platform support
+- Auto-sync README files on develop push
+- Enhanced test coverage and reliability
+- Improved CI/CD pipeline stability
+
 ## [1.9.18] - 2025-10-17
 
 **Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation

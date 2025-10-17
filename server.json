@@ -1,82 +1,37 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
-  "name": "io.github.dollhousemcp/mcp-server",
+  "name": "io.github.DollhouseMCP/mcp-server",
   "title": "DollhouseMCP",
-  "description": "Community-powered AI customization through modular elements. Create, manage, and share personas, skills, templates, agents, and memories for Claude and other MCP-compatible AI assistants.",
-  "version": "1.9.18",
-  "websiteUrl": "https://dollhousemcp.com",
+  "description": "OSS to create Personas, Skills, Templates, Agents, and Memories to customize your AI experience.",
+  "version": "1.9.19",
+  "homepage": "https://dollhousemcp.com",
   "repository": {
-    "url": "https://github.com/DollhouseMCP/mcp-server",
-    "source": "github"
+    "type": "git",
+    "url": "https://github.com/DollhouseMCP/mcp-server"
   },
+  "license": "AGPL-3.0",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "persona",
+    "prompt",
+    "claude",
+    "ai-assistant",
+    "behavioral-profiles",
+    "dynamic-prompting",
+    "typescript",
+    "dollhouse",
+    "marketplace"
+  ],
   "packages": [
     {
       "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@dollhousemcp/mcp-server",
-      "version": "1.9.18",
+      "version": "1.9.19",
       "transport": {
         "type": "stdio"
-      },
-      "environmentVariables": [
-        {
-          "name": "DOLLHOUSE_PORTFOLIO_DIR",
-          "description": "Custom directory for storing your portfolio of elements (default: ~/.dollhouse/portfolio/)",
-          "isRequired": false,
-          "isSecret": false
-        },
-        {
-          "name": "GITHUB_TOKEN",
-          "description": "GitHub Personal Access Token for portfolio sync and collection submission (optional, can use OAuth instead)",
-          "isRequired": false,
-          "isSecret": true
-        },
-        {
-          "name": "DOLLHOUSE_DEBUG",
-          "description": "Enable debug logging (set to 'true' for verbose output)",
-          "isRequired": false,
-          "isSecret": false,
-          "default": "false"
-        }
-      ]
-    }
-  ],
-  "_meta": {
-    "io.modelcontextprotocol.registry/publisher-provided": {
-      "tool": "mcp-publisher",
-      "version": "1.3.0",
-      "build_info": {
-        "timestamp": "2025-10-15T17:30:00Z",
-        "mcp_sdk_version": "1.20.0"
-      }
-    },
-    "dollhousemcp": {
-      "capabilities": {
-        "element_types": [
-          "personas",
-          "skills",
-          "templates",
-          "agents",
-          "memories",
-          "ensembles"
-        ],
-        "features": [
-          "element_management",
-          "portfolio_sync",
-          "github_integration",
-          "collection_browsing",
-          "oauth_authentication",
-          "search_and_discovery",
-          "relationship_mapping",
-          "semantic_similarity"
-        ],
-        "total_tools": 47
-      },
-      "licensing": {
-        "primary": "AGPL-3.0",
-        "commercial_available": true,
-        "contact": "contact@dollhousemcp.com"
       }
     }
-  }
+  ]
 }
