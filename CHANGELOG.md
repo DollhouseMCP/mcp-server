@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.9.20] - 2025-10-17
+
+**Fix Release**: MCP Registry Publishing Compatibility
+
+### Fixed
+- MCP Registry publishing case sensitivity issue (#XXXX)
+  - Corrected `mcpName` field in package.json to match GitHub organization capitalization
+  - Changed from `io.github.dollhousemcp/mcp-server` to `io.github.DollhouseMCP/mcp-server`
+  - Resolves NPM package validation errors when publishing to MCP Registry
+  - Ensures proper namespace permission matching
+
+### Context
+The MCP Registry performs two case-sensitive validations:
+1. Permission check against GitHub org name (`io.github.DollhouseMCP/*`)
+2. NPM package validation against `mcpName` field in package.json
+
+The initial implementation incorrectly used lowercase for `mcpName`, causing a validation mismatch. This patch release corrects the capitalization to match our GitHub organization name.
+
 ## [1.9.19] - 2025-10-17
 
 **Comprehensive Release**: 90 commits including security fixes, PostHog telemetry, MCP registry support, and major cleanup
