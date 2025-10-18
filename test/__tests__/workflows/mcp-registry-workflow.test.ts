@@ -119,12 +119,37 @@ describe('MCP Registry Workflow Configuration', () => {
     });
 
     test('should use pinned mcp-publisher version (not latest)', () => {
-      // Check that we're using a specific version tag, not "latest"
-      const versionRegex = /releases\/download\/v\d+\.\d+\.\d+\/mcp-publisher/;
-      const latestRegex = /releases\/latest\/download\/mcp-publisher/;
+      /**
+       * Security requirement: mcp-publisher version must be pinned
+       *
+       * We validate the VERSION variable is set to a specific semver tag (vX.Y.Z)
+       * and used via ${VERSION} interpolation. This prevents using "latest" which
+       * could introduce breaking changes or security vulnerabilities.
+       *
+       * We check the source YAML (not runtime values) because:
+       * - The workflow uses shell variable interpolation: ${VERSION}
+       * - We need to validate the VARIABLE DEFINITION, not the expanded URL
+       * - This catches mistakes like VERSION="latest" or hardcoded URLs
+       *
+       * Related: Issue #1375 - Fix test pattern to validate VERSION variable
+       */
 
-      expect(workflowContent).toMatch(versionRegex);
-      expect(workflowContent).not.toMatch(latestRegex);
+      // Check 1: VERSION variable is defined with semver format (vX.Y.Z or vX.Y.Z-prerelease)
+      // Support both single and double quotes, optional whitespace
+      const versionVarRegex = /VERSION\s*=\s*["']v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?["']/;
+      expect(workflowContent).toMatch(versionVarRegex);
+
+      // Check 2: VERSION variable is used in download URL (prevents hardcoded bypass)
+      const downloadUrlRegex = /releases\/download\/\$\{VERSION\}/;
+      expect(workflowContent).toMatch(downloadUrlRegex);
+
+      // Check 3: No use of "latest" in release URLs (security anti-pattern)
+      const latestUrlRegex = /releases\/latest\/download/;
+      expect(workflowContent).not.toMatch(latestUrlRegex);
+
+      // Check 4: VERSION is not set to "latest" (prevent variable-level bypass)
+      const versionLatestRegex = /VERSION\s*=\s*["']latest["']/;
+      expect(workflowContent).not.toMatch(versionLatestRegex);
     });
 
     test('should have dry-run capability', () => {
@@ -336,8 +361,9 @@ describe('MCP Registry Workflow Configuration', () => {
       expect(workflowContent).toMatch(/id-token: write/);
       expect(workflowContent).toMatch(/login github-oidc/);
 
-      // Pinned versions
-      expect(workflowContent).toMatch(/releases\/download\/v\d+\.\d+\.\d+/);
+      // Pinned versions - check VERSION variable declaration (see line 121 for detailed explanation)
+      // This validates the VERSION variable uses semver format, not "latest"
+      expect(workflowContent).toMatch(/VERSION\s*=\s*["']v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?["']/);
 
       // Dry-run capability
       expect(workflowContent).toMatch(/dry[-_]run/);
