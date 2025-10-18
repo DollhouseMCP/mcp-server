@@ -131,12 +131,12 @@ describe('MCP Registry Workflow Configuration', () => {
        * - We need to validate the VARIABLE DEFINITION, not the expanded URL
        * - This catches mistakes like VERSION="latest" or hardcoded URLs
        *
-       * Related: Issue #1375 - Fix test pattern to validate VERSION variable
+       * Related: Issue #1375 - Fixed test pattern to validate VERSION variable declaration
        */
 
       // Check 1: VERSION variable is defined with semver format (vX.Y.Z or vX.Y.Z-prerelease)
       // Support both single and double quotes, optional whitespace
-      const versionVarRegex = /VERSION\s*=\s*["']v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?["']/;
+      const versionVarRegex = /\bVERSION\s*=\s*["']v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?["']/;
       expect(workflowContent).toMatch(versionVarRegex);
 
       // Check 2: VERSION variable is used in download URL (prevents hardcoded bypass)
@@ -148,8 +148,24 @@ describe('MCP Registry Workflow Configuration', () => {
       expect(workflowContent).not.toMatch(latestUrlRegex);
 
       // Check 4: VERSION is not set to "latest" (prevent variable-level bypass)
-      const versionLatestRegex = /VERSION\s*=\s*["']latest["']/;
+      const versionLatestRegex = /\bVERSION\s*=\s*["']latest["']/;
       expect(workflowContent).not.toMatch(versionLatestRegex);
+    });
+
+    test('should not use YAML environment variable VERSION with latest', () => {
+      /**
+       * Additional security check: Prevent using YAML env var syntax
+       *
+       * While the workflow currently uses shell variables, someone could
+       * theoretically bypass our checks by using YAML environment variables:
+       *
+       * env:
+       *   VERSION: latest
+       *
+       * This test ensures we catch that pattern too.
+       */
+      const envVarLatestRegex = /env:[\s\S]*?VERSION:\s*latest/;
+      expect(workflowContent).not.toMatch(envVarLatestRegex);
     });
 
     test('should have dry-run capability', () => {
