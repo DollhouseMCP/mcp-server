@@ -53,6 +53,7 @@ import { Memory } from './elements/memories/Memory.js';
 import { generateMemoryId } from './elements/memories/utils.js';
 import { ConfigManager } from './config/ConfigManager.js';
 import { CapabilityIndexResource } from './server/resources/CapabilityIndexResource.js';
+import { ElementFormatter } from './utils/ElementFormatter.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -768,6 +769,9 @@ export class DollhouseMCPServer implements IToolHandler {
       );
     }
 
+    // FIX (Issue #874): Unescape content for proper markdown rendering
+    const unescapedContent = ElementFormatter.unescapeContent(persona.content);
+
     return {
       content: [
         {
@@ -778,7 +782,7 @@ export class DollhouseMCPServer implements IToolHandler {
             `**Version:** ${persona.metadata.version || '1.0'}\n` +
             `**Author:** ${persona.metadata.author || 'Unknown'}\n` +
             `**Triggers:** ${persona.metadata.triggers?.join(', ') || 'None'}\n\n` +
-            `**Full Content:**\n\`\`\`\n${persona.content}\n\`\`\``,
+            `**Full Content:**\n\`\`\`\n${unescapedContent}\n\`\`\``,
         },
       ],
     };
@@ -1290,7 +1294,10 @@ export class DollhouseMCPServer implements IToolHandler {
               }]
             };
           }
-          
+
+          // FIX (Issue #874): Unescape instructions for proper markdown rendering
+          const unescapedInstructions = ElementFormatter.unescapeContent(skill.instructions);
+
           const details = [
             `🛠️ **${skill.metadata.name}**`,
             `${skill.metadata.description}`,
@@ -1301,16 +1308,16 @@ export class DollhouseMCPServer implements IToolHandler {
             `**Prerequisites**: ${skill.metadata.prerequisites?.join(', ') || 'none'}`,
             ``,
             `**Instructions**:`,
-            skill.instructions
+            unescapedInstructions
           ];
-          
+
           if (skill.metadata.parameters && skill.metadata.parameters.length > 0) {
             details.push('', '**Parameters**:');
             skill.metadata.parameters.forEach((p: any) => {
               details.push(`- ${p.name} (${p.type}): ${p.description}`);
             });
           }
-          
+
           return {
             content: [{
               type: "text",
@@ -1331,7 +1338,10 @@ export class DollhouseMCPServer implements IToolHandler {
               }]
             };
           }
-          
+
+          // FIX (Issue #874): Unescape content for proper markdown rendering
+          const unescapedContent = ElementFormatter.unescapeContent(template.content);
+
           const details = [
             `📄 **${template.metadata.name}**`,
             `${template.metadata.description}`,
@@ -1339,17 +1349,17 @@ export class DollhouseMCPServer implements IToolHandler {
             `**Output Format**: ${(template.metadata as any).output_format || 'text'}`,
             `**Template Content**:`,
             '```',
-            template.content,
+            unescapedContent,
             '```'
           ];
-          
+
           if (template.metadata.variables && template.metadata.variables.length > 0) {
             details.push('', '**Variables**:');
             template.metadata.variables.forEach((v: any) => {
               details.push(`- ${v.name} (${v.type}): ${v.description}`);
             });
           }
-          
+
           return {
             content: [{
               type: "text",
@@ -1370,7 +1380,11 @@ export class DollhouseMCPServer implements IToolHandler {
               }]
             };
           }
-          
+
+          // FIX (Issue #874): Unescape instructions for proper markdown rendering
+          const agentInstructions = (agent as any).instructions || 'No instructions available';
+          const unescapedInstructions = ElementFormatter.unescapeContent(agentInstructions);
+
           const details = [
             `🤖 **${agent.metadata.name}**`,
             `${agent.metadata.description}`,
@@ -1381,9 +1395,9 @@ export class DollhouseMCPServer implements IToolHandler {
             `**Risk Tolerance**: ${(agent.metadata as any).riskTolerance || 'low'}`,
             ``,
             `**Instructions**:`,
-            (agent as any).instructions || 'No instructions available'
+            unescapedInstructions
           ];
-          
+
           const agentState = (agent as any).state;
           if (agentState?.goals && agentState.goals.length > 0) {
             details.push('', '**Current Goals**:');
@@ -1391,7 +1405,7 @@ export class DollhouseMCPServer implements IToolHandler {
               details.push(`- ${g.description} (${g.status})`);
             });
           }
-          
+
           return {
             content: [{
               type: "text",
@@ -1413,6 +1427,10 @@ export class DollhouseMCPServer implements IToolHandler {
             };
           }
 
+          // FIX (Issue #874): Unescape content for proper markdown rendering
+          const memoryContent = memory.content || 'No content stored';
+          const unescapedContent = ElementFormatter.unescapeContent(memoryContent);
+
           const details = [
             `🧠 **${memory.metadata.name}**`,
             `${memory.metadata.description}`,
@@ -1424,7 +1442,7 @@ export class DollhouseMCPServer implements IToolHandler {
             `**Privacy Level**: ${(memory.metadata as any).privacyLevel || 'private'}`,
             ``,
             `**Content**:`,
-            memory.content || 'No content stored'
+            unescapedContent
           ];
 
           return {

@@ -640,11 +640,13 @@ export class ElementFormatter {
   }
 
   /**
-   * Unescape newline characters
+   * Unescape newline characters (public static utility)
    * Using replaceAll as per SonarCloud S7781
    * Using character map to avoid escape sequence issues
+   *
+   * FIX (Issue #874): Public static method for use in MCP tool outputs
    */
-  private unescapeNewlines(text: string): string {
+  public static unescapeContent(text: string): string {
     // Map of escape sequences to their actual characters
     // This avoids SonarCloud's String.raw warnings
     const escapeMap: Array<[string, string]> = [
@@ -659,6 +661,15 @@ export class ElementFormatter {
       result = result.replaceAll(escaped, actual);
     }
     return result;
+  }
+
+  /**
+   * Unescape newline characters (private instance method)
+   * Using replaceAll as per SonarCloud S7781
+   * Using character map to avoid escape sequence issues
+   */
+  private unescapeNewlines(text: string): string {
+    return ElementFormatter.unescapeContent(text);
   }
 
   /**
