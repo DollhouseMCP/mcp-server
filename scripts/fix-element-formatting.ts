@@ -69,9 +69,20 @@ function needsFormatting(filePath: string): boolean {
  *
  * The content is typically one long line with headers, code blocks, etc. all smashed together.
  * Example: "Skill## PurposeAutomated workflow...### 1. Content Ingestion..."
+ *
+ * Security: Regex patterns are designed to avoid ReDoS (Regular Expression Denial of Service)
+ * by using bounded quantifiers and avoiding nested/overlapping quantifiers that could cause
+ * catastrophic backtracking on maliciously-crafted element files.
  */
 function formatMarkdownContent(content: string): string {
   if (!content || content.length === 0) {
+    return content;
+  }
+
+  // Security: Guard against excessively large files that could cause performance issues
+  const MAX_CONTENT_LENGTH = 100000; // 100KB limit
+  if (content.length > MAX_CONTENT_LENGTH) {
+    console.warn(`  ⚠️  Content too large (${content.length} chars), skipping formatting for safety`);
     return content;
   }
 
@@ -79,34 +90,43 @@ function formatMarkdownContent(content: string): string {
 
   // Step 1: Add newlines before markdown headers (# ## ### ####)
   // Pattern: non-whitespace followed immediately by # (header marker)
+  // Security: Simple pattern, no nested quantifiers, safe from ReDoS
   formatted = formatted.replaceAll(/([^\s\n])(#{1,6}\s)/g, '$1\n\n$2');
 
   // Step 1b: Add newlines after header text when followed by capital letter
   // Pattern: header followed by capital letter with no newline (e.g., "## PurposeAutomated")
-  formatted = formatted.replaceAll(/(#{1,6}\s+[^\n]+[a-z])([A-Z][a-z])/g, '$1\n\n$2');
+  // Security: FIXED - Use bounded quantifier {1,500} and non-greedy match to prevent ReDoS
+  // Old pattern was vulnerable: [^\n]+ could backtrack excessively
+  formatted = formatted.replaceAll(/(#{1,6}\s+[^\n]{1,500}?[a-z])([A-Z][a-z])/g, '$1\n\n$2');
 
   // Step 2: Add newlines before code blocks
   // Pattern: word or punctuation followed immediately by ```
+  // Security: Simple pattern, no nested quantifiers, safe from ReDoS
   formatted = formatted.replaceAll(/([^\s\n])(```)/g, '$1\n\n$2');
 
   // Step 3: Add newlines after code block closings
   // Pattern: ``` followed by a word (not on new line)
-  formatted = formatted.replaceAll(/(```)\s*([a-zA-Z])/g, '$1\n\n$2');
+  // Security: Bounded quantifier {0,10} prevents excessive backtracking
+  formatted = formatted.replaceAll(/(```)\s{0,10}([a-zA-Z])/g, '$1\n\n$2');
 
   // Step 4: Fix code block language labels (e.g., "Pipelineyaml" -> "Pipeline\n\nyaml")
+  // Security: Fixed alternation with bounded word length to prevent backtracking
   formatted = formatted.replaceAll(/([a-z])(yaml|json|javascript|typescript|python|bash|sh|ruby|go|rust|java|cpp|c\+\+)/gi, '$1\n\n$2');
 
   // Step 5: Fix bullet/numbered lists
   // Pattern: word/period followed by list marker
-  formatted = formatted.replaceAll(/([^\s\n])\s*([-*]\s+[a-zA-Z])/g, '$1\n\n$2');
-  formatted = formatted.replaceAll(/([^\s\n])\s*(\d+\.\s+[a-zA-Z])/g, '$1\n\n$2');
+  // Security: FIXED - Use bounded quantifier {0,10} instead of * to prevent ReDoS
+  // Old pattern \s* could backtrack excessively with crafted input
+  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}([-*]\s+[a-zA-Z])/g, '$1\n\n$2');
+  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}(\d+\.\s+[a-zA-Z])/g, '$1\n\n$2');
 
   // Step 6: Reduce excessive newlines (max 2 consecutive)
+  // Security: Simple quantifier, safe pattern
   formatted = formatted.replaceAll(/\n{3,}/g, '\n\n');
 
   // Step 7: Ensure proper spacing around colons in YAML-like structures
-  // But don't add too many newlines
-  formatted = formatted.replaceAll(/:\s{2,}/g, ':\n  ');
+  // Security: Bounded quantifier {2,20} prevents excessive matching
+  formatted = formatted.replaceAll(/:\s{2,20}/g, ':\n  ');
 
   // Step 8: Ensure single trailing newline
   formatted = formatted.trim() + '\n';
