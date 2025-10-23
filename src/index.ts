@@ -1385,7 +1385,7 @@ export class DollhouseMCPServer implements IToolHandler {
           // FIX (Issue #874): Unescape instructions for proper markdown rendering
           // FIX (SonarCloud S4325): Remove unnecessary type assertions
           // Agents don't have instructions property, check extensions first
-          const agentMetadata = agent.metadata as any;
+          const agentMetadata = agent.metadata;
           const agentInstructions = agent.extensions?.instructions || 'No instructions available';
           const unescapedInstructions = ElementFormatter.unescapeContent(agentInstructions);
 
