@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.9.22] - 2025-10-23
+
+**Hotfix Release**: Resolve jsdom test failures
+
+### Fixed
+- **jsdom version compatibility** (Hotfix)
+  - Reverted jsdom from 27.0.1 to 27.0.0 due to parse5 ES module import issues
+  - Fixes test failures in MemoryManager and other test suites
+  - The jsdom 27.0.1 update introduced a breaking change with parse5 becoming an ES module
+  - Will revisit jsdom 27.0.1 update in future release with proper ES module configuration
+
 ## [1.9.21] - 2025-10-23
 
 **Patch Release**: Memory validation system activation and element formatting
