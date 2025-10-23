@@ -45,7 +45,10 @@ function needsFormatting(filePath: string): boolean {
       }
     }
 
-    if (frontmatterEnd === -1) return false; // No frontmatter found
+    if (frontmatterEnd === -1) {
+      // No frontmatter found - file might be malformed or not an element file
+      return false;
+    }
 
     // Check content section only
     const contentLines = lines.slice(frontmatterEnd + 1);
@@ -111,14 +114,20 @@ function formatMarkdownContent(content: string): string {
 
   // Step 4: Fix code block language labels (e.g., "Pipelineyaml" -> "Pipeline\n\nyaml")
   // Security: Fixed alternation with bounded word length to prevent backtracking
-  formatted = formatted.replaceAll(/([a-z])(yaml|json|javascript|typescript|python|bash|sh|ruby|go|rust|java|cpp|c\+\+)/gi, '$1\n\n$2');
+  // Enhanced: Comprehensive language list covers most common code block languages
+  formatted = formatted.replaceAll(
+    /([a-z])(yaml|json|javascript|typescript|python|bash|sh|shell|ruby|go|rust|java|cpp|c\+\+|sql|css|html|xml|php|perl|swift|kotlin|scala|r|matlab|powershell)(?=\s|$)/gi,
+    '$1\n\n$2'
+  );
 
   // Step 5: Fix bullet/numbered lists
   // Pattern: word/period followed by list marker
-  // Security: FIXED - Use bounded quantifier {0,10} instead of * to prevent ReDoS
-  // Old pattern \s* could backtrack excessively with crafted input
-  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}([-*]\s+[a-zA-Z])/g, '$1\n\n$2');
-  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}(\d+\.\s+[a-zA-Z])/g, '$1\n\n$2');
+  // Security: FIXED - All quantifiers bounded to prevent ReDoS attacks
+  // - \s{0,10}: Max 10 spaces before list marker
+  // - \d{1,4}: Max 4 digits (supports lists up to 9999 items)
+  // - \s{1,10}: Max 10 spaces after list marker/period
+  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}([-*]\s{1,10}[a-zA-Z])/g, '$1\n\n$2');
+  formatted = formatted.replaceAll(/([^\s\n])\s{0,10}(\d{1,4}\.\s{1,10}[a-zA-Z])/g, '$1\n\n$2');
 
   // Step 6: Reduce excessive newlines (max 2 consecutive)
   // Security: Simple quantifier, safe pattern
@@ -126,6 +135,7 @@ function formatMarkdownContent(content: string): string {
 
   // Step 7: Ensure proper spacing around colons in YAML-like structures
   // Security: Bounded quantifier {2,20} prevents excessive matching
+  // Note: Starting at 2 spaces (not 3) to catch more formatting issues while staying safe
   formatted = formatted.replaceAll(/:\s{2,20}/g, ':\n  ');
 
   // Step 8: Ensure single trailing newline
@@ -154,7 +164,7 @@ function processFile(filePath: string, dryRun: boolean): boolean {
 
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].trim() === '---') {
-        if (!inFrontmatter) {
+        if (inFrontmatter === false) {
           frontmatterStart = i;
           inFrontmatter = true;
         } else {
@@ -198,8 +208,12 @@ function processFile(filePath: string, dryRun: boolean): boolean {
 
 /**
  * Process all files in a directory
+ *
+ * @returns ProcessingStats - Accumulated statistics for all files processed
  */
 function processDirectory(dirPath: string, dryRun: boolean): ProcessingStats {
+  // Note: This function always returns stats (never null/undefined) which is correct behavior
+  // SonarQube S3516 warning is a false positive - stats are accumulated and returned
   const stats: ProcessingStats = { fixed: 0, skipped: 0, errors: 0 };
 
   if (!fs.existsSync(dirPath)) {
@@ -223,7 +237,9 @@ function processDirectory(dirPath: string, dryRun: boolean): ProcessingStats {
         stats.skipped++;
       }
     } catch (error) {
-      console.error(`  ❌ ${file}`);
+      // Handle error by logging and tracking in stats for summary reporting
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`  ❌ ${file}: ${errorMsg}`);
       stats.errors++;
     }
   }
