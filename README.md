@@ -883,6 +883,15 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
   - Trust levels are now properly updated (VALIDATED, FLAGGED, QUARANTINED)
   - Validation runs server-side with zero token cost
 
+#### 🔄 Changed
+- **README version history optimization**
+  - Limited version history in README to 1.9.x releases only (21 versions instead of 35)
+  - Reduced README size from ~75KB to ~61KB for better readability
+  - Complete history remains in CHANGELOG.md (source of truth)
+  - Updated `generate-version-history.js` minVersion from 1.6.0 to 1.9.0
+- **Added missing v1.9.20 changelog entry to README**
+  - Previous README was missing the v1.9.20 MCP Registry Publishing Fix
+
 #### Context
 The BackgroundValidator service was fully implemented in Issue #1314 (Phase 1: Background validation for memory security) but was never activated. The `backgroundValidator.start()` method was missing from server initialization, causing all memories to remain UNTRUSTED indefinitely.
 This patch release adds proper lifecycle management:
