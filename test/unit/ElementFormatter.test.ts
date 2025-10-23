@@ -741,7 +741,7 @@ entries:
 
       it('should unescape backslashes', () => {
         const input = String.raw`Path\\to\\file`;
-        const expected = 'Path\\to\\file';
+        const expected = String.raw`Path\to\file`;
         expect(ElementFormatter.unescapeContent(input)).toBe(expected);
       });
     });
@@ -858,7 +858,9 @@ entries:
       });
 
       it('should not execute embedded scripts', () => {
-        const input = String.raw`<script>alert('xss')</script>\n${()=>alert('code')}`;
+        // Test that unescapeContent doesn't execute embedded code-like strings
+        // Avoiding arrow function syntax to prevent SonarCloud S2004 (nesting depth)
+        const input = String.raw`<script>alert('xss')</script>\nfunction(){alert('code')}`;
         const result = ElementFormatter.unescapeContent(input);
         // Should just unescape, not execute
         expect(result).toContain('\n');
