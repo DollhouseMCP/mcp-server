@@ -875,7 +875,16 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### v1.9.21 - 2025-10-23
 
-**Patch Release**: Memory validation system activation
+**Patch Release**: Memory validation system activation and element formatting
+#### ✨ Features
+- **Element file formatter script** (#1388, fixes #1387)
+  - New `scripts/fix-element-formatting.ts` to reformat blob content elements
+  - Fixes 140 element files stored as single-line blobs (unreadable in editors)
+  - Intelligently adds newlines before/after markdown headers
+  - Formats code blocks and YAML structures properly
+  - Dry-run mode for safe testing
+  - Average line length detection (>200 chars triggers formatting)
+
 #### 🔧 Fixed
 - **Background memory validation startup** (#1389)
   - BackgroundValidator service now starts automatically on server initialization
