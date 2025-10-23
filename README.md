@@ -18,7 +18,6 @@
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
 [![Bugs](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=bugs)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
 
 ## Platform Support
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
