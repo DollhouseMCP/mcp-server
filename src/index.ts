@@ -54,6 +54,7 @@ import { generateMemoryId } from './elements/memories/utils.js';
 import { ConfigManager } from './config/ConfigManager.js';
 import { CapabilityIndexResource } from './server/resources/CapabilityIndexResource.js';
 import { ElementFormatter } from './utils/ElementFormatter.js';
+import { backgroundValidator } from './security/validation/BackgroundValidator.js';
 // ConfigWizard imports removed - not included in hotfix
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -6071,6 +6072,10 @@ Placeholders for custom format:
       // Setup MCP resource handlers (conditional based on config)
       await this.setupResourceHandlers();
 
+      // Start background validation service for memory security
+      backgroundValidator.start();
+      logger.info("Background validation service started");
+
       // Output message that Docker tests can detect
       logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
     } catch (error) {
@@ -6083,15 +6088,18 @@ Placeholders for custom format:
     // Set up graceful shutdown handlers
     const cleanup = async () => {
       logger.info("Shutting down DollhouseMCP server...");
-      
+
       try {
+        // Stop background validation service
+        backgroundValidator.stop();
+
         // Clean up GitHub auth manager
         if (this.githubAuthManager) {
           await this.githubAuthManager.cleanup();
         }
-        
+
         // Clean up any other resources
-        
+
         logger.info("Cleanup completed");
       } catch (error) {
         logger.error("Error during cleanup", { error });
