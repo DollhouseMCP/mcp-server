@@ -640,26 +640,61 @@ export class ElementFormatter {
   }
 
   /**
-   * Unescape newline characters (public static utility)
-   * Using replaceAll as per SonarCloud S7781
-   * Using character map to avoid escape sequence issues
+   * Unescapes common escape sequences in text content for proper markdown rendering.
    *
-   * FIX (Issue #874): Public static method for use in MCP tool outputs
+   * Converts escaped newlines, carriage returns, tabs, and backslashes to their actual characters.
+   * This is essential for displaying element content (personas, skills, templates, etc.) with
+   * proper formatting in MCP tool outputs.
+   *
+   * @param text - The text content containing escaped sequences (e.g., "Line 1\nLine 2")
+   * @returns The unescaped text with actual control characters (e.g., "Line 1\nLine 2" with real newline)
+   *
+   * @example
+   * ```typescript
+   * const escaped = "# Title\n\nContent with\ttabs and\\nmore";
+   * const unescaped = ElementFormatter.unescapeContent(escaped);
+   * // Result: "# Title\n\nContent with    tabs and\nmore" (with actual newlines and tabs)
+   * ```
+   *
+   * @remarks
+   * - Uses replaceAll for performance (SonarCloud S7781 compliance)
+   * - Uses placeholder approach to handle \\ correctly (prevents \\t from becoming tab)
+   * - Processing order: 1) Replace \\ with placeholder, 2) Replace \n, \r, \t, 3) Restore \\
+   * - Safe for all UTF-8 content including emojis and special characters
+   * - Input validation: Returns empty string for null/undefined inputs
+   *
+   * @public
+   * @static
+   * @since 1.9.21
+   * @see {@link https://github.com/DollhouseMCP/mcp-server/issues/874 | Issue #874}
    */
   public static unescapeContent(text: string): string {
-    // Map of escape sequences to their actual characters
-    // This avoids SonarCloud's String.raw warnings
-    const escapeMap: Array<[string, string]> = [
-      [String.raw`\n`, '\n'],  // Newline
-      [String.raw`\r`, '\r'],  // Carriage return
-      [String.raw`\t`, '\t'],  // Tab
-      [String.raw`\\`, '\\']   // Backslash (must be last to avoid double-unescaping)
-    ];
-
-    let result = text;
-    for (const [escaped, actual] of escapeMap) {
-      result = result.replaceAll(escaped, actual);
+    // Input validation: Handle edge cases
+    if (text === null || text === undefined) {
+      return '';
     }
+    if (typeof text !== 'string') {
+      return String(text);
+    }
+    if (text.length === 0) {
+      return text;
+    }
+
+    // CRITICAL: Use placeholder approach to handle \\ correctly
+    // We must protect \\ from being processed as \t, \n, etc. after conversion
+    const BACKSLASH_PLACEHOLDER = '\x00BACKSLASH\x00';  // Use null bytes as delimiter
+
+    // Step 1: Replace \\ with placeholder to protect it
+    let result = text.replaceAll(String.raw`\\`, BACKSLASH_PLACEHOLDER);
+
+    // Step 2: Replace escape sequences with their actual characters
+    result = result.replaceAll(String.raw`\n`, '\n');  // Newline
+    result = result.replaceAll(String.raw`\r`, '\r');  // Carriage return
+    result = result.replaceAll(String.raw`\t`, '\t');  // Tab
+
+    // Step 3: Replace placeholder with single backslash
+    result = result.replaceAll(BACKSLASH_PLACEHOLDER, '\\');
+
     return result;
   }
 

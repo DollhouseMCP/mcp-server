@@ -718,4 +718,189 @@ entries:
       expect(parsedYaml.entries[1].content).toContain('\r');
     });
   });
+
+  describe('unescapeContent (static method - Issue #874)', () => {
+    describe('basic escape sequences', () => {
+      it('should unescape newlines', () => {
+        const input = String.raw`Line 1\nLine 2\nLine 3`;
+        const expected = 'Line 1\nLine 2\nLine 3';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should unescape carriage returns', () => {
+        const input = String.raw`Line 1\rLine 2\r`;
+        const expected = 'Line 1\rLine 2\r';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should unescape tabs', () => {
+        const input = String.raw`Column1\tColumn2\tColumn3`;
+        const expected = 'Column1\tColumn2\tColumn3';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should unescape backslashes', () => {
+        const input = String.raw`Path\\to\\file`;
+        const expected = 'Path\\to\\file';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+    });
+
+    describe('combined escape sequences', () => {
+      it('should handle multiple escape types in one string', () => {
+        const input = String.raw`Line 1\nLine 2 with\ttab\rAnd return`;
+        const expected = 'Line 1\nLine 2 with\ttab\rAnd return';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should handle double-escaped backslashes followed by newlines', () => {
+        const input = String.raw`Text with\\n literal backslash-n\nand actual newline`;
+        const expected = 'Text with\\n literal backslash-n\nand actual newline';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+    });
+
+    describe('markdown content', () => {
+      it('should unescape markdown headers with newlines', () => {
+        const input = String.raw`# Title\n\n## Subtitle\n\nContent here`;
+        const expected = '# Title\n\n## Subtitle\n\nContent here';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should unescape markdown lists with tabs', () => {
+        const input = String.raw`- Item 1\n\t- Subitem 1a\n\t- Subitem 1b\n- Item 2`;
+        const expected = '- Item 1\n\t- Subitem 1a\n\t- Subitem 1b\n- Item 2';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should handle code blocks with escaped newlines', () => {
+        const input = String.raw`Example:\ncode block\nconst x = 1;\nconst y = 2;\n`;
+        const expected = 'Example:\ncode block\nconst x = 1;\nconst y = 2;\n';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+    });
+
+    describe('real-world persona content', () => {
+      it('should unescape persona instructions properly', () => {
+        const input = String.raw`# Creative Writer\n\n## Identity\n\nI am a creative writer...\n\n## Skills\n- Story crafting\n- Character development`;
+        const expected = '# Creative Writer\n\n## Identity\n\nI am a creative writer...\n\n## Skills\n- Story crafting\n- Character development';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should handle session notes with mixed escapes', () => {
+        const input = String.raw`Session Notes - 2025-10-23\n\n**Focus**: Bug fixes\n**Tasks**:\n\t1. Fix rendering\n\t2. Add tests\n\n**Outcome**: ✅ Success`;
+        const expected = 'Session Notes - 2025-10-23\n\n**Focus**: Bug fixes\n**Tasks**:\n\t1. Fix rendering\n\t2. Add tests\n\n**Outcome**: ✅ Success';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+    });
+
+    describe('edge cases and input validation', () => {
+      it('should handle empty string', () => {
+        expect(ElementFormatter.unescapeContent('')).toBe('');
+      });
+
+      it('should handle null input', () => {
+        expect(ElementFormatter.unescapeContent(null as any)).toBe('');
+      });
+
+      it('should handle undefined input', () => {
+        expect(ElementFormatter.unescapeContent(undefined as any)).toBe('');
+      });
+
+      it('should convert non-string input to string', () => {
+        expect(ElementFormatter.unescapeContent(123 as any)).toBe('123');
+        expect(ElementFormatter.unescapeContent(true as any)).toBe('true');
+        expect(ElementFormatter.unescapeContent({ foo: 'bar' } as any)).toBe('[object Object]');
+      });
+
+      it('should handle strings with no escape sequences', () => {
+        const input = 'Normal text without any escapes';
+        expect(ElementFormatter.unescapeContent(input)).toBe(input);
+      });
+
+      it('should handle strings with only escape sequences', () => {
+        const input = String.raw`\n\n\n`;
+        const expected = '\n\n\n';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should handle very long strings efficiently', () => {
+        const input = String.raw`Line\n`.repeat(10000);
+        const result = ElementFormatter.unescapeContent(input);
+        // Note: split('\n') on "Line\n" repeated 10000 times yields 10001 elements
+        // (10000 "Line" strings + 1 empty string after the final \n)
+        expect(result.split('\n').length).toBe(10001);
+      });
+    });
+
+    describe('unicode and special characters', () => {
+      it('should preserve unicode characters while unescaping', () => {
+        const input = String.raw`Hello 世界\nСпасибо\n🎉 Emoji party!`;
+        const expected = 'Hello 世界\nСпасибо\n🎉 Emoji party!';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+
+      it('should handle mixed unicode and escape sequences', () => {
+        const input = String.raw`Café\tBistro\n日本語\t中文`;
+        const expected = 'Café\tBistro\n日本語\t中文';
+        expect(ElementFormatter.unescapeContent(input)).toBe(expected);
+      });
+    });
+
+    describe('security and robustness', () => {
+      it('should handle potential ReDoS patterns safely', () => {
+        // Test that the method doesn't use vulnerable regex patterns
+        const input = String.raw`${'a'.repeat(10000)}\n${'b'.repeat(10000)}`;
+        const start = Date.now();
+        ElementFormatter.unescapeContent(input);
+        const duration = Date.now() - start;
+        expect(duration).toBeLessThan(1000); // Should complete quickly
+      });
+
+      it('should not execute embedded scripts', () => {
+        const input = String.raw`<script>alert('xss')</script>\n${()=>alert('code')}`;
+        const result = ElementFormatter.unescapeContent(input);
+        // Should just unescape, not execute
+        expect(result).toContain('\n');
+        expect(typeof result).toBe('string');
+      });
+
+      it('should handle malformed escape sequences gracefully', () => {
+        const input = String.raw`\x invalid\u invalid\z invalid`;
+        const result = ElementFormatter.unescapeContent(input);
+        // Should return as-is since these aren't in our escape map
+        expect(result).toBe(input);
+      });
+    });
+
+    describe('regression tests', () => {
+      it('should fix Issue #874 - escaped newlines in persona content', () => {
+        // Real example from Issue #874
+        const escaped = String.raw`# Session Notes Writer - Context-Aware Documentation Specialist\n\n## Core Identity\n\nI am the Session Notes Writer...`;
+        const unescaped = ElementFormatter.unescapeContent(escaped);
+
+        expect(unescaped).not.toContain(String.raw`\n`);
+        expect(unescaped).toContain('\n');
+        expect(unescaped.split('\n').length).toBeGreaterThan(1);
+      });
+
+      it('should handle content from all element types', () => {
+        // Skills
+        const skillContent = String.raw`**Skill**: Code Review\n\n**Instructions**:\n1. Check syntax\n2. Review logic`;
+        expect(ElementFormatter.unescapeContent(skillContent)).toContain('\n');
+
+        // Templates
+        const templateContent = String.raw`Hello {{name}},\n\nWelcome to {{place}}!`;
+        expect(ElementFormatter.unescapeContent(templateContent)).toContain('\n');
+
+        // Agents
+        const agentContent = String.raw`Goal: Complete task\nStatus: Active\nFramework: Rule-based`;
+        expect(ElementFormatter.unescapeContent(agentContent)).toContain('\n');
+
+        // Memories
+        const memoryContent = String.raw`## Memory Entry\n\nContext from previous session:\n- Fixed bug\n- Added tests`;
+        expect(ElementFormatter.unescapeContent(memoryContent)).toContain('\n');
+      });
+    });
+  });
 });

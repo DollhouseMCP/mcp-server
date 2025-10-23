@@ -1382,7 +1382,10 @@ export class DollhouseMCPServer implements IToolHandler {
           }
 
           // FIX (Issue #874): Unescape instructions for proper markdown rendering
-          const agentInstructions = (agent as any).instructions || 'No instructions available';
+          // FIX (SonarCloud S4325): Remove unnecessary type assertions
+          // Agents don't have instructions property, check extensions first
+          const agentMetadata = agent.metadata as any;
+          const agentInstructions = agent.extensions?.instructions || 'No instructions available';
           const unescapedInstructions = ElementFormatter.unescapeContent(agentInstructions);
 
           const details = [
@@ -1390,15 +1393,15 @@ export class DollhouseMCPServer implements IToolHandler {
             `${agent.metadata.description}`,
             ``,
             `**Status**: ${agent.getStatus()}`,
-            `**Specializations**: ${(agent.metadata as any).specializations?.join(', ') || 'general'}`,
-            `**Decision Framework**: ${(agent.metadata as any).decisionFramework || 'rule-based'}`,
-            `**Risk Tolerance**: ${(agent.metadata as any).riskTolerance || 'low'}`,
+            `**Specializations**: ${agentMetadata.specializations?.join(', ') || 'general'}`,
+            `**Decision Framework**: ${agentMetadata.decisionFramework || 'rule-based'}`,
+            `**Risk Tolerance**: ${agentMetadata.riskTolerance || 'low'}`,
             ``,
             `**Instructions**:`,
             unescapedInstructions
           ];
 
-          const agentState = (agent as any).state;
+          const agentState = agent.getState();
           if (agentState?.goals && agentState.goals.length > 0) {
             details.push('', '**Current Goals**:');
             agentState.goals.forEach((g: any) => {
