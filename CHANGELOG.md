@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.9.21] - 2025-10-23
+
+**Patch Release**: Memory validation system activation
+
+### Fixed
+- **Background memory validation startup** (#1389)
+  - BackgroundValidator service now starts automatically on server initialization
+  - Memory entries with UNTRUSTED status will be automatically validated every 5 minutes
+  - Trust levels are now properly updated (VALIDATED, FLAGGED, QUARANTINED)
+  - Validation runs server-side with zero token cost
+
+### Context
+The BackgroundValidator service was fully implemented in Issue #1314 (Phase 1: Background validation for memory security) but was never activated. The `backgroundValidator.start()` method was missing from server initialization, causing all memories to remain UNTRUSTED indefinitely.
+
+This patch release adds proper lifecycle management:
+- Import backgroundValidator singleton in server initialization
+- Start validation service after resource handlers are set up
+- Stop service during server cleanup
+
+### Impact
+- Memory security architecture is now fully operational
+- UNTRUSTED memories will be automatically validated
+- Trust level updates work correctly
+- No performance impact (runs in background outside LLM context)
+
 ## [1.9.20] - 2025-10-17
 
 **Fix Release**: MCP Registry Publishing Compatibility
