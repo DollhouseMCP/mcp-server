@@ -873,62 +873,189 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.19 - October 17, 2025
+### v1.9.21 - 2025-10-23
+
+**Patch Release**: Memory validation system activation and element formatting
+#### ✨ Features
+- **Element file formatter script** (#1388, fixes #1387)
+  - New `scripts/fix-element-formatting.ts` to reformat blob content elements
+  - Fixes element files stored as single-line blobs (unreadable in editors)
+  - Intelligently adds newlines before/after markdown headers
+  - Formats code blocks and YAML structures properly
+  - Dry-run mode for safe testing
+  - Average line length detection (>200 chars triggers formatting)
+
+#### 🔧 Fixed
+- **Background memory validation startup** (#1389)
+  - BackgroundValidator service now starts automatically on server initialization
+  - Memory entries with UNTRUSTED status will be automatically validated every 5 minutes
+  - Trust levels are now properly updated (VALIDATED, FLAGGED, QUARANTINED)
+  - Validation runs server-side with zero token cost
+
+#### 🔄 Changed
+- **README version history optimization**
+  - Limited version history in README to 1.9.x releases only (21 versions instead of 35)
+  - Reduced README size from ~75KB to ~61KB for better readability
+  - Complete history remains in CHANGELOG.md (source of truth)
+  - Updated `generate-version-history.js` minVersion from 1.6.0 to 1.9.0
+- **Added missing v1.9.20 changelog entry to README**
+  - Previous README was missing the v1.9.20 MCP Registry Publishing Fix
+
+#### Context
+The BackgroundValidator service was fully implemented in Issue #1314 (Phase 1: Background validation for memory security) but was never activated. The `backgroundValidator.start()` method was missing from server initialization, causing all memories to remain UNTRUSTED indefinitely.
+This patch release adds proper lifecycle management:
+- Import backgroundValidator singleton in server initialization
+- Start validation service after resource handlers are set up
+- Stop service during server cleanup
+
+#### Impact
+- Memory security architecture is now fully operational
+- UNTRUSTED memories will be automatically validated
+- Trust level updates work correctly
+- No performance impact (runs in background outside LLM context)
+
+---
+
+### v1.9.20 - 2025-10-17
+
+**Fix Release**: MCP Registry Publishing Compatibility
+#### 🔧 Fixed
+- MCP Registry publishing case sensitivity issue (#XXXX)
+  - Corrected `mcpName` field in package.json to match GitHub organization capitalization
+  - Changed from `io.github.dollhousemcp/mcp-server` to `io.github.DollhouseMCP/mcp-server`
+  - Resolves NPM package validation errors when publishing to MCP Registry
+  - Ensures proper namespace permission matching
+
+#### Context
+The MCP Registry performs two case-sensitive validations:
+1. Permission check against GitHub org name (`io.github.DollhouseMCP/*`)
+2. NPM package validation against `mcpName` field in package.json
+The initial implementation incorrectly used lowercase for `mcpName`, causing a validation mismatch. This patch release corrects the capitalization to match our GitHub organization name.
+
+---
+
+### v1.9.19 - 2025-10-17
 
 **Comprehensive Release**: 90 commits including security fixes, PostHog telemetry, MCP registry support, and major cleanup
-
-#### Added
+#### ✨ Features
 - MCP registry publishing workflow with OIDC authentication (#1367)
-- PostHog remote telemetry integration (#1357, #1361) - Opt-in remote analytics
-- MCP Resources support for capability index (#1360) - Future-proof architecture
+  - Automated publishing to registry.modelcontextprotocol.io
+  - GitHub Actions workflow with manual dry-run mode
+  - Comprehensive test suite for workflow validation (50+ tests)
+  - Pinned mcp-publisher CLI to v1.3.3 for reproducibility
+- PostHog remote telemetry integration (#1357, #1361)
+  - Opt-in remote analytics with DOLLHOUSE_TELEMETRY_OPTIN=true
+  - Usage patterns and error tracking
+  - Privacy-focused with explicit consent
+- MCP Resources support for capability index (#1360)
+  - Future-proof architecture (disabled by default)
+  - Ready for MCP protocol evolution
 - Dual licensing model with commercial option (#1350)
+  - AGPL-3.0 with platform stability commitments
+  - Commercial licensing pathway
 - Minimal installation telemetry (#1359)
+  - Operational metrics for v1.9.19
+  - Installation success tracking
 - Security telemetry tracking for blocked attacks (#1313)
 - Automated release issue verification system (#1249)
 - Orphaned issues checker for systematic cleanup (#1251)
 - Personal development notes directory (#1275)
 
-#### Security
+#### 🔒 Security
 - Phase 1: Background validation for memory security (#1316, #1320, #1322)
 - Phase 2: AES-256-GCM pattern encryption (#1323)
 - Fixed symlink path traversal vulnerability (#1290, #1306)
-- Fixed command injection in verify-release-issues.js (#1249) - DMCP-SEC-001
+  - Resolve symlinks before validation
+  - Enhanced audit logging
+  - Comprehensive path sanitization
+- Fixed command injection in verify-release-issues.js (#1249)
+  - DMCP-SEC-001: Critical vulnerability patched
+  - PATH injection protection with absolute paths
 - Tightened YAML bomb detection threshold from 10:1 to 5:1 (#1305)
+- Fixed multiple security audit issues (3 MEDIUM/LOW severity)
 
-#### Fixed
+#### 🔧 Fixed
 - Missing shell: bash declarations in MCP registry workflow
 - OAuth device flow zero-scopes bug (using OIDC instead)
 - Test isolation to prevent resource contention (#1288)
 - GitHub rate limiter test failures (#1285)
 - Recognition of MERGED state in release verification (#1250)
-- Resolved 26+ SonarCloud code quality issues
+- Resolved 26+ SonarCloud code quality issues across multiple files
+  - Import/export ordering issues
+  - Cognitive complexity reductions
+  - Security hotspot resolutions
+- Cross-platform workflow compatibility improvements
+- Namespace casing for MCP registry (DollhouseMCP)
 
-#### Changed
-- Updated @modelcontextprotocol/sdk from 1.18.0 to 1.20.0
-- Updated jest from 30.0.5 to 30.2.0
+#### 🔄 Changed
+- Improved whitespace detection performance
 - Enhanced path traversal protection mechanisms
 - Skip Claude Code Review for Dependabot PRs (#1241)
+- Refactored CLAUDE.md into modular documentation (#1270)
+- Renamed docs/archive/ to docs/session-history/ (#1277)
+- Added node: prefix for built-in module imports
+- Reduced cognitive complexity in multiple modules
+
+#### Dependencies
+- Updated @modelcontextprotocol/sdk from 1.18.0 to 1.20.0
+- Updated jest from 30.0.5 to 30.2.0
+- Updated @types/node from 24.4.0 to 24.7.0
+- Updated typescript from 5.9.2 to 5.9.3
+- Updated multiple dev dependencies
+- Added PostHog SDK for telemetry
+
+#### Technical
+- OIDC permissions: id-token:write, contents:read
+- server.json included in NPM package
+- Docker build optimizations and multi-platform support
+- Auto-sync README files on develop push
+- Enhanced test coverage and reliability
+- Improved CI/CD pipeline stability
 
 ---
 
-### v1.9.18 - October 17, 2025
+### v1.9.18 - 2025-10-17
 
 **Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
-
-#### Added
+#### ✨ Features
 - **PostHog Remote Telemetry Integration** (#1357, #1361) - Opt-in remote analytics
-  - Simple opt-in: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable remote telemetry
+  - **Simple opt-in**: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable remote telemetry
   - Uses shared PostHog project for community-wide insights
-  - Multiple control levels and GDPR compliant by design
+  - Default PostHog project key embedded (safe to expose - write-only)
+  - Backward compatible with custom `POSTHOG_API_KEY` for enterprise deployments
+  - Multiple control levels:
+    - `DOLLHOUSE_TELEMETRY_OPTIN=true` - Enable remote telemetry
+    - `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Local only, no PostHog
+    - `DOLLHOUSE_TELEMETRY=false` - Disable all telemetry
+  - GDPR compliant - fully opt-in by design
+  - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
+  - Future incentive program planned for community contributors
 
-- **MCP Resources Support** (#1360) - Future-proof implementation
+- **MCP Resources Support** (#1360) - Future-proof implementation of MCP Resources protocol
   - Three resource variants exposed: summary (~3K tokens), full (~40K tokens), and stats (JSON)
-  - Status: Non-functional in Claude Code (Oct 2025) - discovery only
-  - Default: Disabled for safety - zero overhead when not enabled
+  - Capability index exposed as MCP resources for intelligent element discovery
+  - **Status**: Non-functional in Claude Code (Oct 2025) - discovery only, not read
+  - **Default**: Disabled for safety - zero overhead when not enabled
+  - Manual attachment works in Claude Desktop and VS Code
+  - Comprehensive user documentation at `docs/configuration/MCP_RESOURCES.md`
+  - Research document at `docs/development/MCP_RESOURCES_SUPPORT_RESEARCH_2025-10-16.md`
+  - Configuration options: `resources.enabled`, `resources.expose[]`, `resources.cache_ttl`
+  - Early adopter advantage - ready when MCP clients implement full resource reading
 
 - **Operational Telemetry Foundation** (#1358, #1359) - Minimal installation tracking
-  - Tracks single installation event on first run
+  - Tracks single installation event on first run (version, OS, Node version, MCP client)
+  - Local-only logging to `~/.dollhouse/telemetry.log` by default
+  - Simple opt-out via `DOLLHOUSE_TELEMETRY=false` environment variable
   - Privacy-first design: no PII, no behavioral data, no user content
+  - Anonymous UUID generated locally for installation identification
+  - Graceful error handling (never crashes if files can't be written)
+  - Zero performance impact when opted out
+
+#### Documentation
+- Added comprehensive telemetry incentive strategy guide
+- Updated privacy policy with PostHog opt-in details
+- Added session notes for telemetry implementation
+- Enhanced README with telemetry opt-in section
 
 #### Test Results
 - 2546 tests passing
@@ -937,139 +1064,122 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-### v1.9.17 - October 8, 2025
+### v1.9.17 - 2025-10-08
 
-**Test isolation and repository cleanup patch**
-
-#### Fixed
-- **Performance Test Isolation (#1288)**: Fixed flaky IndexOptimization test
+Test isolation and repository cleanup patch
+#### 🔧 Fixed
+- **Performance Test Isolation (#1288)**: Fixed flaky IndexOptimization test by isolating performance tests
   - Created dedicated `jest.performance.config.cjs` with 4 parallel workers
-  - Main test suite no longer runs performance tests concurrently
-  - IndexOptimization test now consistently passes at 60-70ms
+  - Main test suite no longer runs performance tests concurrently (prevents resource contention)
+  - IndexOptimization test now consistently passes at 60-70ms (was failing at 926ms due to interference)
+  - Added `test:performance` and `test:all` npm scripts
+  - CI workflows updated with dedicated performance test step
+  - Execution time: 18.7s with 4 workers vs 10+ minutes serial
+  - Reduced code duplication by using filter to inherit base config patterns
 
 - **Repository Cleanup (#1287)**: Removed ignored files from Git tracking
-  - Removed `.obsidian/` directory (4 files) and `test-results/` (3 files)
+  - Removed `.obsidian/` directory (4 files) and `test-results/` (3 files) from version control
+  - Files remain available locally but no longer tracked in repository
+  - Follows gitignore additions from PR #1276
 
 - **Flaky Test Management (#1286)**: Skip flaky GitHubRateLimiter tests
   - Marked intermittent GitHub API rate limiter tests as skipped
+  - Prevents CI failures from external API dependencies
+  - Tests can be run manually when needed
 
 #### Chores
-- Repository Organization (#1276): Added `.obsidian/` and `test-results/` to .gitignore
-- Documentation Structure (#1277): Renamed docs/archive/ to docs/session-history/
-- Documentation Refactor (#1270): Improved CLAUDE.md organization
+- **Repository Organization (#1276)**: Added `.obsidian/` and `test-results/` to .gitignore
+- **Documentation Structure (#1277)**: Renamed docs/archive/ to docs/session-history/
+- **Docker Best Practices (#1273)**: Enhanced Docker environment file documentation
+- **Data Directory Documentation (#1274)**: Added README to data/ directory
+- **Documentation Refactor (#1270)**: Improved CLAUDE.md organization and clarity
 
-#### Features
-- Issue Management (#1251): Added orphaned issues checker
-- Developer Experience (#1275): Added dev-notes/ directory
-- CI Improvements: Added automated release issue verification (#1241)
+#### ✨ Features
+- **Issue Management (#1251)**: Added orphaned issues checker for repository maintenance
+- **Developer Experience (#1275)**: Added dev-notes/ directory for personal documentation
+- **CI Improvements**: Added automated release issue verification (#1241)
+- **Dependabot Integration (#1241)**: Skip Claude Code Review for Dependabot PRs
 
 #### Test Results
 - Main suite: 2269 tests passing (performance tests excluded)
 - Performance suite: 62 tests passing (isolated execution)
 - Total: 2331 tests passing
+- No flaky tests remaining
+- CI/CD: All workflows passing across all platforms
 
 ---
 
-### v1.9.16 - October 3, 2025
+### v1.9.15 - 2025-10-01
 
-**Patch Release**: Platform-agnostic MCP client documentation + SonarCloud code quality (19 issues)
+Security patch: Zero-width Unicode bypass vulnerability + SonarCloud cleanup
+SECURITY FIX [HIGH]:
+- Block zero-width Unicode characters in metadata validation (#1228, #1229)
+- Prevents steganography and homograph attacks
 
-#### 📚 Documentation
-- **Platform-Agnostic Documentation** - Updated all documentation to reflect compatibility with ANY MCP client (#1236, #1237)
-  - Added "MCP Client Compatibility" section explicitly stating stdio transport compatibility
-  - Listed Claude Desktop, Claude Code, Gemini, and other MCP clients as supported platforms
-  - Updated all "Configure Claude Desktop" headers to "Configure Your MCP Client"
-  - Changed "Claude Desktop integration" to "MCP client integration" throughout
-  - New comprehensive guide: `docs/guides/MCP_CLIENT_SETUP.md`
-- **Workflow Documentation** - Added comprehensive workflow examples for efficient issue handling (#1235)
+CODE QUALITY:
+- 228+ SonarCloud issues resolved (#1220-1224)
+- 199 security hotspots evaluated (all safe)
+- Number.parseInt modernization, String.replaceAll updates
 
-#### 🧹 Code Quality
-- **SonarCloud S7723** - Array constructor modernization (15 issues) (#1233)
-- **SonarCloud S7758** - String method modernization (4 fixed, 2 false positives) (#1234)
-- Removed temporary SonarCloud utility scripts (#1232)
-
-#### 📊 Impact
-- ✅ Removes artificial barrier for Gemini and other MCP client users
-- ✅ 19 SonarCloud issues resolved
-- ✅ Maintains Claude Desktop as primary example while being inclusive of all MCP clients
+All production security concerns resolved.
 
 ---
 
-### v1.9.15 - October 1, 2025
-
-**Security Patch**: Zero-width Unicode bypass vulnerability + SonarCloud cleanup
-
-#### 🔒 Security Fix [HIGH]
-- **Zero-width Unicode bypass vulnerability** - Restored Unicode security validation (#1228, #1229)
-  - Blocks zero-width characters (U+200B-U+200F, U+FEFF) in metadata validation
-  - Prevents steganography and homograph attacks
-  - Fixed `validateContent` bypass in DefaultElementProvider
-  - Restored security validation chain through ContentValidator and UnicodeValidator
-
-#### 🧹 Code Quality
-- **228+ SonarCloud issues resolved** across 5 issues (#1220-1224):
-  - S7773: Modernized Number parsing methods (90 issues) - `parseInt()` → `Number.parseInt()`
-  - S7781: String.replaceAll modernization (134 issues) - `.replace(/g)` → `.replaceAll()`
-  - MEDIUM severity fixes (4 issues) - Object literals, loop counters, Promise types
-  - False positives marked (11 issues) - Test-only patterns properly categorized
-- **199 security hotspots evaluated** - All marked SAFE, zero production concerns (#1219)
-  - Math.random(), MD5, PATH usage validated for non-security contexts
-  - Comprehensive documentation of safe patterns
-
-#### 📊 Impact
-- ✅ 1 HIGH severity security vulnerability fixed
-- ✅ All production security concerns resolved
-- ✅ Test coverage maintained at >96%
-
-### v1.9.14 - September 30, 2025
-
-**Bug Fixes**: ElementFormatter and portfolio search improvements
+### v1.9.14 - 2025-09-30
 
 #### 🔧 Fixed
-- **ElementFormatter Security Scanner False Positives** - Fixed validation option being ignored (#1211, #1212)
-  - SecureYamlParser now properly respects `validateContent: false` option
-  - ElementFormatter uses `validateContent: false` for all YAML parsing (5 locations)
-  - Local trusted files can bypass content scanning while maintaining security for untrusted sources
+- **ElementFormatter Security Scanner False Positives (Issue #1211, PR #1212)**
+  - Fixed SecureYamlParser ignoring `validateContent: false` option
+  - Pre-parse security validation now properly respects validation flag
+  - ElementFormatter now uses `validateContent: false` for all YAML parsing (5 locations)
+  - Allows local trusted files to bypass content scanning while maintaining security for untrusted sources
+  - Improved memory name generation: derives names from filenames instead of auto-generated IDs
+  - Example: `sonarcloud-rules-reference` instead of `mem_1759077319164_w9m9fk56y`
 
-- **Portfolio Search File Extension Display** - Fixed incorrect extension display (#1213, #1215)
-  - Portfolio search now shows correct file extensions based on element type
-  - Memories display `.yaml` extension, other elements show `.md` extension
+- **Portfolio Search File Extension Display (Issue #1213, PR #1215)**
+  - Portfolio search now displays correct file extensions based on element type
+  - Memories show `.yaml` extension, other elements show `.md` extension
+  - Added `getFileExtension()` public method to PortfolioManager
+  - Fixed hardcoded `.md` extension in search result formatting
+  - No breaking changes, display-only fix
 
-#### 📚 Documentation
-- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
-- Updated CLAUDE.md with naming conventions and style guide for session notes
-- Added session notes documentation for PR #1215
-
-#### 📊 Statistics
-- 2 Bug fixes merged (PR #1212, #1215)
-- 10 Code quality issues resolved
+#### Code Quality
+- Fixed SonarCloud issues in Docker test files:
+  - S7018: Sorted apt packages alphabetically in Dockerfile.test-enhanced
+  - S7031: Merged consecutive RUN instructions in Dockerfile.test-enhanced
+  - S7772: Added `node:` prefix for built-in module imports (4 occurrences)
+  - S2486: Added proper error logging for JSON parse exceptions
+  - S7780: Used String.raw for grep regex patterns (2 occurrences)
+- Added comprehensive test coverage for portfolio search file extensions
 - 2,277 tests passing with >96% coverage
-- Quality Gate: PASSING
-- Test Coverage: >96% maintained
+
+#### Documentation
+- Added SESSION_NOTES_2025-09-30-AFTERNOON-PR1215-SONARCLOUD-PROCEDURE.md
+- Added SONARCLOUD_QUERY_PROCEDURE.md - Critical guide for querying SonarCloud correctly
+- Updated CLAUDE.md with naming conventions and style guide for session notes and memories
 
 ---
 
-### v1.9.13 - September 29, 2025
-
-**Memory System Critical Fixes**: Security scanner improvements and enhanced error reporting
+### v1.9.13 - 2025-09-29
 
 #### 🔧 Fixed
-- **Security Scanner False Positives** - Fixed memory system rejecting legitimate security documentation (#1206, #1207)
+- **Memory System Critical Fixes (Issue #1206, PR #1207)**
+  - Fixed security scanner false positives preventing legitimate security documentation from loading
   - Memory files with security terms (vulnerability, exploit, attack) now load correctly
   - Local memory files are now pre-trusted (validateContent: false)
-- **Silent Error Reporting** - Added visible error reporting for failed memory loads
+
+  - Added visible error reporting for failed memory loads
   - Users now see "Failed to load X memories" with detailed error messages
   - New getLoadStatus() diagnostic method for troubleshooting
-- **Legacy Memory Migration** - New migration tool for old .md files
-  - Migrates to .yaml format in date-organized folders
+  - New legacy memory migration tool (migrate-legacy-memories.ts)
+  - Migrates old .md files to .yaml format in date-organized folders
   - Safe archiving of original files, dry-run mode by default
+#### ✨ Features
+- **CLI Utility**: migrate-legacy-memories.ts for legacy file migration
+- **Diagnostic Method**: getLoadStatus() for memory loading diagnostics
+- **Error Tracking**: failedLoads tracking in MemoryManager
 
-#### ✨ Added
-- CLI Utility: migrate-legacy-memories.ts for legacy file migration
-- Diagnostic Method: getLoadStatus() for memory loading diagnostics
-- Error Tracking: failedLoads tracking in MemoryManager
-
-#### 🛠️ Code Quality
+#### Code Quality
 - Fixed SonarCloud S3776: Reduced cognitive complexity in getLoadStatus()
 - Fixed SonarCloud S3358: Replaced nested ternary with if-else chain
 - Fixed SonarCloud S7785: Use top-level await instead of promise chain
@@ -1079,478 +1189,368 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 #### 🔒 Security
 - Fixed DMCP-SEC-004: Added Unicode normalization to CLI input validation
 
-#### 📊 Statistics
-- 3 Critical fixes merged in PR #1207
-- 7 Code quality issues resolved
-- 1 Security issue fixed
-- Quality Gate: PASSING
-- Test Coverage: >96% maintained
-
 ---
 
-### v1.9.12 - September 29, 2025
-
-**Memory System Stability**: Portfolio index and test isolation improvements
+### v1.9.12 - 2025-09-29
 
 #### 🔧 Fixed
-- **Memory Metadata Preservation** - Fixed PortfolioIndexManager overwriting memory metadata (#1196, #1197)
-  - Memory descriptions now properly preserved instead of "Memory element"
-- **Test Isolation** - Fixed memory portfolio index tests contaminating real user portfolio (#1194, #1195)
-  - Tests now use temporary directories
+- **Memory System Critical Fixes**
+  - Fixed PortfolioIndexManager overwriting memory metadata during indexing (Issue #1196, PR #1197)
+  - Memory descriptions now properly preserved instead of being replaced with "Memory element"
+  - Fixed memory portfolio index test isolation (Issue #1194, PR #1195)
+  - Tests now use temporary directories instead of contaminating real user portfolio
   - Added security validation for memory YAML parsing (size limits, type checking)
-- **ElementFormatter Tool** - Added tool for cleaning malformed elements (#1190, #1193)
 
-#### 🛠️ Code Quality
-- Fixed SonarCloud S7781: Use String#replaceAll() for modern string replacement
-- Fixed SonarCloud S1135: Removed TODO comments, documented test isolation patterns
+- **Code Quality**
+  - Fixed SonarCloud S7781: Use String#replaceAll() for modern string replacement (PR #1195)
+  - Fixed SonarCloud S1135: Removed TODO comments, documented test isolation patterns (PR #1195)
+  - Added ElementFormatter tool for cleaning malformed elements (Issue #1190, PR #1193)
 
 #### 🔒 Security
 - Added content size validation (1MB limit) for memory YAML parsing
 - Added type safety validation for parsed memory content
 - Documented security trade-offs with audit suppressions
 
-#### 📊 Statistics
+#### Test Coverage
 - Memory portfolio index tests: 8/8 passing (was 3/8)
-- Closed issues: #1196, #1194, #1190, #659, #404, #919
-- Quality Gate: PASSING
-- Test Coverage: >96% maintained
+- All tests properly isolated from user portfolio state
+- No regressions introduced (2260+ tests passing)
+
+#### Closed Issues
+- #1196 - Memory metadata preservation
+- #1194 - Test isolation
+- #1190 - ElementFormatter tool
+- #659 - Tool execution timeout (verified fixed in earlier release)
+- #404 - Element system MCP exposure (verified fixed in earlier release)
+- #919 - Duplicate tool names (verified fixed in earlier release)
 
 ---
 
-### v1.9.11 - September 28, 2025
-
-**SonarCloud Quality & Security**: Major code quality improvements and security fixes
-
-#### 🔒 Security Fixes
-- Fixed command injection vulnerabilities in GitHub Actions workflows (#1149)
-- Resolved ReDoS vulnerabilities in RelationshipManager (#1144)
-- All critical and high severity issues resolved
-
-#### 🛠️ Quality Improvements
-- **82% reduction in SonarCloud reliability bugs** (from 55 to 10)
-- Fixed unsafe throw in finally blocks (S1143)
-- Fixed async constructor patterns
-- Resolved regex precedence issues
-- Fixed control character usage
-- Removed hardcoded tokens
-
-#### 📊 Statistics
-- 11 Pull Requests merged for quality fixes
-- Quality Gate: PASSING
-- Security: All critical issues resolved
-- Test Coverage: >96% maintained
-
-### v1.9.10 - September 27, 2025
-
-**Enhanced Capability Index & Security**: Complete trigger extraction system and SonarCloud integration
-
-#### ✨ Major Features
-- **Enhanced Capability Index System** - NLP scoring with Jaccard similarity and Shannon entropy
-- **Cross-Element Relationships** - GraphRAG-style relationship mapping
-- **Complete Trigger Extraction** - All element types now support trigger extraction
-- **SonarCloud Integration** - Quality gate PASSING with 0% duplication
-
-#### 🔒 Security Improvements
-- Fixed 16 SonarCloud BLOCKER issues
-- GitHub Actions command injection vulnerabilities resolved
-- Full SHA pinning for all Actions
-- PATH manipulation vulnerability fixed
-
-#### 🛠️ Improvements
-- Extended Node compatibility fixes
-- Enhanced Index stability improvements
-- Type-safe relationship parsing
-- Docker Hub rate limit mitigation
-- Test isolation and CI improvements
-
-#### 📊 Statistics
-- 34 Pull Requests merged
-- Test Coverage: 98.17%
-- Security Hotspots: 100% reviewed
-- Code Duplication: 0% on new code
-
----
-
-### v1.9.9 - September 22, 2025
-
-**Security & Stability**: Prototype pollution protection and memory timestamp fixes
-
-#### ✨ Features
-- **Security Utilities**: New reusable security module for prototype pollution protection
-- **Memory Auto-Repair**: Corrupted memory timestamps now auto-repair during read operations
-- **Enhanced Validation**: Comprehensive timestamp validation with detailed error reporting
+### v1.9.11 - 2025-09-28
 
 #### 🔧 Fixed
-- **Memory Timestamps**: Fixed toISOString errors when memory entries have string timestamps (#1069)
-- **Security Badge**: Fixed broken security badge link in README pointing to wrong location
-- **Prototype Pollution**: Added belt-and-suspenders protection to satisfy code scanners (#202-#205)
+- **SonarCloud Quality Improvements**
+  - Resolved S1143 violation: unsafe throw in finally block (PR #1162)
+  - Fixed async constructor pattern in GitHubRateLimiter (PR #1161)
+  - Addressed remaining test file reliability issues (PR #1158)
+  - Removed SonarCloud analysis artifacts from tracking (PR #1157)
+  - Fixed remaining source file bugs (PR #1156)
+  - Resolved regex precedence and ReDoS vulnerabilities (PR #1155)
+  - Fixed control character literal usage (PR #1154)
+  - Fixed unsafe throw in finally blocks (PR #1153)
+  - Removed hardcoded token from validation script (PR #1152)
 
 #### 🔒 Security
-- Added `securityUtils.ts` module with reusable security patterns
-- Implemented Object.create(null) for prototype-less objects
-- Added Object.defineProperty() for secure property setting
+- Fixed command injection vulnerabilities in GitHub Actions workflows (Issue #1149)
+- Resolved ReDoS vulnerabilities in RelationshipManager by replacing regex with string methods (Issue #1144)
+
+#### 🔄 Changed
+- **Test Utilities**: Extracted reusable permission test helpers for cross-platform compatibility
+- **Code Quality**: Achieved 82% reduction in SonarCloud reliability bugs (from 55 to 10)
+- **Security Posture**: All critical and high severity security issues resolved
+
+---
+
+### v1.9.10 - 2025-09-27
+
+#### ✨ Features
+- **Enhanced Capability Index** - Major new feature for intelligent element discovery
+  - **NLP Scoring System** (PR #1091)
+    - Jaccard similarity and Shannon entropy scoring
+    - Advanced sampling algorithm for performance
+    - Extensible Enhanced Index Manager architecture
+    - Verb-based action triggers for natural language queries
+
+  - **Cross-Element Relationships** (PR #1093)
+    - GraphRAG-style relationship mapping between elements
+    - Automatic discovery of element dependencies and connections
+  - **Comprehensive Trigger Extraction** - Extended to all element types
+    - Memory elements trigger extraction (PR #1133, Issue #1124)
+    - Skills elements trigger extraction (PR #1136, Issue #1121)
+    - Template elements trigger extraction (PR #1137, Issue #1122)
+    - Agent elements trigger extraction (PR #1138, Issue #1123)
+    - Comprehensive trigger extraction documentation (PR #1135)
+#### 🔧 Fixed
+- **Enhanced Index Stability**
+  - Fixed verb extraction with comprehensive configuration support (PR #1125)
+  - Fixed undefined metadata handling in EnhancedIndexManager (PR #1110)
+  - Fixed loadIndex error and Docker Hub rate limits (PR #1107)
+  - Improved type safety in relationship parsing (PR #1106, Issue #1103)
+  - Fixed caching issues and added error boundaries (PR #1098)
+  - Enhanced trigger validation for Skills and Memories (PR #1140, Issue #1139)
+
+- **Test Infrastructure**
+  - Fixed Extended Node compatibility test failures (PR #1141, Issue #1142)
+  - Fixed CI test failures in IndexConfig and EnhancedIndexManager (PR #1115)
+  - Fixed CI environment tests for GitHub Actions (PR #1114)
+  - Fixed Extended Node test failures with Node 22+ (PR #1111)
+  - Removed dangerous restore-keys from cache configuration (PR #1109)
+  - Added test isolation to prevent file system pollution (PR #1094, #1095)
+  - Added memory trigger tests to ESM ignore list (PR #1134)
+  - Skip ESM-incompatible tests in CI (PR #1130)
+
+- **Code Quality**
+  - Standardized element ID parsing logic (PR #1104, Issue #1099)
+  - Moved magic numbers to configuration (PR #1105, Issue #1100)
+  - Fixed broken README badge links (PR #1079)
+
+#### 🔄 Changed
+- **Performance**: Enhanced Index now includes batching, caching, and memory cleanup mechanisms
+- **Security**: Added validation for configuration changes with audit logging
+- **Documentation**: Added CHANGELOG_PROCESS.md and restored lost session documentation (PR #1082, #1077)
+
+#### Technical Details
+- The Enhanced Capability Index provides intelligent element discovery using NLP techniques
+- All element types now support trigger extraction for improved searchability
+- Comprehensive test coverage improvements and CI reliability fixes
+- Node 22+ compatibility fully verified and tested
+
+---
+
+### v1.9.9 - 2025-09-22
+
+#### ✨ Features
+- **Security Utilities Module** (PR #1072)
+  - New `src/utils/securityUtils.ts` with reusable security patterns
+  - Prototype pollution protection functions
+  - Safe object creation with Object.create(null)
+  - Secure property setting with Object.defineProperty()
+
+- **Memory Auto-Repair** (PR #1070)
+  - Automatic repair of corrupted memory timestamps during read operations
+  - No migration needed - repairs happen transparently
+  - Enhanced sorting operations with defensive timestamp conversions
+
+#### 🔧 Fixed
+- **Memory Timestamp Crashes** (PR #1070)
+  - Fixed toISOString() errors when memory entries have string timestamps (#1069)
+  - Added comprehensive timestamp validation with detailed error reporting
+
+- **Security Badge Link** (PR #1071, #1075)
+  - Fixed broken security badge link in README pointing to docs/SECURITY.md
+  - Badge now correctly points to SECURITY.md at repository root
+
+- **Prototype Pollution False Positives** (PR #1072)
+  - Added CodeQL suppressions for false positive alerts (#202-#205)
+  - Implemented belt-and-suspenders protection to satisfy code scanners
+
+#### 🔒 Security
+- Added comprehensive prototype pollution protection across ConfigManager
 - Proper CodeQL suppressions for validated false positives
+- Enhanced input validation and sanitization
 
 ---
 
-### v1.9.8 - September 20, 2025
-
-**Memory System Complete**: Full CRUD operations and enhanced memory management
+### v1.9.8 - 2025-09-20
 
 #### ✨ Features
-- **Memory CRUD Operations**: Complete create, read, update, delete functionality for memories
-- **Memory Editing**: Full support for editing memory fields including metadata and content
-- **Memory Validation**: Comprehensive validation with detailed error reporting
-- **Enhanced Search**: Improved search across all sources with duplicate detection
+- **Memory Deletion Support** (PR #1043)
+  - Full deletion functionality for memory elements
+  - Handles date-based folder structure (YYYY-MM-DD)
+  - Cleans up both YAML and optional .storage files
+  - Deactivates memories before deletion
+  - Fixes issue #1040
+
+- **Memory Editing Support** (PR #1044)
+  - Complete edit functionality for memory elements
+  - Fixed file extension handling (.yaml for memories, .md for others)
+  - Supports field updates including nested properties
+  - Version auto-increment on edits
+  - Fixes issue #1041
+
+- **Memory Validation Support** (PR #1046)
+  - Full validation functionality for memory elements
+  - Validates metadata, retention settings, entry structure
+  - Supports strict mode for additional quality checks
+  - Returns detailed validation reports with errors/warnings
+  - Fixes issue #1042
+
+#### 🔄 Changed
+- **Code Organization**: Test files moved from root directory to proper test subdirectories (PR #1047)
+  - Manual test files now in `test/manual/`
+  - Security audit reports in `.security-audit/`
+  - Cleaner root directory structure
+
+#### Technical Details
+- Memory elements now have complete CRUD + validation operations matching other element types
+- All memory operations properly handle the date-based folder structure
+- Comprehensive test coverage for all new memory operations
+
+---
+
+### v1.9.7 - 2025-09-20
 
 #### 🔧 Fixed
-- **Memory Display**: Fixed "No content stored" issue when memories have valid content
-- **Test Coverage**: Maintained >96% test coverage with comprehensive memory tests
-- **Documentation**: Updated all documentation to reflect new memory features
+- **NPM Package Build**: Corrected v1.9.6 NPM package which was built from wrong commit
+  - The v1.9.6 tag was created before the memory display fixes were merged
+  - This resulted in the NPM package missing the critical memory content display fix
+  - v1.9.7 includes all fixes that were intended for v1.9.6
+  - Memory elements now correctly display their content instead of "No content stored"
+
+#### Note
+This release republishes v1.9.6 with the correct code. The memory display fix (PR #1036) and other improvements were merged to main before the v1.9.6 release but the NPM package was accidentally built from an earlier commit.
 
 ---
 
-### v1.9.7 - September 20, 2025
+### v1.9.6 - 2025-09-20
 
-**NPM Package Fix**: Corrected build issue from v1.9.6
+#### 🎉 First External Contribution
+- **Community Milestone**: This release includes improvements from our first external contributor! Special thanks to **Jeet Singh (@jeetsingh008)** for identifying performance and security improvements in PR #1035.
 
 #### 🔧 Fixed
-- **NPM Package Build**: Republished with correct commit including all memory display fixes
-- **Memory Display**: Memories now correctly show content instead of "No content stored"
-- Note: v1.9.6 NPM package was accidentally built from wrong commit
-
----
-
-### v1.9.6 - September 20, 2025
-
-**🎉 First External Contribution**: Performance and security improvements from the community!
-
-#### ✨ Highlights
-- **Fixed**: Memory display bug - added content getter to Memory class (PR #1036)
-- **Fixed**: Flaky macOS tests on Node 22+ (PR #1038)
-- **Enhanced**: Optimized whitespace detection for better performance (PR #1037)
-- **Security**: Strengthened path traversal protection (PR #1037)
-- **Attribution**: Thanks to @jeetsingh008 for identifying improvements!
-
----
-
-### v1.9.5 - September 19, 2025
-
-**Memory YAML Parsing Fix**: Resolved display issues with pure YAML memory files
-
-#### 🔧 Bug Fixes
-- **Fixed**: Memory files showing incorrect names for pure YAML format
-- **Enhanced**: Added comprehensive test coverage for memory file formats
-- **Technical**: Improved compatibility between SecureYamlParser and pure YAML
-
----
-
-### v1.9.4 - September 19, 2025
-
-**Memory Name Display Fix**: Corrected "Unnamed Memory" display issue
-
-#### 🔧 Bug Fixes
-- **Fixed**: Memory elements showing as "Unnamed Memory" in list output
-- **Fixed**: Corrected metadata parsing path in SecureYamlParser
-- **Technical**: Added retention format parsing for various formats
-
----
-
-### v1.9.3 - September 19, 2025
-
-**Memory Element MCP Support**: Complete MCP tool handler integration
-
-#### 🔧 Bug Fixes
-- **Fixed**: Added Memory element support to all MCP tool handlers
-- **Fixed**: Resolved "Unknown element type 'memories'" errors
-- **Technical**: Added Memory case handling to 8 critical methods
-
----
-
-### v1.9.2 - September 19, 2025
-
-**Branch Synchronization**: Documentation and configuration alignment
-
-#### 🔧 Improvements
-- **Fixed**: Resolved divergence between main and develop branches
-- **Enhanced**: Updated documentation to reflect all features
-- **Technical**: Merged 58 commits from develop branch
-
----
-
-### v1.9.1 - September 19, 2025
-
-**Memory Element Hotfix**: Fixed validation and tool descriptions
-
-#### 🔧 Bug Fixes
-- **Fixed**: Added 'memories' to validation arrays
-- **Fixed**: Updated collection tool descriptions
-- **Technical**: Clean hotfix for memory element support
-
----
-
-### v1.9.0 - September 19, 2025
-
-**🎉 Memory Element Release**: Persistent context storage with enterprise-grade features
-
-#### ✨ New Features
-- **Memory Element**: Complete implementation of persistent context storage (PR #1000 - The Milestone PR!)
-- **Date-based Organization**: Automatic folder structure (YYYY-MM-DD) prevents flat directory issues
-- **Content Deduplication**: SHA-256 hashing prevents duplicate storage (Issue #994)
-- **Search Indexing**: Fast queries across thousands of entries with O(log n) performance (Issue #984)
-- **Privacy Levels**: Three-tier access control (public, private, sensitive)
-- **Retention Policies**: Automatic cleanup based on age and capacity
-
-#### 🔧 Improvements
-- **Performance Optimizations**: 60-second cache for date folder operations
-- **Collision Handling**: Automatic version suffixes for same-named files
-- **Atomic Operations**: FileLockManager prevents corruption and race conditions
-- **Sanitization Caching**: SHA-256 checksums reduce CPU usage by ~40% during deserialization
-- **Retry Logic**: Search index building with exponential backoff
-
-#### 🛡️ Security
-- **Comprehensive Input Validation**: All memory content sanitized with DOMPurify
-- **Path Traversal Protection**: Robust validation in MemoryManager
-- **Size Limits**: DoS protection with 1MB memory and 100KB entry limits
-- **Audit Logging**: Complete security event tracking
-
-#### 🧪 Testing
-- **89 Memory Tests**: Comprehensive coverage across 4 test suites
-- **Concurrent Access Tests**: Thread safety verification
-- **Security Coverage**: XSS, Unicode attacks, path traversal
-- **CI Improvements**: Fixed GitHub integration test conflicts (PR #1001)
-
----
-
-### v1.8.1 - September 15, 2025
-
-**CI Reliability Improvements**: Fixed persistent test failures across platforms
-
-#### 🔧 Bug Fixes
-- **GitHub API 409 Conflicts**: Enhanced retry mechanism with jitter for parallel CI jobs
-- **Windows Performance Tests**: Platform-specific timing thresholds for CI environments
-- **Test Stability**: Resolved flaky tests in Extended Node Compatibility workflow
-
----
-
-### v1.8.0 - September 15, 2025
-
-**Major Portfolio System Enhancements**: Full GitHub portfolio synchronization
-
-#### ✨ New Features
-- **Portfolio Sync**: Complete bidirectional sync with GitHub portfolios
-- **Pull Functionality**: Download elements from GitHub portfolios (3 sync modes)
-- **Configurable Repos**: Portfolio repository names now configurable
-- **Configuration Wizard**: Now manual-only (removed auto-trigger for better UX)
-
-#### 🔧 Improvements
-- **Tool Clarity**: Renamed conflicting tools for better user experience
-- **Rate Limiting**: Fixed redundant token validation causing API limits
-- **GitHub Integration**: Comprehensive repository management
-
----
-
-### v1.7.4 - September 12, 2025
-
-**Hotfix Release**: Critical build and registration fixes
-
-#### 🔧 Bug Fixes
-- **Build Infrastructure**: Fixed missing TypeScript files in dist
-- **Tool Registration**: Resolved MCP tool availability issues
-- **Skill System**: Fixed skill registration and activation
-- **Test Framework**: Restored test infrastructure functionality
-
----
-
-### v1.7.3 - September 9, 2025
-
-**Security & Configuration Release**: Prototype pollution protection and config management
-
-#### 🛡️ Security
-- **Prototype Pollution Protection**: Comprehensive validation against injection attacks
-- **YAML Security**: Maintained FAILSAFE_SCHEMA with security documentation
-- **Security Audit**: Achieved 0 security findings across all severity levels
-
-#### ✨ Improvements
-- **Configuration Management**: Complete overhaul with atomic operations
-- **Test Coverage**: Comprehensive security and configuration tests
-- **Input Normalization**: All inputs normalized at MCP request layer
-
----
-
-### v1.7.2 - September 7, 2025
-
-**Security Patch Release**: Critical logging vulnerability fixes
-
-#### 🛡️ Security Fixes
-- **Clear-text Logging Prevention**: Comprehensive sanitization of sensitive data
-- **OAuth Token Protection**: Prevents exposure of tokens in console output
-- **API Key Sanitization**: Masks all credentials before logging
-
----
-
-### v1.7.1 - September 3, 2025
-
-**Maintenance Release**: Documentation and compatibility improvements
-
-#### 🔧 Improvements
-- **Documentation**: Updated for better clarity and accuracy
-- **Compatibility**: Enhanced cross-platform support
-- **Bug Fixes**: Various minor fixes and optimizations
-
----
-
-### v1.7.0 - August 30, 2025
-
-**Major Feature Release**: Enhanced portfolio and collection systems
-
-#### ✨ New Features
-- **Portfolio Management**: Improved local portfolio organization
-- **Collection Integration**: Better integration with community collection
-- **Security Enhancements**: Critical security fixes from code review
-
----
-
-### v1.6.11 - August 28, 2025
-
-**Test Reliability & Collection Fixes**: Improved test suite stability and fixed collection system
-
-#### 🔧 Bug Fixes
-- **Collection Index URL**: Fixed to use GitHub Pages for better reliability
-- **E2E Test Tokens**: Improved token prioritization for CI environments
-- **Response Format**: Enhanced compatibility with various response formats
-- **Type Safety**: Improved TypeScript types throughout test suite
-
-#### ✨ Improvements
-- Added helper functions for better code organization
-- Enhanced test reliability in CI/CD pipelines
-- General code quality improvements
-
----
-
-### v1.6.10 - August 28, 2025
-
-**Collection Submission Fix**: Critical fix for collection submission pipeline
-
-#### 🔧 Bug Fixes
-- **Collection Submission**: Fixed workflow failing due to missing element types
-- **Local Path Parameter**: Added missing localPath parameter to submission tool
-- **Duplicate Detection**: Added detection for duplicate portfolio uploads and collection issues
-
-#### ✨ Improvements
-- Added comprehensive QA tests for collection submission validation
-- Cleaned up QA documentation files
-- Updated all documentation to v1.6.10
-
----
-
-### v1.6.9 - August 26, 2025
-
-**Critical Fixes**: Fixed OAuth helper NPM packaging and performance testing workflow
-
-#### 🔧 Bug Fixes
-- **OAuth NPM Packaging**: Fixed missing `oauth-helper.mjs` file in NPM distribution
-  - File was present in repository but not included in published package
-  - OAuth authentication now works correctly for NPM users
-- **Performance Tests**: Fixed CI workflow running all tests instead of performance tests
-  - Performance monitoring now works correctly in GitHub Actions
-
----
-
-### v1.6.3 - August 25, 2025
-
-**OAuth Authentication Fix**: Fixed invalid OAuth client ID and improved error handling
-
-#### 🔧 Bug Fixes
-- **OAuth Client ID**: Updated from incorrect ID to correct `Ov23li9gyNZP6m9aJ2EP`
-- **Error Messages**: Improved clarity of OAuth error messages for better debugging
-- **Setup Tool**: Fixed `setup_github_auth` tool to properly handle authentication flow
-
----
-
-### v1.6.2 - August 25, 2025
-
-**Critical Hotfix**: Fixed OAuth default client ID not being used in `setup_github_auth` tool
-
-#### 🔧 Bug Fixes
-- **OAuth Default Client**: Fixed `setup_github_auth` tool not using default client ID when none provided
-- **Authentication Flow**: Restored ability to authenticate without manual client ID entry
-
-#### 📝 Documentation
-- Added troubleshooting guide for OAuth issues
-- Updated setup instructions with clearer OAuth configuration steps
-
----
-
-### v1.6.1 - August 25, 2025
-
-**⚠️ Breaking Changes**:
-- 🔄 **Serialization Format Change** - `BaseElement.serialize()` now returns markdown with YAML frontmatter instead of JSON
-
-#### 🔧 Bug Fixes
-- **Serialization Format**: Fixed `BaseElement.serialize()` to return markdown format
-  - Changed from JSON string to markdown with YAML frontmatter
-  - Maintains consistency with existing persona format
-  - Fixes portfolio round-trip workflow
-
-#### ✨ Improvements
-- **Code Quality**: Extracted validation methods into ValidationService
-- **Error Handling**: Improved validation error messages with specific field information
-- **Test Coverage**: Added comprehensive tests for markdown serialization
-
----
-
-### v1.6.0 - August 25, 2025
-
-**🚀 Major Release: Portfolio System & OAuth Integration**
-
-This release introduces the complete portfolio management system with GitHub OAuth authentication, enabling secure cloud-based element synchronization and management.
-
-#### ✨ New Features
-
-##### 🔐 GitHub OAuth Authentication
-- **OAuth App Integration**: Full OAuth flow with GitHub for secure authentication
-- **Personal Access Token Support**: Alternative authentication method for CI/CD
-- **Token Management**: Secure storage and rotation of authentication tokens
-- **Multi-Account Support**: Handle multiple GitHub accounts seamlessly
-
-##### 📦 Portfolio Management System
-- **Cloud Sync**: Automatic synchronization between local and GitHub portfolios
-- **Version Control**: Full git integration for portfolio elements
-- **Conflict Resolution**: Smart merging of local and remote changes
-- **Batch Operations**: Upload/download multiple elements efficiently
-
-##### 🛠️ New MCP Tools (42 total)
-- `setup_github_auth`: Interactive GitHub OAuth setup
-- `check_github_auth`: Verify authentication status
-- `refresh_github_token`: Rotate OAuth tokens
-- `sync_portfolio`: Bidirectional portfolio synchronization
-- `upload_to_portfolio`: Upload local elements to GitHub
-- `download_from_portfolio`: Download elements from GitHub
-- `submit_to_portfolio`: Submit elements for review
-- And 30 more tools for complete portfolio management
-
-#### 🔧 Bug Fixes
-- **Element Detection**: Fixed smart detection of element types
-- **YAML Parsing**: Improved handling of complex YAML structures
-- **Path Resolution**: Fixed Windows path compatibility issues
-- **Token Security**: Enhanced token storage encryption
-
-#### 📝 Documentation
-- Comprehensive OAuth setup guide
-- Portfolio management tutorials
-- Troubleshooting guides for common issues
-- API documentation for all new tools
+- **Memory Display Bug**: Added content getter to Memory class (PR #1036)
+  - Fixed "No content stored" issue when displaying memory elements
+  - Memory files were being loaded but content wasn't accessible
+  - Added proper getter method to retrieve content from entries
+  - Resolves issue where memories appeared empty despite having content
+
+- **Flaky macOS Tests**: Fixed ToolCache test failures on macOS with Node 22+ (PR #1038)
+  - Addressed race condition in directory cleanup
+  - Added retry logic for ENOTEMPTY errors during rmdir operations
+  - Tests now consistently pass on all platforms and Node versions
+  - Particularly affects macOS runners with Node 22.x
+
+#### Enhanced
+- **Performance Optimization**: Improved whitespace detection in memory file parsing (PR #1037)
+  - Replaced regex-based whitespace detection with character code checks
+  - Eliminates repeated regex evaluations during format detection
+  - More efficient for large memory files
+  - *Improvement identified by @jeetsingh008*
 
 #### 🔒 Security
-- OAuth token encryption at rest
-- Secure token transmission
-- Rate limiting for API calls
-- Audit logging for all operations
+- **Path Validation**: Strengthened path traversal protection (PR #1037)
+  - Enhanced validation checks both original and normalized paths
+  - Adds validation before path normalization
+  - Comprehensive protection against directory traversal attacks
+  - *Security enhancement identified by @jeetsingh008*
+
+#### Attribution
+The performance and security improvements in this release were originally identified and proposed by **Jeet Singh (@jeetsingh008)** in PR #1035. While we implemented these changes internally for security review purposes, full credit goes to Jeet for these valuable contributions. Thank you for helping make DollhouseMCP better! 🙏
 
 ---
 
-For complete release history prior to v1.6.0, see the [GitHub Releases](https://github.com/DollhouseMCP/mcp-server/releases) page.
+### v1.9.5 - 2025-09-19
+
+#### 🔧 Fixed
+- **Memory YAML Parsing**: Fixed memory files not displaying correct names for pure YAML format
+  - Memory files saved by v1.9.3+ are pure YAML without frontmatter markers
+  - MemoryManager.load() now detects pure YAML and wraps it for SecureYamlParser compatibility
+  - Added proper handling for nested metadata structure (data.metadata || data)
+  - Fixed entries loading to look in correct location (parsed.data.entries)
+  - Added edge case handling for empty memory files
+  - Fixes issue where v1.9.3/v1.9.4 memory files showed as "Unnamed Memory"
+
+#### Enhanced
+- **Test Coverage**: Added comprehensive tests for memory file format handling
+  - Test for pure YAML files without frontmatter markers
+  - Test for files with frontmatter (backward compatibility)
+  - Test for empty file handling
+  - Test for mixed formats in same directory
+  - All 40 MemoryManager tests now passing
+
+#### Technical Details
+- SecureYamlParser is designed for markdown files with YAML frontmatter
+- Memory files are pure YAML, requiring format detection and wrapping
+- Solution maintains backward compatibility while fixing the core issue
+
+---
+
+### v1.9.4 - 2025-09-19
+
+#### 🔧 Fixed
+- **Memory Name Display**: Fixed memory elements showing as "Unnamed Memory" in list output
+  - Corrected metadata parsing to use `parsed.data` instead of `parsed.metadata`
+  - SecureYamlParser returns YAML frontmatter in the `data` property for markdown files
+  - Added `parseRetentionDays()` helper to handle various retention formats (permanent, perpetual, "30 days")
+  - Memory files are correctly identified as .yaml format only (removed incorrect .md support)
+  - Ensures `validateAndResolvePath()` only accepts .yaml and .yml extensions for consistency
+  - Fixes PR #1030: All memory names now display correctly instead of showing "Unnamed Memory"
+
+#### Technical Details
+- The bug was caused by incorrect property path when parsing YAML frontmatter from SecureYamlParser
+- Legacy .md files in memories directory are templates/schemas, not actual memory files
+- All real memory files are stored as .yaml in date-based folders as designed
+
+---
+
+### v1.9.3 - 2025-09-19
+
+#### 🔧 Fixed
+- **Memory Element MCP Support**: Added complete Memory element support to all MCP tool handlers
+  - Fixed "Unknown element type 'memories'" errors in DollhouseMCP client
+  - Added Memory case handling to 8 critical methods in src/index.ts:
+    - `listElements`: Lists available memories with retention policy and tags
+    - `activateElement`: Activates memory and shows status
+    - `getActiveElements`: Shows active memories with their tags
+    - `deactivateElement`: Deactivates memory elements
+    - `getElementDetails`: Shows comprehensive memory details
+    - `reloadElements`: Reloads memories from portfolio
+    - `createElement`: Creates new memory instances with content
+    - `editElement`: Supports editing memory properties
+  - Memory infrastructure was already implemented but MCP tool handlers were missing the switch cases
+  - Fixes user-reported issue with memories not working in v1.9.2
+
+#### 🔧 Fixed
+- **Test Compatibility**: Updated GenericElementTools test to use ensembles instead of memories
+  - Test was expecting memories to be unsupported but they are now fully functional
+  - Changed test to use ensembles which remain unsupported for creation/editing/validation
+
+---
+
+### v1.9.2 - 2025-09-19
+
+#### 🔧 Fixed
+- **Branch Synchronization**: Resolved divergence between main and develop branches
+  - Synchronized documentation updates that were only in develop
+  - Fixed security audit suppressions path to use proper location
+  - Ensured all v1.9.0 and v1.9.1 features are properly documented
+
+#### Enhanced
+- **Documentation**: Updated README and CHANGELOG to accurately reflect all implemented features
+- **Security Audit**: Corrected suppressions file path from root to proper config location
+
+#### Technical Details
+- Merged 58 commits from develop that were missing from main
+- No actual code changes to Memory element (already fully implemented in main)
+- Primary changes are documentation and configuration fixes
+
+---
+
+### v1.9.1 - 2025-09-19
+
+#### 🔧 Fixed
+- **Memory Element Support**: Fixed validation and tool descriptions for memory elements
+  - Added 'memories' to all validation arrays in index.ts
+  - Updated browse_collection, get_collection_content, and install_collection_content tool descriptions
+  - Fixed switch statements to handle memory element type properly
+  - Resolves Issue #1019 where browse_collection returned "Invalid type 'memories'" error
+  - Memory elements can now be browsed, installed, and managed through all MCP tools
+
+#### Technical Details
+- Modified validation arrays at lines 2034, 5322, and 5394 in src/index.ts
+- Added memory case to element type switch statements
+- Updated all collection tool descriptions to include memory elements
+- Clean hotfix approach with cherry-picked commit from develop branch
+
+---
+
+### v1.9.0 - 2025-09-17
+
+#### ✨ Features
+- **Memory Element Implementation**: Complete memory element support with advanced features
+  - Persistent context storage across sessions
+  - Date-based folder organization for scalability
+  - Search indexing with content-based retrieval
+  - Retention policies and privacy levels
+  - Performance optimizations for large memory sets
+
+#### Enhanced
+- **Collection Support**: Full memory element support in collection browsing and installation
+- **Portfolio System**: Memory elements fully integrated with portfolio management
+
+---
+
+For complete release history prior to v1.9.0, see the [GitHub Releases](https://github.com/DollhouseMCP/mcp-server/releases) page.
 
 ## 📜 License
 

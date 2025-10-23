@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [1.9.21] - 2025-10-23
+
+**Patch Release**: Memory validation system activation and element formatting
+
+### Added
+- **Element file formatter script** (#1388, fixes #1387)
+  - New `scripts/fix-element-formatting.ts` to reformat blob content elements
+  - Fixes element files stored as single-line blobs (unreadable in editors)
+  - Intelligently adds newlines before/after markdown headers
+  - Formats code blocks and YAML structures properly
+  - Dry-run mode for safe testing
+  - Average line length detection (>200 chars triggers formatting)
+
+### Fixed
+- **Background memory validation startup** (#1389)
+  - BackgroundValidator service now starts automatically on server initialization
+  - Memory entries with UNTRUSTED status will be automatically validated every 5 minutes
+  - Trust levels are now properly updated (VALIDATED, FLAGGED, QUARANTINED)
+  - Validation runs server-side with zero token cost
+
+### Changed
+- **README version history optimization**
+  - Limited version history in README to 1.9.x releases only (21 versions instead of 35)
+  - Reduced README size from ~75KB to ~61KB for better readability
+  - Complete history remains in CHANGELOG.md (source of truth)
+  - Updated `generate-version-history.js` minVersion from 1.6.0 to 1.9.0
+- **Added missing v1.9.20 changelog entry to README**
+  - Previous README was missing the v1.9.20 MCP Registry Publishing Fix
+
+### Context
+The BackgroundValidator service was fully implemented in Issue #1314 (Phase 1: Background validation for memory security) but was never activated. The `backgroundValidator.start()` method was missing from server initialization, causing all memories to remain UNTRUSTED indefinitely.
+
+This patch release adds proper lifecycle management:
+- Import backgroundValidator singleton in server initialization
+- Start validation service after resource handlers are set up
+- Stop service during server cleanup
+
+### Impact
+- Memory security architecture is now fully operational
+- UNTRUSTED memories will be automatically validated
+- Trust level updates work correctly
+- No performance impact (runs in background outside LLM context)
+
 ## [1.9.20] - 2025-10-17
 
 **Fix Release**: MCP Registry Publishing Compatibility

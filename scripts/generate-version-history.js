@@ -26,7 +26,7 @@ const CONFIG = {
   outputPath: path.join(__dirname, '..', 'docs', 'readme', 'chunks', '11-changelog-full.md'),
 
   // Minimum version to include (inclusive)
-  minVersion: '1.6.0',
+  minVersion: '1.9.0',
 
   // Maximum number of versions to include (null for unlimited)
   maxVersions: null,
