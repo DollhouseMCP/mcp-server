@@ -6,7 +6,7 @@
 #### ✨ Features
 - **Element file formatter script** (#1388, fixes #1387)
   - New `scripts/fix-element-formatting.ts` to reformat blob content elements
-  - Fixes 140 element files stored as single-line blobs (unreadable in editors)
+  - Fixes element files stored as single-line blobs (unreadable in editors)
   - Intelligently adds newlines before/after markdown headers
   - Formats code blocks and YAML structures properly
   - Dry-run mode for safe testing
