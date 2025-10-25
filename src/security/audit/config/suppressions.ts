@@ -164,12 +164,37 @@ export const suppressions: Suppression[] = [
   {
     rule: 'DMCP-SEC-005',
     file: 'src/converters/DollhouseToAnthropicConverter.ts',
-    reason: 'INTENTIONAL: Uses yaml.load with CORE_SCHEMA to parse extracted YAML frontmatter. CORE_SCHEMA prevents deserialization attacks and code execution. Cannot use SecureYamlParser.parse() because it expects full Markdown documents with frontmatter, but this code processes already-extracted YAML strings. Additionally applies UnicodeValidator.normalize() on input. PR #1400'
+    reason: 'INTENTIONAL: Format transformer, not security boundary. Uses yaml.load with CORE_SCHEMA to prevent deserialization attacks. Cannot use SecureYamlParser (expects full Markdown with frontmatter, not extracted YAML strings). Preserves content fidelity - no modification. Input skills already validated (from DollhouseMCP system). PR #1400'
   },
   {
     rule: 'DMCP-SEC-005',
     file: 'src/converters/AnthropicToDollhouseConverter.ts',
-    reason: 'INTENTIONAL: Uses yaml.load with CORE_SCHEMA to parse extracted YAML frontmatter and preserved metadata. CORE_SCHEMA prevents deserialization attacks and code execution. Cannot use SecureYamlParser.parse() because it expects full Markdown documents with frontmatter, but this code processes already-extracted YAML strings. Additionally applies UnicodeValidator.normalize() on input. PR #1400'
+    reason: 'INTENTIONAL: Format transformer, not security boundary. Uses yaml.load with CORE_SCHEMA to prevent deserialization attacks. Cannot use SecureYamlParser (processes extracted YAML strings). Preserves content fidelity - no modification. Output validated when loaded via SkillManager.load() which applies SecureYamlParser. PR #1400'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/converters/DollhouseToAnthropicConverter.ts',
+    reason: 'INTENTIONAL: Format transformer, not security boundary. Preserves content fidelity without Unicode normalization. Input skills already validated (from DollhouseMCP system). One-to-one mechanical transformation - no content modification. Security boundary is SkillManager.load(), not converters. PR #1400'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/converters/AnthropicToDollhouseConverter.ts',
+    reason: 'INTENTIONAL: Format transformer, not security boundary. Preserves content fidelity without Unicode normalization. Output validated when loaded via SkillManager.load() which applies full security validation (SecureYamlParser + UnicodeValidator). One-to-one mechanical transformation. PR #1400'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/converters/ContentExtractor.ts',
+    reason: 'INTENTIONAL: Format analysis tool for converters, not security boundary. Preserves content fidelity without modification. Used by format transformers which preserve one-to-one correspondence. No user input processing - internal utility for mechanical conversion. PR #1400'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/converters/DollhouseToAnthropicConverter.ts',
+    reason: 'FALSE POSITIVE: Converters are format transformers, not security operations. Audit logging happens at CLI level (cli/convert.ts line 251) where conversion operations are logged. Converters are internal utilities, not user-facing security boundaries. PR #1400'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/converters/AnthropicToDollhouseConverter.ts',
+    reason: 'FALSE POSITIVE: Converters are format transformers, not security operations. Audit logging happens at CLI level (cli/convert.ts line 251) where conversion operations are logged. Converters are internal utilities, not user-facing security boundaries. PR #1400'
   },
   {
     rule: 'DMCP-SEC-004',

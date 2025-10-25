@@ -6,6 +6,13 @@
  *
  * Implements the mechanical transformation:
  * DollhouseMCP Skill (single .md file) → Anthropic Skill (directory with separated components)
+ *
+ * SECURITY MODEL:
+ * - This is a FORMAT TRANSFORMER, not a security boundary
+ * - Preserves content fidelity - no modification, sanitization, or validation
+ * - YAML parsing uses CORE_SCHEMA to prevent deserialization attacks only
+ * - Security validation happens at SkillManager.load() time, not conversion time
+ * - Input skills should already be validated (they're from DollhouseMCP system)
  */
 
 import * as fs from 'fs';
@@ -13,7 +20,6 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type DollhouseMCPSkillMetadata, type AnthropicSkillMetadata } from './SchemaMapper.js';
 import { ContentExtractor, type ExtractedSection } from './ContentExtractor.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface AnthropicSkillStructure {
     'SKILL.md': string;
@@ -51,12 +57,10 @@ export class DollhouseToAnthropicConverter {
         includelicense?: boolean;
         preserveComments?: boolean;
     }): Promise<AnthropicSkillStructure> {
-        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
-        const unicodeResult = UnicodeValidator.normalize(skillContent);
-        const normalizedContent = unicodeResult.normalizedContent;
-
         // Step 1: Extract YAML frontmatter
-        const { metadata, bodyContent } = this.extractYAMLFrontmatter(normalizedContent);
+        // NOTE: No Unicode normalization - preserves content fidelity for mechanical transformation
+        // Security validation happens when loading converted skills via SkillManager.load()
+        const { metadata, bodyContent } = this.extractYAMLFrontmatter(skillContent);
 
         // Step 2: Simplify YAML (keep only name + description, optionally license)
         const minimalYAML = this.schemaMapper.dollhouseToAnthropic(metadata);

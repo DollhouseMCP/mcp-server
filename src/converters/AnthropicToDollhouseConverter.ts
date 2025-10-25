@@ -15,6 +15,14 @@
  * 6. Read all themes/ files and embed as templates
  * 7. Combine all content into single .md file with rich frontmatter
  * 8. Return single-file content
+ *
+ * SECURITY MODEL:
+ * - This is a FORMAT TRANSFORMER, not a security boundary
+ * - Preserves content fidelity - no modification, sanitization, or validation during conversion
+ * - YAML parsing uses CORE_SCHEMA to prevent deserialization attacks only
+ * - Output validation happens when user loads skill via SkillManager.load()
+ * - SkillManager.load() applies SecureYamlParser and full security validation
+ * - Converted skills must pass DollhouseMCP security checks before activation
  */
 
 import * as fs from 'fs';
@@ -22,7 +30,6 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type AnthropicSkillMetadata, type DollhouseMCPSkillMetadata } from './SchemaMapper.js';
 import type { AnthropicSkillStructure } from './DollhouseToAnthropicConverter.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface AnthropicSkillDirectory {
     skillMD: {
@@ -62,6 +69,8 @@ export class AnthropicToDollhouseConverter {
         customMetadata?: Partial<DollhouseMCPSkillMetadata>;
     }): Promise<string> {
         // Step 1: Read the Anthropic skill directory structure
+        // NOTE: No Unicode normalization - preserves content fidelity
+        // Output will be validated when loaded via SkillManager.load()
         const skillData = await this.readAnthropicStructure(skillDirPath);
 
         // Step 2: Check for preserved DollhouseMCP metadata, or enrich if not found
@@ -96,11 +105,9 @@ export class AnthropicToDollhouseConverter {
         preserveSource?: boolean;
         customMetadata?: Partial<DollhouseMCPSkillMetadata>;
     }): string {
-        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
-        const unicodeResult = UnicodeValidator.normalize(structure['SKILL.md']);
-
         // Parse SKILL.md
-        const { metadata, content } = this.parseSkillMD(unicodeResult.normalizedContent);
+        // NOTE: No Unicode normalization - preserves content fidelity
+        const { metadata, content } = this.parseSkillMD(structure['SKILL.md']);
 
         // Convert structure to directory format
         const skillData: AnthropicSkillDirectory = {
@@ -191,10 +198,9 @@ export class AnthropicToDollhouseConverter {
             throw new Error(`SKILL.md not found in ${skillDirPath}`);
         }
 
-        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
+        // Read SKILL.md (no normalization - preserve fidelity)
         const skillMDContent = fs.readFileSync(skillMDPath, 'utf-8');
-        const unicodeResult = UnicodeValidator.normalize(skillMDContent);
-        const { metadata, content } = this.parseSkillMD(unicodeResult.normalizedContent);
+        const { metadata, content } = this.parseSkillMD(skillMDContent);
 
         const skillData: AnthropicSkillDirectory = {
             skillMD: { metadata, content },

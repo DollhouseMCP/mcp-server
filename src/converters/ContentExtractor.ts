@@ -6,9 +6,13 @@
  * - Documentation sections → reference/
  * - Examples → examples/
  * - Main instructions (preserved in SKILL.md)
+ *
+ * SECURITY MODEL:
+ * - This is a FORMAT ANALYSIS tool, not a security boundary
+ * - Preserves content exactly as-is for mechanical transformation
+ * - No modification, sanitization, or validation
+ * - Used by converters which are format transformers, not security gates
  */
-
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface ExtractedSection {
     type: 'code' | 'documentation' | 'example' | 'main';
@@ -25,12 +29,9 @@ export class ContentExtractor {
      * Parse DollhouseMCP markdown content and identify extractable sections
      */
     extractSections(content: string): ExtractedSection[] {
-        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
-        const unicodeResult = UnicodeValidator.normalize(content);
-        const normalizedContent = unicodeResult.normalizedContent;
-
+        // NOTE: No Unicode normalization - preserves content fidelity for conversion
         const sections: ExtractedSection[] = [];
-        const lines = normalizedContent.split('\n');
+        const lines = content.split('\n');
 
         let inCodeBlock = false;
         let codeBlockStart = 0;
@@ -183,11 +184,8 @@ export class ContentExtractor {
      * Extract complete documentation section (including subsections)
      */
     extractDocumentationSection(content: string, sectionTitle: string): string | null {
-        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
-        const unicodeResult = UnicodeValidator.normalize(content);
-        const normalizedContent = unicodeResult.normalizedContent;
-
-        const lines = normalizedContent.split('\n');
+        // NOTE: No Unicode normalization - preserves content fidelity
+        const lines = content.split('\n');
         let capturing = false;
         let sectionContent: string[] = [];
         let sectionLevel = 0;
