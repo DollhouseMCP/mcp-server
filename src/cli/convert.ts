@@ -7,18 +7,35 @@
  *   dollhouse convert to-anthropic <input> [options]
  *   dollhouse convert from-anthropic <input> [options]
  *
+ * Input formats:
+ *   to-anthropic:   DollhouseMCP skill file (.md)
+ *   from-anthropic: Anthropic skill directory or ZIP file
+ *
  * Options:
  *   -o, --output <dir>      Output directory
+ *                           Default for from-anthropic: ~/.dollhouse/portfolio/skills
+ *                           Default for to-anthropic: ./anthropic-skills
  *   -v, --verbose           Show detailed conversion steps
  *   -r, --report            Generate conversion report
  *   --dry-run               Preview conversion without executing
- *   --no-backup             Don't create backup files
+ *
+ * Examples:
+ *   # Convert downloaded ZIP file from Claude.ai
+ *   dollhouse convert from-anthropic ~/Downloads/my-skill.zip
+ *
+ *   # Convert Anthropic skill directory
+ *   dollhouse convert from-anthropic ~/Downloads/my-skill-folder
+ *
+ *   # Export DollhouseMCP skill to share
+ *   dollhouse convert to-anthropic ~/.dollhouse/portfolio/skills/my-skill.md -o ./exported
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { Command } from 'commander';
 import chalk from 'chalk';
+import extract from 'extract-zip';
 import {
     DollhouseToAnthropicConverter,
     AnthropicToDollhouseConverter,
@@ -27,6 +44,82 @@ import {
 import { SecurityMonitor } from '../security/securityMonitor.js';
 
 const program = new Command();
+
+/**
+ * Get the default DollhouseMCP portfolio skills directory
+ */
+function getDefaultSkillsDirectory(): string {
+    return path.join(process.env.HOME || '', '.dollhouse', 'portfolio', 'skills');
+}
+
+/**
+ * Extract a ZIP file to a temporary directory
+ * @returns Path to extracted directory
+ */
+async function extractZipFile(zipPath: string, verbose: boolean): Promise<string> {
+    const tempDir = path.join(os.tmpdir(), `dollhouse-extract-${Date.now()}`);
+
+    if (verbose) {
+        console.log(chalk.blue('\nExtracting ZIP file...'));
+        console.log(chalk.gray(`  ZIP: ${zipPath}`));
+        console.log(chalk.gray(`  Temp dir: ${tempDir}`));
+    }
+
+    await extract(zipPath, { dir: tempDir });
+
+    // Find the skill directory (should be the only top-level directory)
+    const contents = fs.readdirSync(tempDir);
+    const directories = contents.filter(item =>
+        fs.statSync(path.join(tempDir, item)).isDirectory()
+    );
+
+    if (directories.length === 1) {
+        // Return the skill directory path
+        return path.join(tempDir, directories[0]);
+    } else if (contents.length > 0) {
+        // If multiple items or no directory, return temp dir itself
+        return tempDir;
+    } else {
+        throw new Error('ZIP file appears to be empty');
+    }
+}
+
+/**
+ * Check if a file is a ZIP file based on extension
+ */
+function isZipFile(filePath: string): boolean {
+    return path.extname(filePath).toLowerCase() === '.zip';
+}
+
+/**
+ * Prepare input for conversion (handles both directories and ZIP files)
+ * @returns {actualInput, tempDir} - actualInput is the directory to convert, tempDir is the temp dir to cleanup (or null)
+ */
+async function prepareConversionInput(
+    input: string,
+    verbose: boolean
+): Promise<{ actualInput: string; tempDir: string | null }> {
+    // Verify input exists
+    if (!fs.existsSync(input)) {
+        console.error(chalk.red(`Input not found: ${input}`));
+        process.exit(1);
+    }
+
+    // Handle ZIP files
+    if (isZipFile(input)) {
+        const actualInput = await extractZipFile(input, verbose);
+        const tempDir = path.dirname(actualInput);
+        return { actualInput, tempDir };
+    }
+
+    // Handle directories
+    if (!fs.statSync(input).isDirectory()) {
+        console.error(chalk.red(`Input must be a directory or ZIP file: ${input}`));
+        process.exit(1);
+    }
+
+    return { actualInput: input, tempDir: null };
+}
 
 interface ConvertOptions {
     output?: string;
@@ -62,8 +155,8 @@ program
 
 program
     .command('from-anthropic <input>')
-    .description('Convert Anthropic Skills to DollhouseMCP skill format')
-    .option('-o, --output <dir>', 'Output directory', './dollhouse-skills')
+    .description('Convert Anthropic Skills to DollhouseMCP skill format (input can be a directory or ZIP file)')
+    .option('-o, --output <dir>', 'Output directory', getDefaultSkillsDirectory())
     .option('-v, --verbose', 'Show detailed conversion steps', false)
     .option('-r, --report', 'Generate conversion report', false)
     .option('--dry-run', 'Preview conversion without executing', false)
@@ -158,26 +251,21 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
  * Convert Anthropic skill to DollhouseMCP format
  */
 async function convertFromAnthropic(input: string, options: ConvertOptions): Promise<void> {
+    let tempDir: string | null = null;
+
     try {
         logOperation('from-anthropic', input, options);
 
-        // Verify input directory
-        if (!fs.existsSync(input)) {
-            console.error(chalk.red(`Input directory not found: ${input}`));
-            process.exit(1);
-        }
+        // Prepare input (handles both directories and ZIP files)
+        const { actualInput, tempDir: extractedTempDir } = await prepareConversionInput(input, options.verbose);
+        tempDir = extractedTempDir;
 
-        if (!fs.statSync(input).isDirectory()) {
-            console.error(chalk.red(`Input must be a directory: ${input}`));
-            process.exit(1);
-        }
-
-        const skillName = path.basename(input);
+        const skillName = path.basename(actualInput);
 
         if (options.verbose) {
             console.log(chalk.blue('\nReading Anthropic skill...'));
-            console.log(chalk.gray(`  Input: ${input}`));
-            listAnthropicStructure(input);
+            console.log(chalk.gray(`  Input: ${actualInput}`));
+            listAnthropicStructure(actualInput);
         }
 
         // Convert
@@ -188,11 +276,11 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
             console.log(chalk.blue('\nConverting to DollhouseMCP Skills format...'));
         }
 
-        const dollhouseSkill = await converter.convertSkill(input);
-        logReverseConversionSteps(input, operationsLog, options.verbose);
+        const dollhouseSkill = await converter.convertSkill(actualInput);
+        logReverseConversionSteps(actualInput, operationsLog, options.verbose);
 
         // Determine output file
-        const outputDir = options.output || './dollhouse-skills';
+        const outputDir = options.output || getDefaultSkillsDirectory();
         const outputFile = path.join(outputDir, `${skillName}.md`);
 
         if (options.dryRun) {
@@ -241,6 +329,14 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
     } catch (error) {
         console.error(chalk.red('\n✗ Conversion failed:'), error);
         process.exit(1);
+    } finally {
+        // Cleanup temp directory if ZIP was extracted
+        if (tempDir && fs.existsSync(tempDir)) {
+            if (options.verbose) {
+                console.log(chalk.gray(`\nCleaning up temporary files...`));
+            }
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
     }
 }
 
