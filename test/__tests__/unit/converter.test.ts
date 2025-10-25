@@ -543,7 +543,7 @@ Follow these steps:
             // The CLI code would detect this and reject it
             const uncompressedSize = 10 * 60 * 1024 * 1024; // 600MB
             expect(uncompressedSize).toBeGreaterThan(500 * 1024 * 1024); // Over 500MB limit
-        });
+        }, 60000); // 60s timeout for Windows file creation performance
 
         it('should cleanup temp files on successful extraction', async () => {
             const skillDir = createTestSkillDirectory('cleanup-success');
