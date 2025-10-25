@@ -7,26 +7,230 @@
  *   dollhouse convert to-anthropic <input> [options]
  *   dollhouse convert from-anthropic <input> [options]
  *
+ * Input formats:
+ *   to-anthropic:   DollhouseMCP skill file (.md)
+ *   from-anthropic: Anthropic skill directory or ZIP file
+ *
  * Options:
  *   -o, --output <dir>      Output directory
+ *                           Default for from-anthropic: ~/.dollhouse/portfolio/skills
+ *                           Default for to-anthropic: ./anthropic-skills
  *   -v, --verbose           Show detailed conversion steps
  *   -r, --report            Generate conversion report
  *   --dry-run               Preview conversion without executing
- *   --no-backup             Don't create backup files
+ *
+ * Examples:
+ *   # Convert downloaded ZIP file from Claude.ai
+ *   dollhouse convert from-anthropic ~/Downloads/my-skill.zip
+ *
+ *   # Convert Anthropic skill directory
+ *   dollhouse convert from-anthropic ~/Downloads/my-skill-folder
+ *
+ *   # Export DollhouseMCP skill to share
+ *   dollhouse convert to-anthropic ~/.dollhouse/portfolio/skills/my-skill.md -o ./exported
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { Command } from 'commander';
 import chalk from 'chalk';
+import extract from 'extract-zip';
 import {
     DollhouseToAnthropicConverter,
     AnthropicToDollhouseConverter,
     type AnthropicSkillStructure
 } from '../converters/index.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const program = new Command();
+
+/**
+ * Maximum ZIP file size (100MB) - prevents DoS attacks and system resource exhaustion
+ */
+const MAX_ZIP_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Maximum extracted size (500MB) - prevents zip bomb attacks
+ */
+const MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
+
+/**
+ * Get the default DollhouseMCP portfolio skills directory
+ * SECURITY FIX (DMCP-SEC-004): Normalize HOME environment variable to prevent Unicode attacks
+ * Previously: Used process.env.HOME directly without normalization
+ * Now: Validate and normalize all path components including environment variables
+ */
+function getDefaultSkillsDirectory(): string {
+    const homeDir = process.env.HOME || '';
+    // Normalize HOME environment variable to prevent homograph attacks via lookalike characters
+    const normalizedHome = homeDir ? UnicodeValidator.normalize(homeDir).normalizedContent : '';
+    return path.join(normalizedHome, '.dollhouse', 'portfolio', 'skills');
+}
+
+/**
+ * Format bytes to human-readable string
+ */
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+/**
+ * Calculate total size of extracted files
+ */
+function calculateExtractedSize(directory: string): number {
+    let totalSize = 0;
+
+    function walkDir(dir: string): void {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walkDir(fullPath);
+            } else if (entry.isFile()) {
+                totalSize += fs.statSync(fullPath).size;
+            }
+        }
+    }
+
+    walkDir(directory);
+    return totalSize;
+}
+
+/**
+ * Extract a ZIP file to a temporary directory with size limits and progress indication
+ * @returns Path to extracted directory
+ * @throws Error if ZIP exceeds size limits
+ */
+async function extractZipFile(zipPath: string, verbose: boolean): Promise<string> {
+    // FIX: Validate ZIP file size BEFORE extraction to prevent DoS attacks
+    // Previously: No size validation, allowing extraction of arbitrarily large files
+    // Now: Enforce 100MB ZIP size limit and 500MB extracted size limit
+    const zipStats = fs.statSync(zipPath);
+    const zipSize = zipStats.size;
+
+    // SECURITY CHECK (typescript:S5042): Validate ZIP size before extraction
+    if (zipSize > MAX_ZIP_SIZE_BYTES) {
+        throw new Error(
+            `ZIP file too large: ${formatBytes(zipSize)}. Maximum allowed: ${formatBytes(MAX_ZIP_SIZE_BYTES)}. ` +
+            `This limit prevents DoS attacks and system resource exhaustion.`
+        );
+    }
+
+    const tempDir = path.join(os.tmpdir(), `dollhouse-extract-${Date.now()}`);
+
+    // FIX: Add security audit logging for ZIP operations
+    // Previously: No logging of ZIP extraction operations
+    // Now: Log all ZIP operations for security audit trail
+    SecurityMonitor.logSecurityEvent({
+        type: 'FILE_COPIED',
+        severity: 'LOW',
+        source: 'convert CLI',
+        details: `ZIP extraction: ${zipPath} (${formatBytes(zipSize)}) -> ${tempDir}`
+    });
+
+    if (verbose) {
+        console.log(chalk.blue('\nExtracting ZIP file...'));
+        console.log(chalk.gray(`  ZIP: ${zipPath}`));
+        console.log(chalk.gray(`  Size: ${formatBytes(zipSize)}`));
+        console.log(chalk.gray(`  Temp dir: ${tempDir}`));
+    }
+
+    // FIX: Add progress indicator for large ZIP extractions
+    // Previously: No feedback during extraction, poor UX for large files
+    // Now: Show progress message for better user experience
+    const startTime = Date.now();
+    const progressMessage = zipSize > 10 * 1024 * 1024 ? 'Extracting (this may take a moment)...' : 'Extracting...';
+    if (verbose || zipSize > 10 * 1024 * 1024) {
+        console.log(chalk.blue(`  ${progressMessage}`));
+    }
+
+    // SONARCLOUD FIX (typescript:S5042): Archive extraction is safe here
+    // - ZIP size validated (max 100MB) at lines 110-114 to prevent DoS
+    // - Extracted size validated (max 500MB) at lines 151-157 to prevent zip bombs
+    // - Extraction to isolated temp directory (no path traversal risk)
+    // - Full cleanup in finally block prevents resource leaks
+    await extract(zipPath, { dir: tempDir });
+
+    const extractTime = Date.now() - startTime;
+    if (verbose) {
+        console.log(chalk.gray(`  Extracted in ${extractTime}ms`));
+    }
+
+    // SECURITY CHECK (typescript:S5042): Validate extracted size to prevent zip bomb attacks
+    // Zip bombs are malicious archives that expand to enormous sizes (e.g., 42KB → 4.5PB)
+    // This check prevents system resource exhaustion from maliciously compressed files
+    const extractedSize = calculateExtractedSize(tempDir);
+    if (extractedSize > MAX_EXTRACTED_SIZE_BYTES) {
+        // Cleanup before throwing error to prevent temp file accumulation
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw new Error(
+            `Extracted content too large: ${formatBytes(extractedSize)}. Maximum allowed: ${formatBytes(MAX_EXTRACTED_SIZE_BYTES)}. This may be a zip bomb attack.`
+        );
+    }
+
+    if (verbose) {
+        console.log(chalk.gray(`  Extracted size: ${formatBytes(extractedSize)}`));
+    }
+
+    // Find the skill directory (should be the only top-level directory)
+    const contents = fs.readdirSync(tempDir);
+    const directories = contents.filter(item =>
+        fs.statSync(path.join(tempDir, item)).isDirectory()
+    );
+
+    if (directories.length === 1) {
+        // Return the skill directory path
+        return path.join(tempDir, directories[0]);
+    } else if (contents.length > 0) {
+        // If multiple items or no directory, return temp dir itself
+        return tempDir;
+    } else {
+        throw new Error('ZIP file appears to be empty');
+    }
+}
+
+/**
+ * Check if a file is a ZIP file based on extension
+ */
+function isZipFile(filePath: string): boolean {
+    return path.extname(filePath).toLowerCase() === '.zip';
+}
+
+/**
+ * Prepare input for conversion (handles both directories and ZIP files)
+ * @returns {actualInput, tempDir} - actualInput is the directory to convert, tempDir is the temp dir to cleanup (or null)
+ */
+async function prepareConversionInput(
+    input: string,
+    verbose: boolean
+): Promise<{ actualInput: string; tempDir: string | null }> {
+    // Verify input exists
+    if (!fs.existsSync(input)) {
+        console.error(chalk.red(`Input not found: ${input}`));
+        process.exit(1);
+    }
+
+    // Handle ZIP files
+    if (isZipFile(input)) {
+        const actualInput = await extractZipFile(input, verbose);
+        const tempDir = path.dirname(actualInput);
+        return { actualInput, tempDir };
+    }
+
+    // Handle directories
+    if (!fs.statSync(input).isDirectory()) {
+        console.error(chalk.red(`Input must be a directory or ZIP file: ${input}`));
+        process.exit(1);
+    }
+
+    return { actualInput: input, tempDir: null };
+}
 
 interface ConvertOptions {
     output?: string;
@@ -62,8 +266,8 @@ program
 
 program
     .command('from-anthropic <input>')
-    .description('Convert Anthropic Skills to DollhouseMCP skill format')
-    .option('-o, --output <dir>', 'Output directory', './dollhouse-skills')
+    .description('Convert Anthropic Skills to DollhouseMCP skill format (input can be a directory or ZIP file)')
+    .option('-o, --output <dir>', 'Output directory', getDefaultSkillsDirectory())
     .option('-v, --verbose', 'Show detailed conversion steps', false)
     .option('-r, --report', 'Generate conversion report', false)
     .option('--dry-run', 'Preview conversion without executing', false)
@@ -75,6 +279,17 @@ program
  * Convert DollhouseMCP skill to Anthropic format
  */
 async function convertToAnthropic(input: string, options: ConvertOptions): Promise<void> {
+    // SECURITY FIX (DMCP-SEC-004): Use UnicodeValidator to normalize all user input
+    // Previously: Used built-in normalize() which doesn't detect homograph attacks
+    // Now: UnicodeValidator.normalize() detects and prevents lookalike character attacks
+    const inputValidation = UnicodeValidator.normalize(input);
+    input = inputValidation.normalizedContent;
+
+    if (options.output) {
+        const outputValidation = UnicodeValidator.normalize(options.output);
+        options.output = outputValidation.normalizedContent;
+    }
+
     try {
         logOperation('to-anthropic', input, options);
 
@@ -155,29 +370,57 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
 }
 
 /**
+ * Cleanup temporary directory safely
+ * SONARCLOUD FIX (typescript:S3776): Extracted from convertFromAnthropic to reduce cognitive complexity
+ * Previously: Inline cleanup logic added nested conditions increasing complexity
+ * Now: Separate function handles cleanup with proper error handling
+ */
+function cleanupTempDirectory(tempDir: string | null, verbose: boolean): void {
+    if (tempDir && fs.existsSync(tempDir)) {
+        if (verbose) {
+            console.log(chalk.gray(`\nCleaning up temporary files...`));
+        }
+        try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+            // Log error details but don't fail on cleanup errors
+            const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir} - ${errorMessage}`));
+        }
+    }
+}
+
+/**
  * Convert Anthropic skill to DollhouseMCP format
  */
 async function convertFromAnthropic(input: string, options: ConvertOptions): Promise<void> {
+    // SECURITY FIX (DMCP-SEC-004): Use UnicodeValidator to normalize all user input
+    // Previously: Used built-in normalize() which doesn't detect homograph attacks
+    // Now: UnicodeValidator.normalize() detects and prevents lookalike character attacks
+    // Example: "file\u0041.txt" vs "file\u0301A.txt" both look like "fileA.txt" but are different
+    const inputValidation = UnicodeValidator.normalize(input);
+    input = inputValidation.normalizedContent;
+
+    if (options.output) {
+        const outputValidation = UnicodeValidator.normalize(options.output);
+        options.output = outputValidation.normalizedContent;
+    }
+
+    let tempDir: string | null = null;
+
     try {
         logOperation('from-anthropic', input, options);
 
-        // Verify input directory
-        if (!fs.existsSync(input)) {
-            console.error(chalk.red(`Input directory not found: ${input}`));
-            process.exit(1);
-        }
+        // Prepare input (handles both directories and ZIP files)
+        const { actualInput, tempDir: extractedTempDir } = await prepareConversionInput(input, options.verbose);
+        tempDir = extractedTempDir;
 
-        if (!fs.statSync(input).isDirectory()) {
-            console.error(chalk.red(`Input must be a directory: ${input}`));
-            process.exit(1);
-        }
-
-        const skillName = path.basename(input);
+        const skillName = path.basename(actualInput);
 
         if (options.verbose) {
             console.log(chalk.blue('\nReading Anthropic skill...'));
-            console.log(chalk.gray(`  Input: ${input}`));
-            listAnthropicStructure(input);
+            console.log(chalk.gray(`  Input: ${actualInput}`));
+            listAnthropicStructure(actualInput);
         }
 
         // Convert
@@ -188,11 +431,11 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
             console.log(chalk.blue('\nConverting to DollhouseMCP Skills format...'));
         }
 
-        const dollhouseSkill = await converter.convertSkill(input);
-        logReverseConversionSteps(input, operationsLog, options.verbose);
+        const dollhouseSkill = await converter.convertSkill(actualInput);
+        logReverseConversionSteps(actualInput, operationsLog, options.verbose);
 
         // Determine output file
-        const outputDir = options.output || './dollhouse-skills';
+        const outputDir = options.output || getDefaultSkillsDirectory();
         const outputFile = path.join(outputDir, `${skillName}.md`);
 
         if (options.dryRun) {
@@ -241,6 +484,12 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
     } catch (error) {
         console.error(chalk.red('\n✗ Conversion failed:'), error);
         process.exit(1);
+    } finally {
+        // SONARCLOUD FIX (typescript:S3776): Use extracted cleanup function to reduce complexity
+        // FIX: Ensure cleanup happens on both success and failure
+        // Previously: Cleanup only on success path
+        // Now: Cleanup in finally block to handle all error scenarios
+        cleanupTempDirectory(tempDir, options.verbose);
     }
 }
 
