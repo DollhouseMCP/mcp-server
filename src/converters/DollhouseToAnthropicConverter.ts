@@ -160,8 +160,11 @@ export class DollhouseToAnthropicConverter {
             fs.mkdirSync(scriptsDir, { recursive: true });
             for (const [filename, content] of Object.entries(structure['scripts/'])) {
                 fs.writeFileSync(path.join(scriptsDir, filename), content);
-                // Make scripts executable
-                fs.chmodSync(path.join(scriptsDir, filename), '755');
+                // SECURITY (SonarCloud S2612): Do NOT auto-chmod scripts executable
+                // - Scripts from DollhouseMCP are markdown code blocks, not executable files
+                // - Format transformer shouldn't make security decisions (chmod = security decision)
+                // - Principle of least privilege: user can chmod if needed
+                // - Prevents automatic execution of potentially malicious converted scripts
             }
         }
 
