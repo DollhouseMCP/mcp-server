@@ -8,6 +8,8 @@
  * - Main instructions (preserved in SKILL.md)
  */
 
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+
 export interface ExtractedSection {
     type: 'code' | 'documentation' | 'example' | 'main';
     language?: string;
@@ -23,8 +25,12 @@ export class ContentExtractor {
      * Parse DollhouseMCP markdown content and identify extractable sections
      */
     extractSections(content: string): ExtractedSection[] {
+        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
+        const unicodeResult = UnicodeValidator.normalize(content);
+        const normalizedContent = unicodeResult.normalizedContent;
+
         const sections: ExtractedSection[] = [];
-        const lines = content.split('\n');
+        const lines = normalizedContent.split('\n');
 
         let inCodeBlock = false;
         let codeBlockStart = 0;
@@ -177,7 +183,11 @@ export class ContentExtractor {
      * Extract complete documentation section (including subsections)
      */
     extractDocumentationSection(content: string, sectionTitle: string): string | null {
-        const lines = content.split('\n');
+        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
+        const unicodeResult = UnicodeValidator.normalize(content);
+        const normalizedContent = unicodeResult.normalizedContent;
+
+        const lines = normalizedContent.split('\n');
         let capturing = false;
         let sectionContent: string[] = [];
         let sectionLevel = 0;

@@ -22,6 +22,7 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type AnthropicSkillMetadata, type DollhouseMCPSkillMetadata } from './SchemaMapper.js';
 import type { AnthropicSkillStructure } from './DollhouseToAnthropicConverter.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface AnthropicSkillDirectory {
     skillMD: {
@@ -68,7 +69,8 @@ export class AnthropicToDollhouseConverter {
         if (skillData.metadata?.has('dollhouse.yaml')) {
             // Use preserved metadata for perfect roundtrip
             const preservedYAML = skillData.metadata.get('dollhouse.yaml')!;
-            enrichedMetadata = yaml.load(preservedYAML) as DollhouseMCPSkillMetadata;
+            // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
+            enrichedMetadata = yaml.load(preservedYAML, { schema: yaml.CORE_SCHEMA }) as DollhouseMCPSkillMetadata;
             // Apply any custom metadata overrides
             if (options?.customMetadata) {
                 Object.assign(enrichedMetadata, options.customMetadata);
@@ -94,8 +96,11 @@ export class AnthropicToDollhouseConverter {
         preserveSource?: boolean;
         customMetadata?: Partial<DollhouseMCPSkillMetadata>;
     }): string {
+        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
+        const unicodeResult = UnicodeValidator.normalize(structure['SKILL.md']);
+
         // Parse SKILL.md
-        const { metadata, content } = this.parseSkillMD(structure['SKILL.md']);
+        const { metadata, content } = this.parseSkillMD(unicodeResult.normalizedContent);
 
         // Convert structure to directory format
         const skillData: AnthropicSkillDirectory = {
@@ -154,7 +159,8 @@ export class AnthropicToDollhouseConverter {
         if (skillData.metadata?.has('dollhouse.yaml')) {
             // Use preserved metadata for perfect roundtrip
             const preservedYAML = skillData.metadata.get('dollhouse.yaml')!;
-            enrichedMetadata = yaml.load(preservedYAML) as DollhouseMCPSkillMetadata;
+            // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
+            enrichedMetadata = yaml.load(preservedYAML, { schema: yaml.CORE_SCHEMA }) as DollhouseMCPSkillMetadata;
             // Apply any custom metadata overrides
             if (options?.customMetadata) {
                 Object.assign(enrichedMetadata, options.customMetadata);
@@ -185,8 +191,10 @@ export class AnthropicToDollhouseConverter {
             throw new Error(`SKILL.md not found in ${skillDirPath}`);
         }
 
+        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
         const skillMDContent = fs.readFileSync(skillMDPath, 'utf-8');
-        const { metadata, content } = this.parseSkillMD(skillMDContent);
+        const unicodeResult = UnicodeValidator.normalize(skillMDContent);
+        const { metadata, content } = this.parseSkillMD(unicodeResult.normalizedContent);
 
         const skillData: AnthropicSkillDirectory = {
             skillMD: { metadata, content },
@@ -273,7 +281,8 @@ export class AnthropicToDollhouseConverter {
             throw new Error('No YAML frontmatter found in SKILL.md');
         }
 
-        const metadata = yaml.load(yamlMatch[1]) as AnthropicSkillMetadata;
+        // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
+        const metadata = yaml.load(yamlMatch[1], { schema: yaml.CORE_SCHEMA }) as AnthropicSkillMetadata;
         const content = yamlMatch[2].trim();
 
         return { metadata, content };

@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type DollhouseMCPSkillMetadata, type AnthropicSkillMetadata } from './SchemaMapper.js';
 import { ContentExtractor, type ExtractedSection } from './ContentExtractor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface AnthropicSkillStructure {
     'SKILL.md': string;
@@ -50,8 +51,12 @@ export class DollhouseToAnthropicConverter {
         includelicense?: boolean;
         preserveComments?: boolean;
     }): Promise<AnthropicSkillStructure> {
+        // FIX (DMCP-SEC-004): Normalize Unicode content to prevent bypass attacks
+        const unicodeResult = UnicodeValidator.normalize(skillContent);
+        const normalizedContent = unicodeResult.normalizedContent;
+
         // Step 1: Extract YAML frontmatter
-        const { metadata, bodyContent } = this.extractYAMLFrontmatter(skillContent);
+        const { metadata, bodyContent } = this.extractYAMLFrontmatter(normalizedContent);
 
         // Step 2: Simplify YAML (keep only name + description, optionally license)
         const minimalYAML = this.schemaMapper.dollhouseToAnthropic(metadata);
@@ -211,7 +216,8 @@ export class DollhouseToAnthropicConverter {
             throw new Error('No YAML frontmatter found');
         }
 
-        const metadata = yaml.load(yamlMatch[1]) as DollhouseMCPSkillMetadata;
+        // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
+        const metadata = yaml.load(yamlMatch[1], { schema: yaml.CORE_SCHEMA }) as DollhouseMCPSkillMetadata;
         const bodyContent = yamlMatch[2];
 
         return { metadata, bodyContent };
