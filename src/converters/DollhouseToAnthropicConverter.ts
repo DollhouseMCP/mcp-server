@@ -15,8 +15,8 @@
  * - Input skills should already be validated (they're from DollhouseMCP system)
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type DollhouseMCPSkillMetadata, type AnthropicSkillMetadata } from './SchemaMapper.js';
 import { ContentExtractor, type ExtractedSection } from './ContentExtractor.js';
@@ -221,7 +221,7 @@ export class DollhouseToAnthropicConverter {
         metadata: DollhouseMCPSkillMetadata;
         bodyContent: string;
     } {
-        const yamlMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+        const yamlMatch = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content);
 
         if (!yamlMatch) {
             throw new Error('No YAML frontmatter found');
@@ -377,8 +377,8 @@ export class DollhouseToAnthropicConverter {
     private slugify(title: string): string {
         return title
             .toLowerCase()
-            .replace(/[^a-z0-9\s-]/g, '')
-            .replace(/\s+/g, '-');
+            .replaceAll(/[^a-z0-9\s-]/g, '')
+            .replaceAll(/\s+/g, '-');
     }
 
     /**

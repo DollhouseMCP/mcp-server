@@ -25,8 +25,8 @@
  * - Converted skills must pass DollhouseMCP security checks before activation
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type AnthropicSkillMetadata, type DollhouseMCPSkillMetadata } from './SchemaMapper.js';
 import type { AnthropicSkillStructure } from './DollhouseToAnthropicConverter.js';
@@ -360,7 +360,7 @@ export class AnthropicToDollhouseConverter {
      * Parse SKILL.md and extract metadata and content
      */
     private parseSkillMD(skillMDContent: string): { metadata: AnthropicSkillMetadata; content: string } {
-        const yamlMatch = skillMDContent.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+        const yamlMatch = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(skillMDContent);
 
         if (!yamlMatch) {
             throw new Error('No YAML frontmatter found in SKILL.md');
@@ -416,10 +416,7 @@ export class AnthropicToDollhouseConverter {
             sections.push('\n## Scripts\n');
             for (const [filename, { content, language }] of skillData.scripts) {
                 const title = this.filenameToTitle(filename);
-                sections.push(`### ${title}\n`);
-                sections.push('```' + language);
-                sections.push(content);
-                sections.push('```\n');
+                sections.push(`### ${title}\n`, '```' + language, content, '```\n');
             }
         }
 
@@ -434,8 +431,7 @@ export class AnthropicToDollhouseConverter {
         if (skillData.examples.size > 0) {
             sections.push('\n## Examples\n');
             for (const [, content] of skillData.examples) {
-                sections.push(content);
-                sections.push('\n');
+                sections.push(content, '\n');
             }
         }
 
@@ -443,8 +439,7 @@ export class AnthropicToDollhouseConverter {
         if (skillData.themes.size > 0) {
             sections.push('\n## Templates\n');
             for (const [, content] of skillData.themes) {
-                sections.push(content);
-                sections.push('\n');
+                sections.push(content, '\n');
             }
         }
 
@@ -512,7 +507,7 @@ export class AnthropicToDollhouseConverter {
 
         // Convert hyphens/underscores to spaces and capitalize
         return nameWithoutExt
-            .replace(/[-_]/g, ' ')
+            .replaceAll(/[-_]/g, ' ')
             .split(' ')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
             .join(' ');

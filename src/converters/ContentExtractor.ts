@@ -93,16 +93,16 @@ export class ContentExtractor {
         },
         sections: ExtractedSection[]
     ): void {
-        if (!state.inCodeBlock) {
+        if (state.inCodeBlock) {
+            // End of code block
+            state.inCodeBlock = false;
+            this.addCodeBlockIfExtractable(lineIndex, state, sections);
+        } else {
             // Start of code block
             state.inCodeBlock = true;
             state.codeBlockStart = lineIndex;
             state.codeBlockLanguage = line.substring(3).trim();
             state.codeBlockContent = [];
-        } else {
-            // End of code block
-            state.inCodeBlock = false;
-            this.addCodeBlockIfExtractable(lineIndex, state, sections);
         }
     }
 
@@ -156,8 +156,7 @@ export class ContentExtractor {
 
         // Check if this section should be extracted
         // (Currently just tracking for context - full extraction logic not implemented)
-        const shouldExtract = this.shouldExtractSection(state.currentSection);
-        // shouldExtract result currently unused - future enhancement for section extraction
+        // Future enhancement: use shouldExtractSection result for section extraction
     }
 
     /**
@@ -203,11 +202,11 @@ export class ContentExtractor {
 
         // Common patterns: "# Pre-execution checks", "# Install server", etc.
         if (firstLine.startsWith('#')) {
-            const titleMatch = firstLine.match(/^#\s*(.+)/);
+            const titleMatch = /^#\s*(.+)/.exec(firstLine);
             if (titleMatch) {
                 const title = titleMatch[1].toLowerCase()
-                    .replace(/[^a-z0-9\s-]/g, '')
-                    .replace(/\s+/g, '-');
+                    .replaceAll(/[^a-z0-9\s-]/g, '')
+                    .replaceAll(/\s+/g, '-');
                 return `${title}.${this.getExtension(language)}`;
             }
         }
@@ -215,8 +214,8 @@ export class ContentExtractor {
         // Use section name
         if (section) {
             const sectionSlug = section.toLowerCase()
-                .replace(/[^a-z0-9\s-]/g, '')
-                .replace(/\s+/g, '-');
+                .replaceAll(/[^a-z0-9\s-]/g, '')
+                .replaceAll(/\s+/g, '-');
             return `${sectionSlug}.${this.getExtension(language)}`;
         }
 
@@ -267,7 +266,7 @@ export class ContentExtractor {
 
         for (const line of lines) {
             if (line.startsWith('##')) {
-                const level = line.match(/^#+/)?.[0].length || 0;
+                const level = /^#+/.exec(line)?.[0].length || 0;
                 const title = line.substring(level).trim();
 
                 if (!capturing && title.toLowerCase().includes(sectionTitle.toLowerCase())) {

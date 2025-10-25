@@ -15,8 +15,8 @@
  *   --no-backup             Don't create backup files
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import {
@@ -494,14 +494,10 @@ function generateReport(data: ConversionReport): string {
     ];
 
     if (data.filesCreated.length > 0) {
-        lines.push('## Files Created', '');
-        lines.push(...data.filesCreated.map(file => `- \`${file}\``));
-        lines.push('');
+        lines.push('## Files Created', '', ...data.filesCreated.map(file => `- \`${file}\``), '');
     }
 
-    lines.push('## Operations Performed', '');
-    lines.push(...data.operationsPerformed.map(operation => `- ${operation}`));
-    lines.push('');
+    lines.push('## Operations Performed', '', ...data.operationsPerformed.map(operation => `- ${operation}`), '');
 
     if (data.error) {
         lines.push('## Error', '', '```', data.error, '```', '');
