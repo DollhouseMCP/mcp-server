@@ -42,6 +42,7 @@ import {
     type AnthropicSkillStructure
 } from '../converters/index.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const program = new Command();
 
@@ -57,9 +58,15 @@ const MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
 
 /**
  * Get the default DollhouseMCP portfolio skills directory
+ * SECURITY FIX (DMCP-SEC-004): Normalize HOME environment variable to prevent Unicode attacks
+ * Previously: Used process.env.HOME directly without normalization
+ * Now: Validate and normalize all path components including environment variables
  */
 function getDefaultSkillsDirectory(): string {
-    return path.join(process.env.HOME || '', '.dollhouse', 'portfolio', 'skills');
+    const homeDir = process.env.HOME || '';
+    // Normalize HOME environment variable to prevent homograph attacks via lookalike characters
+    const normalizedHome = homeDir ? UnicodeValidator.normalize(homeDir).normalizedContent : '';
+    return path.join(normalizedHome, '.dollhouse', 'portfolio', 'skills');
 }
 
 /**
@@ -272,11 +279,15 @@ program
  * Convert DollhouseMCP skill to Anthropic format
  */
 async function convertToAnthropic(input: string, options: ConvertOptions): Promise<void> {
-    // SECURITY FIX: Normalize Unicode input to prevent path traversal attacks via lookalike characters
-    // SonarCloud: Unicode normalization prevents attacks using visually similar characters
-    input = input.normalize('NFC');
+    // SECURITY FIX (DMCP-SEC-004): Use UnicodeValidator to normalize all user input
+    // Previously: Used built-in normalize() which doesn't detect homograph attacks
+    // Now: UnicodeValidator.normalize() detects and prevents lookalike character attacks
+    const inputValidation = UnicodeValidator.normalize(input);
+    input = inputValidation.normalizedContent;
+
     if (options.output) {
-        options.output = options.output.normalize('NFC');
+        const outputValidation = UnicodeValidator.normalize(options.output);
+        options.output = outputValidation.normalizedContent;
     }
 
     try {
@@ -359,15 +370,40 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
 }
 
 /**
+ * Cleanup temporary directory safely
+ * SONARCLOUD FIX (typescript:S3776): Extracted from convertFromAnthropic to reduce cognitive complexity
+ * Previously: Inline cleanup logic added nested conditions increasing complexity
+ * Now: Separate function handles cleanup with proper error handling
+ */
+function cleanupTempDirectory(tempDir: string | null, verbose: boolean): void {
+    if (tempDir && fs.existsSync(tempDir)) {
+        if (verbose) {
+            console.log(chalk.gray(`\nCleaning up temporary files...`));
+        }
+        try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+            // Log error details but don't fail on cleanup errors
+            const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir} - ${errorMessage}`));
+        }
+    }
+}
+
+/**
  * Convert Anthropic skill to DollhouseMCP format
  */
 async function convertFromAnthropic(input: string, options: ConvertOptions): Promise<void> {
-    // SECURITY FIX: Normalize Unicode input to prevent path traversal attacks via lookalike characters
-    // SonarCloud: Unicode normalization prevents attacks using visually similar characters
+    // SECURITY FIX (DMCP-SEC-004): Use UnicodeValidator to normalize all user input
+    // Previously: Used built-in normalize() which doesn't detect homograph attacks
+    // Now: UnicodeValidator.normalize() detects and prevents lookalike character attacks
     // Example: "file\u0041.txt" vs "file\u0301A.txt" both look like "fileA.txt" but are different
-    input = input.normalize('NFC');
+    const inputValidation = UnicodeValidator.normalize(input);
+    input = inputValidation.normalizedContent;
+
     if (options.output) {
-        options.output = options.output.normalize('NFC');
+        const outputValidation = UnicodeValidator.normalize(options.output);
+        options.output = outputValidation.normalizedContent;
     }
 
     let tempDir: string | null = null;
@@ -449,20 +485,11 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
         console.error(chalk.red('\n✗ Conversion failed:'), error);
         process.exit(1);
     } finally {
+        // SONARCLOUD FIX (typescript:S3776): Use extracted cleanup function to reduce complexity
         // FIX: Ensure cleanup happens on both success and failure
         // Previously: Cleanup only on success path
         // Now: Cleanup in finally block to handle all error scenarios
-        if (tempDir && fs.existsSync(tempDir)) {
-            if (options.verbose) {
-                console.log(chalk.gray(`\nCleaning up temporary files...`));
-            }
-            try {
-                fs.rmSync(tempDir, { recursive: true, force: true });
-            } catch (cleanupError) {
-                // Log but don't fail on cleanup errors
-                console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir}`));
-            }
-        }
+        cleanupTempDirectory(tempDir, options.verbose);
     }
 }
 

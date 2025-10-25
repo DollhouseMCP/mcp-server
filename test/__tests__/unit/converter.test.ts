@@ -22,6 +22,31 @@ import {
     ContentExtractor
 } from '../../../src/converters/index.js';
 
+/**
+ * Helper to create a ZIP file from a directory
+ * SONARCLOUD FIX (typescript:S7721, typescript:S2004): Moved to outer scope to avoid nested async functions
+ * Previously: Nested inside describe block causing performance issues and excessive nesting
+ * Now: Top-level function with proper error handling and no void operator
+ */
+async function createZip(sourceDir: string, outputPath: string): Promise<void> {
+    const output = fs.createWriteStream(outputPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    // SONARCLOUD FIX (typescript:S3735): Return promise directly instead of using void operator
+    // Previously: void archive.finalize() caused confusing code
+    // Now: Properly await finalize() and handle errors
+    return new Promise<void>((resolve, reject) => {
+        output.on('close', () => resolve());
+        archive.on('error', reject);
+
+        archive.pipe(output);
+        archive.directory(sourceDir, path.basename(sourceDir));
+
+        // Archive finalize returns a promise, so we await it properly
+        archive.finalize().catch(reject);
+    });
+}
+
 describe('Converter Integration Tests', () => {
     let dollhouseToAnthropic: DollhouseToAnthropicConverter;
     let anthropicToDollhouse: AnthropicToDollhouseConverter;
@@ -419,23 +444,6 @@ console.log("Script 3");
         });
 
         /**
-         * Helper to create a ZIP file from a directory
-         */
-        async function createZip(sourceDir: string, outputPath: string): Promise<void> {
-            return new Promise((resolve, reject) => {
-                const output = fs.createWriteStream(outputPath);
-                const archive = archiver('zip', { zlib: { level: 9 } });
-
-                output.on('close', () => resolve());
-                archive.on('error', (err: Error) => reject(err));
-
-                archive.pipe(output);
-                archive.directory(sourceDir, path.basename(sourceDir));
-                void archive.finalize();
-            });
-        }
-
-        /**
          * Helper to create a test skill directory
          */
         function createTestSkillDirectory(dirName: string): string {
@@ -527,7 +535,9 @@ Follow these steps:
 
             await createZip(skillDir, zipPath);
 
-            const zipStats = fs.statSync(zipPath);
+            // SONARCLOUD FIX (typescript:S1854): Removed useless zipStats assignment
+            // Previously: zipStats was assigned but never used
+            // Now: Direct calculation of uncompressed size without unused variable
 
             // Verify that while the ZIP may be small, the extracted content would be huge
             // The CLI code would detect this and reject it
@@ -610,7 +620,9 @@ Follow these steps:
 
             await createZip(skillDir, zipPath);
 
-            const stats = fs.statSync(zipPath);
+            // SONARCLOUD FIX (typescript:S1854): Removed useless stats assignment
+            // Previously: stats was assigned but never used
+            // Now: Direct file existence check without unused variable
 
             // If compressed size is > 10MB, progress indicator would be shown
             // Note: Compression may make this smaller, so we just verify the file was created
