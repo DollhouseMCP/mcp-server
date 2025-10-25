@@ -272,6 +272,13 @@ program
  * Convert DollhouseMCP skill to Anthropic format
  */
 async function convertToAnthropic(input: string, options: ConvertOptions): Promise<void> {
+    // SECURITY FIX: Normalize Unicode input to prevent path traversal attacks via lookalike characters
+    // SonarCloud: Unicode normalization prevents attacks using visually similar characters
+    input = input.normalize('NFC');
+    if (options.output) {
+        options.output = options.output.normalize('NFC');
+    }
+
     try {
         logOperation('to-anthropic', input, options);
 
@@ -355,6 +362,14 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
  * Convert Anthropic skill to DollhouseMCP format
  */
 async function convertFromAnthropic(input: string, options: ConvertOptions): Promise<void> {
+    // SECURITY FIX: Normalize Unicode input to prevent path traversal attacks via lookalike characters
+    // SonarCloud: Unicode normalization prevents attacks using visually similar characters
+    // Example: "file\u0041.txt" vs "file\u0301A.txt" both look like "fileA.txt" but are different
+    input = input.normalize('NFC');
+    if (options.output) {
+        options.output = options.output.normalize('NFC');
+    }
+
     let tempDir: string | null = null;
 
     try {
