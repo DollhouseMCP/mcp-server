@@ -311,6 +311,14 @@ function logConversionSteps(
             console.log(chalk.gray(`  ✓ Extracted ${count} template(s)`));
         }
     }
+
+    // Log metadata preservation
+    if (structure['metadata/']) {
+        operationsLog.push('Preserved full DollhouseMCP metadata to metadata/dollhouse.yaml');
+        if (verbose) {
+            console.log(chalk.gray('  ✓ Preserved metadata for perfect roundtrip'));
+        }
+    }
 }
 
 /**
@@ -355,13 +363,20 @@ function logReverseConversionSteps(
             console.log(chalk.gray(`  ✓ Combined ${count} template(s)`));
         }
     }
+
+    if (fs.existsSync(path.join(inputDir, 'metadata'))) {
+        operationsLog.push('Restored original DollhouseMCP metadata from metadata/dollhouse.yaml');
+        if (verbose) {
+            console.log(chalk.gray('  ✓ Restored original metadata (perfect roundtrip)'));
+        }
+    }
 }
 
 /**
  * List Anthropic skill directory structure
  */
 function listAnthropicStructure(inputDir: string): void {
-    const subdirs = ['scripts', 'reference', 'examples', 'themes'];
+    const subdirs = ['scripts', 'reference', 'examples', 'themes', 'metadata'];
     for (const subdir of subdirs) {
         const dirPath = path.join(inputDir, subdir);
         if (fs.existsSync(dirPath)) {
@@ -417,6 +432,12 @@ function listFilesToCreate(structure: AnthropicSkillStructure, outputDir: string
         }
     }
 
+    if (structure['metadata/']) {
+        for (const filename of Object.keys(structure['metadata/'])) {
+            console.log(chalk.gray(`    - metadata/${filename}`));
+        }
+    }
+
     if (structure['LICENSE.txt']) {
         console.log(chalk.gray(`    - LICENSE.txt`));
     }
@@ -449,6 +470,12 @@ function getCreatedFiles(structure: AnthropicSkillStructure, outputDir: string):
     if (structure['themes/']) {
         for (const filename of Object.keys(structure['themes/'])) {
             files.push(path.join(outputDir, 'themes', filename));
+        }
+    }
+
+    if (structure['metadata/']) {
+        for (const filename of Object.keys(structure['metadata/'])) {
+            files.push(path.join(outputDir, 'metadata', filename));
         }
     }
 

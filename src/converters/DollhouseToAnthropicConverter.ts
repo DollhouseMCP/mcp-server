@@ -20,6 +20,7 @@ export interface AnthropicSkillStructure {
     'reference/'?: Record<string, string>;
     'themes/'?: Record<string, string>;
     'examples/'?: Record<string, string>;
+    'metadata/'?: Record<string, string>;
     'LICENSE.txt'?: string;
 }
 
@@ -124,6 +125,11 @@ export class DollhouseToAnthropicConverter {
             result['LICENSE.txt'] = this.createLicenseFile(metadata.license, metadata.author);
         }
 
+        // Always preserve full DollhouseMCP metadata for perfect roundtrip
+        result['metadata/'] = {
+            'dollhouse.yaml': yaml.dump(metadata)
+        };
+
         return result;
     }
 
@@ -174,6 +180,15 @@ export class DollhouseToAnthropicConverter {
             fs.mkdirSync(examplesDir, { recursive: true });
             for (const [filename, content] of Object.entries(structure['examples/'])) {
                 fs.writeFileSync(path.join(examplesDir, filename), content);
+            }
+        }
+
+        // Write metadata
+        if (structure['metadata/']) {
+            const metadataDir = path.join(outputDir, 'metadata');
+            fs.mkdirSync(metadataDir, { recursive: true });
+            for (const [filename, content] of Object.entries(structure['metadata/'])) {
+                fs.writeFileSync(path.join(metadataDir, filename), content);
             }
         }
 

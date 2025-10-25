@@ -32,6 +32,7 @@ export interface AnthropicSkillDirectory {
     reference: Map<string, string>;
     examples: Map<string, string>;
     themes: Map<string, string>;
+    metadata?: Map<string, string>;
     license?: string;
 }
 
@@ -62,8 +63,20 @@ export class AnthropicToDollhouseConverter {
         // Step 1: Read the Anthropic skill directory structure
         const skillData = await this.readAnthropicStructure(skillDirPath);
 
-        // Step 2: Enrich YAML with DollhouseMCP fields
-        const enrichedMetadata = this.enrichMetadata(skillData.skillMD.metadata, options);
+        // Step 2: Check for preserved DollhouseMCP metadata, or enrich if not found
+        let enrichedMetadata: DollhouseMCPSkillMetadata;
+        if (skillData.metadata?.has('dollhouse.yaml')) {
+            // Use preserved metadata for perfect roundtrip
+            const preservedYAML = skillData.metadata.get('dollhouse.yaml')!;
+            enrichedMetadata = yaml.load(preservedYAML) as DollhouseMCPSkillMetadata;
+            // Apply any custom metadata overrides
+            if (options?.customMetadata) {
+                Object.assign(enrichedMetadata, options.customMetadata);
+            }
+        } else {
+            // Fall back to enrichment if no preserved metadata
+            enrichedMetadata = this.enrichMetadata(skillData.skillMD.metadata, options);
+        }
 
         // Step 3-6: Combine all components
         const combinedContent = this.combineComponents(skillData);
@@ -123,13 +136,33 @@ export class AnthropicToDollhouseConverter {
             }
         }
 
+        // Process metadata
+        if (structure['metadata/']) {
+            skillData.metadata = new Map();
+            for (const [filename, content] of Object.entries(structure['metadata/'])) {
+                skillData.metadata.set(filename, content);
+            }
+        }
+
         // License
         if (structure['LICENSE.txt']) {
             skillData.license = structure['LICENSE.txt'];
         }
 
-        // Enrich metadata
-        const enrichedMetadata = this.enrichMetadata(metadata, options);
+        // Check for preserved DollhouseMCP metadata
+        let enrichedMetadata: DollhouseMCPSkillMetadata;
+        if (skillData.metadata?.has('dollhouse.yaml')) {
+            // Use preserved metadata for perfect roundtrip
+            const preservedYAML = skillData.metadata.get('dollhouse.yaml')!;
+            enrichedMetadata = yaml.load(preservedYAML) as DollhouseMCPSkillMetadata;
+            // Apply any custom metadata overrides
+            if (options?.customMetadata) {
+                Object.assign(enrichedMetadata, options.customMetadata);
+            }
+        } else {
+            // Fall back to enrichment if no preserved metadata
+            enrichedMetadata = this.enrichMetadata(metadata, options);
+        }
 
         // Combine components
         const combinedContent = this.combineComponents(skillData);
@@ -206,6 +239,18 @@ export class AnthropicToDollhouseConverter {
                 const filePath = path.join(themesDir, filename);
                 const content = fs.readFileSync(filePath, 'utf-8');
                 skillData.themes.set(filename, content);
+            }
+        }
+
+        // Read metadata/
+        const metadataDir = path.join(skillDirPath, 'metadata');
+        if (fs.existsSync(metadataDir)) {
+            skillData.metadata = new Map();
+            const metadataFiles = fs.readdirSync(metadataDir);
+            for (const filename of metadataFiles) {
+                const filePath = path.join(metadataDir, filename);
+                const content = fs.readFileSync(filePath, 'utf-8');
+                skillData.metadata.set(filename, content);
             }
         }
 
