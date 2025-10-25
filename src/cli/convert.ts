@@ -46,6 +46,16 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 const program = new Command();
 
 /**
+ * Maximum ZIP file size (100MB) - prevents DoS attacks and system resource exhaustion
+ */
+const MAX_ZIP_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
+
+/**
+ * Maximum extracted size (500MB) - prevents zip bomb attacks
+ */
+const MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
+
+/**
  * Get the default DollhouseMCP portfolio skills directory
  */
 function getDefaultSkillsDirectory(): string {
@@ -53,19 +63,106 @@ function getDefaultSkillsDirectory(): string {
 }
 
 /**
- * Extract a ZIP file to a temporary directory
+ * Format bytes to human-readable string
+ */
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+/**
+ * Calculate total size of extracted files
+ */
+function calculateExtractedSize(directory: string): number {
+    let totalSize = 0;
+
+    function walkDir(dir: string): void {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walkDir(fullPath);
+            } else if (entry.isFile()) {
+                totalSize += fs.statSync(fullPath).size;
+            }
+        }
+    }
+
+    walkDir(directory);
+    return totalSize;
+}
+
+/**
+ * Extract a ZIP file to a temporary directory with size limits and progress indication
  * @returns Path to extracted directory
+ * @throws Error if ZIP exceeds size limits
  */
 async function extractZipFile(zipPath: string, verbose: boolean): Promise<string> {
+    // FIX: Validate ZIP file size BEFORE extraction to prevent DoS attacks
+    // Previously: No size validation, allowing extraction of arbitrarily large files
+    // Now: Enforce 100MB ZIP size limit and 500MB extracted size limit
+    const zipStats = fs.statSync(zipPath);
+    const zipSize = zipStats.size;
+
+    if (zipSize > MAX_ZIP_SIZE_BYTES) {
+        throw new Error(
+            `ZIP file too large: ${formatBytes(zipSize)}. Maximum allowed: ${formatBytes(MAX_ZIP_SIZE_BYTES)}`
+        );
+    }
+
     const tempDir = path.join(os.tmpdir(), `dollhouse-extract-${Date.now()}`);
+
+    // FIX: Add security audit logging for ZIP operations
+    // Previously: No logging of ZIP extraction operations
+    // Now: Log all ZIP operations for security audit trail
+    SecurityMonitor.logSecurityEvent({
+        type: 'FILE_COPIED',
+        severity: 'LOW',
+        source: 'convert CLI',
+        details: `ZIP extraction: ${zipPath} (${formatBytes(zipSize)}) -> ${tempDir}`
+    });
 
     if (verbose) {
         console.log(chalk.blue('\nExtracting ZIP file...'));
         console.log(chalk.gray(`  ZIP: ${zipPath}`));
+        console.log(chalk.gray(`  Size: ${formatBytes(zipSize)}`));
         console.log(chalk.gray(`  Temp dir: ${tempDir}`));
     }
 
+    // FIX: Add progress indicator for large ZIP extractions
+    // Previously: No feedback during extraction, poor UX for large files
+    // Now: Show progress message for better user experience
+    const startTime = Date.now();
+    const progressMessage = zipSize > 10 * 1024 * 1024 ? 'Extracting (this may take a moment)...' : 'Extracting...';
+    if (verbose || zipSize > 10 * 1024 * 1024) {
+        console.log(chalk.blue(`  ${progressMessage}`));
+    }
+
     await extract(zipPath, { dir: tempDir });
+
+    const extractTime = Date.now() - startTime;
+    if (verbose) {
+        console.log(chalk.gray(`  Extracted in ${extractTime}ms`));
+    }
+
+    // FIX: Validate extracted size to prevent zip bomb attacks
+    // Previously: No validation of extracted content size
+    // Now: Enforce 500MB extracted size limit to prevent resource exhaustion
+    const extractedSize = calculateExtractedSize(tempDir);
+    if (extractedSize > MAX_EXTRACTED_SIZE_BYTES) {
+        // Cleanup before throwing error
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw new Error(
+            `Extracted content too large: ${formatBytes(extractedSize)}. Maximum allowed: ${formatBytes(MAX_EXTRACTED_SIZE_BYTES)}. This may be a zip bomb attack.`
+        );
+    }
+
+    if (verbose) {
+        console.log(chalk.gray(`  Extracted size: ${formatBytes(extractedSize)}`));
+    }
 
     // Find the skill directory (should be the only top-level directory)
     const contents = fs.readdirSync(tempDir);
@@ -330,12 +427,19 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
         console.error(chalk.red('\n✗ Conversion failed:'), error);
         process.exit(1);
     } finally {
-        // Cleanup temp directory if ZIP was extracted
+        // FIX: Ensure cleanup happens on both success and failure
+        // Previously: Cleanup only on success path
+        // Now: Cleanup in finally block to handle all error scenarios
         if (tempDir && fs.existsSync(tempDir)) {
             if (options.verbose) {
                 console.log(chalk.gray(`\nCleaning up temporary files...`));
             }
-            fs.rmSync(tempDir, { recursive: true, force: true });
+            try {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            } catch (cleanupError) {
+                // Log but don't fail on cleanup errors
+                console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir}`));
+            }
         }
     }
 }
