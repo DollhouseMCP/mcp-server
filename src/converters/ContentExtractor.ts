@@ -27,62 +27,137 @@ export interface ExtractedSection {
 export class ContentExtractor {
     /**
      * Parse DollhouseMCP markdown content and identify extractable sections
+     * REFACTORED: Simplified by extracting code block and section handling logic
      */
     extractSections(content: string): ExtractedSection[] {
         // NOTE: No Unicode normalization - preserves content fidelity for conversion
         const sections: ExtractedSection[] = [];
         const lines = content.split('\n');
 
-        let inCodeBlock = false;
-        let codeBlockStart = 0;
-        let codeBlockLanguage = '';
-        let codeBlockContent: string[] = [];
-        let currentSection = '';
-        let sectionStart = 0;
+        const state = {
+            inCodeBlock: false,
+            codeBlockStart: 0,
+            codeBlockLanguage: '',
+            codeBlockContent: [] as string[],
+            currentSection: '',
+            sectionStart: 0
+        };
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-
-            // Detect code block boundaries
-            if (line.startsWith('```')) {
-                if (!inCodeBlock) {
-                    // Start of code block
-                    inCodeBlock = true;
-                    codeBlockStart = i;
-                    codeBlockLanguage = line.substring(3).trim();
-                    codeBlockContent = [];
-                } else {
-                    // End of code block
-                    inCodeBlock = false;
-
-                    // Determine if this should be extracted
-                    if (this.shouldExtractCodeBlock(codeBlockLanguage, codeBlockContent)) {
-                        sections.push({
-                            type: 'code',
-                            language: codeBlockLanguage,
-                            title: this.inferCodeBlockTitle(codeBlockContent, currentSection),
-                            content: codeBlockContent.join('\n'),
-                            startLine: codeBlockStart,
-                            endLine: i,
-                            filename: this.generateScriptFilename(codeBlockLanguage, codeBlockContent, currentSection)
-                        });
-                    }
-                }
-            } else if (inCodeBlock) {
-                codeBlockContent.push(line);
-            } else if (line.startsWith('##')) {
-                // Section header
-                currentSection = line.substring(2).trim();
-                sectionStart = i;
-
-                // Check if this section should be extracted
-                if (this.shouldExtractSection(currentSection)) {
-                    // Will accumulate until next section
-                }
-            }
+            this.processLine(line, i, state, sections);
         }
 
         return sections;
+    }
+
+    /**
+     * Process a single line and update state
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private processLine(
+        line: string,
+        lineIndex: number,
+        state: {
+            inCodeBlock: boolean;
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+            sectionStart: number;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (line.startsWith('```')) {
+            this.handleCodeBlockBoundary(line, lineIndex, state, sections);
+        } else if (state.inCodeBlock) {
+            state.codeBlockContent.push(line);
+        } else if (line.startsWith('##')) {
+            this.handleSectionHeader(line, lineIndex, state);
+        }
+    }
+
+    /**
+     * Handle code block start/end boundary
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private handleCodeBlockBoundary(
+        line: string,
+        lineIndex: number,
+        state: {
+            inCodeBlock: boolean;
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (!state.inCodeBlock) {
+            // Start of code block
+            state.inCodeBlock = true;
+            state.codeBlockStart = lineIndex;
+            state.codeBlockLanguage = line.substring(3).trim();
+            state.codeBlockContent = [];
+        } else {
+            // End of code block
+            state.inCodeBlock = false;
+            this.addCodeBlockIfExtractable(lineIndex, state, sections);
+        }
+    }
+
+    /**
+     * Add code block to sections if it should be extracted
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private addCodeBlockIfExtractable(
+        endLineIndex: number,
+        state: {
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (!this.shouldExtractCodeBlock(state.codeBlockLanguage, state.codeBlockContent)) {
+            return;
+        }
+
+        sections.push({
+            type: 'code',
+            language: state.codeBlockLanguage,
+            title: this.inferCodeBlockTitle(state.codeBlockContent, state.currentSection),
+            content: state.codeBlockContent.join('\n'),
+            startLine: state.codeBlockStart,
+            endLine: endLineIndex,
+            filename: this.generateScriptFilename(
+                state.codeBlockLanguage,
+                state.codeBlockContent,
+                state.currentSection
+            )
+        });
+    }
+
+    /**
+     * Handle section header
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private handleSectionHeader(
+        line: string,
+        lineIndex: number,
+        state: {
+            currentSection: string;
+            sectionStart: number;
+        }
+    ): void {
+        state.currentSection = line.substring(2).trim();
+        state.sectionStart = lineIndex;
+
+        // Check if this section should be extracted
+        // (Currently just tracking for context - full extraction logic not implemented)
+        const shouldExtract = this.shouldExtractSection(state.currentSection);
+        // shouldExtract result currently unused - future enhancement for section extraction
     }
 
     /**
@@ -156,7 +231,7 @@ export class ContentExtractor {
 
         // Check for comment at start
         if (firstLine.startsWith('#') || firstLine.startsWith('//')) {
-            return firstLine.replace(/^[#\/\s]+/, '').trim();
+            return firstLine.replace(/^[#/\s]+/, '').trim();
         }
 
         return section || 'Script';

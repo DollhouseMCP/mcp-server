@@ -45,7 +45,7 @@ export interface AnthropicSkillDirectory {
 }
 
 export class AnthropicToDollhouseConverter {
-    private schemaMapper: SchemaMapper;
+    private readonly schemaMapper: SchemaMapper;
 
     constructor() {
         this.schemaMapper = new SchemaMapper();
@@ -110,98 +110,25 @@ export class AnthropicToDollhouseConverter {
         const { metadata, content } = this.parseSkillMD(structure['SKILL.md']);
 
         // Convert structure to directory format
-        const skillData: AnthropicSkillDirectory = {
-            skillMD: { metadata, content },
-            scripts: new Map(),
-            reference: new Map(),
-            examples: new Map(),
-            themes: new Map()
-        };
+        const skillData = this.buildSkillDataFromStructure(structure, metadata, content);
 
-        // Process scripts
-        if (structure['scripts/']) {
-            for (const [filename, content] of Object.entries(structure['scripts/'])) {
-                const language = this.inferLanguageFromFilename(filename);
-                const cleanContent = this.removeShebangAndHeaders(content);
-                skillData.scripts.set(filename, { content: cleanContent, language });
-            }
-        }
+        // Get enriched metadata (either preserved or generated)
+        const enrichedMetadata = this.getEnrichedMetadata(skillData, metadata, options);
 
-        // Process reference docs
-        if (structure['reference/']) {
-            for (const [filename, content] of Object.entries(structure['reference/'])) {
-                skillData.reference.set(filename, content);
-            }
-        }
-
-        // Process examples
-        if (structure['examples/']) {
-            for (const [filename, content] of Object.entries(structure['examples/'])) {
-                skillData.examples.set(filename, content);
-            }
-        }
-
-        // Process themes
-        if (structure['themes/']) {
-            for (const [filename, content] of Object.entries(structure['themes/'])) {
-                skillData.themes.set(filename, content);
-            }
-        }
-
-        // Process metadata
-        if (structure['metadata/']) {
-            skillData.metadata = new Map();
-            for (const [filename, content] of Object.entries(structure['metadata/'])) {
-                skillData.metadata.set(filename, content);
-            }
-        }
-
-        // License
-        if (structure['LICENSE.txt']) {
-            skillData.license = structure['LICENSE.txt'];
-        }
-
-        // Check for preserved DollhouseMCP metadata
-        let enrichedMetadata: DollhouseMCPSkillMetadata;
-        if (skillData.metadata?.has('dollhouse.yaml')) {
-            // Use preserved metadata for perfect roundtrip
-            const preservedYAML = skillData.metadata.get('dollhouse.yaml')!;
-            // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
-            enrichedMetadata = yaml.load(preservedYAML, { schema: yaml.CORE_SCHEMA }) as DollhouseMCPSkillMetadata;
-            // Apply any custom metadata overrides
-            if (options?.customMetadata) {
-                Object.assign(enrichedMetadata, options.customMetadata);
-            }
-        } else {
-            // Fall back to enrichment if no preserved metadata
-            enrichedMetadata = this.enrichMetadata(metadata, options);
-        }
-
-        // Combine components
+        // Combine components and create final skill
         const combinedContent = this.combineComponents(skillData);
-
-        // Create final skill
         return this.createDollhouseSkill(enrichedMetadata, combinedContent);
     }
 
     /**
-     * Read Anthropic skill directory structure from disk
+     * Build skill data structure from Anthropic structure
+     * REFACTORED: Extracted to reduce cognitive complexity
      */
-    async readAnthropicStructure(skillDirPath: string): Promise<AnthropicSkillDirectory> {
-        if (!fs.existsSync(skillDirPath)) {
-            throw new Error(`Skill directory not found: ${skillDirPath}`);
-        }
-
-        // Read SKILL.md
-        const skillMDPath = path.join(skillDirPath, 'SKILL.md');
-        if (!fs.existsSync(skillMDPath)) {
-            throw new Error(`SKILL.md not found in ${skillDirPath}`);
-        }
-
-        // Read SKILL.md (no normalization - preserve fidelity)
-        const skillMDContent = fs.readFileSync(skillMDPath, 'utf-8');
-        const { metadata, content } = this.parseSkillMD(skillMDContent);
-
+    private buildSkillDataFromStructure(
+        structure: AnthropicSkillStructure,
+        metadata: AnthropicSkillMetadata,
+        content: string
+    ): AnthropicSkillDirectory {
         const skillData: AnthropicSkillDirectory = {
             skillMD: { metadata, content },
             scripts: new Map(),
@@ -210,71 +137,223 @@ export class AnthropicToDollhouseConverter {
             themes: new Map()
         };
 
-        // Read scripts/
+        // Process all structure components
+        this.processStructureScripts(structure, skillData);
+        this.processStructureDirectory(structure['reference/'], skillData.reference);
+        this.processStructureDirectory(structure['examples/'], skillData.examples);
+        this.processStructureDirectory(structure['themes/'], skillData.themes);
+        this.processStructureMetadata(structure, skillData);
+
+        if (structure['LICENSE.txt']) {
+            skillData.license = structure['LICENSE.txt'];
+        }
+
+        return skillData;
+    }
+
+    /**
+     * Process scripts from structure
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private processStructureScripts(structure: AnthropicSkillStructure, skillData: AnthropicSkillDirectory): void {
+        if (!structure['scripts/']) return;
+
+        for (const [filename, content] of Object.entries(structure['scripts/'])) {
+            const language = this.inferLanguageFromFilename(filename);
+            const cleanContent = this.removeShebangAndHeaders(content);
+            skillData.scripts.set(filename, { content: cleanContent, language });
+        }
+    }
+
+    /**
+     * Process generic directory structure (reference, examples, themes)
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private processStructureDirectory(
+        sourceDir: Record<string, string> | undefined,
+        targetMap: Map<string, string>
+    ): void {
+        if (!sourceDir) return;
+
+        for (const [filename, content] of Object.entries(sourceDir)) {
+            targetMap.set(filename, content);
+        }
+    }
+
+    /**
+     * Process metadata from structure
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private processStructureMetadata(structure: AnthropicSkillStructure, skillData: AnthropicSkillDirectory): void {
+        if (!structure['metadata/']) return;
+
+        skillData.metadata = new Map();
+        for (const [filename, content] of Object.entries(structure['metadata/'])) {
+            skillData.metadata.set(filename, content);
+        }
+    }
+
+    /**
+     * Get enriched metadata (preserved or generated)
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private getEnrichedMetadata(
+        skillData: AnthropicSkillDirectory,
+        metadata: AnthropicSkillMetadata,
+        options?: {
+            preserveSource?: boolean;
+            customMetadata?: Partial<DollhouseMCPSkillMetadata>;
+        }
+    ): DollhouseMCPSkillMetadata {
+        // Check for preserved DollhouseMCP metadata
+        if (skillData.metadata?.has('dollhouse.yaml')) {
+            return this.loadPreservedMetadata(skillData.metadata.get('dollhouse.yaml')!, options);
+        }
+
+        // Fall back to enrichment if no preserved metadata
+        return this.enrichMetadata(metadata, options);
+    }
+
+    /**
+     * Load preserved metadata from YAML
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private loadPreservedMetadata(
+        preservedYAML: string,
+        options?: {
+            customMetadata?: Partial<DollhouseMCPSkillMetadata>;
+        }
+    ): DollhouseMCPSkillMetadata {
+        // FIX (DMCP-SEC-005): Use CORE_SCHEMA to prevent YAML deserialization attacks
+        const enrichedMetadata = yaml.load(preservedYAML, { schema: yaml.CORE_SCHEMA }) as DollhouseMCPSkillMetadata;
+
+        // Apply any custom metadata overrides
+        if (options?.customMetadata) {
+            Object.assign(enrichedMetadata, options.customMetadata);
+        }
+
+        return enrichedMetadata;
+    }
+
+    /**
+     * Read Anthropic skill directory structure from disk
+     * REFACTORED: Simplified by extracting directory reading logic
+     */
+    async readAnthropicStructure(skillDirPath: string): Promise<AnthropicSkillDirectory> {
+        this.validateSkillDirectory(skillDirPath);
+
+        // Read and parse SKILL.md
+        const { metadata, content } = this.readSkillMD(skillDirPath);
+
+        // Initialize skill data structure
+        const skillData: AnthropicSkillDirectory = {
+            skillMD: { metadata, content },
+            scripts: new Map(),
+            reference: new Map(),
+            examples: new Map(),
+            themes: new Map()
+        };
+
+        // Read all directory components
+        this.readScriptsDirectory(skillDirPath, skillData);
+        this.readFilesDirectory(skillDirPath, 'reference', skillData.reference);
+        this.readFilesDirectory(skillDirPath, 'examples', skillData.examples);
+        this.readFilesDirectory(skillDirPath, 'themes', skillData.themes);
+        this.readMetadataDirectory(skillDirPath, skillData);
+        this.readLicenseFile(skillDirPath, skillData);
+
+        return skillData;
+    }
+
+    /**
+     * Validate skill directory exists and has SKILL.md
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private validateSkillDirectory(skillDirPath: string): void {
+        if (!fs.existsSync(skillDirPath)) {
+            throw new Error(`Skill directory not found: ${skillDirPath}`);
+        }
+
+        const skillMDPath = path.join(skillDirPath, 'SKILL.md');
+        if (!fs.existsSync(skillMDPath)) {
+            throw new Error(`SKILL.md not found in ${skillDirPath}`);
+        }
+    }
+
+    /**
+     * Read and parse SKILL.md file
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private readSkillMD(skillDirPath: string): { metadata: AnthropicSkillMetadata; content: string } {
+        const skillMDPath = path.join(skillDirPath, 'SKILL.md');
+        const skillMDContent = fs.readFileSync(skillMDPath, 'utf-8');
+        return this.parseSkillMD(skillMDContent);
+    }
+
+    /**
+     * Read scripts directory and process script files
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private readScriptsDirectory(skillDirPath: string, skillData: AnthropicSkillDirectory): void {
         const scriptsDir = path.join(skillDirPath, 'scripts');
-        if (fs.existsSync(scriptsDir)) {
-            const scriptFiles = fs.readdirSync(scriptsDir);
-            for (const filename of scriptFiles) {
-                const filePath = path.join(scriptsDir, filename);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const language = this.inferLanguageFromFilename(filename);
-                const cleanContent = this.removeShebangAndHeaders(content);
-                skillData.scripts.set(filename, { content: cleanContent, language });
-            }
-        }
+        if (!fs.existsSync(scriptsDir)) return;
 
-        // Read reference/
-        const refDir = path.join(skillDirPath, 'reference');
-        if (fs.existsSync(refDir)) {
-            const refFiles = fs.readdirSync(refDir);
-            for (const filename of refFiles) {
-                const filePath = path.join(refDir, filename);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                skillData.reference.set(filename, content);
-            }
+        const scriptFiles = fs.readdirSync(scriptsDir);
+        for (const filename of scriptFiles) {
+            const filePath = path.join(scriptsDir, filename);
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const language = this.inferLanguageFromFilename(filename);
+            const cleanContent = this.removeShebangAndHeaders(content);
+            skillData.scripts.set(filename, { content: cleanContent, language });
         }
+    }
 
-        // Read examples/
-        const examplesDir = path.join(skillDirPath, 'examples');
-        if (fs.existsSync(examplesDir)) {
-            const exampleFiles = fs.readdirSync(examplesDir);
-            for (const filename of exampleFiles) {
-                const filePath = path.join(examplesDir, filename);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                skillData.examples.set(filename, content);
-            }
+    /**
+     * Read generic files directory (reference, examples, themes)
+     * REFACTORED: Extracted to reduce cognitive complexity and reuse code
+     */
+    private readFilesDirectory(
+        skillDirPath: string,
+        dirName: string,
+        targetMap: Map<string, string>
+    ): void {
+        const dirPath = path.join(skillDirPath, dirName);
+        if (!fs.existsSync(dirPath)) return;
+
+        const files = fs.readdirSync(dirPath);
+        for (const filename of files) {
+            const filePath = path.join(dirPath, filename);
+            const content = fs.readFileSync(filePath, 'utf-8');
+            targetMap.set(filename, content);
         }
+    }
 
-        // Read themes/
-        const themesDir = path.join(skillDirPath, 'themes');
-        if (fs.existsSync(themesDir)) {
-            const themeFiles = fs.readdirSync(themesDir);
-            for (const filename of themeFiles) {
-                const filePath = path.join(themesDir, filename);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                skillData.themes.set(filename, content);
-            }
-        }
-
-        // Read metadata/
+    /**
+     * Read metadata directory
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private readMetadataDirectory(skillDirPath: string, skillData: AnthropicSkillDirectory): void {
         const metadataDir = path.join(skillDirPath, 'metadata');
-        if (fs.existsSync(metadataDir)) {
-            skillData.metadata = new Map();
-            const metadataFiles = fs.readdirSync(metadataDir);
-            for (const filename of metadataFiles) {
-                const filePath = path.join(metadataDir, filename);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                skillData.metadata.set(filename, content);
-            }
-        }
+        if (!fs.existsSync(metadataDir)) return;
 
-        // Read LICENSE.txt
+        skillData.metadata = new Map();
+        const metadataFiles = fs.readdirSync(metadataDir);
+        for (const filename of metadataFiles) {
+            const filePath = path.join(metadataDir, filename);
+            const content = fs.readFileSync(filePath, 'utf-8');
+            skillData.metadata.set(filename, content);
+        }
+    }
+
+    /**
+     * Read LICENSE.txt file if it exists
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private readLicenseFile(skillDirPath: string, skillData: AnthropicSkillDirectory): void {
         const licensePath = path.join(skillDirPath, 'LICENSE.txt');
         if (fs.existsSync(licensePath)) {
             skillData.license = fs.readFileSync(licensePath, 'utf-8');
         }
-
-        return skillData;
     }
 
     /**
@@ -346,7 +425,7 @@ export class AnthropicToDollhouseConverter {
 
         // Add reference documentation sections
         if (skillData.reference.size > 0) {
-            for (const [filename, content] of skillData.reference) {
+            for (const [, content] of skillData.reference) {
                 sections.push('\n' + content);
             }
         }
@@ -354,7 +433,7 @@ export class AnthropicToDollhouseConverter {
         // Add examples
         if (skillData.examples.size > 0) {
             sections.push('\n## Examples\n');
-            for (const [filename, content] of skillData.examples) {
+            for (const [, content] of skillData.examples) {
                 sections.push(content);
                 sections.push('\n');
             }
@@ -363,7 +442,7 @@ export class AnthropicToDollhouseConverter {
         // Add themes/templates
         if (skillData.themes.size > 0) {
             sections.push('\n## Templates\n');
-            for (const [filename, content] of skillData.themes) {
+            for (const [, content] of skillData.themes) {
                 sections.push(content);
                 sections.push('\n');
             }

@@ -32,8 +32,8 @@ export interface AnthropicSkillStructure {
 }
 
 export class DollhouseToAnthropicConverter {
-    private schemaMapper: SchemaMapper;
-    private contentExtractor: ContentExtractor;
+    private readonly schemaMapper: SchemaMapper;
+    private readonly contentExtractor: ContentExtractor;
 
     constructor() {
         this.schemaMapper = new SchemaMapper();
@@ -81,7 +81,6 @@ export class DollhouseToAnthropicConverter {
         const codeBlocks = sections.filter(s => s.type === 'code');
         for (const block of codeBlocks) {
             if (block.filename) {
-                const ext = this.getExtension(block.language || '');
                 const filename = block.filename;
                 scripts[filename] = this.formatScriptFile(block.content, block.language || '');
                 sectionReferences.push(`See \`scripts/${filename}\` for ${block.title}`);
@@ -144,69 +143,74 @@ export class DollhouseToAnthropicConverter {
 
     /**
      * Write the Anthropic skill structure to disk
+     * REFACTORED: Simplified by extracting directory writing logic
      */
     async writeToDirectory(structure: AnthropicSkillStructure, outputDir: string): Promise<void> {
         // Create output directory
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
+        this.ensureDirectoryExists(outputDir);
 
         // Write SKILL.md
         fs.writeFileSync(path.join(outputDir, 'SKILL.md'), structure['SKILL.md']);
 
-        // Write scripts
-        if (structure['scripts/']) {
-            const scriptsDir = path.join(outputDir, 'scripts');
-            fs.mkdirSync(scriptsDir, { recursive: true });
-            for (const [filename, content] of Object.entries(structure['scripts/'])) {
-                fs.writeFileSync(path.join(scriptsDir, filename), content);
-                // SECURITY (SonarCloud S2612): Do NOT auto-chmod scripts executable
-                // - Scripts from DollhouseMCP are markdown code blocks, not executable files
-                // - Format transformer shouldn't make security decisions (chmod = security decision)
-                // - Principle of least privilege: user can chmod if needed
-                // - Prevents automatic execution of potentially malicious converted scripts
-            }
-        }
+        // Write all component directories
+        this.writeScriptsDirectory(structure, outputDir);
+        this.writeFilesDirectory(structure['reference/'], outputDir, 'reference');
+        this.writeFilesDirectory(structure['themes/'], outputDir, 'themes');
+        this.writeFilesDirectory(structure['examples/'], outputDir, 'examples');
+        this.writeFilesDirectory(structure['metadata/'], outputDir, 'metadata');
 
-        // Write reference docs
-        if (structure['reference/']) {
-            const refDir = path.join(outputDir, 'reference');
-            fs.mkdirSync(refDir, { recursive: true });
-            for (const [filename, content] of Object.entries(structure['reference/'])) {
-                fs.writeFileSync(path.join(refDir, filename), content);
-            }
-        }
-
-        // Write themes
-        if (structure['themes/']) {
-            const themesDir = path.join(outputDir, 'themes');
-            fs.mkdirSync(themesDir, { recursive: true });
-            for (const [filename, content] of Object.entries(structure['themes/'])) {
-                fs.writeFileSync(path.join(themesDir, filename), content);
-            }
-        }
-
-        // Write examples
-        if (structure['examples/']) {
-            const examplesDir = path.join(outputDir, 'examples');
-            fs.mkdirSync(examplesDir, { recursive: true });
-            for (const [filename, content] of Object.entries(structure['examples/'])) {
-                fs.writeFileSync(path.join(examplesDir, filename), content);
-            }
-        }
-
-        // Write metadata
-        if (structure['metadata/']) {
-            const metadataDir = path.join(outputDir, 'metadata');
-            fs.mkdirSync(metadataDir, { recursive: true });
-            for (const [filename, content] of Object.entries(structure['metadata/'])) {
-                fs.writeFileSync(path.join(metadataDir, filename), content);
-            }
-        }
-
-        // Write license
+        // Write license file
         if (structure['LICENSE.txt']) {
             fs.writeFileSync(path.join(outputDir, 'LICENSE.txt'), structure['LICENSE.txt']);
+        }
+    }
+
+    /**
+     * Ensure directory exists, creating it if necessary
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private ensureDirectoryExists(dirPath: string): void {
+        if (!fs.existsSync(dirPath)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+    }
+
+    /**
+     * Write scripts directory with security considerations
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private writeScriptsDirectory(structure: AnthropicSkillStructure, outputDir: string): void {
+        if (!structure['scripts/']) return;
+
+        const scriptsDir = path.join(outputDir, 'scripts');
+        fs.mkdirSync(scriptsDir, { recursive: true });
+
+        for (const [filename, content] of Object.entries(structure['scripts/'])) {
+            fs.writeFileSync(path.join(scriptsDir, filename), content);
+            // SECURITY (SonarCloud S2612): Do NOT auto-chmod scripts executable
+            // - Scripts from DollhouseMCP are markdown code blocks, not executable files
+            // - Format transformer shouldn't make security decisions (chmod = security decision)
+            // - Principle of least privilege: user can chmod if needed
+            // - Prevents automatic execution of potentially malicious converted scripts
+        }
+    }
+
+    /**
+     * Write generic files directory (reference, themes, examples, metadata)
+     * REFACTORED: Extracted to reduce cognitive complexity and reuse code
+     */
+    private writeFilesDirectory(
+        files: Record<string, string> | undefined,
+        outputDir: string,
+        dirName: string
+    ): void {
+        if (!files) return;
+
+        const targetDir = path.join(outputDir, dirName);
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        for (const [filename, content] of Object.entries(files)) {
+            fs.writeFileSync(path.join(targetDir, filename), content);
         }
     }
 
@@ -381,6 +385,7 @@ export class DollhouseToAnthropicConverter {
      * Create LICENSE.txt file
      */
     private createLicenseFile(license: string, author?: string): string {
-        return `${license}${author ? `\n\nAuthor: ${author}` : ''}`;
+        const authorSuffix = author ? `\n\nAuthor: ${author}` : '';
+        return `${license}${authorSuffix}`;
     }
 }
