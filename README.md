@@ -33,13 +33,50 @@
 
 ---
 
+## 🎯 DollhouseMCP Elements: Six Types of AI Customization
+
+DollhouseMCP provides **six types of customization elements** for extending AI capabilities:
+
+- **🎭 Personas** – Shape AI behavior and communication style
+- **💡 Skills** – Add specialized capabilities and knowledge domains
+- **📝 Templates** – Ensure consistent, structured outputs
+- **🤖 Agents** – Enable autonomous task completion
+- **🧠 Memories** – Persistent context storage across sessions
+- **🎯 Ensembles** – Orchestrate multiple elements (coming soon)
+
+### Skills Interoperability with Claude.ai
+
+**DollhouseMCP Skills** premiered in July 2025. In October 2025, Anthropic introduced Skills for claude.ai.
+
+**New in v1.9.23**: DollhouseMCP now provides **bidirectional conversion** between DollhouseMCP Skills and Claude Skills:
+
+```bash
+# Import Claude Skills from claude.ai
+dollhouse convert from-anthropic ~/Downloads/skill.zip
+
+# Export DollhouseMCP Skills to Claude Skills format
+dollhouse convert to-anthropic ~/.dollhouse/portfolio/skills/my-skill.md
+```
+
+**Conversion Capabilities:**
+- ✅ **Lossless Translation**: Perfect fidelity roundtrip conversion
+- ✅ **Format Detection**: Automatically identifies source schema
+- ✅ **Bidirectional**: Convert from DollhouseMCP to Claude Skills and back
+- ✅ **Automatic Enrichment**: Preserves full DollhouseMCP metadata when importing
+
+The converter enables **Claude Skills to operate within the DollhouseMCP ecosystem**, providing access to version control, cross-platform deployment (378+ MCP-compatible applications), and integration with the other five element types.
+
+> **Technical Details**: [Skills Converter Documentation](docs/guides/SKILLS_CONVERTER.md)
+
+---
+
 <div align="center">
   <img src="docs/assets/dollhouse-logo.png" alt="DollhouseMCP" width="200" />
-  
+
   # Open Source, Community-Powered AI Customization
-  
+
   ### Create, Edit, and Share Customization Elements for Your AI Platforms
-  
+
   [![Install](https://img.shields.io/badge/Install-npm%20install%20@dollhousemcp/mcp--server-blue?style=for-the-badge)](https://www.npmjs.com/package/@dollhousemcp/mcp-server)
   [![Collection](https://img.shields.io/badge/Browse-Community%20Collection-purple?style=for-the-badge)](https://github.com/DollhouseMCP/collection)
   [![Contribute](https://img.shields.io/badge/Share-Your%20Elements-green?style=for-the-badge)](https://github.com/DollhouseMCP/mcp-server#contributing)
