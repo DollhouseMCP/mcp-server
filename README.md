@@ -33,50 +33,13 @@
 
 ---
 
-## 🎯 DollhouseMCP Elements: Six Types of AI Customization
-
-DollhouseMCP provides **six types of customization elements** for extending AI capabilities:
-
-- **🎭 Personas** – Shape AI behavior and communication style
-- **💡 Skills** – Add specialized capabilities and knowledge domains
-- **📝 Templates** – Ensure consistent, structured outputs
-- **🤖 Agents** – Enable autonomous task completion
-- **🧠 Memories** – Persistent context storage across sessions
-- **🎯 Ensembles** – Orchestrate multiple elements (coming soon)
-
-### Skills Interoperability with Claude.ai
-
-**DollhouseMCP Skills** premiered in July 2025. In October 2025, Anthropic introduced Skills for claude.ai.
-
-**New in v1.9.23**: DollhouseMCP now provides **bidirectional conversion** between DollhouseMCP Skills and Claude Skills:
-
-```bash
-# Import Claude Skills from claude.ai
-dollhouse convert from-anthropic ~/Downloads/skill.zip
-
-# Export DollhouseMCP Skills to Claude Skills format
-dollhouse convert to-anthropic ~/.dollhouse/portfolio/skills/my-skill.md
-```
-
-**Conversion Capabilities:**
-- ✅ **Lossless Translation**: Perfect fidelity roundtrip conversion
-- ✅ **Format Detection**: Automatically identifies source schema
-- ✅ **Bidirectional**: Convert from DollhouseMCP to Claude Skills and back
-- ✅ **Automatic Enrichment**: Preserves full DollhouseMCP metadata when importing
-
-The converter enables **Claude Skills to operate within the DollhouseMCP ecosystem**, providing access to version control, cross-platform deployment (378+ MCP-compatible applications), and integration with the other five element types.
-
-> **Technical Details**: [Skills Converter Documentation](docs/guides/SKILLS_CONVERTER.md)
-
----
-
 <div align="center">
   <img src="docs/assets/dollhouse-logo.png" alt="DollhouseMCP" width="200" />
-
+  
   # Open Source, Community-Powered AI Customization
-
+  
   ### Create, Edit, and Share Customization Elements for Your AI Platforms
-
+  
   [![Install](https://img.shields.io/badge/Install-npm%20install%20@dollhousemcp/mcp--server-blue?style=for-the-badge)](https://www.npmjs.com/package/@dollhousemcp/mcp-server)
   [![Collection](https://img.shields.io/badge/Browse-Community%20Collection-purple?style=for-the-badge)](https://github.com/DollhouseMCP/collection)
   [![Contribute](https://img.shields.io/badge/Share-Your%20Elements-green?style=for-the-badge)](https://github.com/DollhouseMCP/mcp-server#contributing)
@@ -909,30 +872,6 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 🏷️ Version History
-
-### v1.9.23 - 2025-10-26
-
-**Feature Release**: Bidirectional Skills Converter
-#### ✨ Features
-- **Bidirectional Skills Converter** (#1400, #1401)
-  - Lossless conversion between DollhouseMCP Skills and Claude Skills
-  - CLI: `dollhouse convert from-anthropic` / `to-anthropic`
-  - Automatic format detection and metadata enrichment
-  - 100% fidelity roundtrip conversion
-  - Comprehensive documentation in `docs/guides/SKILLS_CONVERTER.md`
-
-- **DollhouseMCP Primacy Messaging**
-  - README section establishing timeline (July 2025 vs October 2025)
-  - Positions DollhouseMCP as superset with 6 element types
-  - Professional framing for legal review
-
-#### Technical Details
-- 13 converter tests passing
-- Security: ZIP size limits, bomb detection, Unicode normalization
-- Components: SchemaMapper, ContentExtractor, bidirectional converters
-- Performance: Sub-second for small skills, scales to large multi-MB skills
-
----
 
 ### v1.9.21 - 2025-10-23
 
