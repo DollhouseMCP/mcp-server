@@ -910,6 +910,30 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
+### v1.9.23 - 2025-10-26
+
+**Feature Release**: Bidirectional Skills Converter
+#### ✨ Features
+- **Bidirectional Skills Converter** (#1400, #1401)
+  - Lossless conversion between DollhouseMCP Skills and Claude Skills
+  - CLI: `dollhouse convert from-anthropic` / `to-anthropic`
+  - Automatic format detection and metadata enrichment
+  - 100% fidelity roundtrip conversion
+  - Comprehensive documentation in `docs/guides/SKILLS_CONVERTER.md`
+
+- **DollhouseMCP Primacy Messaging**
+  - README section establishing timeline (July 2025 vs October 2025)
+  - Positions DollhouseMCP as superset with 6 element types
+  - Professional framing for legal review
+
+#### Technical Details
+- 13 converter tests passing
+- Security: ZIP size limits, bomb detection, Unicode normalization
+- Components: SchemaMapper, ContentExtractor, bidirectional converters
+- Performance: Sub-second for small skills, scales to large multi-MB skills
+
+---
+
 ### v1.9.21 - 2025-10-23
 
 **Patch Release**: Memory validation system activation and element formatting

@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+## [1.9.23] - 2025-10-26
+
+**Feature Release**: Bidirectional Skills Converter with DollhouseMCP primacy messaging
+
+### ✨ Features
+- **Bidirectional Skills Converter** (#1400, #1401)
+  - Lossless conversion between DollhouseMCP Skills and Claude Skills formats
+  - CLI commands: `dollhouse convert from-anthropic` / `to-anthropic`
+  - Automatic format detection (ZIP, directory, .md file)
+  - Metadata enrichment when importing Claude Skills
+  - Roundtrip conversion with 100% fidelity
+  - Comprehensive test suite (13/13 tests passing)
+
+- **Skills Converter Documentation** (docs commit 510ec3e7)
+  - Complete guide: `docs/guides/SKILLS_CONVERTER.md`
+  - Technical architecture details
+  - Usage examples and workflows
+  - CLI reference documentation
+
+- **DollhouseMCP Primacy Messaging** (docs commit bf1711d0)
+  - README section establishing timeline (July 2025 premiere)
+  - Superset positioning vs Claude Skills
+  - Professional, legally-reviewable framing
+
+### 🔧 Components
+- **SchemaMapper**: Bidirectional metadata transformation
+- **ContentExtractor**: Code block and documentation parsing
+- **DollhouseToAnthropicConverter**: Export to Claude Skills format
+- **AnthropicToDollhouseConverter**: Import from Claude Skills format
+- **CLI Interface**: `src/cli/convert.ts` with verbose/report modes
+
+### Technical Details
+- Converter location: `src/converters/`
+- CLI location: `src/cli/convert.ts`
+- Tests: `test/__tests__/unit/converter.test.ts`
+- Security: ZIP bomb detection, Unicode normalization, size limits
+- Performance: <1s for small skills, 5-30s for large skills
+
+### Documentation
+- Skills Converter Guide: `docs/guides/SKILLS_CONVERTER.md` (758 lines)
+- README primacy section: Establishes DollhouseMCP as original (July 2025)
+- Architecture comparison in guide (DollhouseMCP superset)
+
+---
+
 ## [1.9.22] - 2025-10-23
 
 **Hotfix Release**: Resolve jsdom test failures
