@@ -6,9 +6,10 @@ This document outlines the best practices for creating high-quality pull request
 1. [Branch Strategy](#branch-strategy)
 2. [Commit Messages](#commit-messages)
 3. [PR Creation](#pr-creation)
-4. [Review Process](#review-process)
-5. [Post-Review Actions](#post-review-actions)
-6. [Examples](#examples)
+4. [Merge Strategy](#merge-strategy)
+5. [Review Process](#review-process)
+6. [Post-Review Actions](#post-review-actions)
+7. [Examples](#examples)
 
 ## Branch Strategy
 
@@ -156,6 +157,112 @@ EOF
 8. **Related Issues**: Links to tracking issues
 9. **Next Steps**: What comes after this PR
 10. **Review Request**: Specific areas for reviewer attention
+
+## Merge Strategy
+
+### Overview
+
+DollhouseMCP uses different merge strategies depending on the target branch. This approach balances clean git history with complete context preservation.
+
+### Feature/Fix PRs → `develop`: SQUASH MERGE
+
+**Command:**
+```bash
+gh pr merge [PR-NUMBER] --squash --delete-branch
+```
+
+**When to use:**
+- All feature branches
+- All fix branches
+- All documentation updates to develop
+- Any PR targeting the `develop` branch
+
+**Why squash?**
+- ✅ Keeps develop history clean and readable
+- ✅ Each PR becomes one logical commit
+- ✅ Normalizes contributor commit practices (important as team scales)
+- ✅ Easy to generate release notes (one entry per feature)
+- ✅ Easy to revert entire features atomically
+- ✅ PR preserves full commit history for archaeology
+- ✅ Handles large refactors cleanly (50 commits → 1 logical unit)
+
+**Example:**
+```bash
+# Feature branch with 8 commits
+feature/new-capability → PR #1234 → develop (SQUASH)
+
+# Result on develop: One clean commit
+feat: Add new capability system (#1234)
+```
+
+### `develop` → `main`: REGULAR MERGE
+
+**Command:**
+```bash
+gh pr merge [PR-NUMBER] --merge  # NOT --squash!
+```
+
+**When to use:**
+- Release branches (develop → main)
+- Hotfixes to main
+- Documentation updates to main
+- **ANY PR targeting the `main` branch**
+
+**Why regular merge?**
+- ✅ Preserves all squashed feature commits from develop
+- ✅ Shows complete history of what went into the release
+- ✅ Prevents losing changes unique to target branch
+- ❌ **Squash merges to main can overwrite main-specific changes** (documented issue from v1.9.23)
+
+**Example:**
+```bash
+# Release PR with 5 feature commits
+develop → PR #1240 → main (REGULAR MERGE)
+
+# Result on main: All feature commits visible
+Merge PR #1240: Release v1.9.24
+├─ feat: Add new capability (#1234)
+├─ fix: Bug fix from contributor (#1235)
+├─ refactor: Modularize index.ts (#1236)
+├─ docs: Update README (#1238)
+└─ chore: Update dependencies (#1239)
+```
+
+### Known Issues
+
+**Squash Merge to Main Risk** (documented Oct 27, 2025):
+- Squash merging develop → main can overwrite changes unique to main
+- Example: v1.9.23 release squash merge removed SonarCloud badges from main
+- Root cause: Squash replaced main's README with develop's version
+- **Solution**: Always use regular merge for develop → main
+
+### Quick Reference Table
+
+| Source Branch | Target Branch | Merge Strategy | Command |
+|---------------|---------------|----------------|---------|
+| `feature/*` | `develop` | **SQUASH** | `gh pr merge N --squash --delete-branch` |
+| `fix/*` | `develop` | **SQUASH** | `gh pr merge N --squash --delete-branch` |
+| `docs/*` | `develop` | **SQUASH** | `gh pr merge N --squash --delete-branch` |
+| `develop` | `main` | **REGULAR** | `gh pr merge N --merge` |
+| `hotfix/*` | `main` | **REGULAR** | `gh pr merge N --merge` |
+| Any branch | `main` | **REGULAR** | `gh pr merge N --merge` |
+
+### Multi-Contributor Considerations
+
+As the project scales with more contributors:
+
+**Squash merging to develop is increasingly important:**
+- Contributors have varying commit practices
+- Large refactors (e.g., modularizing index.ts) produce many WIP commits
+- Squashing normalizes all contributions into clean, reviewable units
+- PR descriptions + squash commits provide complete context
+- Individual PR history remains accessible for code archaeology
+
+**Regular merging to main is critical:**
+- Main branch may have direct commits (badges, registry files, etc.)
+- Preserving develop's squashed commits maintains release history
+- Easy to see what features went into each release
+- Supports clean changelog generation
 
 ## Review Process
 
