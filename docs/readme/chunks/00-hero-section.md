@@ -39,7 +39,9 @@
 
 ### Claude Skills Compatibility
 
-**100% bidirectional round-trip conversion** between DollhouseMCP Skills and Claude Skills with complete fidelity. Import Claude Skills into the DollhouseMCP ecosystem for enhanced version control, deployment across hundreds of AI platforms that support MCP servers, security validation against hundreds of attack vectors, and integration with personas, templates, agents, and memories. Convert DollhouseMCP Skills to Claude Skills when you need compatibility with Claude-specific environments that cannot run DollhouseMCP.
+100% lossless round-trip conversion between DollhouseMCP Skills and Claude Skills—all metadata, validation, and structure preserved without loss in either direction.
+
+Import Claude Skills into the DollhouseMCP ecosystem for enhanced version control, deployment across hundreds of AI platforms that support MCP servers, security validation against hundreds of attack vectors, and integration with personas, templates, agents, and memories. Convert DollhouseMCP Skills to Claude Skills when you need compatibility with Claude-specific environments that cannot run DollhouseMCP.
 
 → **[Complete Skills Converter Guide](docs/guides/SKILLS_CONVERTER.md)** – Lossless round-trip translation in both directions with CLI reference and examples
 
