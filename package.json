@@ -141,7 +141,7 @@
     "js-yaml": "^4.1.0",
     "jsdom": "27.0.1",
     "node-fetch": "^3.3.2",
-    "posthog-node": "^5.10.0",
+    "posthog-node": "^5.10.3",
     "uuid": "^11.1.0",
     "zod": "^4.1.12"
   },
