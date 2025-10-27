@@ -147,7 +147,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.2.0",
-    "@modelcontextprotocol/inspector": "^0.17.1",
+    "@modelcontextprotocol/inspector": "^0.17.2",
     "@types/archiver": "^6.0.4",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
