@@ -3,7 +3,7 @@
   "name": "io.github.DollhouseMCP/mcp-server",
   "title": "DollhouseMCP",
   "description": "OSS to create Personas, Skills, Templates, Agents, and Memories to customize your AI experience.",
-  "version": "1.9.22",
+  "version": "1.9.23",
   "homepage": "https://dollhousemcp.com",
   "repository": {
     "type": "git",
@@ -29,7 +29,7 @@
     {
       "registryType": "npm",
       "identifier": "@dollhousemcp/mcp-server",
-      "version": "1.9.22",
+      "version": "1.9.23",
       "transport": {
         "type": "stdio"
       }
