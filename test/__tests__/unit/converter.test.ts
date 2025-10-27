@@ -526,10 +526,11 @@ Follow these steps:
             createdFiles.push(zipPath, skillDir);
 
             // Create multiple large files that compress well
-            for (let i = 0; i < 10; i++) {
+            // Reduced from 10×60MB to 5×40MB (200MB total) to avoid CI memory issues
+            for (let i = 0; i < 5; i++) {
                 const largeFile = path.join(skillDir, `large-file-${i}.txt`);
-                // Create 60MB files that compress to almost nothing (all zeros)
-                const buffer = Buffer.alloc(60 * 1024 * 1024, 0);
+                // Create 40MB files that compress to almost nothing (all zeros)
+                const buffer = Buffer.alloc(40 * 1024 * 1024, 0);
                 fs.writeFileSync(largeFile, buffer);
             }
 

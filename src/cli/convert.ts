@@ -57,6 +57,11 @@ const MAX_ZIP_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
 const MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
 
 /**
+ * Progress indicator threshold (10MB) - show progress message for files larger than this
+ */
+const PROGRESS_THRESHOLD_BYTES = 10 * 1024 * 1024; // 10MB
+
+/**
  * Get the default DollhouseMCP portfolio skills directory
  * SECURITY FIX (DMCP-SEC-004): Normalize HOME environment variable to prevent Unicode attacks
  * Previously: Used process.env.HOME directly without normalization
@@ -64,8 +69,27 @@ const MAX_EXTRACTED_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
  */
 function getDefaultSkillsDirectory(): string {
     const homeDir = process.env.HOME || '';
+
     // Normalize HOME environment variable to prevent homograph attacks via lookalike characters
-    const normalizedHome = homeDir ? UnicodeValidator.normalize(homeDir).normalizedContent : '';
+    let normalizedHome = '';
+    if (homeDir) {
+        const normalizationResult = UnicodeValidator.normalize(homeDir);
+        normalizedHome = normalizationResult.normalizedContent;
+
+        // [SECURITY WARNING] Log if normalization changed the HOME path
+        // This could indicate a security issue or misconfiguration
+        if (normalizedHome !== homeDir) {
+            console.warn(
+                chalk.yellow(
+                    `[WARNING] HOME environment variable was modified during Unicode normalization.\n` +
+                    `Original: "${homeDir}"\n` +
+                    `Normalized: "${normalizedHome}"\n` +
+                    `This may indicate a security issue or misconfiguration.`
+                )
+            );
+        }
+    }
+
     return path.join(normalizedHome, '.dollhouse', 'portfolio', 'skills');
 }
 
@@ -145,8 +169,8 @@ async function extractZipFile(zipPath: string, verbose: boolean): Promise<string
     // Previously: No feedback during extraction, poor UX for large files
     // Now: Show progress message for better user experience
     const startTime = Date.now();
-    const progressMessage = zipSize > 10 * 1024 * 1024 ? 'Extracting (this may take a moment)...' : 'Extracting...';
-    if (verbose || zipSize > 10 * 1024 * 1024) {
+    const progressMessage = zipSize > PROGRESS_THRESHOLD_BYTES ? 'Extracting (this may take a moment)...' : 'Extracting...';
+    if (verbose || zipSize > PROGRESS_THRESHOLD_BYTES) {
         console.log(chalk.blue(`  ${progressMessage}`));
     }
 
