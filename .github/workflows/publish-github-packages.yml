@@ -1,5 +1,17 @@
 name: Publish to GitHub Packages
 
+# This workflow publishes the package to GitHub Packages Registry when a version tag is pushed.
+# It includes duplicate publication prevention to handle cases where:
+# - A tag is re-pushed or moved
+# - Multiple commits trigger the workflow for the same version
+# - Manual workflow_dispatch is run multiple times
+#
+# Test Scenarios (validate on next release):
+# 1. New version publication → should publish successfully
+# 2. Duplicate tag push → should skip with clear message
+# 3. Invalid/empty version → should fail gracefully with error
+# 4. Authentication issues → should proceed to publish (fails safely if duplicate)
+
 on:
   push:
     tags:
@@ -50,24 +62,44 @@ jobs:
       - name: Check if version already published
         id: check_version
         run: |
+          # Extract and validate version from package.json
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          # Validate version is not empty
+          if [ -z "$PACKAGE_VERSION" ]; then
+            echo "❌ Error: Could not extract version from package.json"
+            exit 1
+          fi
+
           echo "Checking if version $PACKAGE_VERSION is already published..."
 
           # Try to fetch package info from GitHub Packages
-          # Use npm view with the GitHub Packages registry
-          if npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>/dev/null; then
-            echo "Version $PACKAGE_VERSION already exists on GitHub Packages"
+          # Capture both stdout and exit code to distinguish between errors
+          if npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 | grep -q "$PACKAGE_VERSION"; then
+            echo "✓ Version $PACKAGE_VERSION already exists on GitHub Packages"
             echo "already_published=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $PACKAGE_VERSION not found, proceeding with publication"
-            echo "already_published=false" >> $GITHUB_OUTPUT
+            # Check if it was an authentication error vs package not found
+            CHECK_OUTPUT=$(npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 || true)
+            if echo "$CHECK_OUTPUT" | grep -qi "unauthorized\|forbidden\|authentication"; then
+              echo "⚠️ Warning: Authentication issue checking package existence"
+              echo "Proceeding with publication attempt (will fail safely if already exists)"
+              echo "already_published=false" >> $GITHUB_OUTPUT
+            else
+              echo "✓ Version $PACKAGE_VERSION not found, proceeding with publication"
+              echo "already_published=false" >> $GITHUB_OUTPUT
+            fi
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to GitHub Packages
         if: steps.check_version.outputs.already_published == 'false'
-        run: npm publish
+        run: |
+          # Publish to GitHub Packages
+          # Registry is configured via setup-node step's registry-url parameter
+          # NODE_AUTH_TOKEN provides authentication to GitHub Packages
+          npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
