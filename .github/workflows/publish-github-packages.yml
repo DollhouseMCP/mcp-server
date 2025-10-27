@@ -47,10 +47,35 @@ jobs:
           console.log('Updated package name for GitHub Packages: ' + pkg.name);
           "
 
+      - name: Check if version already published
+        id: check_version
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "Checking if version $PACKAGE_VERSION is already published..."
+
+          # Try to fetch package info from GitHub Packages
+          # Use npm view with the GitHub Packages registry
+          if npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>/dev/null; then
+            echo "Version $PACKAGE_VERSION already exists on GitHub Packages"
+            echo "already_published=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $PACKAGE_VERSION not found, proceeding with publication"
+            echo "already_published=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish to GitHub Packages
+        if: steps.check_version.outputs.already_published == 'false'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip publication (already exists)
+        if: steps.check_version.outputs.already_published == 'true'
+        run: |
+          echo "⏭️ Skipping publication - version already exists on GitHub Packages"
+          echo "This is expected if the tag was re-pushed or if multiple commits reference the same tag"
 
       - name: Restore original package.json
         if: always()
@@ -60,5 +85,9 @@ jobs:
       - name: Notify success
         if: success()
         run: |
-          echo "✅ Successfully published to GitHub Packages!"
-          echo "📦 Package will appear in the repository's Packages section"
+          if [ "${{ steps.check_version.outputs.already_published }}" == "true" ]; then
+            echo "✅ Workflow completed successfully (publication skipped - version already exists)"
+          else
+            echo "✅ Successfully published to GitHub Packages!"
+            echo "📦 Package will appear in the repository's Packages section"
+          fi
