@@ -1,5 +1,54 @@
 ## 🏷️ Version History
 
+### v1.9.24 - 2025-10-27
+
+**Documentation Release**: Claude Skills Compatibility & Dependency Updates
+
+#### 📖 Documentation
+- **Claude Skills Compatibility Section** (#1413)
+  - Added prominent README section highlighting 100% lossless round-trip conversion
+  - Documents bidirectional conversion between DollhouseMCP Skills and Claude Skills
+  - Includes skill-converter usage for CLI-enabled LLMs (Claude Code, Cursor, Gemini Code Assist)
+  - Complete metadata, validation, and structure preservation in both directions
+
+- **Merge Strategy Documentation**
+  - Documented squash vs. regular merge strategy in `docs/development/PR_BEST_PRACTICES.md`
+  - Feature → develop: SQUASH merge (clean history)
+  - Develop → main: REGULAR merge (preserves commits)
+
+#### 🔄 Dependency Updates
+- `@modelcontextprotocol/sdk` 1.20.1 → 1.20.2
+- `posthog-node` 5.10.0 → 5.10.3
+- `jsdom` 27.0.0 → 27.0.1 (dev)
+- `@types/node` 24.8.1 → 24.9.1 (dev)
+- `@modelcontextprotocol/inspector` 0.17.1 → 0.17.2 (dev)
+
+---
+
+### v1.9.23 - 2025-10-26
+
+**Feature Release**: Bidirectional Skills Converter
+#### ✨ Features
+- **Bidirectional Skills Converter** (#1400, #1401)
+  - Lossless conversion between DollhouseMCP Skills and Claude Skills
+  - CLI: `dollhouse convert from-anthropic` / `to-anthropic`
+  - Automatic format detection and metadata enrichment
+  - 100% fidelity roundtrip conversion
+  - Comprehensive documentation in `docs/guides/SKILLS_CONVERTER.md`
+
+- **DollhouseMCP Primacy Messaging**
+  - README section establishing timeline (July 2025 vs October 2025)
+  - Positions DollhouseMCP as superset with 6 element types
+  - Professional framing for legal review
+
+#### Technical Details
+- 13 converter tests passing
+- Security: ZIP size limits, bomb detection, Unicode normalization
+- Components: SchemaMapper, ContentExtractor, bidirectional converters
+- Performance: Sub-second for small skills, scales to large multi-MB skills
+
+---
+
 ### v1.9.21 - 2025-10-23
 
 **Patch Release**: Memory validation system activation and element formatting

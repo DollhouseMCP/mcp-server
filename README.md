@@ -12,13 +12,6 @@
 [![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
 [![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/SECURITY.md)
 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=bugs)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
-
 ## Platform Support
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
@@ -76,6 +69,16 @@
 - **🛡️  Security-First Validation** – All elements validated against hundreds of attack vectors
 - **⚡  Hot-Swap Elements** – Change personas, skills, and templates without restarting as needed
 - **📦  Personal Portfolio** – Your library of custom AI configurations on your local computer or personal GitHub repo
+
+### Claude Skills Compatibility
+
+100% lossless round-trip conversion between DollhouseMCP Skills and Claude Skills—all metadata, validation, and structure preserved without loss in either direction.
+
+Import Claude Skills into the DollhouseMCP ecosystem for enhanced version control, deployment across hundreds of AI platforms that support MCP servers, security validation against hundreds of attack vectors, and integration with personas, templates, agents, and memories. Convert DollhouseMCP Skills to Claude Skills when you need compatibility with Claude-specific environments that cannot run DollhouseMCP.
+
+→ **[Complete Skills Converter Guide](docs/guides/SKILLS_CONVERTER.md)** – Lossless round-trip translation in both directions with CLI reference and examples
+
+→ Use the DollhouseMCP **skill-converter** skill to convert directly from chat on LLMs with command-line access like Claude Code, Cursor, Gemini Code Assist, etc.
 
 ### Use Cases
 
@@ -879,6 +882,31 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Discussions**: [Community Q&A](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 🏷️ Version History
+
+### v1.9.24 - 2025-10-27
+
+**Documentation Release**: Claude Skills Compatibility & Dependency Updates
+
+#### 📖 Documentation
+- **Claude Skills Compatibility Section** (#1413)
+  - Added prominent README section highlighting 100% lossless round-trip conversion
+  - Documents bidirectional conversion between DollhouseMCP Skills and Claude Skills
+  - Includes skill-converter usage for CLI-enabled LLMs (Claude Code, Cursor, Gemini Code Assist)
+  - Complete metadata, validation, and structure preservation in both directions
+
+- **Merge Strategy Documentation**
+  - Documented squash vs. regular merge strategy in `docs/development/PR_BEST_PRACTICES.md`
+  - Feature → develop: SQUASH merge (clean history)
+  - Develop → main: REGULAR merge (preserves commits)
+
+#### 🔄 Dependency Updates
+- `@modelcontextprotocol/sdk` 1.20.1 → 1.20.2
+- `posthog-node` 5.10.0 → 5.10.3
+- `jsdom` 27.0.0 → 27.0.1 (dev)
+- `@types/node` 24.8.1 → 24.9.1 (dev)
+- `@modelcontextprotocol/inspector` 0.17.1 → 0.17.2 (dev)
+
+---
 
 ### v1.9.23 - 2025-10-26
 
