@@ -70,6 +70,12 @@
 - **⚡  Hot-Swap Elements** – Change personas, skills, and templates without restarting as needed
 - **📦  Personal Portfolio** – Your library of custom AI configurations on your local computer or personal GitHub repo
 
+### Claude Skills Compatibility
+
+**100% bidirectional round-trip conversion** between DollhouseMCP Skills and Claude Skills formats with complete fidelity. Import Claude Skills into the DollhouseMCP ecosystem for enhanced version control, deployment across hundreds of AI platforms that support MCP servers, security validation against hundreds of attack vectors, and integration with personas, templates, agents, and memories. Convert DollhouseMCP Skills to Claude Skills format when you need compatibility with Claude-specific environments that cannot run DollhouseMCP.
+
+→ **[Complete Skills Converter Guide](docs/guides/SKILLS_CONVERTER.md)** – Lossless round-trip translation in both directions
+
 ### Use Cases
 
 <table>
