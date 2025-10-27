@@ -45,7 +45,7 @@ Import Claude Skills into the DollhouseMCP ecosystem for enhanced version contro
 
 → **[Complete Skills Converter Guide](docs/guides/SKILLS_CONVERTER.md)** – Lossless round-trip translation in both directions with CLI reference and examples
 
-→ Or on LLMs with command-line access (Claude Code, Cursor, Gemini Code Assist, etc.), use the DollhouseMCP **skill-converter** skill to convert directly from chat
+→ Use the DollhouseMCP **skill-converter** skill to convert directly from chat on LLMs with command-line access like Claude Code, Cursor, Gemini Code Assist, etc.
 
 ### Use Cases
 
