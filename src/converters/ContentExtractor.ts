@@ -1,0 +1,289 @@
+/**
+ * ContentExtractor - Extracts components from DollhouseMCP skills for Anthropic conversion
+ *
+ * Identifies and extracts:
+ * - Code blocks (bash, python, etc.) → scripts/
+ * - Documentation sections → reference/
+ * - Examples → examples/
+ * - Main instructions (preserved in SKILL.md)
+ *
+ * SECURITY MODEL:
+ * - This is a FORMAT ANALYSIS tool, not a security boundary
+ * - Preserves content exactly as-is for mechanical transformation
+ * - No modification, sanitization, or validation
+ * - Used by converters which are format transformers, not security gates
+ */
+
+export interface ExtractedSection {
+    type: 'code' | 'documentation' | 'example' | 'main';
+    language?: string;
+    title: string;
+    content: string;
+    startLine: number;
+    endLine: number;
+    filename?: string; // Suggested filename for extraction
+}
+
+export class ContentExtractor {
+    /**
+     * Parse DollhouseMCP markdown content and identify extractable sections
+     * REFACTORED: Simplified by extracting code block and section handling logic
+     */
+    extractSections(content: string): ExtractedSection[] {
+        // NOTE: No Unicode normalization - preserves content fidelity for conversion
+        const sections: ExtractedSection[] = [];
+        const lines = content.split('\n');
+
+        const state = {
+            inCodeBlock: false,
+            codeBlockStart: 0,
+            codeBlockLanguage: '',
+            codeBlockContent: [] as string[],
+            currentSection: '',
+            sectionStart: 0
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            this.processLine(line, i, state, sections);
+        }
+
+        return sections;
+    }
+
+    /**
+     * Process a single line and update state
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private processLine(
+        line: string,
+        lineIndex: number,
+        state: {
+            inCodeBlock: boolean;
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+            sectionStart: number;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (line.startsWith('```')) {
+            this.handleCodeBlockBoundary(line, lineIndex, state, sections);
+        } else if (state.inCodeBlock) {
+            state.codeBlockContent.push(line);
+        } else if (line.startsWith('##')) {
+            this.handleSectionHeader(line, lineIndex, state);
+        }
+    }
+
+    /**
+     * Handle code block start/end boundary
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private handleCodeBlockBoundary(
+        line: string,
+        lineIndex: number,
+        state: {
+            inCodeBlock: boolean;
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (state.inCodeBlock) {
+            // End of code block
+            state.inCodeBlock = false;
+            this.addCodeBlockIfExtractable(lineIndex, state, sections);
+        } else {
+            // Start of code block
+            state.inCodeBlock = true;
+            state.codeBlockStart = lineIndex;
+            state.codeBlockLanguage = line.substring(3).trim();
+            state.codeBlockContent = [];
+        }
+    }
+
+    /**
+     * Add code block to sections if it should be extracted
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private addCodeBlockIfExtractable(
+        endLineIndex: number,
+        state: {
+            codeBlockStart: number;
+            codeBlockLanguage: string;
+            codeBlockContent: string[];
+            currentSection: string;
+        },
+        sections: ExtractedSection[]
+    ): void {
+        if (!this.shouldExtractCodeBlock(state.codeBlockLanguage, state.codeBlockContent)) {
+            return;
+        }
+
+        sections.push({
+            type: 'code',
+            language: state.codeBlockLanguage,
+            title: this.inferCodeBlockTitle(state.codeBlockContent, state.currentSection),
+            content: state.codeBlockContent.join('\n'),
+            startLine: state.codeBlockStart,
+            endLine: endLineIndex,
+            filename: this.generateScriptFilename(
+                state.codeBlockLanguage,
+                state.codeBlockContent,
+                state.currentSection
+            )
+        });
+    }
+
+    /**
+     * Handle section header
+     * REFACTORED: Extracted to reduce cognitive complexity
+     */
+    private handleSectionHeader(
+        line: string,
+        lineIndex: number,
+        state: {
+            currentSection: string;
+            sectionStart: number;
+        }
+    ): void {
+        state.currentSection = line.substring(2).trim();
+        state.sectionStart = lineIndex;
+
+        // Check if this section should be extracted
+        // (Currently just tracking for context - full extraction logic not implemented)
+        // Future enhancement: use shouldExtractSection result for section extraction
+    }
+
+    /**
+     * Determine if a code block should be extracted to a separate file
+     */
+    private shouldExtractCodeBlock(language: string, content: string[]): boolean {
+        // Extract bash, python, javascript scripts
+        const extractableLanguages = ['bash', 'sh', 'python', 'py', 'javascript', 'js', 'typescript', 'ts'];
+
+        if (!extractableLanguages.includes(language.toLowerCase())) {
+            return false;
+        }
+
+        // Extract if it's substantial (more than 3 lines)
+        return content.length > 3;
+    }
+
+    /**
+     * Determine if a documentation section should be extracted
+     */
+    private shouldExtractSection(sectionTitle: string): boolean {
+        const extractableSections = [
+            'input formats',
+            'error handling',
+            'supported clients',
+            'command building',
+            'configuration',
+            'api reference',
+            'troubleshooting'
+        ];
+
+        return extractableSections.some(pattern =>
+            sectionTitle.toLowerCase().includes(pattern)
+        );
+    }
+
+    /**
+     * Generate appropriate filename for extracted script
+     */
+    private generateScriptFilename(language: string, content: string[], section: string): string {
+        // Look for meaningful names in comments
+        const firstLine = content[0] || '';
+
+        // Common patterns: "# Pre-execution checks", "# Install server", etc.
+        if (firstLine.startsWith('#')) {
+            const titleMatch = /^#\s*(.+)/.exec(firstLine);
+            if (titleMatch) {
+                const title = titleMatch[1].toLowerCase()
+                    .replaceAll(/[^a-z0-9\s-]/g, '')
+                    .replaceAll(/\s+/g, '-');
+                return `${title}.${this.getExtension(language)}`;
+            }
+        }
+
+        // Use section name
+        if (section) {
+            const sectionSlug = section.toLowerCase()
+                .replaceAll(/[^a-z0-9\s-]/g, '')
+                .replaceAll(/\s+/g, '-');
+            return `${sectionSlug}.${this.getExtension(language)}`;
+        }
+
+        return `script.${this.getExtension(language)}`;
+    }
+
+    /**
+     * Infer title for code block from surrounding context
+     */
+    private inferCodeBlockTitle(content: string[], section: string): string {
+        const firstLine = content[0] || '';
+
+        // Check for comment at start
+        if (firstLine.startsWith('#') || firstLine.startsWith('//')) {
+            return firstLine.replace(/^[#/\s]+/, '').trim();
+        }
+
+        return section || 'Script';
+    }
+
+    /**
+     * Get file extension for language
+     */
+    private getExtension(language: string): string {
+        const extensions: Record<string, string> = {
+            bash: 'sh',
+            sh: 'sh',
+            python: 'py',
+            py: 'py',
+            javascript: 'js',
+            js: 'js',
+            typescript: 'ts',
+            ts: 'ts'
+        };
+
+        return extensions[language.toLowerCase()] || 'txt';
+    }
+
+    /**
+     * Extract complete documentation section (including subsections)
+     */
+    extractDocumentationSection(content: string, sectionTitle: string): string | null {
+        // NOTE: No Unicode normalization - preserves content fidelity
+        const lines = content.split('\n');
+        let capturing = false;
+        let sectionContent: string[] = [];
+        let sectionLevel = 0;
+
+        for (const line of lines) {
+            if (line.startsWith('##')) {
+                const level = /^#+/.exec(line)?.[0].length || 0;
+                const title = line.substring(level).trim();
+
+                if (!capturing && title.toLowerCase().includes(sectionTitle.toLowerCase())) {
+                    capturing = true;
+                    sectionLevel = level;
+                    sectionContent.push(line);
+                } else if (capturing && level <= sectionLevel) {
+                    // End of section
+                    break;
+                } else if (capturing) {
+                    sectionContent.push(line);
+                }
+            } else if (capturing) {
+                sectionContent.push(line);
+            }
+        }
+
+        return sectionContent.length > 0 ? sectionContent.join('\n') : null;
+    }
+}
