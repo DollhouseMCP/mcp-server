@@ -37,7 +37,9 @@ describe('Memory Trigger Performance', () => {
   });
 
   afterEach(async () => {
-    // Ensure all pending file operations complete after each test
+    // FIX: Ensure all pending file operations complete after each test
+    // This is NOT redundant with afterAll - it provides inter-test isolation
+    // by ensuring each test's file operations complete before the next starts
     await new Promise(resolve => setImmediate(resolve));
   });
 
@@ -131,20 +133,23 @@ entries: []`;
       const memory = await memoryManager.load('filter-perf.yaml');
       const filterTime = Date.now() - startTime;
 
-      // Should filter to only valid triggers (but limited to first 20 of array)
-      // Since we interleave valid/invalid, we get about half valid from first 20
+      // FIX: Validate filtering behavior
+      // The system takes the first 20 triggers from the array, then filters for validity
+      // With alternating valid/invalid pattern (even=valid, odd=invalid),
+      // the first 20 contain 10 valid triggers (indices 0,2,4,6,8,10,12,14,16,18)
       expect(memory.metadata.triggers).toBeDefined();
-      expect(memory.metadata.triggers?.length).toBe(10); // About half of first 20 are valid
+      expect(memory.metadata.triggers?.length).toBe(10);
 
-      // All triggers should be valid
-      memory.metadata.triggers?.forEach(trigger => {
+      // All triggers should be valid (match alphanumeric-dash-underscore pattern)
+      for (const trigger of memory.metadata.triggers ?? []) {
         expect(trigger).toMatch(/^[a-zA-Z0-9\-_]+$/);
-      });
+      }
 
       // Should complete quickly even with filtering (< 300ms)
       expect(filterTime).toBeLessThan(300);
 
-      console.log(`Filtered 100 triggers to 50 valid in ${filterTime}ms`);
+      // FIX: Corrected log message to show actual count (10, not 50)
+      console.log(`Filtered 100 triggers to 10 valid in ${filterTime}ms`);
     });
 
     it('should handle memory save/load cycle with many triggers efficiently', async () => {
@@ -195,10 +200,10 @@ entries: []`;
       // Should have created 100 memories with 50 triggers each
       expect(memories).toHaveLength(100);
 
-      // Each memory should have its triggers
-      memories.forEach(memory => {
+      // FIX: Validate each memory has its triggers (using for...of per SonarCloud S7728)
+      for (const memory of memories) {
         expect(memory.metadata.triggers?.length).toBe(50);
-      });
+      }
 
       // Memory footprint should be reasonable
       // 100 memories * 50 triggers * ~20 bytes per trigger = ~100KB
