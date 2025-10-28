@@ -3,7 +3,7 @@
  * Tests performance with large numbers of triggers
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, afterEach, jest } from '@jest/globals';
 import { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../src/elements/memories/Memory.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
@@ -16,6 +16,9 @@ describe('Memory Trigger Performance', () => {
   let testDir: string;
   let memoriesDir: string;
   let originalPortfolioDir: string | undefined;
+
+  // Increase timeout for performance tests to prevent premature teardown
+  jest.setTimeout(30000);
 
   beforeAll(async () => {
     // Create test directory
@@ -33,7 +36,15 @@ describe('Memory Trigger Performance', () => {
     memoryManager = new MemoryManager();
   });
 
+  afterEach(async () => {
+    // Ensure all pending file operations complete after each test
+    await new Promise(resolve => setImmediate(resolve));
+  });
+
   afterAll(async () => {
+    // Ensure all pending operations complete
+    await new Promise(resolve => setImmediate(resolve));
+
     // Restore original portfolio dir
     if (originalPortfolioDir) {
       process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
@@ -44,8 +55,21 @@ describe('Memory Trigger Performance', () => {
     // Reset PortfolioManager singleton
     (PortfolioManager as any).instance = null;
 
-    // Clean up test directory
-    await fs.rm(testDir, { recursive: true, force: true });
+    // Clean up test directory with retry logic
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch (error) {
+      // Retry once after a brief delay if cleanup fails
+      await new Promise(resolve => setTimeout(resolve, 100));
+      try {
+        await fs.rm(testDir, { recursive: true, force: true });
+      } catch (retryError) {
+        console.warn('Failed to clean up test directory:', retryError);
+      }
+    }
+
+    // Final delay to ensure all async operations complete before teardown
+    await new Promise(resolve => setImmediate(resolve));
   });
 
   describe('Performance with Large Trigger Sets', () => {
