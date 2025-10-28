@@ -59,12 +59,14 @@ describe('Memory Trigger Performance', () => {
     try {
       await fs.rm(testDir, { recursive: true, force: true });
     } catch (error) {
+      // FIX: Log first failure before retrying (SonarCloud S2486)
+      console.warn('First cleanup attempt failed, retrying...', error);
       // Retry once after a brief delay if cleanup fails
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
         await fs.rm(testDir, { recursive: true, force: true });
       } catch (retryError) {
-        console.warn('Failed to clean up test directory:', retryError);
+        console.warn('Failed to clean up test directory after retry:', retryError);
       }
     }
 
