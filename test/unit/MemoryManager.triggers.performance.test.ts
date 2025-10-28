@@ -3,7 +3,7 @@
  * Tests performance with large numbers of triggers
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, afterEach, jest } from '@jest/globals';
 import { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../src/elements/memories/Memory.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
@@ -16,6 +16,9 @@ describe('Memory Trigger Performance', () => {
   let testDir: string;
   let memoriesDir: string;
   let originalPortfolioDir: string | undefined;
+
+  // Increase timeout for performance tests to prevent premature teardown
+  jest.setTimeout(30000);
 
   beforeAll(async () => {
     // Create test directory
@@ -33,7 +36,17 @@ describe('Memory Trigger Performance', () => {
     memoryManager = new MemoryManager();
   });
 
+  afterEach(async () => {
+    // FIX: Ensure all pending file operations complete after each test
+    // This is NOT redundant with afterAll - it provides inter-test isolation
+    // by ensuring each test's file operations complete before the next starts
+    await new Promise(resolve => setImmediate(resolve));
+  });
+
   afterAll(async () => {
+    // Ensure all pending operations complete
+    await new Promise(resolve => setImmediate(resolve));
+
     // Restore original portfolio dir
     if (originalPortfolioDir) {
       process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
@@ -44,8 +57,23 @@ describe('Memory Trigger Performance', () => {
     // Reset PortfolioManager singleton
     (PortfolioManager as any).instance = null;
 
-    // Clean up test directory
-    await fs.rm(testDir, { recursive: true, force: true });
+    // Clean up test directory with retry logic
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch (error) {
+      // FIX: Log first failure before retrying (SonarCloud S2486)
+      console.warn('First cleanup attempt failed, retrying...', error);
+      // Retry once after a brief delay if cleanup fails
+      await new Promise(resolve => setTimeout(resolve, 100));
+      try {
+        await fs.rm(testDir, { recursive: true, force: true });
+      } catch (retryError) {
+        console.warn('Failed to clean up test directory after retry:', retryError);
+      }
+    }
+
+    // Final delay to ensure all async operations complete before teardown
+    await new Promise(resolve => setImmediate(resolve));
   });
 
   describe('Performance with Large Trigger Sets', () => {
@@ -105,20 +133,23 @@ entries: []`;
       const memory = await memoryManager.load('filter-perf.yaml');
       const filterTime = Date.now() - startTime;
 
-      // Should filter to only valid triggers (but limited to first 20 of array)
-      // Since we interleave valid/invalid, we get about half valid from first 20
+      // FIX: Validate filtering behavior
+      // The system takes the first 20 triggers from the array, then filters for validity
+      // With alternating valid/invalid pattern (even=valid, odd=invalid),
+      // the first 20 contain 10 valid triggers (indices 0,2,4,6,8,10,12,14,16,18)
       expect(memory.metadata.triggers).toBeDefined();
-      expect(memory.metadata.triggers?.length).toBe(10); // About half of first 20 are valid
+      expect(memory.metadata.triggers?.length).toBe(10);
 
-      // All triggers should be valid
-      memory.metadata.triggers?.forEach(trigger => {
+      // All triggers should be valid (match alphanumeric-dash-underscore pattern)
+      for (const trigger of memory.metadata.triggers ?? []) {
         expect(trigger).toMatch(/^[a-zA-Z0-9\-_]+$/);
-      });
+      }
 
       // Should complete quickly even with filtering (< 300ms)
       expect(filterTime).toBeLessThan(300);
 
-      console.log(`Filtered 100 triggers to 50 valid in ${filterTime}ms`);
+      // FIX: Corrected log message to show actual count (10, not 50)
+      console.log(`Filtered 100 triggers to 10 valid in ${filterTime}ms`);
     });
 
     it('should handle memory save/load cycle with many triggers efficiently', async () => {
@@ -169,10 +200,10 @@ entries: []`;
       // Should have created 100 memories with 50 triggers each
       expect(memories).toHaveLength(100);
 
-      // Each memory should have its triggers
-      memories.forEach(memory => {
+      // FIX: Validate each memory has its triggers (using for...of per SonarCloud S7728)
+      for (const memory of memories) {
         expect(memory.metadata.triggers?.length).toBe(50);
-      });
+      }
 
       // Memory footprint should be reasonable
       // 100 memories * 50 triggers * ~20 bytes per trigger = ~100KB

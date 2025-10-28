@@ -46,6 +46,7 @@ jobs:
         run: npm run build
 
       - name: Configure package.json for GitHub Packages
+        shell: bash
         run: |
           # Create a temporary package.json for GitHub Packages
           # GitHub Packages requires the package name to match the org/repo format
@@ -61,6 +62,7 @@ jobs:
 
       - name: Check if version already published
         id: check_version
+        shell: bash
         run: |
           # Extract and validate version from package.json
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -95,6 +97,7 @@ jobs:
 
       - name: Publish to GitHub Packages
         if: steps.check_version.outputs.already_published == 'false'
+        shell: bash
         run: |
           # Publish to GitHub Packages
           # Registry is configured via setup-node step's registry-url parameter
@@ -105,17 +108,20 @@ jobs:
 
       - name: Skip publication (already exists)
         if: steps.check_version.outputs.already_published == 'true'
+        shell: bash
         run: |
           echo "⏭️ Skipping publication - version already exists on GitHub Packages"
           echo "This is expected if the tag was re-pushed or if multiple commits reference the same tag"
 
       - name: Restore original package.json
         if: always()
+        shell: bash
         run: |
           git checkout -- package.json
 
       - name: Notify success
         if: success()
+        shell: bash
         run: |
           if [ "${{ steps.check_version.outputs.already_published }}" == "true" ]; then
             echo "✅ Workflow completed successfully (publication skipped - version already exists)"
