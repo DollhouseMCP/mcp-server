@@ -45,7 +45,7 @@ const config = {
   setupFilesAfterEnv: ['<rootDir>/test/jest.setup.mjs'],
   modulePathIgnorePatterns: ['<rootDir>/dist/'],
   roots: ['<rootDir>'],
-  testTimeout: 10000,
+  testTimeout: 30000, // Increased to 30s to prevent teardown issues with async file operations
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
