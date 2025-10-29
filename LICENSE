@@ -3,30 +3,13 @@
 
 Copyright (C) 2024 Mick Darling <mick@mickdarling.com>
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version, SUBJECT TO THE ADDITIONAL TERMS
-specified at the end of this license.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 ================================================================================
-                            FULL LICENSE TERMS
+⚠️  IMPORTANT: This software is licensed under AGPL-3.0-or-later WITH
+    ADDITIONAL TERMS pursuant to Section 7. All terms are binding and
+    must be complied with together.
+    
+    See LICENSE-ADDITIONAL-TERMS.md for complete terms.
 ================================================================================
-
-                    GNU AFFERO GENERAL PUBLIC LICENSE
-                       Version 3, 19 November 2007
-
- Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
- Everyone is permitted to copy and distribute verbatim copies
- of this license document, but changing it is not allowed.
 
                             Preamble
 
@@ -682,82 +665,3 @@ specific requirements.
 if any, to sign a "copyright disclaimer" for the program, if necessary.
 For more information on this, and how to apply and follow the GNU AGPL, see
 <https://www.gnu.org/licenses/>.
-
-================================================================================
-              ADDITIONAL TERMS UNDER AGPL SECTION 7
-================================================================================
-
-The following additional terms apply to this work pursuant to Section 7 of
-the GNU Affero General Public License. These terms are binding and enforceable
-as part of the license agreement:
-
---------------------------------------------------------------------------------
-DUAL LICENSING NOTICE
---------------------------------------------------------------------------------
-
-DollhouseMCP is available under dual licensing:
-
-1. AGPL-3.0 (this license) - Free for personal, educational, and open source 
-   projects that comply with ALL terms in this license including additional 
-   terms below.
-
-2. Commercial License - For proprietary/commercial use without AGPL obligations.
-   See COMMERCIAL_LICENSE.md or contact: contact@dollhousemcp.com
-
-IMPORTANT: You must choose ONE license model. If you have not obtained a 
-separate commercial license agreement, this software is licensed under the 
-AGPL-3.0 WITH ALL ADDITIONAL TERMS BELOW. You cannot selectively comply with
-only some terms - all terms in this document apply together.
-
---------------------------------------------------------------------------------
-LICENSE TRANSITION NOTICE
---------------------------------------------------------------------------------
-
-This project was originally developed under the MIT License as "persona-mcp-server".
-On July 1, 2025, the copyright owner (Mick Darling) exercised their right to 
-relicense the work under AGPL-3.0 as part of the transformation to "DollhouseMCP". 
-This transition is documented in the git commit history and represents a lawful 
-relicensing of original work by the sole copyright holder. All code was authored 
-by Mick Darling, with no external contributors to the original MIT-licensed version.
-
---------------------------------------------------------------------------------
-DOLLHOUSEMCP PLATFORM STABILITY COMMITMENT
---------------------------------------------------------------------------------
-
-To protect users and creators, the following commitments apply:
-
-- Material changes to monetization terms require 90-day advance notice
-- Users retain full data portability rights at all times
-- Revenue sharing ratios locked for minimum 12 months after any change
-- Major policy changes require community feedback period
-- Users may export all content during transition periods
-
---------------------------------------------------------------------------------
-CREATOR PROTECTION CLAUSE
---------------------------------------------------------------------------------
-
-- No retroactive changes to existing persona licensing
-- Grandfathering of current creators under existing terms
-- Automatic content export tools always available
-- Platform cannot claim additional IP rights without explicit consent
-- Community advisory input on policy changes affecting monetization
-
---------------------------------------------------------------------------------
-BUSINESS CONTINUITY STANDARDS
---------------------------------------------------------------------------------
-
-In the event of ownership transfer or major platform changes:
-
-- 180-day transition period with existing terms maintained
-- User notification and opt-out rights
-- Data export assistance provided
-- Alternative platform migration support
-- Existing revenue sharing agreements honored
-
-================================================================================
-
-For more information about DollhouseMCP, visit: https://dollhousemcp.com
-
-These additional terms are binding under AGPL Section 7 and cannot be separated
-from the license. Failure to comply with ANY term in this license (including
-additional terms) constitutes a license violation.
