@@ -88,7 +88,7 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
     } catch (error) {
       // Directory doesn't exist or is empty - this is expected and safe to ignore during cleanup
       // No action needed as we're about to recreate the directory
-      void error; // SonarCloud S2486: Intentionally ignored during test cleanup
+      // Intentionally empty - test cleanup errors are expected and safe to ignore // NOSONAR
     }
 
     // Ensure memories directory exists
@@ -101,7 +101,7 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
     } catch (error) {
       // Directory doesn't exist - this is expected and safe to ignore during cleanup
       // Directory will be recreated in the try block above
-      void error; // SonarCloud S2486: Intentionally ignored during test cleanup
+      // Intentionally empty - test cleanup errors are expected and safe to ignore // NOSONAR
     }
 
     // Reset singletons for each test
