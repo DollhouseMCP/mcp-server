@@ -80,17 +80,20 @@ export class ServerStartup {
   /**
    * Process a single auto-load memory
    * FIX (SonarCloud): Extracted to reduce cognitive complexity
+   * FIX (SonarCloud): Reduced parameter count by using options object
    * @private
    */
   private async processAutoLoadMemory(
     memory: any,
     memoryManager: any,
-    totalTokens: number,
-    singleLimit: number | undefined,
-    totalBudget: number,
-    suppressWarnings: boolean,
-    totalMemories: number,
-    loadedCount: number
+    options: {
+      totalTokens: number;
+      singleLimit: number | undefined;
+      totalBudget: number;
+      suppressWarnings: boolean;
+      totalMemories: number;
+      loadedCount: number;
+    }
   ): Promise<{
     skip: boolean;
     breakLoop: boolean;
@@ -115,16 +118,16 @@ export class ServerStartup {
       const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
 
       // Check for size warnings
-      const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, suppressWarnings);
+      const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, options.suppressWarnings);
 
       // Check if memory should be skipped
-      const skipCheck = this.shouldSkipMemory(memoryName, estimatedTokens, totalTokens, singleLimit, totalBudget);
+      const skipCheck = this.shouldSkipMemory(memoryName, estimatedTokens, options.totalTokens, options.singleLimit, options.totalBudget);
       if (skipCheck.skip) {
         if (skipCheck.reason === 'budget_exceeded') {
-          const remaining = totalMemories - loadedCount;
+          const remaining = options.totalMemories - options.loadedCount;
           logger.info(
-            `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
-            `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
+            `[ServerStartup] Token budget reached (${options.totalTokens}/${options.totalBudget} tokens). ` +
+            `Loaded ${options.loadedCount} memories, skipping remaining ${remaining}.`
           );
           return { skip: false, breakLoop: true, skippedCount: remaining, estimatedTokens: 0, warnings: 0 };
         }
@@ -140,8 +143,8 @@ export class ServerStartup {
         additionalData: {
           memoryName,
           estimatedTokens,
-          priority: (memory.metadata as any).priority,
-          totalTokensSoFar: totalTokens + estimatedTokens
+          priority: memory.metadata.priority,
+          totalTokensSoFar: options.totalTokens + estimatedTokens
         }
       });
 
@@ -326,12 +329,14 @@ export class ServerStartup {
         const result = await this.processAutoLoadMemory(
           memory,
           memoryManager,
-          totalTokens,
-          singleLimit,
-          totalBudget,
-          suppressWarnings,
-          autoLoadMemories.length,
-          loadedCount
+          {
+            totalTokens,
+            singleLimit,
+            totalBudget,
+            suppressWarnings,
+            totalMemories: autoLoadMemories.length,
+            loadedCount
+          }
         );
 
         if (result.breakLoop) {
