@@ -403,7 +403,7 @@ Test content
       // then restores normal permissions (0o644) so temp directory cleanup succeeds.
       // This is test-only code in isolated temp directory, not production.
       // SonarCloud: Reviewed and approved - necessary for test cleanup
-      await fs.chmod(memoryPath, 0o644);
+      await fs.chmod(memoryPath, 0o644); // NOSONAR - Test cleanup in isolated temp directory
     });
 
     it('should handle corrupted config gracefully', async () => {
