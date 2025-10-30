@@ -1,0 +1,602 @@
+---
+name: token-estimation-guidelines
+type: memory
+description: Guidelines for estimating and optimizing token usage in auto-load memories
+version: 1.0.0
+author: DollhouseMCP
+category: documentation
+tags:
+  - tokens
+  - optimization
+  - guidelines
+  - auto-load
+  - performance
+triggers:
+  - token-estimation
+  - token-guidelines
+  - optimize-tokens
+  - token-budget
+  - token-usage
+autoLoad: false
+priority: 999
+retention: permanent
+privacyLevel: public
+searchable: true
+trustLevel: VALIDATED
+---
+
+# Token Estimation Guidelines for Auto-Load Memories
+
+## Understanding Tokens
+
+### What Are Tokens?
+
+Tokens are the fundamental units that AI models process. Think of them as "word pieces":
+
+- **1 token** ≈ 4 characters in English
+- **1 token** ≈ 0.75 words (conservative estimate)
+- **100 tokens** ≈ 75 words ≈ 1 paragraph
+- **1,000 tokens** ≈ 750 words ≈ 1-2 pages
+
+**Examples**:
+```
+"Hello, world!" = 4 tokens
+"The quick brown fox jumps" = 5 tokens
+"DollhouseMCP" = 3 tokens (Doll-house-MCP)
+```
+
+### Why Tokens Matter for Auto-Load
+
+Auto-load memories consume tokens at **every startup**:
+
+- **Token Budget**: Default 5,000 tokens (~3,750 words)
+- **Impact**: Larger memories = less room for other memories
+- **Performance**: More tokens = longer startup time
+- **Cost**: Some AI services charge per token
+
+**Goal**: Maximize value per token.
+
+## DollhouseMCP Estimation Method
+
+### The Formula
+
+```typescript
+estimatedTokens = Math.ceil(wordCount / 0.75)
+```
+
+**Conservative estimate**: 1 token per 0.75 words
+
+### Example Calculation
+
+```
+Content: "The quick brown fox jumps over the lazy dog"
+Word count: 9 words
+Estimated tokens: 9 / 0.75 = 12 tokens
+```
+
+### Accuracy
+
+- **Conservative**: Tends to overestimate slightly
+- **English-optimized**: Best for English text
+- **Code-aware**: May underestimate for code-heavy content
+
+**Comparison to other estimators**:
+- DollhouseMCP: 12 tokens (conservative)
+- Actual (Claude): 10-11 tokens (varies by model)
+- OpenAI tiktoken: 9-10 tokens
+
+**Recommendation**: Use DollhouseMCP estimate for budgeting, actual usage will be slightly lower.
+
+## Token Size Categories
+
+### Micro (0-500 tokens)
+
+**~0-375 words, ~0-0.5 pages**
+
+**Best For**:
+- Quick reference cards
+- Cheat sheets
+- Key definitions
+- Contact lists
+
+**Example**:
+```yaml
+name: team-contacts
+tokens: 350
+content: |
+  # Team Contacts
+
+  - PM: Jane (@jane)
+  - Tech Lead: Bob (@bob)
+  - DevOps: Alice (@alice)
+
+  ## Escalation
+  1. Team Lead → Director → VP
+  2. After hours: On-call rotation (PagerDuty)
+```
+
+### Small (500-1,500 tokens)
+
+**~375-1,125 words, ~0.5-1.5 pages**
+
+**Best For**:
+- Coding standards summaries
+- API endpoint lists
+- Configuration options
+- Brief project overviews
+
+**Example**:
+```yaml
+name: coding-standards
+tokens: 1,200
+content: |
+  # Coding Standards
+
+  ## TypeScript
+  - Use strict mode
+  - No `any` types
+  - Prefer interfaces over types
+
+  ## Testing
+  - Coverage >80%
+  - Jest for unit tests
+  - Playwright for E2E
+
+  ## PR Process
+  1. Feature branch from main
+  2. Write tests first
+  3. Get 2 approvals
+  4. Squash merge
+```
+
+### Medium (1,500-5,000 tokens)
+
+**~1,125-3,750 words, ~1.5-5 pages**
+
+**Best For**:
+- Project architecture overviews
+- Domain knowledge primers
+- Team onboarding guides
+- Detailed API references
+
+**Example**:
+```yaml
+name: project-architecture
+tokens: 3,500
+content: |
+  # Project Architecture
+
+  ## System Overview
+  MyApp is a 3-tier web application...
+
+  ## Components
+  ### Frontend (React)
+  - User interface
+  - State management (Redux)
+  - API client
+
+  ### Backend (Node.js)
+  - REST API (Express)
+  - Business logic
+  - Authentication (JWT)
+
+  ### Database (PostgreSQL)
+  - User data
+  - Transaction logs
+  - Analytics
+
+  ## Deployment
+  - Dev: AWS ECS (fargate)
+  - Staging: AWS ECS (fargate)
+  - Prod: AWS ECS (EC2 reserved)
+
+  [... detailed sections ...]
+```
+
+### Large (5,000-10,000 tokens)
+
+**~3,750-7,500 words, ~5-10 pages**
+
+**Best For**:
+- Comprehensive documentation
+- Extensive domain knowledge
+- Multi-project context
+
+**Warning**: May trigger warnings, consider splitting.
+
+**Example**:
+```yaml
+name: healthcare-domain-knowledge
+tokens: 7,800
+content: |
+  # Healthcare Domain Knowledge
+
+  ## Medical Terminology
+  [Extensive glossary...]
+
+  ## Regulatory Compliance
+  [HIPAA, GDPR, etc...]
+
+  ## Clinical Workflows
+  [Patient intake, treatment, discharge...]
+
+  ## Coding Systems
+  [ICD-10, CPT, SNOMED...]
+```
+
+### Very Large (10,000+ tokens)
+
+**~7,500+ words, ~10+ pages**
+
+**Not Recommended for Auto-Load**
+
+**Why**:
+- Exceeds default budget alone
+- Slows startup significantly
+- Likely contains unnecessary detail
+
+**Solution**: Split into focused memories or use on-demand loading.
+
+## Optimization Strategies
+
+### Strategy 1: Use Bullet Points
+
+**Before** (verbose):
+```
+The application uses a three-tier architecture. The frontend is
+implemented using React and handles all user interactions. The
+backend is built with Node.js and Express and provides a REST API
+for the frontend to consume. The database layer uses PostgreSQL
+to store persistent data.
+```
+
+**Tokens**: ~60
+
+**After** (bullet points):
+```
+Architecture:
+- Frontend: React (user interface)
+- Backend: Node.js + Express (REST API)
+- Database: PostgreSQL (persistent storage)
+```
+
+**Tokens**: ~30 (50% reduction)
+
+### Strategy 2: Remove Examples
+
+**Before**:
+```
+Use TypeScript strict mode.
+
+Bad:
+function add(a, b) { return a + b; }
+
+Good:
+function add(a: number, b: number): number { return a + b; }
+```
+
+**Tokens**: ~40
+
+**After**:
+```
+Use TypeScript strict mode (type all parameters and returns).
+```
+
+**Tokens**: ~12 (70% reduction)
+
+### Strategy 3: Link Instead of Embed
+
+**Before**:
+```
+[Paste entire API documentation - 5,000 tokens]
+```
+
+**After**:
+```
+API Docs: https://docs.company.com/api
+
+Quick Reference:
+- GET /users - List users
+- POST /users - Create user
+- PUT /users/:id - Update user
+- DELETE /users/:id - Delete user
+```
+
+**Tokens**: ~50 (99% reduction)
+
+### Strategy 4: Use Abbreviations
+
+**Before**:
+```
+The application programming interface endpoint for creating
+a new user account requires authentication via JSON Web Token
+in the Authorization header following the Bearer authentication
+scheme.
+```
+
+**Tokens**: ~40
+
+**After**:
+```
+User creation API endpoint requires JWT Bearer auth in Authorization header.
+```
+
+**Tokens**: ~15 (62% reduction)
+
+### Strategy 5: Remove Redundancy
+
+**Before**:
+```
+The frontend uses React. React is a JavaScript library for
+building user interfaces. We chose React because it's popular
+and has a large ecosystem of libraries and tools.
+```
+
+**Tokens**: ~35
+
+**After**:
+```
+Frontend: React (popular, large ecosystem)
+```
+
+**Tokens**: ~8 (77% reduction)
+
+### Strategy 6: Structured Lists Instead of Prose
+
+**Before**:
+```
+Our deployment process starts with creating a feature branch,
+then you write your code and tests, after that you open a pull
+request and get two approvals, and finally you merge to main
+which triggers automatic deployment to staging and then after
+QA approval it goes to production.
+```
+
+**Tokens**: ~60
+
+**After**:
+```
+Deployment:
+1. Create feature branch
+2. Write code + tests
+3. Open PR (2 approvals required)
+4. Merge → staging (auto)
+5. QA approval → production
+```
+
+**Tokens**: ~30 (50% reduction)
+
+## Token Budgeting
+
+### Default Budget (5,000 tokens)
+
+**Recommended Distribution**:
+
+```yaml
+# System baseline (1,000 tokens)
+dollhousemcp-baseline-knowledge: 1,000
+
+# Organizational context (1,500 tokens)
+company-coding-standards: 800
+security-policies: 700
+
+# Team context (1,500 tokens)
+team-patterns: 1,000
+domain-knowledge: 500
+
+# Project context (1,000 tokens)
+project-architecture: 600
+current-sprint: 400
+
+# Total: 5,000 tokens
+```
+
+### Expanded Budget (10,000 tokens)
+
+For larger teams or complex projects:
+
+```yaml
+autoLoad:
+  maxTokenBudget: 10000
+```
+
+**Recommended Distribution**:
+
+```yaml
+# System (1,000)
+dollhousemcp-baseline-knowledge: 1,000
+
+# Organizational (2,500)
+company-standards: 1,200
+security-compliance: 800
+architecture-principles: 500
+
+# Team (3,500)
+team-patterns: 1,500
+domain-knowledge: 1,000
+api-conventions: 1,000
+
+# Project (2,500)
+project-architecture: 1,500
+current-sprint: 600
+recent-decisions: 400
+
+# Reference (500)
+error-codes: 300
+common-commands: 200
+
+# Total: 10,000 tokens
+```
+
+### Aggressive Budget (15,000+ tokens)
+
+**Warning**: May impact startup performance.
+
+**Use Cases**:
+- Highly specialized domains (medical, legal, financial)
+- Large enterprise with complex context
+- Documentation-heavy projects
+
+**Recommendation**: Monitor startup time, consider splitting into multiple smaller memories instead.
+
+## Measuring Token Usage
+
+### Method 1: Validation Command
+
+```bash
+dollhouse validate memory my-memory
+
+# Output includes:
+# "Estimated tokens: 1,234"
+```
+
+### Method 2: Startup Logs
+
+```bash
+# Look for auto-load summary in logs:
+# "[ServerStartup] Auto-load complete: 5 memories loaded (~3,200 tokens)"
+```
+
+### Method 3: Bulk Analysis
+
+```bash
+# Get token counts for all auto-load memories
+for memory in $(dollhouse list memories --filter autoLoad=true --json | jq -r '.[].name'); do
+  echo "Memory: $memory"
+  dollhouse validate memory "$memory" | grep "Estimated tokens"
+done
+```
+
+### Method 4: Configuration Review
+
+```bash
+# Check current budget
+dollhouse config show autoLoad.maxTokenBudget
+
+# Check budget utilization
+dollhouse config show autoLoad | grep -E "(maxTokenBudget|totalLoaded)"
+```
+
+## Performance Impact
+
+### Startup Time
+
+Token count affects startup time:
+
+- **1,000 tokens**: +5ms
+- **5,000 tokens**: +25ms (default)
+- **10,000 tokens**: +50ms
+- **20,000 tokens**: +100ms (not recommended)
+
+**Guideline**: Keep total under 10,000 tokens for fast startup.
+
+### Memory Usage
+
+Each token consumes ~4 bytes in memory:
+
+- **5,000 tokens**: ~20 KB
+- **10,000 tokens**: ~40 KB
+- **50,000 tokens**: ~200 KB
+
+**Guideline**: Memory usage is negligible for typical budgets.
+
+### Cost Impact (for paid AI services)
+
+Some AI services charge per token:
+
+- **Claude**: $0.015 per 1K tokens (input)
+- **GPT-4**: $0.03 per 1K tokens (input)
+
+**Example**:
+- 5,000 tokens per startup
+- 100 startups per day
+- 500,000 tokens per day
+- Claude cost: $7.50/day = $225/month
+
+**Guideline**: For high-frequency usage, optimize aggressively.
+
+## Troubleshooting
+
+### Issue 1: Budget Exceeded
+
+**Symptom**: "Token budget reached, loaded X memories, skipping remaining Y"
+
+**Diagnosis**:
+```bash
+# List auto-load memories with estimates
+dollhouse list memories --filter autoLoad=true --format detailed
+```
+
+**Solutions**:
+1. Increase budget: `autoLoad.maxTokenBudget: 10000`
+2. Optimize large memories (see optimization strategies)
+3. Reduce priority of less-important memories
+4. Remove rarely-used memories from auto-load
+
+### Issue 2: Memory Too Large Warning
+
+**Symptom**: "Memory 'xyz' is very large (~12,000 tokens)"
+
+**Diagnosis**:
+```bash
+# Validate specific memory
+dollhouse validate memory xyz
+
+# Check word count
+wc -w ~/.dollhouse/portfolio/memories/xyz.yaml
+```
+
+**Solutions**:
+1. Split into multiple focused memories
+2. Remove verbose examples
+3. Link to external docs instead of embedding
+4. Use bullet points instead of paragraphs
+5. Set `maxSingleMemoryTokens` limit
+
+### Issue 3: Slow Startup
+
+**Symptom**: Startup takes >500ms
+
+**Diagnosis**:
+```bash
+# Check total tokens loaded
+# Look in logs: "[ServerStartup] Auto-load complete: ... (~X tokens)"
+```
+
+**Solutions**:
+1. Reduce total token budget
+2. Optimize memories (target 60-80% budget utilization)
+3. Remove auto-load flag from rarely-used memories
+4. Consider caching (already implemented in v1.9.25+)
+
+## Quick Reference
+
+| Size | Tokens | Words | Pages | Best For |
+|------|--------|-------|-------|----------|
+| Micro | 0-500 | 0-375 | 0-0.5 | Quick reference, contact lists |
+| Small | 500-1.5K | 375-1.1K | 0.5-1.5 | Standards summary, API lists |
+| Medium | 1.5K-5K | 1.1K-3.8K | 1.5-5 | Architecture, domain knowledge |
+| Large | 5K-10K | 3.8K-7.5K | 5-10 | Comprehensive docs (split recommended) |
+| Very Large | 10K+ | 7.5K+ | 10+ | Not recommended for auto-load |
+
+## Token Optimization Checklist
+
+- [ ] Use bullet points instead of paragraphs
+- [ ] Remove verbose examples (link to docs instead)
+- [ ] Abbreviate common terms (API, JWT, DB, etc.)
+- [ ] Use structured lists for processes
+- [ ] Remove redundant explanations
+- [ ] Link to external docs for details
+- [ ] Use tables for comparisons
+- [ ] Remove "filler" words (the, a, an, that, which)
+- [ ] Target 60-80% budget utilization
+- [ ] Review and optimize quarterly
+
+## Related Documentation
+
+- [How to Create Custom Auto-Load Memories](./how-to-create-custom-auto-load-memories.yaml)
+- [Priority Best Practices for Teams](./priority-best-practices-for-teams.yaml)
+
+---
+
+**Last Updated**: v1.9.25 (October 2025)

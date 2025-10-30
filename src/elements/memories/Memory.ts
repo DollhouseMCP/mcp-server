@@ -90,6 +90,9 @@ export interface MemoryMetadata extends IElementMetadata {
   minTermLength?: number;
   // Trigger words for Enhanced Index (Issue #1124)
   triggers?: string[];
+  // Auto-load configuration (Issue #1430)
+  autoLoad?: boolean;
+  priority?: number;
 }
 
 export interface MemoryEntry {
