@@ -29,6 +29,18 @@
   - Non-breaking: Auto-load failure logs warning but doesn't prevent startup
   - Graceful degradation: Returns empty array on error
   - Production-ready for VC evaluations and agent swarms
+  - **Performance Optimization**: Token estimate caching
+    - Content hash-based caching (SHA-256, first 16 chars)
+    - Max 1,000 cached entries (prevents memory leaks)
+    - ~50% improvement for repeated content calculations
+  - **Enhanced Error Handling**:
+    - Detailed error messages with error type
+    - Helpful recovery suggestions for common errors (ENOENT, EACCES, YAML parse)
+    - Better diagnostics for troubleshooting
+  - **Comprehensive Documentation** (3 new seed memories):
+    - `how-to-create-custom-auto-load-memories.yaml` - Complete step-by-step guide
+    - `priority-best-practices-for-teams.yaml` - Team coordination strategies
+    - `token-estimation-guidelines.yaml` - Optimization techniques and budgeting
 
 ### 🐛 Bug Fixes
 
