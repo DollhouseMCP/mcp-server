@@ -514,7 +514,7 @@ export class MemoryManager implements IElementManager<Memory> {
       }
 
       return memories;
-      
+
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
         // Directory doesn't exist yet
@@ -523,7 +523,53 @@ export class MemoryManager implements IElementManager<Memory> {
       throw error;
     }
   }
-  
+
+  /**
+   * Get memories marked for auto-loading on server initialization
+   * Filters memories by autoLoad flag and sorts by priority (lower = higher priority)
+   * Issue #1430: Auto-load baseline memories feature
+   *
+   * @returns Promise resolving to array of auto-load memories sorted by priority
+   */
+  async getAutoLoadMemories(): Promise<Memory[]> {
+    try {
+      // Get all memories
+      const allMemories = await this.list();
+
+      // Filter for auto-load memories
+      // Cast metadata to MemoryMetadata to access autoLoad property
+      const autoLoadMemories = allMemories.filter(memory => {
+        const memoryMeta = memory.metadata as MemoryMetadata;
+        return memoryMeta?.autoLoad === true;
+      });
+
+      // Sort by priority (lower number = higher priority, undefined = lowest priority)
+      autoLoadMemories.sort((a, b) => {
+        const memoryMetaA = a.metadata as MemoryMetadata;
+        const memoryMetaB = b.metadata as MemoryMetadata;
+        const priorityA = memoryMetaA?.priority ?? 999;
+        const priorityB = memoryMetaB?.priority ?? 999;
+        return priorityA - priorityB;
+      });
+
+      logger.debug(`[MemoryManager] Found ${autoLoadMemories.length} auto-load memories`, {
+        memories: autoLoadMemories.map(m => {
+          const memoryMeta = m.metadata as MemoryMetadata;
+          return {
+            name: memoryMeta.name,
+            priority: memoryMeta?.priority ?? 999
+          };
+        })
+      });
+
+      return autoLoadMemories;
+    } catch (error) {
+      logger.error('[MemoryManager] Failed to get auto-load memories:', error);
+      // Return empty array on error to prevent server startup failure
+      return [];
+    }
+  }
+
   /**
    * Check root files for load failures
    * FIX (SonarCloud S3776): Extract to reduce cognitive complexity

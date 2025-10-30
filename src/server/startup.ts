@@ -4,6 +4,7 @@
 
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
+import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { logger } from '../utils/logger.js';
 
 export interface StartupOptions {
@@ -64,6 +65,36 @@ export class ServerStartup {
         logger.info(`[ServerStartup]   - ${type}: ${count} elements`);
       }
     });
+
+    // Issue #1430: Load and report auto-load memories
+    await this.initializeAutoLoadMemories();
+  }
+
+  /**
+   * Initialize auto-load memories
+   * Issue #1430: Automatically load baseline memories on server startup
+   * @private
+   */
+  private async initializeAutoLoadMemories(): Promise<void> {
+    try {
+      const memoryManager = new MemoryManager();
+      const autoLoadMemories = await memoryManager.getAutoLoadMemories();
+
+      if (autoLoadMemories.length > 0) {
+        logger.info(`[ServerStartup] Auto-load memories: ${autoLoadMemories.length} baseline memories loaded`);
+        autoLoadMemories.forEach((memory, index) => {
+          const memoryMeta = memory.metadata as any;
+          const priority = memoryMeta?.priority ?? 999;
+          const name = memoryMeta?.name || 'Unnamed';
+          logger.info(`[ServerStartup]   ${index + 1}. ${name} (priority: ${priority})`);
+        });
+      } else {
+        logger.debug('[ServerStartup] No auto-load memories configured');
+      }
+    } catch (error) {
+      // Don't fail startup if auto-load fails
+      logger.warn('[ServerStartup] Failed to load auto-load memories:', error);
+    }
   }
   
   /**
