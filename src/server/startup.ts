@@ -89,6 +89,11 @@ export class ServerStartup {
       }
 
       const memoryManager = new MemoryManager();
+
+      // Issue #1430: Install seed memories before loading auto-load memories
+      // This ensures baseline knowledge is available on first run
+      await memoryManager.installSeedMemories();
+
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
 
       if (autoLoadMemories.length > 0) {

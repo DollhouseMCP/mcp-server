@@ -571,6 +571,96 @@ export class MemoryManager implements IElementManager<Memory> {
   }
 
   /**
+   * Install seed memories from the seed-elements directory
+   * Issue #1430: Copy baseline memory to user portfolio on first run
+   *
+   * Copies seed files from src/seed-elements/memories/ to the user's portfolio
+   * if they don't already exist. This allows users to have baseline knowledge
+   * available immediately without manual installation.
+   *
+   * @returns Promise resolving when installation is complete
+   */
+  async installSeedMemories(): Promise<void> {
+    try {
+      // Define the seed file
+      const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
+
+      // Construct paths
+      // When running from dist/elements/memories/MemoryManager.js:
+      //   Go up to dist/ then into seed-elements/memories/
+      // When running from src/elements/memories/MemoryManager.ts:
+      //   Go up to src/ then into seed-elements/memories/
+      const currentModuleDir = path.dirname(new URL(import.meta.url).pathname);
+
+      // Try dist location first (production/built code)
+      let seedSourcePath = path.resolve(currentModuleDir, '../../seed-elements/memories', seedFileName);
+
+      // Check if it exists, if not try src location (development/test)
+      try {
+        await fs.access(seedSourcePath);
+      } catch {
+        // Try src location
+        seedSourcePath = path.resolve(currentModuleDir, '../../../src/seed-elements/memories', seedFileName);
+      }
+
+      // Check if the seed file exists
+      try {
+        await fs.access(seedSourcePath);
+      } catch {
+        logger.warn(`[MemoryManager] Seed file not found at ${seedSourcePath}, skipping installation`);
+        return;
+      }
+
+      // Check if file already exists in user portfolio
+      // Check both date-based folders and root
+      const exists = await this.exists(seedFileName);
+      if (exists) {
+        logger.debug(`[MemoryManager] Seed memory '${seedFileName}' already exists in portfolio, skipping installation`);
+        return;
+      }
+
+      // Also check in date folders
+      const dateFolders = await this.getDateFolders();
+      for (const dateFolder of dateFolders) {
+        const testPath = path.join(dateFolder, seedFileName);
+        if (await this.exists(testPath)) {
+          logger.debug(`[MemoryManager] Seed memory '${seedFileName}' already exists at ${testPath}, skipping installation`);
+          return;
+        }
+      }
+
+      // Read the seed file
+      logger.info(`[MemoryManager] Installing seed memory: ${seedFileName}`);
+      const seedContent = await fs.readFile(seedSourcePath, 'utf-8');
+
+      // Parse and create memory instance
+      const memory = await this.importElement(seedContent, 'yaml');
+
+      // Save to portfolio (this will use date-based path)
+      await this.save(memory);
+
+      logger.info(`[MemoryManager] Successfully installed seed memory: ${seedFileName}`);
+
+      SecurityMonitor.logSecurityEvent({
+        type: 'SEED_MEMORY_INSTALLED',
+        severity: 'LOW',
+        source: 'MemoryManager.installSeedMemories',
+        details: `Installed seed memory: ${seedFileName}`
+      });
+
+    } catch (error) {
+      // Log error but don't throw - seed installation should not break server startup
+      logger.warn(`[MemoryManager] Failed to install seed memories: ${error}`);
+      SecurityMonitor.logSecurityEvent({
+        type: 'SEED_MEMORY_INSTALLATION_FAILED',
+        severity: 'LOW',
+        source: 'MemoryManager.installSeedMemories',
+        details: `Failed to install seed memories: ${error}`
+      });
+    }
+  }
+
+  /**
    * Check root files for load failures
    * FIX (SonarCloud S3776): Extract to reduce cognitive complexity
    * @private
@@ -748,16 +838,20 @@ export class MemoryManager implements IElementManager<Memory> {
           if (data.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
             throw new Error('YAML content exceeds maximum allowed size');
           }
-          
-          // Create a wrapper to use SecureYamlParser with pure YAML
-          // Add minimal frontmatter markers to satisfy parser
-          const wrappedYaml = `---\n${data}\n---\n`;
-          
-          const parseResult = SecureYamlParser.parse(wrappedYaml, {
+
+          // Check if content already has frontmatter markers
+          const trimmedData = data.trim();
+          const hasFrontmatter = trimmedData.startsWith('---');
+
+          // Create a wrapper to use SecureYamlParser with pure YAML if needed
+          // Only add frontmatter markers if not already present
+          const contentToParse = hasFrontmatter ? data : `---\n${data}\n---\n`;
+
+          const parseResult = SecureYamlParser.parse(contentToParse, {
             maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
             validateContent: true
           });
-          
+
           // Extract the parsed data (will be in the 'data' property)
           parsed = parseResult.data;
           
@@ -772,9 +866,14 @@ export class MemoryManager implements IElementManager<Memory> {
       }
       
       // Handle different structures from YAML parsing
-      let metadata = parsed.metadata;
-      let entries = parsed.entries || (parsed.data && parsed.data.entries);
-      
+      // After SecureYamlParser.parse(), 'parsed' is already parseResult.data
+      // Structure can be:
+      // 1. parsed.metadata + parsed.data.entries (test format)
+      // 2. parsed.metadata + parsed.entries (saved format)
+      // 3. parsed with fields directly (seed files)
+      let metadata = parsed.metadata || parsed;
+      let entries = parsed.entries || parsed.data?.entries;
+
       // Validate required fields
       if (!metadata || !metadata.name) {
         throw new Error('Memory must have metadata with name');
@@ -964,7 +1063,10 @@ export class MemoryManager implements IElementManager<Memory> {
         (metadataSource.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS),
       privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: metadataSource.searchable !== false,
-      maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
+      maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+      // FIX #1430: Extract auto-load configuration
+      autoLoad: metadataSource.autoLoad,
+      priority: metadataSource.priority
     };
 
     // Enhanced trigger validation and logging

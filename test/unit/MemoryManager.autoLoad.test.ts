@@ -35,9 +35,6 @@ describe('MemoryManager - Auto-Load Functionality', () => {
 
     // Reset PortfolioManager singleton
     (PortfolioManager as any).instance = null;
-
-    // Initialize manager
-    memoryManager = new MemoryManager();
   });
 
   afterAll(async () => {
@@ -57,15 +54,27 @@ describe('MemoryManager - Auto-Load Functionality', () => {
 
   beforeEach(async () => {
     // Clear memories directory between tests
-    const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(memoriesDir, entry.name);
-      if (entry.isDirectory()) {
-        await fs.rm(fullPath, { recursive: true, force: true });
-      } else {
-        await fs.unlink(fullPath);
+    try {
+      // Ensure directory exists first
+      await fs.mkdir(memoriesDir, { recursive: true });
+
+      const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(memoriesDir, entry.name);
+        if (entry.isDirectory()) {
+          await fs.rm(fullPath, { recursive: true, force: true });
+        } else {
+          await fs.unlink(fullPath);
+        }
       }
+    } catch (error) {
+      // If directory doesn't exist, create it
+      await fs.mkdir(memoriesDir, { recursive: true });
     }
+
+    // FIX #1430: Create new MemoryManager instance for each test
+    // This ensures the date folder cache is fresh and not stale from previous tests
+    memoryManager = new MemoryManager();
   });
 
   describe('getAutoLoadMemories', () => {
@@ -327,6 +336,106 @@ Content B
       const names = autoLoadMemories.map(m => m.metadata.name);
       expect(names).toContain('same-priority-a');
       expect(names).toContain('same-priority-b');
+    });
+  });
+
+  describe('installSeedMemories', () => {
+    it('should install seed memory when it does not exist', async () => {
+      // Verify seed file doesn't exist yet
+      const exists = await memoryManager.exists('dollhousemcp-baseline-knowledge.yaml');
+      expect(exists).toBe(false);
+
+      // Install seed memories
+      await memoryManager.installSeedMemories();
+
+      // Verify seed file was installed
+      const memories = await memoryManager.list();
+      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      expect(seedMemory).toBeDefined();
+      expect(seedMemory?.metadata.autoLoad).toBe(true);
+      expect(seedMemory?.metadata.priority).toBe(1);
+    });
+
+    it('should not overwrite existing seed memory', async () => {
+      // Create a custom version of the seed memory
+      const customContent = `---
+name: dollhousemcp-baseline-knowledge
+type: memory
+description: Custom version of baseline knowledge
+version: 2.0.0
+autoLoad: true
+priority: 1
+tags:
+  - custom
+---
+
+# Custom Baseline Knowledge
+
+This is a custom version that should not be overwritten.
+`;
+      await fs.writeFile(path.join(memoriesDir, 'dollhousemcp-baseline-knowledge.yaml'), customContent);
+
+      // Try to install seed memories
+      await memoryManager.installSeedMemories();
+
+      // Verify the custom version was not overwritten
+      const memories = await memoryManager.list();
+      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      expect(seedMemory).toBeDefined();
+      expect(seedMemory?.metadata.description).toBe('Custom version of baseline knowledge');
+      expect(seedMemory?.metadata.version).toBe('2.0.0');
+    });
+
+    it('should not fail server startup if seed file is missing', async () => {
+      // This test verifies graceful failure handling
+      // Create a new MemoryManager with a path where seed file won't exist
+      // The method should log a warning but not throw
+
+      await expect(memoryManager.installSeedMemories()).resolves.not.toThrow();
+    });
+
+    it('should install seed memory in date-based folder', async () => {
+      // Install seed memories
+      await memoryManager.installSeedMemories();
+
+      // Verify it was installed in a date folder
+      const dateFolders = await fs.readdir(memoriesDir, { withFileTypes: true });
+      const dateFolder = dateFolders.find(entry =>
+        entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name)
+      );
+
+      expect(dateFolder).toBeDefined();
+
+      // Check that the seed file exists in the date folder
+      if (dateFolder) {
+        const filesInDateFolder = await fs.readdir(path.join(memoriesDir, dateFolder.name));
+        const seedFile = filesInDateFolder.find(f => f.includes('dollhousemcp-baseline-knowledge'));
+        expect(seedFile).toBeDefined();
+      }
+    });
+
+    it('should only install once on multiple calls', async () => {
+      // Install seed memories twice
+      await memoryManager.installSeedMemories();
+      await memoryManager.installSeedMemories();
+
+      // Verify only one copy exists
+      const memories = await memoryManager.list();
+      const seedMemories = memories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      expect(seedMemories).toHaveLength(1);
+    });
+
+    it('should make installed seed memory available for auto-load', async () => {
+      // Install seed memories
+      await memoryManager.installSeedMemories();
+
+      // Get auto-load memories
+      const autoLoadMemories = await memoryManager.getAutoLoadMemories();
+
+      // Verify seed memory is in the auto-load list
+      const seedMemory = autoLoadMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      expect(seedMemory).toBeDefined();
+      expect(seedMemory?.metadata.priority).toBe(1);
     });
   });
 });

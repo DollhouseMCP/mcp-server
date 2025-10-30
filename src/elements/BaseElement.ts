@@ -102,6 +102,15 @@ export abstract class BaseElement implements IElement {
       baseMetadata.triggers = (metadata as any).triggers;
     }
 
+    // FIX #1430: Preserve autoLoad and priority fields for Memory elements
+    // These fields control automatic loading of baseline memories
+    if ('autoLoad' in metadata && typeof (metadata as any).autoLoad === 'boolean') {
+      baseMetadata.autoLoad = (metadata as any).autoLoad;
+    }
+    if ('priority' in metadata && typeof (metadata as any).priority === 'number') {
+      baseMetadata.priority = (metadata as any).priority;
+    }
+
     this.metadata = baseMetadata;
     
     // Initialize optional features
