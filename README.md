@@ -179,18 +179,9 @@ Persistent context across sessions with intelligent organization
 - **YAML format** - Human-readable structured data (vs Markdown for other elements)
 - **Smart deduplication** - SHA-256 hashing prevents duplicate storage
 - **Search indexing** - Fast queries across thousands of entries
-- **Auto-load memories** <span style="background-color: #2196F3; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">NEW in v1.9.25</span> - Automatically load baseline knowledge on server startup
 - **Use**: `"Create a memory for this project"` or `"Remember this conversation"`
 
 **Typical file sizes**: Single memories up to ~100KB, folder structure enables unlimited collections
-
-**Auto-Load Memories**: Mark memories with `autoLoad: true` to automatically load them when the server starts. Perfect for:
-- Baseline system knowledge (included by default)
-- Team onboarding information
-- Project context that should always be available
-- Agent initialization data
-
-Configure priority (lower numbers load first) and control via `~/.dollhouse/config.yml`
 
 </td>
 </tr>
