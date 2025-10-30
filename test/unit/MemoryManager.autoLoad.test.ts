@@ -69,6 +69,7 @@ describe('MemoryManager - Auto-Load Functionality', () => {
       }
     } catch (error) {
       // Directory doesn't exist or cleanup failed - this is expected and safe to ignore
+      void error; // SonarCloud S2486: Intentionally ignored during test cleanup
       // Ensure directory exists for test (will be recreated if missing)
       await fs.mkdir(memoriesDir, { recursive: true });
     }
