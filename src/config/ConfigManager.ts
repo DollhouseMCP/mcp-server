@@ -82,6 +82,12 @@ export interface CollectionConfig {
   add_attribution: boolean;
 }
 
+export interface AutoLoadConfig {
+  enabled: boolean;
+  maxTokenBudget: number;
+  memories: string[];
+}
+
 export interface CapabilityIndexResourcesConfig {
   advertise_resources: boolean; // Default: false - safe, don't advertise
   variants: {
@@ -154,6 +160,7 @@ export interface DollhouseConfig {
   github: GitHubConfig;
   sync: SyncConfig;
   collection: CollectionConfig;
+  autoLoad: AutoLoadConfig;
   elements: ElementsConfig;
   display: DisplayConfig;
   wizard: WizardConfig;
@@ -301,6 +308,11 @@ export class ConfigManager {
         auto_submit: false, // Never auto-submit
         require_review: true,
         add_attribution: true
+      },
+      autoLoad: {
+        enabled: true, // Auto-load baseline memories by default
+        maxTokenBudget: 5000, // Safety limit on auto-loaded content
+        memories: [] // Empty = use autoLoad flag in memories
       },
       elements: {
         auto_activate: {},

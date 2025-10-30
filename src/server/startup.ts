@@ -5,6 +5,7 @@
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
 
 export interface StartupOptions {
@@ -77,6 +78,16 @@ export class ServerStartup {
    */
   private async initializeAutoLoadMemories(): Promise<void> {
     try {
+      // Check if auto-load is enabled in config
+      const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
+      const config = await configManager.getConfig();
+
+      if (!config.autoLoad.enabled) {
+        logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
+        return;
+      }
+
       const memoryManager = new MemoryManager();
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
 
