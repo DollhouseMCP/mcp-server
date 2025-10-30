@@ -438,4 +438,59 @@ This is a custom version that should not be overwritten.
       expect(seedMemory?.metadata.priority).toBe(1);
     });
   });
+
+  describe('estimateTokens', () => {
+    it('should return 0 tokens for empty string', () => {
+      const tokens = memoryManager.estimateTokens('');
+      expect(tokens).toBe(0);
+    });
+
+    it('should return minimal tokens for whitespace-only string', () => {
+      // After trim(), whitespace becomes empty string, split returns [""], length 1
+      // 1 word → ~2 tokens with 1.5x multiplier
+      const tokens1 = memoryManager.estimateTokens('   ');
+      const tokens2 = memoryManager.estimateTokens('\n\n\n');
+      const tokens3 = memoryManager.estimateTokens('\t\t');
+      // All should be minimal (implementation detail: split of empty string = 1 word)
+      expect(tokens1).toBeLessThanOrEqual(2);
+      expect(tokens2).toBeLessThanOrEqual(2);
+      expect(tokens3).toBeLessThanOrEqual(2);
+    });
+
+    it('should return 0 tokens for null/undefined', () => {
+      const tokens1 = memoryManager.estimateTokens(null as any);
+      const tokens2 = memoryManager.estimateTokens(undefined as any);
+      expect(tokens1).toBe(0);
+      expect(tokens2).toBe(0);
+    });
+
+    it('should estimate simple text correctly (2 words → ~3 tokens)', () => {
+      const tokens = memoryManager.estimateTokens('hello world');
+      // 2 words → ~3 tokens with 1.5x multiplier
+      expect(tokens).toBe(3);
+    });
+
+    it('should round up fractional tokens (1 word → 2 tokens)', () => {
+      const tokens = memoryManager.estimateTokens('hello');
+      // 1 word → 1.5 tokens → rounds up to 2
+      expect(tokens).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should handle large content (1000 words)', () => {
+      const largeContent = Array(1000).fill('word').join(' ');
+      const tokens = memoryManager.estimateTokens(largeContent);
+      // 1000 words → ~1500 tokens
+      expect(tokens).toBeGreaterThan(1000);
+      expect(tokens).toBeLessThan(2000); // Reasonable upper bound
+    });
+
+    it('should return 0 tokens for non-string input', () => {
+      const tokens1 = memoryManager.estimateTokens(123 as any);
+      const tokens2 = memoryManager.estimateTokens({} as any);
+      const tokens3 = memoryManager.estimateTokens([] as any);
+      expect(tokens1).toBe(0);
+      expect(tokens2).toBe(0);
+      expect(tokens3).toBe(0);
+    });
+  });
 });

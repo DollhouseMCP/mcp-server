@@ -594,13 +594,16 @@ export class MemoryManager implements IElementManager<Memory> {
 
       // Try dist location first (production/built code)
       let seedSourcePath = path.resolve(currentModuleDir, '../../seed-elements/memories', seedFileName);
+      logger.debug(`[MemoryManager] Trying seed path (dist): ${seedSourcePath}`);
 
       // Check if it exists, if not try src location (development/test)
       try {
         await fs.access(seedSourcePath);
+        logger.debug(`[MemoryManager] Found seed file in dist location`);
       } catch {
         // Try src location
         seedSourcePath = path.resolve(currentModuleDir, '../../../src/seed-elements/memories', seedFileName);
+        logger.debug(`[MemoryManager] Trying seed path (src): ${seedSourcePath}`);
       }
 
       // Check if the seed file exists
@@ -1094,5 +1097,21 @@ export class MemoryManager implements IElementManager<Memory> {
     if (retention === 'permanent' || retention === 'perpetual') return 999999;
     const match = retention.match(/(\d+)\s*days?/i);
     return match ? Number.parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
+  }
+
+  /**
+   * Estimate tokens in memory content (rough approximation)
+   * Uses 1 token ≈ 0.75 words for English text
+   * @param content Memory content to estimate
+   * @returns Estimated token count
+   */
+  public estimateTokens(content: string): number {
+    if (!content || typeof content !== 'string') return 0;
+
+    // Simple word count approximation
+    const words = content.trim().split(/\s+/).length;
+
+    // 1 token ≈ 0.75 words (conservative estimate)
+    return Math.ceil(words / 0.75);
   }
 }

@@ -59,7 +59,38 @@ export interface TelemetryConfig {
 }
 
 /**
- * Union type of all telemetry event types
- * Currently only supports installation events
+ * Auto-load metrics recorded on server startup
  */
-export type TelemetryEventType = 'install';
+export interface AutoLoadMetrics {
+  /** ISO 8601 timestamp */
+  timestamp: string;
+
+  /** Server version (semver) */
+  version: string;
+
+  /** Number of memories loaded */
+  memoryCount: number;
+
+  /** Total estimated tokens loaded */
+  totalTokens: number;
+
+  /** Time taken to load memories (milliseconds) */
+  loadTimeMs: number;
+
+  /** Number of memories skipped */
+  skippedCount: number;
+
+  /** Number of warnings issued */
+  warningCount: number;
+
+  /** Whether budget was exceeded */
+  budgetExceeded: boolean;
+
+  /** Whether auto-load was emergency disabled */
+  emergencyDisabled: boolean;
+}
+
+/**
+ * Union type of all telemetry event types
+ */
+export type TelemetryEventType = 'install' | 'autoload_metrics';

@@ -39,7 +39,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { PostHog } from 'posthog-node';
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../constants/version.js';
-import type { InstallationEvent, TelemetryConfig } from './types.js';
+import type { InstallationEvent, TelemetryConfig, AutoLoadMetrics } from './types.js';
 import { detectMCPClient } from './clientDetector.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -421,6 +421,47 @@ export class OperationalTelemetry {
       // Fail gracefully - log error but mark as initialized to prevent retry loops
       logger.debug(`Telemetry: Initialization error: ${error instanceof Error ? error.message : String(error)}`);
       this.initialized = true;
+    }
+  }
+
+  /**
+   * Record auto-load metrics to telemetry log
+   * @param metrics Auto-load performance metrics
+   */
+  public static async recordAutoLoadMetrics(metrics: AutoLoadMetrics): Promise<void> {
+    try {
+      if (!this.isEnabled()) {
+        return;
+      }
+
+      const config = this.getConfig();
+
+      // Append to telemetry log (JSONL format)
+      const logEntry = {
+        event: 'autoload_metrics',
+        ...metrics,
+        installId: this.installId
+      };
+
+      await fs.appendFile(
+        config.logPath,
+        JSON.stringify(logEntry) + '\n',
+        'utf-8'
+      );
+
+      // Send to PostHog if configured
+      if (this.posthog && this.installId) {
+        this.posthog.capture({
+          distinctId: this.installId,
+          event: 'autoload_metrics',
+          properties: metrics
+        });
+      }
+
+      logger.debug('[Telemetry] Recorded auto-load metrics:', metrics);
+    } catch (error) {
+      // Fail gracefully
+      logger.debug(`[Telemetry] Failed to record auto-load metrics: ${error}`);
     }
   }
 

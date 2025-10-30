@@ -85,6 +85,8 @@ export interface CollectionConfig {
 export interface AutoLoadConfig {
   enabled: boolean;
   maxTokenBudget: number;
+  maxSingleMemoryTokens?: number;  // undefined = no limit
+  suppressLargeMemoryWarnings?: boolean;
   memories: string[];
 }
 
@@ -312,6 +314,8 @@ export class ConfigManager {
       autoLoad: {
         enabled: true, // Auto-load baseline memories by default
         maxTokenBudget: 5000, // Safety limit on auto-loaded content
+        maxSingleMemoryTokens: undefined,  // No hard limit by default
+        suppressLargeMemoryWarnings: false,
         memories: [] // Empty = use autoLoad flag in memories
       },
       elements: {
@@ -822,6 +826,7 @@ export class ConfigManager {
     result.github = this.mergeGitHubConfig(result.github, defaults.github);
     result.sync = this.mergeSyncConfig(result.sync, defaults.sync);
     result.collection = { ...defaults.collection, ...result.collection };
+    result.autoLoad = { ...defaults.autoLoad, ...result.autoLoad };
     result.elements = this.mergeElementsConfig(result.elements, defaults.elements);
     result.display = this.mergeDisplayConfig(result.display, defaults.display);
     result.wizard = { ...defaults.wizard, ...result.wizard };
