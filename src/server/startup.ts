@@ -77,6 +77,67 @@ export class ServerStartup {
   }
 
   /**
+   * Check and log size warnings for a memory
+   * @private
+   */
+  private checkMemorySizeWarnings(
+    memoryName: string,
+    estimatedTokens: number,
+    suppressWarnings: boolean
+  ): number {
+    const LARGE_MEMORY_WARN = 5000;
+    const VERY_LARGE_MEMORY_WARN = 10000;
+
+    if (suppressWarnings) {
+      return 0;
+    }
+
+    if (estimatedTokens > VERY_LARGE_MEMORY_WARN) {
+      logger.warn(
+        `[ServerStartup] Memory '${memoryName}' is very large ` +
+        `(~${estimatedTokens} tokens, recommended: ${VERY_LARGE_MEMORY_WARN}). ` +
+        `This may impact startup time.`
+      );
+      return 1;
+    }
+
+    if (estimatedTokens > LARGE_MEMORY_WARN) {
+      logger.info(`[ServerStartup] Memory '${memoryName}' is large (~${estimatedTokens} tokens).`);
+      return 1;
+    }
+
+    return 0;
+  }
+
+  /**
+   * Check if memory should be skipped due to budget limits
+   * @private
+   */
+  private shouldSkipMemory(
+    memoryName: string,
+    estimatedTokens: number,
+    totalTokens: number,
+    singleLimit: number | undefined,
+    totalBudget: number
+  ): { skip: boolean; reason?: string } {
+    // Check single memory limit
+    if (singleLimit !== undefined && estimatedTokens > singleLimit) {
+      logger.info(
+        `[ServerStartup] Skipping '${memoryName}' - ` +
+        `exceeds configured single memory limit (${estimatedTokens} > ${singleLimit} tokens)`
+      );
+      return { skip: true, reason: 'single_limit' };
+    }
+
+    // Check total budget
+    if (totalTokens + estimatedTokens > totalBudget) {
+      return { skip: true, reason: 'budget_exceeded' };
+    }
+
+    return { skip: false };
+  }
+
+  /**
    * Log error recovery suggestions based on error type
    * @private
    */
@@ -148,10 +209,6 @@ export class ServerStartup {
         return;
       }
 
-      // Recommended thresholds (soft warnings)
-      const LARGE_MEMORY_WARN = 5000;
-      const VERY_LARGE_MEMORY_WARN = 10000;
-
       // User-configured limits (hard enforcement if set)
       // VALIDATION: Ensure maxTokenBudget is always > 0 (minimum 100 tokens)
       const totalBudget = Math.max(100, config.autoLoad.maxTokenBudget || 5000);
@@ -165,41 +222,24 @@ export class ServerStartup {
 
         const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
 
-        // Soft warning for large memories (doesn't block)
-        if (!suppressWarnings && estimatedTokens > VERY_LARGE_MEMORY_WARN) {
-          logger.warn(
-            `[ServerStartup] Memory '${memoryName}' is very large ` +
-            `(~${estimatedTokens} tokens, recommended: ${VERY_LARGE_MEMORY_WARN}). ` +
-            `This may impact startup time.`
-          );
-          warningCount++;
-        } else if (!suppressWarnings && estimatedTokens > LARGE_MEMORY_WARN) {
-          logger.info(
-            `[ServerStartup] Memory '${memoryName}' is large ` +
-            `(~${estimatedTokens} tokens).`
-          );
-          warningCount++;
-        }
+        // Check for size warnings
+        const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, suppressWarnings);
+        warningCount += warnings;
 
-        // Hard enforcement: User-configured single memory limit (if set)
-        if (singleLimit !== undefined && estimatedTokens > singleLimit) {
-          logger.info(
-            `[ServerStartup] Skipping '${memoryName}' - ` +
-            `exceeds configured single memory limit (${estimatedTokens} > ${singleLimit} tokens)`
-          );
+        // Check if memory should be skipped
+        const skipCheck = this.shouldSkipMemory(memoryName, estimatedTokens, totalTokens, singleLimit, totalBudget);
+        if (skipCheck.skip) {
+          if (skipCheck.reason === 'budget_exceeded') {
+            const remaining = autoLoadMemories.length - loadedCount;
+            logger.info(
+              `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
+              `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
+            );
+            skippedCount += remaining;
+            break;
+          }
           skippedCount++;
           continue;
-        }
-
-        // Hard enforcement: Total budget
-        if (totalTokens + estimatedTokens > totalBudget) {
-          const remaining = autoLoadMemories.length - loadedCount;
-          logger.info(
-            `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
-            `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
-          );
-          skippedCount += remaining;
-          break;
         }
 
         // Load the memory
