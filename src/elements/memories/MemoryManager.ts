@@ -51,7 +51,7 @@ export class MemoryManager implements IElementManager<Memory> {
   // Issue #1430: Cache token estimates during auto-load to avoid recalculating
   // Key: content hash, Value: estimated token count
   // Max size: 1000 entries (prevents memory leaks)
-  private tokenEstimateCache: Map<string, number> = new Map();
+  private readonly tokenEstimateCache: Map<string, number> = new Map();
   private readonly MAX_TOKEN_CACHE_SIZE = 1000;
   
   constructor() {

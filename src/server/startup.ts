@@ -77,6 +77,20 @@ export class ServerStartup {
   }
 
   /**
+   * Log error recovery suggestions based on error type
+   * @private
+   */
+  private logAutoLoadErrorSuggestions(errorMessage: string): void {
+    if (errorMessage.includes('ENOENT') || errorMessage.includes('not found')) {
+      logger.info('[ServerStartup] Tip: Memory files may not exist yet. They will be created on first use.');
+    } else if (errorMessage.includes('EACCES') || errorMessage.includes('permission')) {
+      logger.warn('[ServerStartup] Tip: Check file permissions for ~/.dollhouse/portfolio/memories/');
+    } else if (errorMessage.includes('YAML') || errorMessage.includes('parse')) {
+      logger.warn('[ServerStartup] Tip: Check YAML syntax in memory files. Use dollhouse validate to diagnose.');
+    }
+  }
+
+  /**
    * Initialize auto-load memories
    * Issue #1430: Automatically load baseline memories on server startup
    * @private
@@ -237,13 +251,7 @@ export class ServerStartup {
       );
 
       // Provide helpful recovery suggestions based on error type
-      if (errorMessage.includes('ENOENT') || errorMessage.includes('not found')) {
-        logger.info('[ServerStartup] Tip: Memory files may not exist yet. They will be created on first use.');
-      } else if (errorMessage.includes('EACCES') || errorMessage.includes('permission')) {
-        logger.warn('[ServerStartup] Tip: Check file permissions for ~/.dollhouse/portfolio/memories/');
-      } else if (errorMessage.includes('YAML') || errorMessage.includes('parse')) {
-        logger.warn('[ServerStartup] Tip: Check YAML syntax in memory files. Use dollhouse validate to diagnose.');
-      }
+      this.logAutoLoadErrorSuggestions(errorMessage);
 
       // Record error in telemetry for diagnostics
       loadedCount = 0;
