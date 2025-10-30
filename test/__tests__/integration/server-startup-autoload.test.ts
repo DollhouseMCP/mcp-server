@@ -13,9 +13,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { ServerStartup } from '../../../src/server/startup.js';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 describe('Server Startup - Auto-Load Memories Integration', () => {
   let testDir: string;
@@ -53,16 +53,16 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
 
   afterAll(async () => {
     // Restore original environment
-    if (originalPortfolioDir !== undefined) {
-      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
-    } else {
+    if (originalPortfolioDir === undefined) {
       delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+    } else {
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
     }
 
-    if (originalConfigDir !== undefined) {
-      process.env.TEST_CONFIG_DIR = originalConfigDir;
-    } else {
+    if (originalConfigDir === undefined) {
       delete process.env.TEST_CONFIG_DIR;
+    } else {
+      process.env.TEST_CONFIG_DIR = originalConfigDir;
     }
 
     // Clean up test directory
@@ -86,7 +86,8 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
         }
       }
     } catch (error) {
-      // Directory doesn't exist or is empty
+      // Directory doesn't exist or is empty - this is expected and safe to ignore during cleanup
+      // No action needed as we're about to recreate the directory
     }
 
     // Ensure memories directory exists
@@ -97,7 +98,8 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
       await fs.rm(configDir, { recursive: true, force: true });
       await fs.mkdir(configDir, { recursive: true });
     } catch (error) {
-      // Directory doesn't exist
+      // Directory doesn't exist - this is expected and safe to ignore during cleanup
+      // Directory will be recreated in the try block above
     }
 
     // Reset singletons for each test

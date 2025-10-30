@@ -6,11 +6,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
-import * as path from 'path';
-import * as fs from 'fs/promises';
-import * as os from 'os';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -68,7 +68,8 @@ describe('MemoryManager - Auto-Load Functionality', () => {
         }
       }
     } catch (error) {
-      // If directory doesn't exist, create it
+      // Directory doesn't exist or cleanup failed - this is expected and safe to ignore
+      // Ensure directory exists for test (will be recreated if missing)
       await fs.mkdir(memoriesDir, { recursive: true });
     }
 
@@ -477,7 +478,7 @@ This is a custom version that should not be overwritten.
     });
 
     it('should handle large content (1000 words)', () => {
-      const largeContent = Array(1000).fill('word').join(' ');
+      const largeContent = new Array(1000).fill('word').join(' ');
       const tokens = memoryManager.estimateTokens(largeContent);
       // 1000 words → ~1500 tokens
       expect(tokens).toBeGreaterThan(1000);

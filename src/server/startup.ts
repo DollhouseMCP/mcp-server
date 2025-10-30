@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
 import { VERSION } from '../constants/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface StartupOptions {
   skipMigration?: boolean;
@@ -97,7 +98,7 @@ export class ServerStartup {
       // Check if auto-load is enabled in config
       const configManager = ConfigManager.getInstance();
       await configManager.initialize();
-      const config = await configManager.getConfig();
+      const config = configManager.getConfig();
 
       if (!config.autoLoad.enabled) {
         logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
@@ -128,19 +129,23 @@ export class ServerStartup {
       const suppressWarnings = config.autoLoad.suppressLargeMemoryWarnings || false;
 
       for (const memory of autoLoadMemories) {
+        // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+        const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
+        const memoryName = normalizedName.normalizedContent;
+
         const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
 
         // Soft warning for large memories (doesn't block)
         if (!suppressWarnings && estimatedTokens > VERY_LARGE_MEMORY_WARN) {
           logger.warn(
-            `[ServerStartup] Memory '${memory.metadata.name}' is very large ` +
+            `[ServerStartup] Memory '${memoryName}' is very large ` +
             `(~${estimatedTokens} tokens, recommended: ${VERY_LARGE_MEMORY_WARN}). ` +
             `This may impact startup time.`
           );
           warningCount++;
         } else if (!suppressWarnings && estimatedTokens > LARGE_MEMORY_WARN) {
           logger.info(
-            `[ServerStartup] Memory '${memory.metadata.name}' is large ` +
+            `[ServerStartup] Memory '${memoryName}' is large ` +
             `(~${estimatedTokens} tokens).`
           );
           warningCount++;
@@ -149,7 +154,7 @@ export class ServerStartup {
         // Hard enforcement: User-configured single memory limit (if set)
         if (singleLimit !== undefined && estimatedTokens > singleLimit) {
           logger.info(
-            `[ServerStartup] Skipping '${memory.metadata.name}' - ` +
+            `[ServerStartup] Skipping '${memoryName}' - ` +
             `exceeds configured single memory limit (${estimatedTokens} > ${singleLimit} tokens)`
           );
           skippedCount++;
