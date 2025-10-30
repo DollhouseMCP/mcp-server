@@ -11,6 +11,7 @@ import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
 import { VERSION } from '../constants/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface StartupOptions {
   skipMigration?: boolean;
@@ -89,9 +90,17 @@ export class ServerStartup {
     const emergencyDisabled = process.env.DOLLHOUSE_DISABLE_AUTOLOAD === 'true';
 
     try {
+      // FIX: DMCP-SEC-006 - Add audit logging for security operations
       // Check for emergency disable
       if (emergencyDisabled) {
         logger.info('[ServerStartup] Auto-load disabled via DOLLHOUSE_DISABLE_AUTOLOAD');
+        SecurityMonitor.logSecurityEvent({
+          type: 'MEMORY_LOADED',
+          severity: 'LOW',
+          source: 'ServerStartup.initializeAutoLoadMemories',
+          details: 'Auto-load memories disabled via emergency environment variable',
+          additionalData: { reason: 'DOLLHOUSE_DISABLE_AUTOLOAD=true' }
+        });
         return;
       }
 
@@ -102,6 +111,13 @@ export class ServerStartup {
 
       if (!config.autoLoad.enabled) {
         logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
+        SecurityMonitor.logSecurityEvent({
+          type: 'MEMORY_LOADED',
+          severity: 'LOW',
+          source: 'ServerStartup.initializeAutoLoadMemories',
+          details: 'Auto-load memories disabled in configuration',
+          additionalData: { reason: 'config.autoLoad.enabled=false' }
+        });
         return;
       }
 
@@ -175,12 +191,41 @@ export class ServerStartup {
         // Load the memory
         totalTokens += estimatedTokens;
         loadedCount++;
+
+        // FIX: DMCP-SEC-006 - Audit log each loaded memory
+        SecurityMonitor.logSecurityEvent({
+          type: 'MEMORY_LOADED',
+          severity: 'LOW',
+          source: 'ServerStartup.initializeAutoLoadMemories',
+          details: `Auto-loaded memory: ${memoryName}`,
+          additionalData: {
+            memoryName,
+            estimatedTokens,
+            priority: memory.metadata.priority,
+            totalTokensSoFar: totalTokens
+          }
+        });
       }
 
       logger.info(
         `[ServerStartup] Auto-load complete: ${loadedCount} memories loaded ` +
         `(~${totalTokens} tokens), ${skippedCount} skipped, ${warningCount} warnings`
       );
+
+      // FIX: DMCP-SEC-006 - Audit log successful completion
+      SecurityMonitor.logSecurityEvent({
+        type: 'MEMORY_LOADED',
+        severity: 'LOW',
+        source: 'ServerStartup.initializeAutoLoadMemories',
+        details: 'Auto-load memories completed successfully',
+        additionalData: {
+          loadedCount,
+          skippedCount,
+          warningCount,
+          totalTokens,
+          loadTimeMs: Date.now() - startTime
+        }
+      });
     } catch (error) {
       // ENHANCED ERROR HANDLING: Issue #1430
       // Don't fail startup if auto-load fails, but provide detailed diagnostics
@@ -203,6 +248,19 @@ export class ServerStartup {
       // Record error in telemetry for diagnostics
       loadedCount = 0;
       totalTokens = 0;
+
+      // FIX: DMCP-SEC-006 - Audit log auto-load failure
+      SecurityMonitor.logSecurityEvent({
+        type: 'MEMORY_LOAD_FAILED',
+        severity: 'MEDIUM',
+        source: 'ServerStartup.initializeAutoLoadMemories',
+        details: `Auto-load memories failed: ${errorType} - ${errorMessage}`,
+        additionalData: {
+          errorType,
+          errorMessage,
+          loadTimeMs: Date.now() - startTime
+        }
+      });
     } finally {
       // Record telemetry
       const metrics: AutoLoadMetrics = {
