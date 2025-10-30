@@ -78,6 +78,99 @@ export class ServerStartup {
   }
 
   /**
+   * Process a single auto-load memory
+   * FIX (SonarCloud): Extracted to reduce cognitive complexity
+   * @private
+   */
+  private async processAutoLoadMemory(
+    memory: any,
+    memoryManager: any,
+    totalTokens: number,
+    singleLimit: number | undefined,
+    totalBudget: number,
+    suppressWarnings: boolean,
+    totalMemories: number,
+    loadedCount: number
+  ): Promise<{
+    skip: boolean;
+    breakLoop: boolean;
+    skippedCount: number;
+    estimatedTokens: number;
+    warnings: number;
+  }> {
+    try {
+      // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+      const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
+      const memoryName = normalizedName.normalizedContent;
+
+      // PR #1436: Validate memory before loading
+      const validation = memory.validate();
+      if (!validation.valid) {
+        throw AutoLoadError.validationFailed(
+          memoryName,
+          validation.errors?.map((e: { message: string }) => e.message).join(', ') || 'Unknown validation error'
+        );
+      }
+
+      const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
+
+      // Check for size warnings
+      const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, suppressWarnings);
+
+      // Check if memory should be skipped
+      const skipCheck = this.shouldSkipMemory(memoryName, estimatedTokens, totalTokens, singleLimit, totalBudget);
+      if (skipCheck.skip) {
+        if (skipCheck.reason === 'budget_exceeded') {
+          const remaining = totalMemories - loadedCount;
+          logger.info(
+            `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
+            `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
+          );
+          return { skip: false, breakLoop: true, skippedCount: remaining, estimatedTokens: 0, warnings: 0 };
+        }
+        return { skip: true, breakLoop: false, skippedCount: 0, estimatedTokens: 0, warnings: 0 };
+      }
+
+      // FIX: DMCP-SEC-006 - Audit log each loaded memory
+      SecurityMonitor.logSecurityEvent({
+        type: 'MEMORY_LOADED',
+        severity: 'LOW',
+        source: 'ServerStartup.initializeAutoLoadMemories',
+        details: `Auto-loaded memory: ${memoryName}`,
+        additionalData: {
+          memoryName,
+          estimatedTokens,
+          priority: (memory.metadata as any).priority,
+          totalTokensSoFar: totalTokens + estimatedTokens
+        }
+      });
+
+      return { skip: false, breakLoop: false, skippedCount: 0, estimatedTokens, warnings };
+    } catch (error) {
+      // PR #1436: Structured error handling with AutoLoadError
+      this.handleAutoLoadMemoryError(error, memory);
+      return { skip: true, breakLoop: false, skippedCount: 0, estimatedTokens: 0, warnings: 0 };
+    }
+  }
+
+  /**
+   * Handle errors during auto-load memory processing
+   * FIX (SonarCloud): Extracted to reduce cognitive complexity
+   * @private
+   */
+  private handleAutoLoadMemoryError(error: unknown, memory: any): void {
+    if (error instanceof AutoLoadError) {
+      logger.info(
+        `[ServerStartup] Skipping '${error.memoryName}' - ` +
+        `${error.phase} phase failed: ${error.message}`
+      );
+    } else {
+      const memoryName = memory.metadata.name || 'unknown';
+      logger.warn(`[ServerStartup] Unexpected error loading '${memoryName}': ${error}`);
+    }
+  }
+
+  /**
    * Check and log size warnings for a memory
    * @private
    */
@@ -230,73 +323,30 @@ export class ServerStartup {
       const suppressWarnings = config.autoLoad.suppressLargeMemoryWarnings || false;
 
       for (const memory of autoLoadMemories) {
-        try {
-          // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
-          const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
-          const memoryName = normalizedName.normalizedContent;
+        const result = await this.processAutoLoadMemory(
+          memory,
+          memoryManager,
+          totalTokens,
+          singleLimit,
+          totalBudget,
+          suppressWarnings,
+          autoLoadMemories.length,
+          loadedCount
+        );
 
-          // PR #1436: Validate memory before loading
-          const validation = memory.validate();
-          if (!validation.valid) {
-            throw AutoLoadError.validationFailed(
-              memoryName,
-              validation.errors?.map(e => e.message).join(', ') || 'Unknown validation error'
-            );
-          }
+        if (result.breakLoop) {
+          skippedCount += result.skippedCount;
+          break;
+        }
 
-          const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
-
-        // Check for size warnings
-        const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, suppressWarnings);
-        warningCount += warnings;
-
-        // Check if memory should be skipped
-        const skipCheck = this.shouldSkipMemory(memoryName, estimatedTokens, totalTokens, singleLimit, totalBudget);
-        if (skipCheck.skip) {
-          if (skipCheck.reason === 'budget_exceeded') {
-            const remaining = autoLoadMemories.length - loadedCount;
-            logger.info(
-              `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
-              `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
-            );
-            skippedCount += remaining;
-            break;
-          }
+        if (result.skip) {
           skippedCount++;
           continue;
         }
 
-        // Load the memory
-        totalTokens += estimatedTokens;
+        totalTokens += result.estimatedTokens;
         loadedCount++;
-
-          // FIX: DMCP-SEC-006 - Audit log each loaded memory
-          SecurityMonitor.logSecurityEvent({
-            type: 'MEMORY_LOADED',
-            severity: 'LOW',
-            source: 'ServerStartup.initializeAutoLoadMemories',
-            details: `Auto-loaded memory: ${memoryName}`,
-            additionalData: {
-              memoryName,
-              estimatedTokens,
-              priority: (memory.metadata as any).priority,
-              totalTokensSoFar: totalTokens
-            }
-          });
-        } catch (error) {
-          // PR #1436: Structured error handling with AutoLoadError
-          if (error instanceof AutoLoadError) {
-            logger.info(
-              `[ServerStartup] Skipping '${error.memoryName}' - ` +
-              `${error.phase} phase failed: ${error.message}`
-            );
-          } else {
-            // Handle unexpected errors
-            const memoryName = memory.metadata.name || 'unknown';
-            logger.warn(`[ServerStartup] Unexpected error loading '${memoryName}': ${error}`);
-          }
-          skippedCount++;
-        }
+        warningCount += result.warnings;
       }
 
       logger.info(

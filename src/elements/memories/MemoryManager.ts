@@ -54,7 +54,7 @@ export class MemoryManager implements IElementManager<Memory> {
   private readonly tokenEstimateCache: Map<string, number> = new Map();
   private readonly MAX_TOKEN_CACHE_SIZE = 1000;
   // PR #1436: Add cache hit/miss metrics for observability
-  private tokenCacheStats = { hits: 0, misses: 0 };
+  private readonly tokenCacheStats = { hits: 0, misses: 0 };
 
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
