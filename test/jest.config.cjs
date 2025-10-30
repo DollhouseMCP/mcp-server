@@ -50,9 +50,9 @@ const config = {
     'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
   resolver: 'ts-jest-resolver',
-  // FIX: Force serial test execution to prevent worker teardown race conditions
-  // This prevents Jest workers from being torn down while tests are still running
-  maxWorkers: process.env.CI ? 1 : '50%', // Serial in CI, parallel locally (50% of CPU cores)
+  // FIX: Force serial test execution in CI to prevent worker teardown race conditions
+  // Local: Omitted to use Jest's default parallel optimization
+  ...(process.env.CI && { maxWorkers: 1 }), // Only set in CI for serial execution
   workerIdleMemoryLimit: '512MB' // Prevent memory issues during long-running tests
 };
 
