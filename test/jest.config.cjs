@@ -53,6 +53,7 @@ const config = {
   // FIX: Force serial test execution in CI to prevent worker teardown race conditions
   // Local: Omitted to use Jest's default parallel optimization
   ...(process.env.CI && { maxWorkers: 1 }), // Only set in CI for serial execution
+  maxConcurrency: 1, // Force truly serial test suite execution to prevent race conditions
   workerIdleMemoryLimit: '512MB' // Prevent memory issues during long-running tests
 };
 
