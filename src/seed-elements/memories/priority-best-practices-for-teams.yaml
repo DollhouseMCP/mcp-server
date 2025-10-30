@@ -1,0 +1,542 @@
+---
+name: priority-best-practices-for-teams
+type: memory
+description: Best practices for organizing auto-load memory priorities in team environments
+version: 1.0.0
+author: DollhouseMCP
+category: documentation
+tags:
+  - auto-load
+  - priorities
+  - teams
+  - best-practices
+  - organization
+triggers:
+  - memory-priorities
+  - priority-best-practices
+  - team-priorities
+  - organize-auto-load
+  - priority-strategy
+autoLoad: false
+priority: 999
+retention: permanent
+privacyLevel: public
+searchable: true
+trustLevel: VALIDATED
+---
+
+# Auto-Load Memory Priority Best Practices for Teams
+
+## Priority System Overview
+
+Auto-load memories are loaded in **ascending priority order** (lower number = loads first). This determines the order in which context is provided to the AI, affecting response quality and token efficiency.
+
+**Key Principle**: Foundation knowledge first, specialized context last.
+
+## Standard Priority Ranges
+
+### System Reserved (1-10)
+
+**Reserved for DollhouseMCP system memories**. Do not use for custom content.
+
+```yaml
+# Priority 1: DollhouseMCP baseline knowledge
+name: dollhousemcp-baseline-knowledge
+priority: 1
+```
+
+**Why Reserved**:
+- Ensures AI always knows DollhouseMCP capabilities
+- Prevents conflicts with system updates
+- Maintains consistent baseline across all installations
+
+### Organizational Baseline (11-30)
+
+**Company-wide or org-wide standards** that apply across all teams.
+
+```yaml
+# Priority 11: Company coding standards
+name: company-coding-standards
+priority: 11
+description: Language-agnostic standards for all engineers
+
+# Priority 15: Company security policies
+name: security-policies
+priority: 15
+description: Security requirements and compliance guidelines
+
+# Priority 20: Company architecture patterns
+name: architecture-patterns
+priority: 20
+description: Standard patterns used across all products
+```
+
+**Examples**:
+- Code review checklist
+- Security/compliance requirements
+- Accessibility standards
+- Documentation standards
+- Incident response procedures
+
+**Best Practices**:
+- Keep concise (500-2,000 tokens)
+- Update quarterly
+- Version control in company wiki
+- Get buy-in from engineering leadership
+
+### Team Context (31-60)
+
+**Team-specific** standards, patterns, and domain knowledge.
+
+```yaml
+# Priority 35: Team backend patterns
+name: backend-team-patterns
+priority: 35
+description: Backend-specific coding patterns and practices
+
+# Priority 40: Domain knowledge (e.g., healthcare terms)
+name: healthcare-domain-knowledge
+priority: 40
+description: Medical terminology and healthcare workflows
+
+# Priority 50: Team API conventions
+name: api-conventions
+priority: 50
+description: REST API design patterns used by backend team
+```
+
+**Examples**:
+- Team-specific tech stack
+- Domain terminology (legal, medical, financial)
+- Third-party service integrations
+- Shared libraries and utilities
+- Team communication patterns
+
+**Best Practices**:
+- Load before project-specific context
+- Include only stable, established patterns
+- Review monthly for relevance
+- Link to detailed docs rather than embedding
+
+### Project Context (61-100)
+
+**Project-specific** architecture, decisions, and current state.
+
+```yaml
+# Priority 65: Project architecture
+name: myapp-architecture
+priority: 65
+description: MyApp system architecture and component overview
+
+# Priority 75: Active sprint context
+name: sprint-42-context
+priority: 75
+description: Current sprint goals and work in progress
+
+# Priority 85: Recent decisions
+name: architecture-decision-records
+priority: 85
+description: Key technical decisions made in last 3 months
+```
+
+**Examples**:
+- Project overview and goals
+- System architecture diagrams
+- Database schemas
+- Active sprint information
+- Recent architectural decisions
+- Key contacts and responsibilities
+
+**Best Practices**:
+- Update at start of each sprint
+- Include "last updated" date
+- Remove completed sprint context
+- Keep architecture diagrams text-based (ASCII/Mermaid)
+
+### Reference Material (101-500)
+
+**Nice-to-have** reference material that's useful but not critical.
+
+```yaml
+# Priority 150: API reference
+name: internal-api-reference
+priority: 150
+description: Quick reference for internal API endpoints
+
+# Priority 200: Common error codes
+name: error-code-reference
+priority: 200
+description: List of error codes and their meanings
+
+# Priority 300: Deployment runbook
+name: deployment-runbook
+priority: 300
+description: Step-by-step deployment procedures
+```
+
+**Examples**:
+- API endpoint lists
+- Error code references
+- Configuration options
+- CLI command references
+- Troubleshooting guides
+
+**Best Practices**:
+- Keep under 3,000 tokens each
+- Use bullet points for scannability
+- Link to full docs for details
+- Update when APIs change
+
+### Low Priority (501+)
+
+**Optional** context that's rarely needed but occasionally helpful.
+
+```yaml
+# Priority 600: Historical context
+name: legacy-system-notes
+priority: 600
+description: Notes about legacy system for migration reference
+
+# Priority 700: Future roadmap
+name: future-roadmap
+priority: 700
+description: Long-term product roadmap and vision
+```
+
+**Examples**:
+- Legacy system documentation
+- Future roadmap (not current work)
+- Historical context
+- Deprecated patterns (for reference)
+
+**Best Practices**:
+- Consider if this should be auto-loaded at all
+- May be better as on-demand memory
+- Review quarterly for relevance
+
+## Team Coordination Strategies
+
+### Strategy 1: Federated Ownership
+
+Each team maintains their own priority namespace:
+
+```yaml
+# Backend team: 31-40
+backend-team-patterns: 35
+backend-api-conventions: 38
+
+# Frontend team: 41-50
+frontend-component-library: 42
+frontend-state-management: 45
+
+# DevOps team: 51-60
+deployment-procedures: 52
+infrastructure-overview: 55
+```
+
+**Pros**:
+- Clear ownership
+- No conflicts
+- Independent updates
+
+**Cons**:
+- Requires coordination
+- Gaps in numbering
+- Less flexibility
+
+### Strategy 2: Content-Based Priorities
+
+Organize by content type, not team:
+
+```yaml
+# Standards (31-40)
+coding-standards: 32
+security-guidelines: 35
+testing-requirements: 38
+
+# Architecture (41-50)
+system-overview: 42
+service-boundaries: 45
+data-flow: 48
+
+# Current Work (51-60)
+active-sprint: 52
+recent-decisions: 55
+known-issues: 58
+```
+
+**Pros**:
+- Logical grouping
+- Easier to understand
+- Natural load order
+
+**Cons**:
+- Multiple teams may edit same priority range
+- Requires more communication
+
+### Strategy 3: Hybrid Approach
+
+Combine both strategies:
+
+```yaml
+# Company (11-20)
+company-standards: 11
+
+# Cross-Team (21-30)
+api-gateway-docs: 25
+
+# Backend Team (31-50)
+backend-patterns: 35
+backend-project-context: 45
+
+# Frontend Team (51-70)
+frontend-standards: 55
+frontend-project-context: 65
+```
+
+**Pros**:
+- Balanced approach
+- Clear boundaries
+- Flexible within teams
+
+**Cons**:
+- More complex to document
+
+## Priority Decision Tree
+
+Use this decision tree to assign priorities:
+
+```
+Is it DollhouseMCP system content?
+├─ YES → Priority 1-10 (system reserved)
+└─ NO ↓
+
+Is it company-wide (applies to ALL engineers)?
+├─ YES → Priority 11-30 (organizational baseline)
+└─ NO ↓
+
+Is it team-specific but not project-specific?
+├─ YES → Priority 31-60 (team context)
+└─ NO ↓
+
+Is it project-specific current work?
+├─ YES → Priority 61-100 (project context)
+└─ NO ↓
+
+Is it reference material (nice to have)?
+├─ YES → Priority 101-500 (reference material)
+└─ NO → Priority 501+ (low priority / consider not auto-loading)
+```
+
+## Common Pitfalls
+
+### Pitfall 1: Everything is High Priority
+
+**Problem**:
+```yaml
+project-overview: 10        # Too high!
+api-docs: 12                # Too high!
+sprint-context: 15          # Too high!
+error-codes: 18             # Too high!
+```
+
+**Result**: Important baseline knowledge gets crowded out.
+
+**Solution**: Use the full priority range. Not everything can be urgent.
+
+### Pitfall 2: No Priority Strategy
+
+**Problem**: Teams assign priorities randomly without coordination.
+
+**Result**: Critical context loads after optional context, wasting tokens.
+
+**Solution**: Document team priority strategy in shared wiki.
+
+### Pitfall 3: Stale Priorities
+
+**Problem**: Priorities set once and never reviewed.
+
+**Result**: Old sprint context loads before current sprint, outdated docs load before current docs.
+
+**Solution**: Review priorities quarterly as part of retrospectives.
+
+### Pitfall 4: Priority Conflicts
+
+**Problem**: Two teams both want priority 50 for their memories.
+
+**Result**: Unpredictable load order, finger-pointing.
+
+**Solution**: Use federated ownership strategy or establish priority ranges per team.
+
+### Pitfall 5: Too Many Auto-Load Memories
+
+**Problem**: 20+ memories, most rarely needed.
+
+**Result**: Token budget exceeded, critical context skipped.
+
+**Solution**: Review annually. Consider moving some to on-demand memories.
+
+## Real-World Examples
+
+### Example 1: Small Startup (5-10 engineers)
+
+```yaml
+# Simple, flat structure
+dollhousemcp-baseline-knowledge: 1     # System
+company-coding-standards: 20            # Company
+project-architecture: 50                # Project
+current-sprint: 60                      # Current work
+api-reference: 100                      # Reference
+```
+
+**Token Budget**: 5,000 (default)
+**Total Memories**: 5
+
+### Example 2: Medium Team (30-50 engineers, 3 teams)
+
+```yaml
+# System
+dollhousemcp-baseline-knowledge: 1
+
+# Company-wide
+company-standards: 15
+security-policies: 18
+
+# Backend Team (31-50)
+backend-patterns: 35
+backend-project: 45
+
+# Frontend Team (51-70)
+frontend-standards: 55
+frontend-project: 65
+
+# Shared
+api-contracts: 80
+active-sprint: 85
+```
+
+**Token Budget**: 8,000
+**Total Memories**: 9
+
+### Example 3: Large Enterprise (200+ engineers, 10+ teams)
+
+```yaml
+# System
+dollhousemcp-baseline-knowledge: 1
+
+# Organizational (11-30)
+enterprise-coding-standards: 11
+security-compliance: 15
+architecture-principles: 20
+
+# Division-Level (31-50)
+product-division-standards: 31
+platform-team-patterns: 35
+
+# Team-Level (51-100)
+team-backend-context: 55
+team-frontend-context: 65
+team-devops-runbooks: 75
+
+# Project-Level (101-150)
+current-project-architecture: 105
+active-sprint-goals: 115
+
+# Reference (151-300)
+api-catalog: 160
+error-code-reference: 180
+deployment-procedures: 200
+```
+
+**Token Budget**: 12,000
+**Total Memories**: 13
+
+## Priority Governance
+
+### For Small Teams (< 20 engineers)
+
+- **Decision Making**: Consensus in team meetings
+- **Documentation**: Shared Google Doc or Notion page
+- **Review Cadence**: Quarterly
+- **Conflicts**: Resolved by tech lead
+
+### For Medium Teams (20-100 engineers)
+
+- **Decision Making**: Team leads + architecture group
+- **Documentation**: Internal wiki with priority registry
+- **Review Cadence**: Bi-annually with representatives from each team
+- **Conflicts**: Escalate to engineering manager
+
+### For Large Organizations (100+ engineers)
+
+- **Decision Making**: Architecture committee
+- **Documentation**: Formal RFC process for priority changes
+- **Review Cadence**: Annually + ad-hoc for new teams
+- **Conflicts**: Formal escalation process with defined SLAs
+
+## Measuring Priority Effectiveness
+
+### Metrics to Track
+
+1. **Token Utilization**:
+   ```
+   Average tokens loaded: 3,200 / 5,000 (64%)
+   Target: 60-80% utilization
+   ```
+
+2. **Load Success Rate**:
+   ```
+   Memories loaded: 8 / 10 (80%)
+   Memories skipped: 2 / 10 (20% due to budget)
+   Target: >90% loaded
+   ```
+
+3. **Relevance Score** (quarterly survey):
+   ```
+   "How often do you reference auto-loaded context?"
+   - Daily: 60%
+   - Weekly: 30%
+   - Rarely: 10%
+   Target: >80% daily/weekly
+   ```
+
+4. **Update Frequency**:
+   ```
+   Memories updated in last 90 days: 7 / 10 (70%)
+   Target: >60% updated quarterly
+   ```
+
+### Dashboard Query
+
+```bash
+# Check current auto-load status
+dollhouse list memories --filter autoLoad=true --sort priority
+
+# See token usage
+dollhouse config show autoLoad.maxTokenBudget
+
+# Validate all auto-load memories
+for memory in $(dollhouse list memories --filter autoLoad=true --json | jq -r '.[].name'); do
+  dollhouse validate memory "$memory"
+done
+```
+
+## Quick Reference
+
+| Priority Range | Purpose | Examples | Token Guideline |
+|----------------|---------|----------|-----------------|
+| 1-10 | System (reserved) | DollhouseMCP baseline | N/A |
+| 11-30 | Organizational | Company standards | 500-2,000 |
+| 31-60 | Team | Team patterns, domain knowledge | 1,000-3,000 |
+| 61-100 | Project | Architecture, current sprint | 1,500-4,000 |
+| 101-500 | Reference | API docs, error codes | 500-3,000 |
+| 501+ | Low priority | Legacy docs, future roadmap | 500-2,000 |
+
+## Related Documentation
+
+- [How to Create Custom Auto-Load Memories](./how-to-create-custom-auto-load-memories.yaml)
+- [Token Estimation Guidelines](./token-estimation-guidelines.yaml)
+
+---
+
+**Last Updated**: v1.9.25 (October 2025)

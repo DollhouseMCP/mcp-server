@@ -1,0 +1,455 @@
+---
+name: how-to-create-custom-auto-load-memories
+type: memory
+description: Complete guide for creating custom auto-load memories - step-by-step instructions and examples
+version: 1.0.0
+author: DollhouseMCP
+category: documentation
+tags:
+  - auto-load
+  - guide
+  - tutorial
+  - memory-creation
+  - documentation
+triggers:
+  - how-to-auto-load
+  - create-auto-load-memory
+  - auto-load-guide
+  - auto-load-tutorial
+  - custom-auto-load
+autoLoad: false
+priority: 999
+retention: permanent
+privacyLevel: public
+searchable: true
+trustLevel: VALIDATED
+---
+
+# How to Create Custom Auto-Load Memories
+
+## Overview
+
+Auto-load memories are automatically loaded when DollhouseMCP starts, providing instant context without searching. Perfect for baseline knowledge, project context, team standards, and frequently-needed information.
+
+## Quick Start
+
+### 1. Create or Modify a Memory
+
+Any memory can be marked for auto-load by adding two metadata fields:
+
+```yaml
+---
+name: my-custom-memory
+type: memory
+description: My project context
+autoLoad: true      # ← Enable auto-load
+priority: 10        # ← Load order (lower = first)
+---
+
+# Your content here
+```
+
+### 2. Configure Auto-Load Settings (Optional)
+
+Edit `~/.dollhouse/config.yaml`:
+
+```yaml
+autoLoad:
+  enabled: true              # Global on/off
+  maxTokenBudget: 5000      # Total token limit
+  maxSingleMemoryTokens: 2000  # Per-memory limit (optional)
+  suppressLargeMemoryWarnings: false
+```
+
+### 3. Restart DollhouseMCP
+
+```bash
+# Restart your MCP client (Claude Desktop, Claude Code, etc.)
+# Auto-load memories will be loaded automatically
+```
+
+## Step-by-Step Guide
+
+### Step 1: Decide What to Auto-Load
+
+**Good Candidates**:
+- Project overview and architecture
+- Team coding standards
+- Frequently-referenced specifications
+- Domain knowledge (medical terms, legal concepts)
+- API reference sheets
+- Personal preferences and workflows
+
+**Poor Candidates**:
+- Large datasets (>10,000 tokens)
+- Sensitive information (credentials, PII)
+- Frequently changing content
+- Temporary notes
+
+### Step 2: Create the Memory
+
+#### Using MCP Tools:
+
+```javascript
+// In Claude Code or compatible MCP client
+create_element({
+  type: "memories",
+  name: "my-project-context",
+  description: "Core project information for AI context",
+  content: "# Project: MyApp\n\n## Architecture\n...",
+  metadata: {
+    autoLoad: true,
+    priority: 5
+  }
+})
+```
+
+#### Using CLI:
+
+```bash
+dollhouse create memory my-project-context \
+  --autoLoad true \
+  --priority 5 \
+  --content "# Project: MyApp..."
+```
+
+#### Manual YAML:
+
+Create `~/.dollhouse/portfolio/memories/my-project-context.yaml`:
+
+```yaml
+---
+name: my-project-context
+type: memory
+description: Core project information
+autoLoad: true
+priority: 5
+retention: permanent
+privacyLevel: private
+searchable: true
+---
+
+# Project: MyApp
+
+## Architecture
+- Frontend: React + TypeScript
+- Backend: Node.js + Express
+- Database: PostgreSQL
+
+## Key Decisions
+- Using REST API (not GraphQL) for simplicity
+- Tailwind CSS for styling
+- Jest for testing
+```
+
+### Step 3: Set Priority
+
+Priority determines load order (lower number = loads first):
+
+- **1-10**: System/baseline knowledge (reserved for DollhouseMCP)
+- **11-50**: Critical project context (load first)
+- **51-100**: Important reference material
+- **101-500**: Nice-to-have context
+- **501+**: Lowest priority
+
+Example priority scheme:
+```yaml
+# Priority 1: DollhouseMCP baseline (system)
+name: dollhousemcp-baseline-knowledge
+priority: 1
+
+# Priority 20: Your project overview
+name: project-overview
+priority: 20
+
+# Priority 30: Team coding standards
+name: coding-standards
+priority: 30
+
+# Priority 50: API reference
+name: api-reference
+priority: 50
+```
+
+### Step 4: Optimize Token Usage
+
+Check token estimate:
+
+```bash
+dollhouse validate memory my-project-context
+# Output includes: "Estimated tokens: 1,234"
+```
+
+**Token Guidelines**:
+- **Small** (0-1,000): Ideal for auto-load
+- **Medium** (1,000-5,000): Good, stays under default budget
+- **Large** (5,000-10,000): Consider splitting or increasing budget
+- **Very Large** (10,000+): Not recommended for auto-load
+
+Reduce token count:
+- Remove verbose examples
+- Use bullet points instead of paragraphs
+- Link to external docs instead of embedding
+- Split into multiple focused memories
+
+### Step 5: Test Your Memory
+
+```bash
+# Check if memory will auto-load
+dollhouse config show autoLoad
+
+# Validate memory syntax
+dollhouse validate memory my-project-context
+
+# See auto-load order
+dollhouse list memories --filter autoLoad=true --sort priority
+```
+
+## Advanced Configuration
+
+### Explicit Memory List
+
+Override metadata-driven auto-load with explicit list:
+
+```yaml
+# ~/.dollhouse/config.yaml
+autoLoad:
+  enabled: true
+  memories:
+    - dollhousemcp-baseline-knowledge
+    - my-project-context
+    - coding-standards
+    # Only these memories will auto-load
+```
+
+### Conditional Auto-Load
+
+Use environment variables to control auto-load:
+
+```bash
+# Disable all auto-load temporarily
+export DOLLHOUSE_DISABLE_AUTOLOAD=true
+
+# Normal auto-load behavior
+unset DOLLHOUSE_DISABLE_AUTOLOAD
+```
+
+### Per-Project Configuration
+
+Create project-specific config:
+
+```yaml
+# /project/.dollhouserc.yaml
+autoLoad:
+  maxTokenBudget: 10000  # Higher budget for this project
+  memories:
+    - project-overview
+    - local-dev-setup
+    # Project-specific memories only
+```
+
+## Common Patterns
+
+### Pattern 1: Layered Context
+
+Load knowledge in layers (general → specific):
+
+```yaml
+# Priority 10: Company-wide standards
+name: company-coding-standards
+priority: 10
+
+# Priority 20: Team standards
+name: team-backend-patterns
+priority: 20
+
+# Priority 30: Project-specific context
+name: myapp-architecture
+priority: 30
+```
+
+### Pattern 2: Role-Based Context
+
+Different memories for different roles:
+
+```yaml
+# For backend developers
+name: backend-context
+autoLoad: true
+tags: [backend, api, database]
+
+# For frontend developers
+name: frontend-context
+autoLoad: true
+tags: [frontend, ui, components]
+```
+
+### Pattern 3: Onboarding Kit
+
+New team member baseline:
+
+```yaml
+name: team-onboarding
+priority: 5
+description: Everything new engineers need to know
+content: |
+  # Welcome to Team Atlas!
+
+  ## First Week Checklist
+  - [ ] Read architecture docs
+  - [ ] Set up dev environment
+  - [ ] Deploy your first PR
+
+  ## Key Resources
+  - Slack: #team-atlas
+  - Docs: docs.company.com/atlas
+  - CI/CD: Jenkins (jenkins.company.com)
+```
+
+## Troubleshooting
+
+### Memory Not Loading
+
+1. Check metadata:
+   ```yaml
+   autoLoad: true  # Must be boolean, not string
+   priority: 10    # Must be number, not string
+   ```
+
+2. Verify config:
+   ```bash
+   dollhouse config show autoLoad.enabled
+   # Should output: true
+   ```
+
+3. Check startup logs:
+   ```bash
+   # Look for: "[ServerStartup] Auto-load complete: X memories loaded"
+   ```
+
+### Budget Exceeded
+
+If memories are skipped due to budget:
+
+```yaml
+# Increase budget
+autoLoad:
+  maxTokenBudget: 10000  # Default: 5000
+
+# Or prioritize critical memories (lower priority = loads first)
+# Or split large memories into smaller focused ones
+```
+
+### Memory Too Large
+
+Warning: "Memory 'xyz' is very large (~12,000 tokens)"
+
+Solutions:
+1. Split into multiple memories
+2. Remove verbose sections
+3. Increase single memory limit:
+   ```yaml
+   autoLoad:
+     maxSingleMemoryTokens: 15000
+   ```
+4. Suppress warnings (not recommended):
+   ```yaml
+   autoLoad:
+     suppressLargeMemoryWarnings: true
+   ```
+
+## Examples
+
+### Example 1: Project Context
+
+```yaml
+---
+name: webapp-project-context
+autoLoad: true
+priority: 20
+---
+
+# WebApp Project Context
+
+**Stack**: React + Node.js + PostgreSQL
+**Deployment**: AWS (ECS + RDS)
+**CI/CD**: GitHub Actions
+
+## Active Sprints
+- Sprint 42: User authentication (ends Oct 15)
+- Tech debt: Migrate to TypeScript (Q4 2025)
+
+## Key Contacts
+- PM: Jane (@jane)
+- Tech Lead: Bob (@bob)
+- DevOps: Alice (@alice)
+```
+
+### Example 2: API Reference
+
+```yaml
+---
+name: internal-api-reference
+autoLoad: true
+priority: 50
+---
+
+# Internal API Reference
+
+## User Service
+- `GET /api/users/:id` - Get user by ID
+- `POST /api/users` - Create user
+- `PUT /api/users/:id` - Update user
+
+## Auth
+- Header: `Authorization: Bearer <token>`
+- Token expires: 24 hours
+```
+
+### Example 3: Coding Standards
+
+```yaml
+---
+name: team-coding-standards
+autoLoad: true
+priority: 30
+---
+
+# Team Coding Standards
+
+## TypeScript
+- Use strict mode
+- No `any` types
+- Prefer interfaces over types
+
+## Testing
+- Coverage: >80% required
+- Unit tests: Jest
+- E2E tests: Playwright
+
+## PR Process
+1. Create feature branch
+2. Write tests first
+3. Get 2 approvals
+4. Squash merge to main
+```
+
+## Best Practices
+
+1. **Start Small**: Begin with 1-2 auto-load memories, expand as needed
+2. **Review Regularly**: Update memories quarterly, remove stale content
+3. **Monitor Token Usage**: Check startup logs for token counts
+4. **Use Priorities Wisely**: Reserve low priorities for critical content
+5. **Document Changes**: Add version history to memory content
+6. **Test Before Committing**: Validate memories before pushing to team
+7. **Share Configurations**: Commit `.dollhouserc.yaml` to project repos
+
+## Related Documentation
+
+- [Priority Best Practices for Teams](./priority-best-practices-for-teams.yaml)
+- [Token Estimation Guidelines](./token-estimation-guidelines.yaml)
+- [DollhouseMCP Baseline Knowledge](./dollhousemcp-baseline-knowledge.yaml)
+
+---
+
+**Last Updated**: v1.9.25 (October 2025)

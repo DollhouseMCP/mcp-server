@@ -46,6 +46,13 @@ export class MemoryManager implements IElementManager<Memory> {
   // Invalidated when new folders are created
   private dateFoldersCache: string[] | null = null;
   private dateFoldersCacheTimestamp: number = 0;
+
+  // PERFORMANCE IMPROVEMENT: Cache for token estimates to avoid repeated calculations
+  // Issue #1430: Cache token estimates during auto-load to avoid recalculating
+  // Key: content hash, Value: estimated token count
+  // Max size: 1000 entries (prevents memory leaks)
+  private tokenEstimateCache: Map<string, number> = new Map();
+  private readonly MAX_TOKEN_CACHE_SIZE = 1000;
   
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
@@ -1100,18 +1107,47 @@ export class MemoryManager implements IElementManager<Memory> {
   }
 
   /**
-   * Estimate tokens in memory content (rough approximation)
-   * Uses 1 token ≈ 0.75 words for English text
-   * @param content Memory content to estimate
+   * Estimate token count for content with caching
+   * Issue #1430: Performance optimization for auto-load memories
+   *
+   * Uses 1 token ≈ 0.75 words for English text (conservative estimate)
+   * Results are cached based on content hash to avoid repeated calculations
+   *
+   * @param content - The content to estimate tokens for
    * @returns Estimated token count
    */
   public estimateTokens(content: string): number {
     if (!content || typeof content !== 'string') return 0;
 
+    // Generate hash for cache key
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(content)
+      .digest('hex')
+      .substring(0, 16); // Use first 16 chars for efficiency
+
+    // Check cache first
+    const cached = this.tokenEstimateCache.get(contentHash);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    // Calculate token estimate
     // Simple word count approximation
     const words = content.trim().split(/\s+/).length;
-
     // 1 token ≈ 0.75 words (conservative estimate)
-    return Math.ceil(words / 0.75);
+    const estimate = Math.ceil(words / 0.75);
+
+    // Cache the result (with size limit to prevent memory leaks)
+    if (this.tokenEstimateCache.size >= this.MAX_TOKEN_CACHE_SIZE) {
+      // Remove oldest entry (first key)
+      const firstKey = this.tokenEstimateCache.keys().next().value;
+      if (firstKey) {
+        this.tokenEstimateCache.delete(firstKey);
+      }
+    }
+    this.tokenEstimateCache.set(contentHash, estimate);
+
+    return estimate;
   }
 }

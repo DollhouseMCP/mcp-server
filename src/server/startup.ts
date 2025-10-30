@@ -182,8 +182,27 @@ export class ServerStartup {
         `(~${totalTokens} tokens), ${skippedCount} skipped, ${warningCount} warnings`
       );
     } catch (error) {
-      // Don't fail startup if auto-load fails
-      logger.warn('[ServerStartup] Failed to load auto-load memories:', error);
+      // ENHANCED ERROR HANDLING: Issue #1430
+      // Don't fail startup if auto-load fails, but provide detailed diagnostics
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
+
+      logger.warn(
+        `[ServerStartup] Failed to load auto-load memories (${errorType}): ${errorMessage}`
+      );
+
+      // Provide helpful recovery suggestions based on error type
+      if (errorMessage.includes('ENOENT') || errorMessage.includes('not found')) {
+        logger.info('[ServerStartup] Tip: Memory files may not exist yet. They will be created on first use.');
+      } else if (errorMessage.includes('EACCES') || errorMessage.includes('permission')) {
+        logger.warn('[ServerStartup] Tip: Check file permissions for ~/.dollhouse/portfolio/memories/');
+      } else if (errorMessage.includes('YAML') || errorMessage.includes('parse')) {
+        logger.warn('[ServerStartup] Tip: Check YAML syntax in memory files. Use dollhouse validate to diagnose.');
+      }
+
+      // Record error in telemetry for diagnostics
+      loadedCount = 0;
+      totalTokens = 0;
     } finally {
       // Record telemetry
       const metrics: AutoLoadMetrics = {
