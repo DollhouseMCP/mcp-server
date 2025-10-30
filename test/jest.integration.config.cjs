@@ -1,7 +1,7 @@
 /** @type {import('jest').Config} */
 module.exports = {
   // Extend the base Jest config
-  preset: 'ts-jest',
+  preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {
@@ -10,12 +10,17 @@ module.exports = {
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
-      tsconfig: 'test/tsconfig.test.json'
+      tsconfig: {
+        allowJs: true,
+        rootDir: '.',
+        isolatedModules: true
+      }
     }]
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@modelcontextprotocol)/)'
+    'node_modules/(?!(@modelcontextprotocol|zod)/)'
   ],
+  resolver: 'ts-jest-resolver',
   
   // Integration test specific settings
   testMatch: ['<rootDir>/test/__tests__/integration/**/*.test.ts'],
@@ -45,5 +50,8 @@ module.exports = {
   
   // Setup and teardown
   globalSetup: '<rootDir>/test/__tests__/integration/setup.ts',
-  globalTeardown: '<rootDir>/test/__tests__/integration/teardown.ts'
+  globalTeardown: '<rootDir>/test/__tests__/integration/teardown.ts',
+
+  // Root directory for test/package resolution
+  rootDir: '..'
 };

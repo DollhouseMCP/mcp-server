@@ -1,0 +1,145 @@
+---
+name: dollhousemcp-baseline-knowledge
+type: memory
+description: Baseline knowledge about DollhouseMCP capabilities and features - automatically loaded on server startup
+version: 1.0.0
+author: DollhouseMCP
+category: system
+tags:
+  - dollhousemcp
+  - baseline-knowledge
+  - capabilities
+  - system
+  - auto-load
+triggers:
+  - what-is-dollhouse
+  - what-can-dollhouse-do
+  - dollhouse-capabilities
+  - dollhouse-features
+  - tell-me-about-dollhouse
+  - explain-dollhouse
+  - dollhouse-overview
+  - dollhouse-help
+autoLoad: true
+priority: 1
+retention: permanent
+privacyLevel: public
+searchable: true
+trustLevel: VALIDATED
+---
+
+# DollhouseMCP - Baseline Knowledge
+
+## What Is DollhouseMCP?
+
+**DollhouseMCP** is an MCP server providing **AI customization through modular, reusable elements**. It solves: AI forgets context, quality is inconsistent, configurations can't be shared, and there's no version control.
+
+**Current Version**: v1.9.25 (Development)
+**Collection**: 76+ community elements (169+ pending)
+
+---
+
+## Core Capabilities
+
+### 1. Persistent Memory
+AI remembers context **forever** across sessions
+- Project details, decisions, preferences
+- Searchable, structured storage
+- Never re-explain context
+
+### 2. Instant Expertise
+Activate expert personas immediately
+- "Creative Writer", "Debug Detective", "Senior Security Analyst"
+- Consistent quality every session
+- Domain-specific knowledge on demand
+
+### 3. Version Control for AI
+Git-based tracking for all configurations
+- Full change history
+- Rollback capabilities
+- Team collaboration
+
+### 4. Community Ecosystem
+Three-tier portfolio: Local → GitHub → Collection
+- Discover & install 169+ elements
+- Customize for your needs
+- Share improvements back
+
+### 5. Cross-Platform Portability
+Works on ANY MCP-compatible platform
+- Claude Desktop, Claude Code, VS Code
+- Memories work everywhere
+- Platform-agnostic knowledge
+
+### 6. MCP Orchestration
+Expert layer for OTHER MCP servers
+- Personas expert at Obsidian, SonarCloud, etc.
+- Unified workflows across tools
+
+### 7. Self-Improving System
+Meta review layer evaluates and improves elements
+- Learns from real usage
+- Real-time adaptation
+- Long-term evolution
+
+---
+
+## Five Element Types
+
+**PERSONAS** - Define HOW AI behaves (expertise, style, methodology)
+**SKILLS** - Define WHAT AI can do (capabilities, parameters)
+**TEMPLATES** - Define structured outputs (formats, variables)
+**AGENTS** - Autonomous actors (goals, state, decision-making)
+**MEMORIES** - Persistent context (forever storage, searchable)
+
+**Key**: They ALL work together. Not isolated tools - integrated system.
+
+---
+
+## Problems Solved
+
+✅ Cross-Session Amnesia - AI forgets everything each session
+✅ Inconsistent Quality - Generic AI varies wildly
+✅ No Sharing - Can't share configurations
+✅ No Version Control - No tracking, rollback, or collaboration
+✅ Platform Lock-in - Configurations trapped per platform
+✅ Tool Isolation - Multiple MCP servers work in isolation
+
+---
+
+## Quick Start
+
+```bash
+# Browse collection
+browse_collection type="personas"
+
+# Install element
+install_collection_content "library/personas/creative-writer.md"
+
+# Activate
+activate_element type="personas" name="creative-writer"
+```
+
+---
+
+## Available Tools (41 MCP Tools)
+
+- **8** Element management (create, edit, activate, validate)
+- **12** Portfolio (sync GitHub, search, upload/download)
+- **8** Collection (browse, search, install, submit)
+- **13+** Auth/config (GitHub, relationships, diagnostics)
+
+---
+
+## Detailed Information
+
+For deeper understanding, query these memories:
+- **Core Concepts**: "load dollhousemcp-core-concepts"
+- **Element Types**: "load dollhousemcp-element-types-detailed"
+- **Architecture**: "load dollhousemcp-architecture-and-technical-implementation"
+- **Workflows**: "load dollhousemcp-workflows-and-use-cases-comprehensive"
+- **Platform Support**: "load dollhousemcp-platform-capabilities-and-limitations"
+
+---
+
+**DollhouseMCP is infrastructure for AI customization - like GitHub for code, but for AI personalities, capabilities, and persistent knowledge.**

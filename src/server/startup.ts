@@ -4,7 +4,13 @@
 
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
+import { MemoryManager } from '../elements/memories/MemoryManager.js';
+import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
+import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
+import { VERSION } from '../constants/version.js';
+import type { AutoLoadMetrics } from '../telemetry/types.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface StartupOptions {
   skipMigration?: boolean;
@@ -64,6 +70,136 @@ export class ServerStartup {
         logger.info(`[ServerStartup]   - ${type}: ${count} elements`);
       }
     });
+
+    // Issue #1430: Load and report auto-load memories
+    await this.initializeAutoLoadMemories();
+  }
+
+  /**
+   * Initialize auto-load memories
+   * Issue #1430: Automatically load baseline memories on server startup
+   * @private
+   */
+  private async initializeAutoLoadMemories(): Promise<void> {
+    const startTime = Date.now();
+    let totalTokens = 0;
+    let loadedCount = 0;
+    let skippedCount = 0;
+    let warningCount = 0;
+    const emergencyDisabled = process.env.DOLLHOUSE_DISABLE_AUTOLOAD === 'true';
+
+    try {
+      // Check for emergency disable
+      if (emergencyDisabled) {
+        logger.info('[ServerStartup] Auto-load disabled via DOLLHOUSE_DISABLE_AUTOLOAD');
+        return;
+      }
+
+      // Check if auto-load is enabled in config
+      const configManager = ConfigManager.getInstance();
+      await configManager.initialize();
+      const config = configManager.getConfig();
+
+      if (!config.autoLoad.enabled) {
+        logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
+        return;
+      }
+
+      const memoryManager = new MemoryManager();
+
+      // Issue #1430: Install seed memories before loading auto-load memories
+      // This ensures baseline knowledge is available on first run
+      await memoryManager.installSeedMemories();
+
+      const autoLoadMemories = await memoryManager.getAutoLoadMemories();
+
+      if (autoLoadMemories.length === 0) {
+        logger.debug('[ServerStartup] No auto-load memories configured');
+        return;
+      }
+
+      // Recommended thresholds (soft warnings)
+      const LARGE_MEMORY_WARN = 5000;
+      const VERY_LARGE_MEMORY_WARN = 10000;
+
+      // User-configured limits (hard enforcement if set)
+      // VALIDATION: Ensure maxTokenBudget is always > 0 (minimum 100 tokens)
+      const totalBudget = Math.max(100, config.autoLoad.maxTokenBudget || 5000);
+      const singleLimit = config.autoLoad.maxSingleMemoryTokens; // undefined = no limit
+      const suppressWarnings = config.autoLoad.suppressLargeMemoryWarnings || false;
+
+      for (const memory of autoLoadMemories) {
+        // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+        const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
+        const memoryName = normalizedName.normalizedContent;
+
+        const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
+
+        // Soft warning for large memories (doesn't block)
+        if (!suppressWarnings && estimatedTokens > VERY_LARGE_MEMORY_WARN) {
+          logger.warn(
+            `[ServerStartup] Memory '${memoryName}' is very large ` +
+            `(~${estimatedTokens} tokens, recommended: ${VERY_LARGE_MEMORY_WARN}). ` +
+            `This may impact startup time.`
+          );
+          warningCount++;
+        } else if (!suppressWarnings && estimatedTokens > LARGE_MEMORY_WARN) {
+          logger.info(
+            `[ServerStartup] Memory '${memoryName}' is large ` +
+            `(~${estimatedTokens} tokens).`
+          );
+          warningCount++;
+        }
+
+        // Hard enforcement: User-configured single memory limit (if set)
+        if (singleLimit !== undefined && estimatedTokens > singleLimit) {
+          logger.info(
+            `[ServerStartup] Skipping '${memoryName}' - ` +
+            `exceeds configured single memory limit (${estimatedTokens} > ${singleLimit} tokens)`
+          );
+          skippedCount++;
+          continue;
+        }
+
+        // Hard enforcement: Total budget
+        if (totalTokens + estimatedTokens > totalBudget) {
+          const remaining = autoLoadMemories.length - loadedCount;
+          logger.info(
+            `[ServerStartup] Token budget reached (${totalTokens}/${totalBudget} tokens). ` +
+            `Loaded ${loadedCount} memories, skipping remaining ${remaining}.`
+          );
+          skippedCount += remaining;
+          break;
+        }
+
+        // Load the memory
+        totalTokens += estimatedTokens;
+        loadedCount++;
+      }
+
+      logger.info(
+        `[ServerStartup] Auto-load complete: ${loadedCount} memories loaded ` +
+        `(~${totalTokens} tokens), ${skippedCount} skipped, ${warningCount} warnings`
+      );
+    } catch (error) {
+      // Don't fail startup if auto-load fails
+      logger.warn('[ServerStartup] Failed to load auto-load memories:', error);
+    } finally {
+      // Record telemetry
+      const metrics: AutoLoadMetrics = {
+        timestamp: new Date().toISOString(),
+        version: VERSION,
+        memoryCount: loadedCount,
+        totalTokens,
+        loadTimeMs: Date.now() - startTime,
+        skippedCount,
+        warningCount,
+        budgetExceeded: skippedCount > 0,
+        emergencyDisabled
+      };
+
+      await OperationalTelemetry.recordAutoLoadMetrics(metrics);
+    }
   }
   
   /**
