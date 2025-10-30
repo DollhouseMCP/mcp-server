@@ -201,7 +201,7 @@ export class ServerStartup {
           additionalData: {
             memoryName,
             estimatedTokens,
-            priority: memory.metadata.priority,
+            priority: (memory.metadata as any).priority,
             totalTokensSoFar: totalTokens
           }
         });
