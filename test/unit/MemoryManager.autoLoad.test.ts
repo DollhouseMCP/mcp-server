@@ -62,14 +62,14 @@ describe('MemoryManager - Auto-Load Functionality', () => {
       for (const entry of entries) {
         const fullPath = path.join(memoriesDir, entry.name);
         if (entry.isDirectory()) {
+          // force: true handles non-existent directories without throwing
           await fs.rm(fullPath, { recursive: true, force: true });
         } else {
           await fs.unlink(fullPath);
         }
       }
-    } catch (error) {
-      // Directory doesn't exist or cleanup failed - this is expected and safe to ignore
-      // Intentionally empty - test cleanup errors are expected and safe to ignore // NOSONAR
+    } catch {
+      // Directory doesn't exist - expected scenario during cleanup
       // Ensure directory exists for test (will be recreated if missing)
       await fs.mkdir(memoriesDir, { recursive: true });
     }

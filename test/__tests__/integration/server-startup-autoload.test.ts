@@ -75,34 +75,30 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
 
   beforeEach(async () => {
     // Clear memories directory between tests
+    // Note: No try-catch needed - if directory doesn't exist, readdir will throw
+    // but we handle that by recreating the directory below
     try {
       const entries = await fs.readdir(memoriesDir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(memoriesDir, entry.name);
         if (entry.isDirectory()) {
+          // force: true handles non-existent directories without throwing
           await fs.rm(fullPath, { recursive: true, force: true });
         } else {
           await fs.unlink(fullPath);
         }
       }
-    } catch (error) {
-      // Directory doesn't exist or is empty - this is expected and safe to ignore during cleanup
-      // No action needed as we're about to recreate the directory
-      // Intentionally empty - test cleanup errors are expected and safe to ignore // NOSONAR
+    } catch {
+      // Directory doesn't exist - expected scenario during cleanup, no action needed
     }
 
     // Ensure memories directory exists
     await fs.mkdir(memoriesDir, { recursive: true });
 
     // Reset config directory
-    try {
-      await fs.rm(configDir, { recursive: true, force: true });
-      await fs.mkdir(configDir, { recursive: true });
-    } catch (error) {
-      // Directory doesn't exist - this is expected and safe to ignore during cleanup
-      // Directory will be recreated in the try block above
-      // Intentionally empty - test cleanup errors are expected and safe to ignore // NOSONAR
-    }
+    // force: true handles non-existent directories without throwing
+    await fs.rm(configDir, { recursive: true, force: true });
+    await fs.mkdir(configDir, { recursive: true });
 
     // Reset singletons for each test
     (PortfolioManager as any).instance = null;
