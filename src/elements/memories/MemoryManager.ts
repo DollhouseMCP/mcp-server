@@ -53,7 +53,9 @@ export class MemoryManager implements IElementManager<Memory> {
   // Max size: 1000 entries (prevents memory leaks)
   private readonly tokenEstimateCache: Map<string, number> = new Map();
   private readonly MAX_TOKEN_CACHE_SIZE = 1000;
-  
+  // PR #1436: Add cache hit/miss metrics for observability
+  private tokenCacheStats = { hits: 0, misses: 0 };
+
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
     this.memoriesDir = this.portfolioManager.getElementDir(ElementType.MEMORY);
@@ -1129,10 +1131,12 @@ export class MemoryManager implements IElementManager<Memory> {
     // Check cache first
     const cached = this.tokenEstimateCache.get(contentHash);
     if (cached !== undefined) {
+      this.tokenCacheStats.hits++;
       return cached;
     }
 
-    // Calculate token estimate
+    // Cache miss - calculate token estimate
+    this.tokenCacheStats.misses++;
     // Simple word count approximation
     const words = content.trim().split(/\s+/).length;
     // 1 token ≈ 0.75 words (conservative estimate)
@@ -1148,6 +1152,40 @@ export class MemoryManager implements IElementManager<Memory> {
     }
     this.tokenEstimateCache.set(contentHash, estimate);
 
+    // PR #1436: Log cache effectiveness periodically (every 100 misses)
+    if (this.tokenCacheStats.misses % 100 === 0) {
+      this.logTokenCacheStats();
+    }
+
     return estimate;
+  }
+
+  /**
+   * Get token estimation cache statistics
+   * PR #1436: Expose cache metrics for observability
+   * @returns Cache statistics including hits, misses, and hit rate
+   */
+  public getTokenCacheStats(): { hits: number; misses: number; hitRate: number } {
+    const total = this.tokenCacheStats.hits + this.tokenCacheStats.misses;
+    const hitRate = total > 0 ? this.tokenCacheStats.hits / total : 0;
+
+    return {
+      hits: this.tokenCacheStats.hits,
+      misses: this.tokenCacheStats.misses,
+      hitRate: Math.round(hitRate * 100) / 100
+    };
+  }
+
+  /**
+   * Log token cache statistics
+   * PR #1436: Periodic logging for cache effectiveness monitoring
+   * @private
+   */
+  private logTokenCacheStats(): void {
+    const stats = this.getTokenCacheStats();
+    logger.debug(
+      `[MemoryManager] Token cache stats: ${stats.hits} hits, ` +
+      `${stats.misses} misses (hit rate: ${(stats.hitRate * 100).toFixed(1)}%)`
+    );
   }
 }

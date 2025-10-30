@@ -12,6 +12,7 @@ import { VERSION } from '../constants/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { AutoLoadError } from '../errors/AutoLoadError.js';
 
 export interface StartupOptions {
   skipMigration?: boolean;
@@ -210,17 +211,40 @@ export class ServerStartup {
       }
 
       // User-configured limits (hard enforcement if set)
-      // VALIDATION: Ensure maxTokenBudget is always > 0 (minimum 100 tokens)
-      const totalBudget = Math.max(100, config.autoLoad.maxTokenBudget || 5000);
+      // PR #1436: Validate maxTokenBudget with bounds and user warning
+      // Minimum: 100 tokens (enough for minimal baseline knowledge)
+      // Maximum: 50,000 tokens (prevents excessive startup time and memory usage)
+      // Default: 5,000 tokens (balanced for typical use cases)
+      const configuredBudget = config.autoLoad.maxTokenBudget || 5000;
+      const totalBudget = Math.max(100, Math.min(50000, configuredBudget));
+
+      // PR #1436: Warn if configured budget was clamped to valid range
+      if (configuredBudget !== totalBudget) {
+        logger.warn(
+          `[ServerStartup] Configured maxTokenBudget (${configuredBudget}) ` +
+          `was adjusted to ${totalBudget} (valid range: 100-50,000)`
+        );
+      }
+
       const singleLimit = config.autoLoad.maxSingleMemoryTokens; // undefined = no limit
       const suppressWarnings = config.autoLoad.suppressLargeMemoryWarnings || false;
 
       for (const memory of autoLoadMemories) {
-        // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
-        const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
-        const memoryName = normalizedName.normalizedContent;
+        try {
+          // FIX: DMCP-SEC-004 - Normalize Unicode in user input to prevent homograph attacks
+          const normalizedName = UnicodeValidator.normalize(memory.metadata.name);
+          const memoryName = normalizedName.normalizedContent;
 
-        const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
+          // PR #1436: Validate memory before loading
+          const validation = memory.validate();
+          if (!validation.valid) {
+            throw AutoLoadError.validationFailed(
+              memoryName,
+              validation.errors?.map(e => e.message).join(', ') || 'Unknown validation error'
+            );
+          }
+
+          const estimatedTokens = memoryManager.estimateTokens(memory.content || '');
 
         // Check for size warnings
         const warnings = this.checkMemorySizeWarnings(memoryName, estimatedTokens, suppressWarnings);
@@ -246,19 +270,33 @@ export class ServerStartup {
         totalTokens += estimatedTokens;
         loadedCount++;
 
-        // FIX: DMCP-SEC-006 - Audit log each loaded memory
-        SecurityMonitor.logSecurityEvent({
-          type: 'MEMORY_LOADED',
-          severity: 'LOW',
-          source: 'ServerStartup.initializeAutoLoadMemories',
-          details: `Auto-loaded memory: ${memoryName}`,
-          additionalData: {
-            memoryName,
-            estimatedTokens,
-            priority: (memory.metadata as any).priority,
-            totalTokensSoFar: totalTokens
+          // FIX: DMCP-SEC-006 - Audit log each loaded memory
+          SecurityMonitor.logSecurityEvent({
+            type: 'MEMORY_LOADED',
+            severity: 'LOW',
+            source: 'ServerStartup.initializeAutoLoadMemories',
+            details: `Auto-loaded memory: ${memoryName}`,
+            additionalData: {
+              memoryName,
+              estimatedTokens,
+              priority: (memory.metadata as any).priority,
+              totalTokensSoFar: totalTokens
+            }
+          });
+        } catch (error) {
+          // PR #1436: Structured error handling with AutoLoadError
+          if (error instanceof AutoLoadError) {
+            logger.info(
+              `[ServerStartup] Skipping '${error.memoryName}' - ` +
+              `${error.phase} phase failed: ${error.message}`
+            );
+          } else {
+            // Handle unexpected errors
+            const memoryName = memory.metadata.name || 'unknown';
+            logger.warn(`[ServerStartup] Unexpected error loading '${memoryName}': ${error}`);
           }
-        });
+          skippedCount++;
+        }
       }
 
       logger.info(
