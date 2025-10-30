@@ -12,6 +12,13 @@
 [![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
 [![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/SECURITY.md)
 
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=bugs)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
+
 ## Platform Support
 [![Windows Build Status](https://img.shields.io/badge/Windows-✓_Tested-0078D4?logo=windows&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "Windows CI Build Status")
 [![macOS Build Status](https://img.shields.io/badge/macOS-✓_Tested-000000?logo=apple&logoColor=white)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main "macOS CI Build Status")
@@ -21,8 +28,8 @@
 ## Technology
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Extended Node Compatibility](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml)
-[![Docker Testing](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml)
+[![Extended Node Compatibility](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml/badge.svg?branch=develop)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/extended-node-compatibility.yml?query=branch:develop)
+[![Docker Testing](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml/badge.svg?branch=develop)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/docker-testing.yml?query=branch:develop)
 
 ---
 
