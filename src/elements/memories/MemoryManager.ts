@@ -46,7 +46,16 @@ export class MemoryManager implements IElementManager<Memory> {
   // Invalidated when new folders are created
   private dateFoldersCache: string[] | null = null;
   private dateFoldersCacheTimestamp: number = 0;
-  
+
+  // PERFORMANCE IMPROVEMENT: Cache for token estimates to avoid repeated calculations
+  // Issue #1430: Cache token estimates during auto-load to avoid recalculating
+  // Key: content hash, Value: estimated token count
+  // Max size: 1000 entries (prevents memory leaks)
+  private readonly tokenEstimateCache: Map<string, number> = new Map();
+  private readonly MAX_TOKEN_CACHE_SIZE = 1000;
+  // PR #1436: Add cache hit/miss metrics for observability
+  private readonly tokenCacheStats = { hits: 0, misses: 0 };
+
   constructor() {
     this.portfolioManager = PortfolioManager.getInstance();
     this.memoriesDir = this.portfolioManager.getElementDir(ElementType.MEMORY);
@@ -1100,18 +1109,83 @@ export class MemoryManager implements IElementManager<Memory> {
   }
 
   /**
-   * Estimate tokens in memory content (rough approximation)
-   * Uses 1 token ≈ 0.75 words for English text
-   * @param content Memory content to estimate
+   * Estimate token count for content with caching
+   * Issue #1430: Performance optimization for auto-load memories
+   *
+   * Uses 1 token ≈ 0.75 words for English text (conservative estimate)
+   * Results are cached based on content hash to avoid repeated calculations
+   *
+   * @param content - The content to estimate tokens for
    * @returns Estimated token count
    */
   public estimateTokens(content: string): number {
     if (!content || typeof content !== 'string') return 0;
 
+    // Generate hash for cache key
+    const contentHash = crypto
+      .createHash('sha256')
+      .update(content)
+      .digest('hex')
+      .substring(0, 16); // Use first 16 chars for efficiency
+
+    // Check cache first
+    const cached = this.tokenEstimateCache.get(contentHash);
+    if (cached !== undefined) {
+      this.tokenCacheStats.hits++;
+      return cached;
+    }
+
+    // Cache miss - calculate token estimate
+    this.tokenCacheStats.misses++;
     // Simple word count approximation
     const words = content.trim().split(/\s+/).length;
-
     // 1 token ≈ 0.75 words (conservative estimate)
-    return Math.ceil(words / 0.75);
+    const estimate = Math.ceil(words / 0.75);
+
+    // Cache the result (with size limit to prevent memory leaks)
+    if (this.tokenEstimateCache.size >= this.MAX_TOKEN_CACHE_SIZE) {
+      // Remove oldest entry (first key)
+      const firstKey = this.tokenEstimateCache.keys().next().value;
+      if (firstKey) {
+        this.tokenEstimateCache.delete(firstKey);
+      }
+    }
+    this.tokenEstimateCache.set(contentHash, estimate);
+
+    // PR #1436: Log cache effectiveness periodically (every 100 misses)
+    if (this.tokenCacheStats.misses % 100 === 0) {
+      this.logTokenCacheStats();
+    }
+
+    return estimate;
+  }
+
+  /**
+   * Get token estimation cache statistics
+   * PR #1436: Expose cache metrics for observability
+   * @returns Cache statistics including hits, misses, and hit rate
+   */
+  public getTokenCacheStats(): { hits: number; misses: number; hitRate: number } {
+    const total = this.tokenCacheStats.hits + this.tokenCacheStats.misses;
+    const hitRate = total > 0 ? this.tokenCacheStats.hits / total : 0;
+
+    return {
+      hits: this.tokenCacheStats.hits,
+      misses: this.tokenCacheStats.misses,
+      hitRate: Math.round(hitRate * 100) / 100
+    };
+  }
+
+  /**
+   * Log token cache statistics
+   * PR #1436: Periodic logging for cache effectiveness monitoring
+   * @private
+   */
+  private logTokenCacheStats(): void {
+    const stats = this.getTokenCacheStats();
+    logger.debug(
+      `[MemoryManager] Token cache stats: ${stats.hits} hits, ` +
+      `${stats.misses} misses (hit rate: ${(stats.hitRate * 100).toFixed(1)}%)`
+    );
   }
 }
