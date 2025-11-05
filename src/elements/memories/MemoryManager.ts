@@ -839,7 +839,8 @@ export class MemoryManager implements IElementManager<Memory> {
   async importElement(data: string, format: 'json' | 'yaml' = 'yaml'): Promise<Memory> {
     try {
       let parsed: any;
-      
+      let markdownContent: string | undefined;
+
       if (format === 'json') {
         parsed = JSON.parse(data);
       } else {
@@ -866,6 +867,10 @@ export class MemoryManager implements IElementManager<Memory> {
 
           // Extract the parsed data (will be in the 'data' property)
           parsed = parseResult.data;
+
+          // BUG FIX: Extract markdown content to preserve it during import
+          // Previously this was discarded, causing seed memories to install with empty entries[]
+          markdownContent = parseResult.content;
           
         } catch (yamlError) {
           throw new Error(`Invalid YAML: ${yamlError}`);
@@ -893,7 +898,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
       // Create memory instance
       const memory = new Memory(metadata);
-      
+
       // Load entries if present
       if (entries) {
         memory.deserialize(JSON.stringify({
@@ -905,7 +910,22 @@ export class MemoryManager implements IElementManager<Memory> {
           entries: entries
         }));
       }
-      
+
+      // BUG FIX: Add markdown content as a memory entry if it exists
+      // This fixes the bug where seed memories were installing with empty entries[]
+      // The content from YAML files (after the --- separator) was being discarded
+      if (markdownContent && markdownContent.trim()) {
+        await memory.addEntry(
+          markdownContent.trim(),
+          [], // No tags from import
+          {
+            source: 'import',
+            importedAt: new Date().toISOString()
+          },
+          'import'
+        );
+      }
+
       return memory;
       
     } catch (error) {
