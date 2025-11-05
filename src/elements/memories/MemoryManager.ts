@@ -234,7 +234,24 @@ export class MemoryManager implements IElementManager<Memory> {
           entries: entries
         }));
       }
-      
+
+      // FIX #1442: Add markdown content as entry if present and no entries loaded
+      // This ensures memories with markdown content (like seed memories) preserve their content
+      // Similar fix to importElement() - handles files written with markdown content section
+      const trimmedMarkdownContent = memoryContent?.trim();
+      if (trimmedMarkdownContent && trimmedMarkdownContent.length > 0 && memory.getAllEntries().length === 0) {
+        // Only add if memory has no entries yet (avoid duplicating on reload)
+        await memory.addEntry(
+          trimmedMarkdownContent,
+          [], // No tags from file load
+          {
+            source: 'file-load',
+            loadedAt: new Date().toISOString()
+          },
+          'file-load'
+        );
+      }
+
       // FIX #1320: Set file path on memory for persistence (store relative path)
       const relativePath = path.relative(this.memoriesDir, fullPath);
       memory.setFilePath(relativePath);
@@ -839,7 +856,8 @@ export class MemoryManager implements IElementManager<Memory> {
   async importElement(data: string, format: 'json' | 'yaml' = 'yaml'): Promise<Memory> {
     try {
       let parsed: any;
-      
+      let markdownContent: string | undefined;
+
       if (format === 'json') {
         parsed = JSON.parse(data);
       } else {
@@ -866,6 +884,10 @@ export class MemoryManager implements IElementManager<Memory> {
 
           // Extract the parsed data (will be in the 'data' property)
           parsed = parseResult.data;
+
+          // BUG FIX: Extract markdown content to preserve it during import
+          // Previously this was discarded, causing seed memories to install with empty entries[]
+          markdownContent = parseResult.content;
           
         } catch (yamlError) {
           throw new Error(`Invalid YAML: ${yamlError}`);
@@ -893,7 +915,7 @@ export class MemoryManager implements IElementManager<Memory> {
       
       // Create memory instance
       const memory = new Memory(metadata);
-      
+
       // Load entries if present
       if (entries) {
         memory.deserialize(JSON.stringify({
@@ -905,7 +927,25 @@ export class MemoryManager implements IElementManager<Memory> {
           entries: entries
         }));
       }
-      
+
+      // BUG FIX: Add markdown content as a memory entry if it exists
+      // This fixes the bug where seed memories were installing with empty entries[]
+      // The content from YAML files (after the --- separator) was being discarded
+      // FIX: Use optional chain for better maintainability (SonarCloud recommendation)
+      const trimmedContent = markdownContent?.trim();
+      if (trimmedContent && trimmedContent.length > 0) {
+        // Validate content is meaningful (not just whitespace or empty)
+        await memory.addEntry(
+          trimmedContent,
+          [], // No tags from import
+          {
+            source: 'import',
+            importedAt: new Date().toISOString()
+          },
+          'import'
+        );
+      }
+
       return memory;
       
     } catch (error) {
