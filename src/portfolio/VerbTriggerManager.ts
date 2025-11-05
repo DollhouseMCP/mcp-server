@@ -13,7 +13,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndexManager, EnhancedIndex } from './EnhancedIndexManager.js';
+import { EnhancedIndexManager, EnhancedIndex, ActionDefinition } from './EnhancedIndexManager.js';
 import { ElementDefinition } from './EnhancedIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -206,11 +206,18 @@ export class VerbTriggerManager {
 
   /**
    * Get base form of a verb (remove -ing, -ed, etc.)
+   *
+   * Transforms verb variations back to their base form to enable flexible matching.
+   * For example, "debugging", "debugged", "debugs" all map to "debug".
    */
   private getBaseVerb(word: string): string | null {
-    // Handle common verb endings
+    // Handle common verb endings with regex transformations
     const transformations: [RegExp, string][] = [
-      [/ing$/, ''],      // debugging -> debug
+      // Handle gerunds with doubled consonants (debugging→debug, running→run, planning→plan)
+      // Pattern: /([bcdfghjklmnpqrstvwxyz])\1ing$/ captures doubled consonant + "ing"
+      // Replacement: '$1' keeps only single consonant
+      [/([bcdfghjklmnpqrstvwxyz])\1ing$/, '$1'],
+      [/ing$/, ''],      // creating -> create, testing -> test
       [/ying$/, 'y'],    // applying -> apply
       [/ied$/, 'y'],     // simplified -> simplify
       [/ed$/, ''],       // created -> create
@@ -283,19 +290,58 @@ export class VerbTriggerManager {
 
     const elements: ElementMatch[] = [];
 
-    // 1. Check explicit verb mappings in action_triggers
-    if (index.action_triggers[verb]) {
-      for (const elementName of index.action_triggers[verb]) {
+    // 1. Check custom verb mappings first (highest priority)
+    // Custom verbs get confidence 0.95 to ensure they override index-based mappings.
+    // This allows runtime customization of verb-to-element mappings, enabling users
+    // to define their own action triggers that take precedence over system defaults.
+    // FIX: Use optional chain for better maintainability (SonarCloud L288)
+    if (this.config.customVerbs?.[verb]) {
+      for (const elementName of this.config.customVerbs[verb]) {
+        const elementType = this.findElementType(elementName, index);
         elements.push({
           name: elementName,
-          type: this.findElementType(elementName, index),
-          confidence: 0.9,  // High confidence for explicit mappings
+          type: elementType,
+          confidence: 0.95,  // Very high confidence for custom mappings
           source: 'explicit'
         });
       }
     }
 
-    // 2. Check element actions for this verb
+    // 2. Check explicit verb mappings in action_triggers
+    if (index.action_triggers[verb]) {
+      for (const elementName of index.action_triggers[verb]) {
+        const elementType = this.findElementType(elementName, index);
+        let confidence = 0.9; // Default for action_triggers
+
+        // Try to get actual confidence from element.actions.
+        // This preserves the confidence value defined in the element's action definition
+        // rather than using a hardcoded default. Each element can specify different
+        // confidence levels for different actions based on how well-suited it is for
+        // that particular verb (e.g., a debugging tool might have 0.95 for "debug"
+        // but only 0.6 for "analyze").
+        if (elementType !== 'unknown') {
+          const element = index.elements[elementType]?.[elementName];
+          if (element?.actions) {
+            // Find the action definition for this specific verb
+            const actionDef = Object.values(element.actions).find(
+              (a: ActionDefinition) => a.verb === verb
+            );
+            if (actionDef?.confidence !== undefined) {
+              confidence = actionDef.confidence;  // Use element's defined confidence
+            }
+          }
+        }
+
+        elements.push({
+          name: elementName,
+          type: elementType,
+          confidence,  // Now uses actual confidence from element definition
+          source: 'explicit'
+        });
+      }
+    }
+
+    // 3. Check element actions for this verb
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         if (element.actions) {
@@ -316,7 +362,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 3. Check synonyms if enabled (with depth limit)
+    // 4. Check synonyms if enabled (with depth limit)
     if (this.config.includeSynonyms && visited.size < 5) {  // Max recursion depth of 5
       const synonyms = this.getSynonyms(verb);
       for (const synonym of synonyms) {
@@ -337,7 +383,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 4. Infer from element names (e.g., "debug-detective" -> "debug")
+    // 5. Infer from element names (e.g., "debug-detective" -> "debug")
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         const elementNameLower = name.toLowerCase();
@@ -356,7 +402,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 5. Infer from descriptions
+    // 6. Infer from descriptions
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         if (element.core.description) {
@@ -411,8 +457,12 @@ export class VerbTriggerManager {
 
   /**
    * Find element type by name
+   * FIX: Handle case where index.elements might be undefined
    */
   private findElementType(elementName: string, index: EnhancedIndex): string {
+    if (!index.elements) {
+      return 'unknown';
+    }
     for (const [type, elements] of Object.entries(index.elements)) {
       if ((elements as any)[elementName]) {
         return type;
@@ -505,21 +555,27 @@ export class VerbTriggerManager {
   public getVerbsForElement(elementName: string, index: EnhancedIndex): string[] {
     const verbs: string[] = [];
 
-    // Check action_triggers
-    for (const [verb, elements] of Object.entries(index.action_triggers)) {
-      if (elements.includes(elementName)) {
-        verbs.push(verb);
+    // Check action_triggers (use optional chain for robustness)
+    // FIX: Handle case where action_triggers might be undefined
+    if (index.action_triggers) {
+      for (const [verb, elements] of Object.entries(index.action_triggers)) {
+        if (elements.includes(elementName)) {
+          verbs.push(verb);
+        }
       }
     }
 
     // Check element's own actions
-    for (const typeElements of Object.values(index.elements)) {
-      const element = (typeElements as any)[elementName];
-      if (element?.actions) {
-        for (const action of Object.values(element.actions)) {
-          const actionVerb = (action as any).verb;
-          if (actionVerb && !verbs.includes(actionVerb)) {
-            verbs.push(actionVerb);
+    // FIX: Handle case where index.elements might be undefined
+    if (index.elements) {
+      for (const typeElements of Object.values(index.elements)) {
+        const element = (typeElements as any)[elementName];
+        if (element?.actions) {
+          for (const action of Object.values(element.actions)) {
+            const actionVerb = (action as any).verb;
+            if (actionVerb && !verbs.includes(actionVerb)) {
+              verbs.push(actionVerb);
+            }
           }
         }
       }
