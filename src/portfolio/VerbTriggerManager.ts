@@ -210,7 +210,8 @@ export class VerbTriggerManager {
   private getBaseVerb(word: string): string | null {
     // Handle common verb endings
     const transformations: [RegExp, string][] = [
-      [/ing$/, ''],      // debugging -> debug
+      [/([bcdfghjklmnpqrstvwxyz])\1ing$/, '$1'],  // debugging -> debug, running -> run
+      [/ing$/, ''],      // creating -> create, testing -> test
       [/ying$/, 'y'],    // applying -> apply
       [/ied$/, 'y'],     // simplified -> simplify
       [/ed$/, ''],       // created -> create
@@ -283,19 +284,48 @@ export class VerbTriggerManager {
 
     const elements: ElementMatch[] = [];
 
-    // 1. Check explicit verb mappings in action_triggers
-    if (index.action_triggers[verb]) {
-      for (const elementName of index.action_triggers[verb]) {
+    // 1. Check custom verb mappings first (highest priority)
+    if (this.config.customVerbs && this.config.customVerbs[verb]) {
+      for (const elementName of this.config.customVerbs[verb]) {
+        const elementType = this.findElementType(elementName, index);
         elements.push({
           name: elementName,
-          type: this.findElementType(elementName, index),
-          confidence: 0.9,  // High confidence for explicit mappings
+          type: elementType,
+          confidence: 0.95,  // Very high confidence for custom mappings
           source: 'explicit'
         });
       }
     }
 
-    // 2. Check element actions for this verb
+    // 2. Check explicit verb mappings in action_triggers
+    if (index.action_triggers[verb]) {
+      for (const elementName of index.action_triggers[verb]) {
+        const elementType = this.findElementType(elementName, index);
+        let confidence = 0.9; // Default for action_triggers
+
+        // Try to get actual confidence from element.actions
+        if (elementType !== 'unknown') {
+          const element = index.elements[elementType]?.[elementName];
+          if (element?.actions) {
+            const actionDef = Object.values(element.actions).find(
+              (a: any) => a.verb === verb
+            );
+            if (actionDef?.confidence !== undefined) {
+              confidence = actionDef.confidence;
+            }
+          }
+        }
+
+        elements.push({
+          name: elementName,
+          type: elementType,
+          confidence,  // Now uses actual confidence
+          source: 'explicit'
+        });
+      }
+    }
+
+    // 3. Check element actions for this verb
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         if (element.actions) {
@@ -316,7 +346,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 3. Check synonyms if enabled (with depth limit)
+    // 4. Check synonyms if enabled (with depth limit)
     if (this.config.includeSynonyms && visited.size < 5) {  // Max recursion depth of 5
       const synonyms = this.getSynonyms(verb);
       for (const synonym of synonyms) {
@@ -337,7 +367,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 4. Infer from element names (e.g., "debug-detective" -> "debug")
+    // 5. Infer from element names (e.g., "debug-detective" -> "debug")
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         const elementNameLower = name.toLowerCase();
@@ -356,7 +386,7 @@ export class VerbTriggerManager {
       }
     }
 
-    // 5. Infer from descriptions
+    // 6. Infer from descriptions
     for (const [type, typeElements] of Object.entries(index.elements)) {
       for (const [name, element] of Object.entries(typeElements)) {
         if (element.core.description) {
