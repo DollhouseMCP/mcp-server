@@ -394,12 +394,12 @@ describe('VerbTriggerManager', () => {
           expect(names).toContain(secondElement);
 
           // Custom mappings should have high confidence (0.95)
-          elements.forEach(e => {
+          for (const e of elements) {
             if (e.name === firstElement || e.name === secondElement) {
               expect(e.confidence).toBe(0.95);
               expect(e.source).toBe('explicit');
             }
-          });
+          }
         } else {
           // No elements available, just verify addCustomVerb method works
           manager.addCustomVerb('test-verb', ['test-element']);

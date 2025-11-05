@@ -13,7 +13,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndexManager, EnhancedIndex } from './EnhancedIndexManager.js';
+import { EnhancedIndexManager, EnhancedIndex, ActionDefinition } from './EnhancedIndexManager.js';
 import { ElementDefinition } from './EnhancedIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -206,11 +206,17 @@ export class VerbTriggerManager {
 
   /**
    * Get base form of a verb (remove -ing, -ed, etc.)
+   *
+   * Transforms verb variations back to their base form to enable flexible matching.
+   * For example, "debugging", "debugged", "debugs" all map to "debug".
    */
   private getBaseVerb(word: string): string | null {
-    // Handle common verb endings
+    // Handle common verb endings with regex transformations
     const transformations: [RegExp, string][] = [
-      [/([bcdfghjklmnpqrstvwxyz])\1ing$/, '$1'],  // debugging -> debug, running -> run
+      // Handle gerunds with doubled consonants (debugging→debug, running→run, planning→plan)
+      // Pattern: /([bcdfghjklmnpqrstvwxyz])\1ing$/ captures doubled consonant + "ing"
+      // Replacement: '$1' keeps only single consonant
+      [/([bcdfghjklmnpqrstvwxyz])\1ing$/, '$1'],
       [/ing$/, ''],      // creating -> create, testing -> test
       [/ying$/, 'y'],    // applying -> apply
       [/ied$/, 'y'],     // simplified -> simplify
@@ -285,6 +291,9 @@ export class VerbTriggerManager {
     const elements: ElementMatch[] = [];
 
     // 1. Check custom verb mappings first (highest priority)
+    // Custom verbs get confidence 0.95 to ensure they override index-based mappings.
+    // This allows runtime customization of verb-to-element mappings, enabling users
+    // to define their own action triggers that take precedence over system defaults.
     // FIX: Use optional chain for better maintainability (SonarCloud L288)
     if (this.config.customVerbs?.[verb]) {
       for (const elementName of this.config.customVerbs[verb]) {
@@ -304,15 +313,21 @@ export class VerbTriggerManager {
         const elementType = this.findElementType(elementName, index);
         let confidence = 0.9; // Default for action_triggers
 
-        // Try to get actual confidence from element.actions
+        // Try to get actual confidence from element.actions.
+        // This preserves the confidence value defined in the element's action definition
+        // rather than using a hardcoded default. Each element can specify different
+        // confidence levels for different actions based on how well-suited it is for
+        // that particular verb (e.g., a debugging tool might have 0.95 for "debug"
+        // but only 0.6 for "analyze").
         if (elementType !== 'unknown') {
           const element = index.elements[elementType]?.[elementName];
           if (element?.actions) {
+            // Find the action definition for this specific verb
             const actionDef = Object.values(element.actions).find(
-              (a: any) => a.verb === verb
+              (a: ActionDefinition) => a.verb === verb
             );
             if (actionDef?.confidence !== undefined) {
-              confidence = actionDef.confidence;
+              confidence = actionDef.confidence;  // Use element's defined confidence
             }
           }
         }
@@ -320,7 +335,7 @@ export class VerbTriggerManager {
         elements.push({
           name: elementName,
           type: elementType,
-          confidence,  // Now uses actual confidence
+          confidence,  // Now uses actual confidence from element definition
           source: 'explicit'
         });
       }
