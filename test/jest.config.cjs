@@ -27,7 +27,7 @@ const config = {
     'UpdateManager\\.npm\\.test\\.ts$',
     'BackupManager\\.npm\\.test\\.ts$',
     'InstallationDetector\\.test\\.ts$',
-    'GitHubAuthManager\\.test\\.ts$',  // Complex mocking issues - needs complete rewrite
+    // GitHubAuthManager test re-enabled after fixing terminal error propagation (PR #1444)
     'CollectionCache\\.test\\.ts$',  // ESM mocking issues with fs/promises
     'EnhancedIndexManager\\.extractActionTriggers\\.test\\.ts$',  // ESM mocking issues with logger
     'EnhancedIndexManager\\.telemetry\\.test\\.ts$',  // ESM mocking issues with ConfigManager
