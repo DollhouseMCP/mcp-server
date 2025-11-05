@@ -371,8 +371,10 @@ version: 1.0.0
 
       // Content should be trimmed
       const content = entries[0].content;
-      expect(content).not.toMatch(/^\s+/); // No leading whitespace
-      expect(content).not.toMatch(/\s+$/); // No trailing whitespace
+      // FIX: Replace vulnerable regex with String.trim() comparison
+      // Previously: Used /^\s+/ and /\s+$/ which could cause ReDoS
+      // Now: Direct trim comparison - safer and more efficient
+      expect(content).toBe(content.trim()); // Content should equal its trimmed version
       expect(content).toContain('Content with leading/trailing whitespace');
     });
   });
