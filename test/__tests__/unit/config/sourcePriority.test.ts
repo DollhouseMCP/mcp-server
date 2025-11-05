@@ -10,8 +10,7 @@ import {
   DEFAULT_SOURCE_PRIORITY,
   getSourcePriorityConfig,
   validateSourcePriority,
-  getSourceDisplayName,
-  ValidationResult
+  getSourceDisplayName
 } from '../../../../src/config/sourcePriority.js';
 
 describe('sourcePriority', () => {
@@ -495,6 +494,11 @@ describe('sourcePriority', () => {
         // Should contain descriptive words
         expect(displayName.split(' ').length).toBeGreaterThan(0);
       }
+    });
+
+    it('should throw error for invalid source value', () => {
+      const invalidSource = 'invalid-source' as ElementSource;
+      expect(() => getSourceDisplayName(invalidSource)).toThrow('Invalid element source: invalid-source');
     });
   });
 

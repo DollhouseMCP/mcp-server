@@ -117,9 +117,14 @@ export const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
  * Get current source priority configuration
  *
  * Priority order for configuration sources:
- * 1. User configuration (from config file) - TODO: Implement
- * 2. Environment variables (for testing) - TODO: Implement
+ * 1. User configuration (from config file) - Will be implemented in Phase 4 (Issue #1448)
+ * 2. Environment variables (for testing) - Will be implemented in Phase 4 (Issue #1448)
  * 3. Default configuration
+ *
+ * Currently returns the default configuration. Future phases will add:
+ * - Config file support via dollhouse_config tool (Phase 4)
+ * - Environment variable overrides for testing (Phase 4)
+ * - Validation of user-provided configurations
  *
  * @returns {SourcePriorityConfig} The current source priority configuration
  *
@@ -141,14 +146,14 @@ export const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
  * }
  */
 export function getSourcePriorityConfig(): SourcePriorityConfig {
-  // TODO: Implement config file reading
+  // FUTURE (Phase 4 - Issue #1448): Implement config file reading
   // const configManager = ConfigManager.getInstance();
   // const userConfig = configManager.getSourcePriority();
   // if (userConfig && validateSourcePriority(userConfig).isValid) {
   //   return userConfig;
   // }
 
-  // TODO: Implement environment variable support for testing
+  // FUTURE (Phase 4 - Issue #1448): Implement environment variable support for testing
   // if (process.env.SOURCE_PRIORITY) {
   //   try {
   //     const envConfig = JSON.parse(process.env.SOURCE_PRIORITY);
@@ -175,6 +180,13 @@ export interface ValidationResult {
   isValid: boolean;
   errors: string[];
 }
+
+/**
+ * Pre-computed list of valid element sources
+ * Used for validation to avoid repeated Object.values() calls
+ * @private
+ */
+const VALID_SOURCES: ElementSource[] = Object.values(ElementSource);
 
 /**
  * Validate source priority configuration
@@ -242,10 +254,9 @@ export function validateSourcePriority(config: SourcePriorityConfig): Validation
     errors.push('Duplicate sources in priority list');
   }
 
-  // Check for unknown sources
-  const validSources = Object.values(ElementSource);
+  // Check for unknown sources using pre-computed valid sources list
   for (const source of config.priority) {
-    if (!validSources.includes(source)) {
+    if (!VALID_SOURCES.includes(source)) {
       errors.push(`Unknown source: ${source}`);
     }
   }
@@ -264,6 +275,7 @@ export function validateSourcePriority(config: SourcePriorityConfig): Validation
  *
  * @param {ElementSource} source - The source to get display name for
  * @returns {string} User-friendly display name
+ * @throws {Error} If source is not a valid ElementSource value
  *
  * @example
  * // Get display names for all sources
@@ -290,5 +302,12 @@ export function getSourceDisplayName(source: ElementSource): string {
     [ElementSource.GITHUB]: 'GitHub Portfolio',
     [ElementSource.COLLECTION]: 'Community Collection'
   };
-  return names[source];
+
+  // Type-safe fallback for invalid sources
+  const displayName = names[source];
+  if (displayName === undefined) {
+    throw new Error(`Invalid element source: ${source}. Expected one of: ${VALID_SOURCES.join(', ')}`);
+  }
+
+  return displayName;
 }
