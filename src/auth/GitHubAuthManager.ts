@@ -446,12 +446,13 @@ export class GitHubAuthManager {
           const errorCode = data.error;  // Extract error code for robust detection
 
           switch (errorCode) {
-            case 'authorization_pending':
+            case 'authorization_pending': {
               // Transient: User hasn't authorized yet, continue polling
               logger.debug('Authorization pending, continuing to poll', { attempt: attempts });
               break;
+            }
 
-            case 'slow_down':
+            case 'slow_down': {
               // Transient: Server requests slower polling, adjust interval
               interval = Math.min(interval * 1.5, 30000); // Max 30 seconds
               logger.debug('Slowing down polling interval per server request', {
@@ -459,25 +460,29 @@ export class GitHubAuthManager {
                 attempt: attempts
               });
               break;
+            }
 
-            case 'expired_token':
+            case 'expired_token': {
               // TERMINAL: Authorization code expired (RFC 8628 Section 3.5)
               throw new Error('The authorization code has expired. Please start over.');
+            }
 
-            case 'access_denied':
+            case 'access_denied': {
               // TERMINAL: User explicitly denied authorization (RFC 8628 Section 3.5)
               throw new Error('Authorization was denied. Please try again.');
+            }
 
             case 'unsupported_grant_type':
-            case 'invalid_grant':
+            case 'invalid_grant': {
               // TERMINAL: Configuration or code issue (RFC 6749 Section 5.2)
               logger.error('OAuth grant error', {
                 error: errorCode,
                 description: data.error_description
               });
               throw new Error('Authentication failed. Please try starting the process again.');
+            }
 
-            default:
+            default: {
               // Unknown error - treat as terminal to avoid infinite polling
               logger.debug('Unknown OAuth error, treating as terminal', {
                 error: errorCode,
@@ -487,6 +492,7 @@ export class GitHubAuthManager {
               const unknownError = new Error('Authentication failed. Please try starting the process again.');
               (unknownError as any).code = errorCode;
               throw unknownError;
+            }
           }
         } else if (data.access_token) {
           // Success! User authorized and token is ready

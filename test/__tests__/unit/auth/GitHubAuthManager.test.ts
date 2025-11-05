@@ -137,6 +137,22 @@ async function expectSuccessfulAuth(promise: Promise<any>, expectedToken = 'ghp_
   return result;
 }
 
+// Helper: Mock OAuth response indefinitely (for timeout testing)
+function mockOAuthResponseIndefinitely(mockFetch: jest.MockedFunction<typeof fetch>, error: string) {
+  const response = {
+    ok: true,
+    json: async () => ({ error })
+  } as Response;
+  return mockFetch.mockImplementation(() => Promise.resolve(response));
+}
+
+// Helper: Mock fetch to throw an error once
+function mockFetchError(mockFetch: jest.MockedFunction<typeof fetch>, errorMessage: string) {
+  return mockFetch.mockImplementationOnce(() => {
+    throw new Error(errorMessage);
+  });
+}
+
 describe('GitHubAuthManager', () => {
   let authManager: InstanceType<typeof GitHubAuthManager>;
   let apiCache: InstanceType<typeof APICache>;
@@ -549,7 +565,7 @@ describe('GitHubAuthManager', () => {
         mockSuccessfulToken(mockFetch, 'ghp_token');
 
         const pollPromise = authManager.pollForToken('test-device-code', 100);
-        const result = await expectSuccessfulAuth(pollPromise, 'ghp_token');
+        await expectSuccessfulAuth(pollPromise, 'ghp_token');
 
         expect(mockFetch).toHaveBeenCalledTimes(3);
       });
@@ -562,7 +578,7 @@ describe('GitHubAuthManager', () => {
         mockSuccessfulToken(mockFetch, 'ghp_success');
 
         const pollPromise = authManager.pollForToken('test-device-code', 50);
-        const result = await expectSuccessfulAuth(pollPromise, 'ghp_success');
+        await expectSuccessfulAuth(pollPromise, 'ghp_success');
 
         expect(mockFetch).toHaveBeenCalledTimes(4);
       });
@@ -584,12 +600,7 @@ describe('GitHubAuthManager', () => {
 
       it('should timeout after MAX_POLL_ATTEMPTS', async () => {
         // Mock authorization_pending responses indefinitely
-        mockFetch.mockImplementation(() =>
-          Promise.resolve({
-            ok: true,
-            json: async () => ({ error: GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING })
-          } as Response)
-        );
+        mockOAuthResponseIndefinitely(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
 
         // Use very short interval to speed up test
         const pollPromise = authManager.pollForToken('test-device-code', 1);
@@ -602,9 +613,7 @@ describe('GitHubAuthManager', () => {
       it('should distinguish between terminal and transient errors in catch block', async () => {
         // First call: throw error with terminal message pattern
         // This tests the error detection in the catch block
-        mockFetch.mockImplementationOnce(() => {
-          throw new Error('The authorization code has expired. Please start over.');
-        });
+        mockFetchError(mockFetch, 'The authorization code has expired. Please start over.');
 
         const pollPromise = authManager.pollForToken('test-device-code', 100);
         await expectTerminalError(pollPromise, 'authorization code has expired');
