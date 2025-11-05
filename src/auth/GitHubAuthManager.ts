@@ -127,19 +127,35 @@ export class GitHubAuthManager {
    * - Terminal errors (expired_token, access_denied) MUST stop polling immediately
    * - Transient errors (network failures, slow_down) should be retried
    *
+   * Error Detection Priority (most to least reliable):
+   * 1. Explicit error code parameter (from GitHub API response)
+   * 2. Error code embedded in Error object properties
+   * 3. Message pattern matching (fallback for compatibility)
+   *
    * @param error - The error to check
    * @param errorCode - Optional OAuth error code from API response
    * @returns true if error is terminal and should propagate, false if retriable
    *
    * @see https://datatracker.ietf.org/doc/html/rfc8628#section-3.5
+   * @see https://docs.github.com/en/developers/apps/authorizing-oauth-apps
    */
   private static isTerminalOAuthError(error: Error, errorCode?: string): boolean {
-    // Check explicit error code first (most reliable)
+    // PRIORITY 1: Check explicit error code parameter (most reliable)
+    // This comes directly from GitHub's API response: { error: "expired_token" }
     if (errorCode && GitHubAuthManager.TERMINAL_OAUTH_ERROR_CODES.includes(errorCode as any)) {
       return true;
     }
 
-    // Fallback to message-based detection
+    // PRIORITY 2: Check if error has embedded error code in properties
+    // GitHub often includes error code in Error object properties
+    const errorObj = error as any;
+    if (errorObj.code && GitHubAuthManager.TERMINAL_OAUTH_ERROR_CODES.includes(errorObj.code)) {
+      return true;
+    }
+
+    // PRIORITY 3: Fall back to message pattern matching (least reliable)
+    // Only used for backward compatibility and unknown error formats
+    // Message text can change, so this is brittle but necessary for robustness
     const errorMessage = error.message.toLowerCase();
     return GitHubAuthManager.TERMINAL_ERROR_PATTERNS.some(pattern =>
       errorMessage.includes(pattern.toLowerCase())
@@ -427,7 +443,9 @@ export class GitHubAuthManager {
 
         // RFC 8628 Section 3.5: Handle OAuth device flow responses
         if (data.error) {
-          switch (data.error) {
+          const errorCode = data.error;  // Extract error code for robust detection
+
+          switch (errorCode) {
             case 'authorization_pending':
               // Transient: User hasn't authorized yet, continue polling
               logger.debug('Authorization pending, continuing to poll', { attempt: attempts });
@@ -454,7 +472,7 @@ export class GitHubAuthManager {
             case 'invalid_grant':
               // TERMINAL: Configuration or code issue (RFC 6749 Section 5.2)
               logger.error('OAuth grant error', {
-                error: data.error,
+                error: errorCode,
                 description: data.error_description
               });
               throw new Error('Authentication failed. Please try starting the process again.');
@@ -462,10 +480,13 @@ export class GitHubAuthManager {
             default:
               // Unknown error - treat as terminal to avoid infinite polling
               logger.debug('Unknown OAuth error, treating as terminal', {
-                error: data.error,
+                error: errorCode,
                 description: data.error_description
               });
-              throw new Error('Authentication failed. Please try starting the process again.');
+              // Embed error code in Error object for isTerminalOAuthError detection
+              const unknownError = new Error('Authentication failed. Please try starting the process again.');
+              (unknownError as any).code = errorCode;
+              throw unknownError;
           }
         } else if (data.access_token) {
           // Success! User authorized and token is ready
@@ -479,9 +500,12 @@ export class GitHubAuthManager {
       } catch (error) {
         // RFC 6749/8628 Compliance: Terminal errors MUST propagate immediately
         // Use helper function for robust terminal error detection
-        if (error instanceof Error && GitHubAuthManager.isTerminalOAuthError(error)) {
+        // Pass error code if available for priority detection
+        const errorCode = (error as any)?.code;
+        if (error instanceof Error && GitHubAuthManager.isTerminalOAuthError(error, errorCode)) {
           logger.debug('Terminal OAuth error detected, stopping polling', {
             error: error.message,
+            errorCode: errorCode,
             attempt: attempts
           });
           throw error;  // Terminal error - propagate immediately, stop polling

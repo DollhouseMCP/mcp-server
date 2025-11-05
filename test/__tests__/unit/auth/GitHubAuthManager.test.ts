@@ -63,6 +63,80 @@ const { TokenManager } = await import('../../../../src/security/tokenManager.js'
 const { logger } = await import('../../../../src/utils/logger.js');
 const { SecurityMonitor } = await import('../../../../src/security/securityMonitor.js');
 
+/**
+ * GitHub OAuth 2.0 Device Flow Error Codes
+ *
+ * Per RFC 8628 Section 3.5 and GitHub API documentation
+ *
+ * TERMINAL ERRORS (stop polling immediately):
+ * - expired_token: The device_code has expired (user took too long to authorize)
+ * - access_denied: User explicitly denied authorization
+ * - unsupported_grant_type: Invalid grant type (server configuration error)
+ * - invalid_grant: Device code is invalid, revoked, or already used
+ *
+ * TRANSIENT ERRORS (continue polling):
+ * - authorization_pending: User has not yet authorized (default state)
+ * - slow_down: Polling too fast, increase interval by 5 seconds
+ *
+ * REFERENCE:
+ * - RFC 8628: https://tools.ietf.org/html/rfc8628#section-3.5
+ * - GitHub Docs: https://docs.github.com/en/developers/apps/authorizing-oauth-apps
+ */
+const GITHUB_OAUTH_ERRORS = {
+  // Terminal errors - must propagate immediately
+  EXPIRED_TOKEN: 'expired_token',
+  ACCESS_DENIED: 'access_denied',
+  UNSUPPORTED_GRANT_TYPE: 'unsupported_grant_type',
+  INVALID_GRANT: 'invalid_grant',
+
+  // Transient errors - continue polling
+  AUTHORIZATION_PENDING: 'authorization_pending',
+  SLOW_DOWN: 'slow_down'
+} as const;
+
+/**
+ * Test Helper Functions
+ * These reduce nesting depth and improve test readability
+ */
+
+// Helper: Mock OAuth response with optional error
+function mockOAuthResponse(mockFetch: jest.MockedFunction<typeof fetch>, error?: string, data?: any) {
+  return mockFetch.mockResolvedValueOnce({
+    ok: true,
+    json: async () => error ? { error } : data
+  } as Response);
+}
+
+// Helper: Mock network error
+function mockNetworkError(mockFetch: jest.MockedFunction<typeof fetch>, message: string) {
+  return mockFetch.mockRejectedValueOnce(new Error(message));
+}
+
+// Helper: Mock successful token response
+function mockSuccessfulToken(mockFetch: jest.MockedFunction<typeof fetch>, token = 'ghp_token') {
+  return mockFetch.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      access_token: token,
+      token_type: 'bearer',
+      scope: 'public_repo read:user'
+    })
+  } as Response);
+}
+
+// Helper: Expect terminal error to be thrown
+async function expectTerminalError(promise: Promise<any>, errorPattern: string | RegExp) {
+  await expect(promise).rejects.toThrow(errorPattern);
+}
+
+// Helper: Expect successful authentication
+async function expectSuccessfulAuth(promise: Promise<any>, expectedToken = 'ghp_token') {
+  const result = await promise;
+  expect(result).toBeDefined();
+  expect(result.access_token).toBe(expectedToken);
+  return result;
+}
+
 describe('GitHubAuthManager', () => {
   let authManager: InstanceType<typeof GitHubAuthManager>;
   let apiCache: InstanceType<typeof APICache>;
@@ -425,14 +499,11 @@ describe('GitHubAuthManager', () => {
 
     describe('RFC 6749/8628 Compliance - Terminal Error Propagation', () => {
       it('should propagate expired_token error immediately without retry', async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ error: 'expired_token' })
-        } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.EXPIRED_TOKEN);
 
         const startTime = Date.now();
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('authorization code has expired');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'authorization code has expired');
         const elapsed = Date.now() - startTime;
 
         // Should throw immediately without waiting for interval
@@ -441,14 +512,11 @@ describe('GitHubAuthManager', () => {
       });
 
       it('should propagate access_denied error immediately without retry', async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ error: 'access_denied' })
-        } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.ACCESS_DENIED);
 
         const startTime = Date.now();
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('Authorization was denied');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'Authorization was denied');
         const elapsed = Date.now() - startTime;
 
         // Should throw immediately without waiting for interval
@@ -457,30 +525,18 @@ describe('GitHubAuthManager', () => {
       });
 
       it('should propagate unsupported_grant_type error immediately', async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            error: 'unsupported_grant_type',
-            error_description: 'The grant type is not supported'
-          })
-        } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.UNSUPPORTED_GRANT_TYPE);
 
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('Authentication failed');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'Authentication failed');
         expect(mockFetch).toHaveBeenCalledTimes(1);
       });
 
       it('should propagate invalid_grant error immediately', async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            error: 'invalid_grant',
-            error_description: 'Invalid or expired device code'
-          })
-        } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.INVALID_GRANT);
 
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('Authentication failed');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'Authentication failed');
         expect(mockFetch).toHaveBeenCalledTimes(1);
       });
 
@@ -488,83 +544,39 @@ describe('GitHubAuthManager', () => {
         // First call: network error (should retry)
         // Second call: authorization_pending (should continue polling)
         // Third call: success
-        mockFetch
-          .mockRejectedValueOnce(new Error('ECONNREFUSED'))
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'authorization_pending' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-              access_token: 'ghp_token',
-              token_type: 'bearer',
-              scope: 'public_repo'
-            })
-          } as Response);
+        mockNetworkError(mockFetch, 'ECONNREFUSED');
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
+        mockSuccessfulToken(mockFetch, 'ghp_token');
 
-        const result = await authManager.pollForToken('test-device-code', 100);
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        const result = await expectSuccessfulAuth(pollPromise, 'ghp_token');
 
-        expect(result).toBeDefined();
-        expect(result.access_token).toBe('ghp_token');
         expect(mockFetch).toHaveBeenCalledTimes(3);
       });
 
       it('should successfully authenticate after multiple authorization_pending responses', async () => {
         // Simulate user taking time to authorize
-        mockFetch
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'authorization_pending' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'authorization_pending' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'authorization_pending' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-              access_token: 'ghp_success',
-              token_type: 'bearer',
-              scope: 'public_repo read:user'
-            })
-          } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
+        mockSuccessfulToken(mockFetch, 'ghp_success');
 
-        const result = await authManager.pollForToken('test-device-code', 50);
+        const pollPromise = authManager.pollForToken('test-device-code', 50);
+        const result = await expectSuccessfulAuth(pollPromise, 'ghp_success');
 
-        expect(result).toBeDefined();
-        expect(result.access_token).toBe('ghp_success');
         expect(mockFetch).toHaveBeenCalledTimes(4);
       });
 
       it('should handle slow_down and adjust polling interval', async () => {
-        mockFetch
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'slow_down' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({ error: 'authorization_pending' })
-          } as Response)
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-              access_token: 'ghp_token',
-              token_type: 'bearer',
-              scope: 'public_repo'
-            })
-          } as Response);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.SLOW_DOWN);
+        mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
+        mockSuccessfulToken(mockFetch, 'ghp_token');
 
         const startTime = Date.now();
-        const result = await authManager.pollForToken('test-device-code', 100);
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectSuccessfulAuth(pollPromise, 'ghp_token');
         const elapsed = Date.now() - startTime;
 
-        expect(result).toBeDefined();
         // Should wait longer due to slow_down (100ms * 1.5 = 150ms minimum)
         expect(elapsed).toBeGreaterThanOrEqual(200);
         expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -575,13 +587,13 @@ describe('GitHubAuthManager', () => {
         mockFetch.mockImplementation(() =>
           Promise.resolve({
             ok: true,
-            json: async () => ({ error: 'authorization_pending' })
+            json: async () => ({ error: GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING })
           } as Response)
         );
 
         // Use very short interval to speed up test
-        await expect(authManager.pollForToken('test-device-code', 1))
-          .rejects.toThrow('Authentication timed out');
+        const pollPromise = authManager.pollForToken('test-device-code', 1);
+        await expectTerminalError(pollPromise, 'Authentication timed out');
 
         // Should attempt MAX_POLL_ATTEMPTS times (180)
         expect(mockFetch).toHaveBeenCalledTimes(180);
@@ -594,24 +606,18 @@ describe('GitHubAuthManager', () => {
           throw new Error('The authorization code has expired. Please start over.');
         });
 
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('authorization code has expired');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'authorization code has expired');
 
         // Should not retry terminal errors
         expect(mockFetch).toHaveBeenCalledTimes(1);
       });
 
       it('should handle unknown OAuth errors as terminal', async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            error: 'unknown_error',
-            error_description: 'Something unexpected happened'
-          })
-        } as Response);
+        mockOAuthResponse(mockFetch, 'unknown_error');
 
-        await expect(authManager.pollForToken('test-device-code', 100))
-          .rejects.toThrow('Authentication failed');
+        const pollPromise = authManager.pollForToken('test-device-code', 100);
+        await expectTerminalError(pollPromise, 'Authentication failed');
 
         // Unknown errors treated as terminal to prevent infinite polling
         expect(mockFetch).toHaveBeenCalledTimes(1);
