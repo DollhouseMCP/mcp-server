@@ -25,7 +25,18 @@ jest.unstable_mockModule('../../../../src/security/tokenManager.js', () => ({
     getGitHubTokenAsync: jest.fn(),
     storeGitHubToken: jest.fn(),
     removeStoredToken: jest.fn(),
-    validateToken: jest.fn()
+    validateToken: jest.fn(),
+    getTokenType: jest.fn(() => 'github'),
+    getTokenPrefix: jest.fn((token: string) => token.substring(0, 8))
+  }
+}));
+
+jest.unstable_mockModule('../../../../src/config/ConfigManager.js', () => ({
+  ConfigManager: {
+    getInstance: jest.fn(() => ({
+      initialize: jest.fn(),
+      getGitHubClientId: jest.fn(() => null)
+    }))
   }
 }));
 
@@ -410,6 +421,201 @@ describe('GitHubAuthManager', () => {
       await expect(authManager.pollForToken('test-device-code')).rejects.toThrow(
         'Authorization was denied'
       );
+    });
+
+    describe('RFC 6749/8628 Compliance - Terminal Error Propagation', () => {
+      it('should propagate expired_token error immediately without retry', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ error: 'expired_token' })
+        } as Response);
+
+        const startTime = Date.now();
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('authorization code has expired');
+        const elapsed = Date.now() - startTime;
+
+        // Should throw immediately without waiting for interval
+        expect(elapsed).toBeLessThan(1000);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should propagate access_denied error immediately without retry', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ error: 'access_denied' })
+        } as Response);
+
+        const startTime = Date.now();
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('Authorization was denied');
+        const elapsed = Date.now() - startTime;
+
+        // Should throw immediately without waiting for interval
+        expect(elapsed).toBeLessThan(1000);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should propagate unsupported_grant_type error immediately', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            error: 'unsupported_grant_type',
+            error_description: 'The grant type is not supported'
+          })
+        } as Response);
+
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('Authentication failed');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should propagate invalid_grant error immediately', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            error: 'invalid_grant',
+            error_description: 'Invalid or expired device code'
+          })
+        } as Response);
+
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('Authentication failed');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should retry on transient network errors', async () => {
+        // First call: network error (should retry)
+        // Second call: authorization_pending (should continue polling)
+        // Third call: success
+        mockFetch
+          .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              access_token: 'ghp_token',
+              token_type: 'bearer',
+              scope: 'public_repo'
+            })
+          } as Response);
+
+        const result = await authManager.pollForToken('test-device-code', 100);
+
+        expect(result).toBeDefined();
+        expect(result.access_token).toBe('ghp_token');
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      });
+
+      it('should successfully authenticate after multiple authorization_pending responses', async () => {
+        // Simulate user taking time to authorize
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              access_token: 'ghp_success',
+              token_type: 'bearer',
+              scope: 'public_repo read:user'
+            })
+          } as Response);
+
+        const result = await authManager.pollForToken('test-device-code', 50);
+
+        expect(result).toBeDefined();
+        expect(result.access_token).toBe('ghp_success');
+        expect(mockFetch).toHaveBeenCalledTimes(4);
+      });
+
+      it('should handle slow_down and adjust polling interval', async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'slow_down' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              access_token: 'ghp_token',
+              token_type: 'bearer',
+              scope: 'public_repo'
+            })
+          } as Response);
+
+        const startTime = Date.now();
+        const result = await authManager.pollForToken('test-device-code', 100);
+        const elapsed = Date.now() - startTime;
+
+        expect(result).toBeDefined();
+        // Should wait longer due to slow_down (100ms * 1.5 = 150ms minimum)
+        expect(elapsed).toBeGreaterThanOrEqual(200);
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      });
+
+      it('should timeout after MAX_POLL_ATTEMPTS', async () => {
+        // Mock authorization_pending responses indefinitely
+        mockFetch.mockImplementation(() =>
+          Promise.resolve({
+            ok: true,
+            json: async () => ({ error: 'authorization_pending' })
+          } as Response)
+        );
+
+        // Use very short interval to speed up test
+        await expect(authManager.pollForToken('test-device-code', 1))
+          .rejects.toThrow('Authentication timed out');
+
+        // Should attempt MAX_POLL_ATTEMPTS times (180)
+        expect(mockFetch).toHaveBeenCalledTimes(180);
+      }, 10000); // Increase timeout for this test
+
+      it('should distinguish between terminal and transient errors in catch block', async () => {
+        // First call: throw error with terminal message pattern
+        // This tests the error detection in the catch block
+        mockFetch.mockImplementationOnce(() => {
+          throw new Error('The authorization code has expired. Please start over.');
+        });
+
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('authorization code has expired');
+
+        // Should not retry terminal errors
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should handle unknown OAuth errors as terminal', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            error: 'unknown_error',
+            error_description: 'Something unexpected happened'
+          })
+        } as Response);
+
+        await expect(authManager.pollForToken('test-device-code', 100))
+          .rejects.toThrow('Authentication failed');
+
+        // Unknown errors treated as terminal to prevent infinite polling
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('should be cancellable via cleanup', async () => {
