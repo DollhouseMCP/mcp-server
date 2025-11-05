@@ -285,7 +285,8 @@ export class VerbTriggerManager {
     const elements: ElementMatch[] = [];
 
     // 1. Check custom verb mappings first (highest priority)
-    if (this.config.customVerbs && this.config.customVerbs[verb]) {
+    // FIX: Use optional chain for better maintainability (SonarCloud L288)
+    if (this.config.customVerbs?.[verb]) {
       for (const elementName of this.config.customVerbs[verb]) {
         const elementType = this.findElementType(elementName, index);
         elements.push({
@@ -441,8 +442,12 @@ export class VerbTriggerManager {
 
   /**
    * Find element type by name
+   * FIX: Handle case where index.elements might be undefined
    */
   private findElementType(elementName: string, index: EnhancedIndex): string {
+    if (!index.elements) {
+      return 'unknown';
+    }
     for (const [type, elements] of Object.entries(index.elements)) {
       if ((elements as any)[elementName]) {
         return type;
@@ -535,21 +540,27 @@ export class VerbTriggerManager {
   public getVerbsForElement(elementName: string, index: EnhancedIndex): string[] {
     const verbs: string[] = [];
 
-    // Check action_triggers
-    for (const [verb, elements] of Object.entries(index.action_triggers)) {
-      if (elements.includes(elementName)) {
-        verbs.push(verb);
+    // Check action_triggers (use optional chain for robustness)
+    // FIX: Handle case where action_triggers might be undefined
+    if (index.action_triggers) {
+      for (const [verb, elements] of Object.entries(index.action_triggers)) {
+        if (elements.includes(elementName)) {
+          verbs.push(verb);
+        }
       }
     }
 
     // Check element's own actions
-    for (const typeElements of Object.values(index.elements)) {
-      const element = (typeElements as any)[elementName];
-      if (element?.actions) {
-        for (const action of Object.values(element.actions)) {
-          const actionVerb = (action as any).verb;
-          if (actionVerb && !verbs.includes(actionVerb)) {
-            verbs.push(actionVerb);
+    // FIX: Handle case where index.elements might be undefined
+    if (index.elements) {
+      for (const typeElements of Object.values(index.elements)) {
+        const element = (typeElements as any)[elementName];
+        if (element?.actions) {
+          for (const action of Object.values(element.actions)) {
+            const actionVerb = (action as any).verb;
+            if (actionVerb && !verbs.includes(actionVerb)) {
+              verbs.push(actionVerb);
+            }
           }
         }
       }
