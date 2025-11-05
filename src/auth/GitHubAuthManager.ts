@@ -381,7 +381,16 @@ export class GitHubAuthManager {
         await this.waitWithAbort(interval, signal);
         
       } catch (error) {
-        // Network errors shouldn't stop polling
+        // Re-throw OAuth terminal errors - they must propagate immediately per RFC 6749/8628
+        if (error instanceof Error && (
+          error.message.includes('authorization code has expired') ||
+          error.message.includes('Authorization was denied') ||
+          error.message.includes('Authentication failed')
+        )) {
+          throw error;  // Terminal error - propagate immediately
+        }
+
+        // Network/transient errors shouldn't stop polling - log and retry
         ErrorHandler.logError('GitHubAuthManager.pollForToken', error, { attempt: attempts });
         await this.waitWithAbort(interval, signal);
       }
