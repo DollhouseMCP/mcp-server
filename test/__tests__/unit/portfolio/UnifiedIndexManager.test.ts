@@ -147,14 +147,20 @@ describe('UnifiedIndexManager', () => {
 
       expect(results.length).toBeGreaterThanOrEqual(2);
 
-      // Check that both results are present, regardless of order
-      const sources = results.map(r => r.source);
-      const names = results.map(r => r.entry.name);
+      // FIX: Build Sets without arrow functions to avoid 5th nesting level
+      // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+      // Previously: results.map(r => r.source) caused function nesting depth violation
+      const sources = new Set<string>();
+      const names = new Set<string>();
+      for (const result of results) {
+        sources.add(result.source);
+        names.add(result.entry.name);
+      }
 
-      expect(sources).toContain('local');
-      expect(sources).toContain('github');
-      expect(names).toContain('Local Test Persona');
-      expect(names).toContain('GitHub Test Persona');
+      expect(sources.has('local')).toBe(true);
+      expect(sources.has('github')).toBe(true);
+      expect(names.has('Local Test Persona')).toBe(true);
+      expect(names.has('GitHub Test Persona')).toBe(true);
     });
 
     it('should handle local search failures gracefully', async () => {
@@ -253,10 +259,15 @@ describe('UnifiedIndexManager', () => {
       expect(results[0].isDuplicate).toBe(true);
       expect(results[1].isDuplicate).toBe(true);
 
-      // Both sources should be present
-      const sources = results.map(r => r.source);
-      expect(sources).toContain('local');
-      expect(sources).toContain('github');
+      // FIX: Build Set without arrow functions to avoid 5th nesting level
+      // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+      // Previously: results.map(r => r.source) caused function nesting depth violation
+      const sources = new Set<string>();
+      for (const result of results) {
+        sources.add(result.source);
+      }
+      expect(sources.has('local')).toBe(true);
+      expect(sources.has('github')).toBe(true);
     });
 
     it('should sort results by score when includeAll is true', async () => {
@@ -776,12 +787,15 @@ describe('UnifiedIndexManager', () => {
         // Should search all sources even though local had results
         expect(results.length).toBeGreaterThanOrEqual(2);
 
-        // FIX: Extract sources for validation (reducing function nesting depth)
-        // Previously: Used arrow functions inside .some() causing 5-level nesting (SonarCloud limit: 4)
-        // Now: Extract sources array first, then check with includes()
-        const resultSources = results.map(r => r.source);
-        const hasLocal = resultSources.includes('local');
-        const hasGitHub = resultSources.includes('github');
+        // FIX: Build Set without arrow functions to avoid 5th nesting level
+        // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+        // Previously: results.map(r => r.source) caused function nesting depth violation
+        const resultSources = new Set<string>();
+        for (const result of results) {
+          resultSources.add(result.source);
+        }
+        const hasLocal = resultSources.has('local');
+        const hasGitHub = resultSources.has('github');
 
         expect(hasLocal).toBe(true);
         expect(hasGitHub).toBe(true);
