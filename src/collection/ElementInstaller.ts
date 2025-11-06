@@ -39,6 +39,7 @@ import {
   getSourceDisplayName
 } from '../config/sourcePriority.js';
 import { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Result of an element installation operation
@@ -128,6 +129,7 @@ export class ElementInstaller {
    *
    * REFACTORED: Reduced cognitive complexity by extracting helper methods
    * ENHANCEMENT (PR #1453): Added input validation for elementName
+   * ENHANCEMENT (PR #1453): Added structured logging for debugging
    */
   async installElement(
     elementName: string,
@@ -152,14 +154,25 @@ export class ElementInstaller {
       fallbackOnError = this.sourcePriorityConfig.fallbackOnError
     } = options;
 
+    // ENHANCEMENT (PR #1453): Log installation attempt for debugging
+    logger.debug('Starting element installation', {
+      elementName,
+      elementType,
+      preferredSource,
+      force,
+      fallbackOnError
+    });
+
     // Step 1: Check if element already exists locally (unless force = true)
     const localCheckResult = await this.checkLocalElementIfNeeded(elementName, elementType, force);
     if (localCheckResult) {
+      logger.debug('Element already exists locally', { elementName, elementType });
       return localCheckResult;
     }
 
     // Step 2: Determine source priority order
     const sourcePriority = this.determineSourcePriority(preferredSource);
+    logger.debug('Source priority order determined', { sourcePriority });
 
     // Step 3: Try sources in priority order
     return await this.trySourcesInOrder(
@@ -273,6 +286,7 @@ export class ElementInstaller {
    * Extracted from trySourcesInOrder() to reduce cognitive complexity
    *
    * ENHANCEMENT (PR #1453): Added detailed error context and retry suggestions
+   * ENHANCEMENT (PR #1453): Added structured logging for debugging
    *
    * @param source - Source to try
    * @param elementName - Name of element
@@ -289,6 +303,14 @@ export class ElementInstaller {
     collectionPath: string,
     fallbackOnError: boolean
   ): Promise<InstallResult & { error?: { source: ElementSource; error: Error } }> {
+    // ENHANCEMENT (PR #1453): Log attempt to install from source
+    logger.debug('Attempting installation from source', {
+      elementName,
+      elementType,
+      source: getSourceDisplayName(source),
+      fallbackOnError
+    });
+
     try {
       const installResult = await this.installFromSource(
         source,
@@ -296,9 +318,28 @@ export class ElementInstaller {
         elementType,
         collectionPath
       );
+
+      // ENHANCEMENT (PR #1453): Log successful installation
+      if (installResult.success) {
+        logger.debug('Installation successful from source', {
+          elementName,
+          elementType,
+          source: getSourceDisplayName(source)
+        });
+      }
+
       return installResult;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+
+      // ENHANCEMENT (PR #1453): Log installation failure
+      logger.debug('Installation failed from source', {
+        elementName,
+        elementType,
+        source: getSourceDisplayName(source),
+        error: err.message,
+        willFallback: fallbackOnError
+      });
 
       if (!fallbackOnError) {
         // Don't try other sources, fail immediately with helpful context
@@ -338,20 +379,29 @@ export class ElementInstaller {
 
     switch (source) {
       case ElementSource.LOCAL:
-        suggestions.push('Element not found in local portfolio');
-        suggestions.push('Try: force=true to reinstall, or check element name spelling');
+        // FIX (SonarCloud): Combine multiple push() calls into single call
+        suggestions.push(
+          'Element not found in local portfolio',
+          'Try: force=true to reinstall, or check element name spelling'
+        );
         break;
 
       case ElementSource.GITHUB:
-        suggestions.push('Element not found in GitHub portfolio or connection failed');
-        suggestions.push('Try: Check GitHub authentication, verify element exists in portfolio');
-        suggestions.push('Consider: preferredSource=\'collection\' to install from community collection');
+        // FIX (SonarCloud): Combine multiple push() calls into single call
+        suggestions.push(
+          'Element not found in GitHub portfolio or connection failed',
+          'Try: Check GitHub authentication, verify element exists in portfolio',
+          'Consider: preferredSource=\'collection\' to install from community collection'
+        );
         break;
 
       case ElementSource.COLLECTION:
-        suggestions.push('Element not found in community collection or download failed');
-        suggestions.push('Try: Check element name and path, verify network connection');
-        suggestions.push('Consider: Search collection first to verify element exists');
+        // FIX (SonarCloud): Combine multiple push() calls into single call
+        suggestions.push(
+          'Element not found in community collection or download failed',
+          'Try: Check element name and path, verify network connection',
+          'Consider: Search collection first to verify element exists'
+        );
         break;
     }
 
@@ -433,6 +483,8 @@ export class ElementInstaller {
   /**
    * Check if element exists locally
    *
+   * ENHANCEMENT (PR #1453): Added optional chaining for robustness
+   *
    * @param elementName - Name of element to check
    * @param elementType - Type of element
    * @returns true if element exists locally
@@ -449,11 +501,12 @@ export class ElementInstaller {
         elementType
       });
 
+      // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
       // Check if any result matches the element name exactly
       return results.some(
         result =>
-          result.source === 'local' &&
-          result.entry.name.toLowerCase() === elementName.toLowerCase()
+          result?.source === 'local' &&
+          result?.entry?.name?.toLowerCase() === elementName.toLowerCase()
       );
     } catch (error) {
       // If index check fails, fall back to filesystem check
@@ -480,6 +533,8 @@ export class ElementInstaller {
    * Fetches element from user's GitHub dollhouse-portfolio repository.
    *
    * ENHANCEMENT (PR #1453): Added elementName validation before filename generation
+   * ENHANCEMENT (PR #1453): Added optional chaining for robustness
+   * ENHANCEMENT (PR #1453): Added structured logging for debugging
    *
    * @param elementName - Name of element to install
    * @param elementType - Type of element
@@ -497,6 +552,12 @@ export class ElementInstaller {
         throw new Error('Element name cannot be empty');
       }
 
+      // ENHANCEMENT (PR #1453): Log GitHub installation attempt
+      logger.debug('Searching GitHub portfolio for element', {
+        elementName,
+        elementType
+      });
+
       // Search GitHub portfolio for the element
       const results = await this.unifiedIndexManager.search({
         query: elementName,
@@ -506,19 +567,32 @@ export class ElementInstaller {
         elementType
       });
 
+      // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
       // Find exact match
       const match = results.find(
         result =>
-          result.source === 'github' &&
-          result.entry.name.toLowerCase() === elementName.toLowerCase()
+          result?.source === 'github' &&
+          result?.entry?.name?.toLowerCase() === elementName.toLowerCase()
       );
 
-      if (!match?.entry.githubDownloadUrl) {
+      if (!match?.entry?.githubDownloadUrl) {
+        logger.debug('Element not found in GitHub portfolio', {
+          elementName,
+          elementType,
+          searchResultsCount: results.length
+        });
         return {
           success: false,
           message: `Element "${elementName}" not found in GitHub portfolio`
         };
       }
+
+      // ENHANCEMENT (PR #1453): Log download attempt
+      logger.debug('Downloading element from GitHub', {
+        elementName,
+        elementType,
+        downloadUrl: match.entry.githubDownloadUrl
+      });
 
       // Fetch content from GitHub
       const response = await fetch(match.entry.githubDownloadUrl);
@@ -568,6 +642,14 @@ export class ElementInstaller {
       // SECURITY: Atomic write
       await this.atomicWriteFile(localPath, sanitizedContent);
 
+      // ENHANCEMENT (PR #1453): Log successful installation
+      logger.debug('Element installed successfully from GitHub', {
+        elementName,
+        elementType,
+        filename,
+        localPath
+      });
+
       return {
         success: true,
         message: 'Element installed successfully from GitHub portfolio',
@@ -577,6 +659,14 @@ export class ElementInstaller {
       };
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+
+      // ENHANCEMENT (PR #1453): Log installation error
+      logger.debug('GitHub installation error', {
+        elementName,
+        elementType,
+        error: err.message
+      });
+
       return {
         success: false,
         message: `Failed to install from GitHub: ${err.message}`
@@ -588,12 +678,18 @@ export class ElementInstaller {
    * Install element from collection (refactored from installContent)
    *
    * REFACTORED: Reduced cognitive complexity by extracting validation and processing steps
+   * ENHANCEMENT (PR #1453): Added structured logging for debugging
    *
    * @param collectionPath - Path in collection
    * @returns InstallResult
    * @private
    */
   private async installFromCollection(collectionPath: string): Promise<InstallResult> {
+    // ENHANCEMENT (PR #1453): Log collection installation attempt
+    logger.debug('Installing from collection', {
+      collectionPath
+    });
+
     // SECURITY: Validate and sanitize the input path first
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.validateAndExtractElementType(sanitizedPath);
@@ -610,11 +706,23 @@ export class ElementInstaller {
     // SECURITY: Check if file already exists before any write operations
     const existsResult = await this.checkFileExists(localPath, filename);
     if (existsResult) {
+      logger.debug('Element already exists in collection', {
+        filename,
+        elementType
+      });
       return existsResult;
     }
 
     // STEP 4: ALL VALIDATION COMPLETE - NOW PERFORM ATOMIC WRITE OPERATION
     await this.atomicWriteFile(localPath, sanitizedContent);
+
+    // ENHANCEMENT (PR #1453): Log successful installation
+    logger.debug('Element installed successfully from collection', {
+      elementName: metadata.name,
+      elementType,
+      filename,
+      localPath
+    });
 
     return {
       success: true,
