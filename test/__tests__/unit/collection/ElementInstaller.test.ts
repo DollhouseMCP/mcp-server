@@ -164,7 +164,7 @@ category: "test"
 ---
 # Test Skill`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(validContent)
       } as any);
@@ -279,7 +279,7 @@ category: "test"
 ---
 # GitHub Preferred`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(validContent)
       } as any);
@@ -479,7 +479,7 @@ version: "1.0.0"
 
 This is a skill from GitHub portfolio.`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(validContent)
       } as any);
@@ -555,7 +555,7 @@ category: "test"
       ]);
 
       // Mock fetch failure
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found'
       } as any);
@@ -801,7 +801,7 @@ category: "test"
 ---
 # Atomic Test`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(validContent)
       } as any);
