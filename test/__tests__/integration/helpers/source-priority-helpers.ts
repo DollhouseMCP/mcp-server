@@ -166,6 +166,21 @@ export async function deleteLocalElement(
 }
 
 /**
+ * Mock SHA counter for deterministic test data
+ * FIX: Replaced Math.random() with counter to prevent weak cryptography warning (SonarCloud S2245)
+ * Safe for test mocks - not used for security purposes
+ */
+let mockShaCounter = 0;
+
+/**
+ * Generate deterministic mock SHA for testing
+ * @returns Mock SHA string with incrementing counter
+ */
+function generateMockSha(prefix: string = 'mock-sha'): string {
+  return `${prefix}-${++mockShaCounter}`;
+}
+
+/**
  * Mock GitHub API response for element content
  */
 export interface MockGitHubElement {
@@ -192,7 +207,7 @@ export function createMockGitHubElement(element: TestElement): MockGitHubElement
     name: filename,
     path: elementPath,
     content: encodedContent,
-    sha: 'mock-sha-' + Math.random().toString(36).substring(7),
+    sha: generateMockSha('mock-sha'),
     size: content.length,
     type: 'file',
     download_url: `https://raw.githubusercontent.com/test/portfolio/main/${elementPath}`,
@@ -227,7 +242,7 @@ export function createMockCollectionElement(element: TestElement, collectionPath
   return {
     path: collectionPath,
     name: elementNameToFilename(element.name, element.elementType),
-    sha: 'mock-collection-sha-' + Math.random().toString(36).substring(7),
+    sha: generateMockSha('mock-collection-sha'),
     size: content.length,
     url: `https://api.github.com/repos/DollhouseMCP/collection/contents/${collectionPath}`,
     html_url: `https://github.com/DollhouseMCP/collection/blob/main/${collectionPath}`,
