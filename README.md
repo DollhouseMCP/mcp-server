@@ -542,6 +542,28 @@ search_collection query="python" type="skills"
 | 🛡️ **Data Protection** | Copy-on-write for default personas, comprehensive backup system |
 | 🏠 **Local-First Architecture** | Full functionality without cloud dependency |
 
+## 🎯 Element Source Priority
+
+DollhouseMCP checks for elements across three sources in priority order:
+
+1. **Local Portfolio** (`~/.dollhouse/portfolio/`) - Your personal elements
+2. **GitHub Portfolio** (your repository) - Your synced elements
+3. **Community Collection** (DollhouseMCP/collection) - Shared elements
+
+When searching for an element, the system checks sources in order and stops at the first match. This ensures your local customizations always take precedence over remote versions.
+
+**Why this matters:**
+- Your local edits are never overridden by remote versions
+- Search is faster (stops at first match)
+- You control which version is used
+- Duplicates are detected across sources
+
+**Configuration**: See [User Guide](docs/USER_GUIDE.md#understanding-element-sources-and-priority) for customization options.
+
+**Installing Elements**: The system automatically prevents duplicates by checking local portfolio first. To force installation from a specific source, use search options with `preferredSource`.
+
+---
+
 ## 🎨 Portfolio System
 
 The DollhouseMCP Portfolio system provides a comprehensive framework for managing AI elements locally and in the cloud.

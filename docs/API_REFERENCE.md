@@ -1018,9 +1018,581 @@ submit_content "My Custom Helper"
 ## See Also
 
 - [Element Architecture](./ELEMENT_ARCHITECTURE.md)
-- [Element Types](./ELEMENT_TYPES.md) 
+- [Element Types](./ELEMENT_TYPES.md)
 - [Developer Guide](./ELEMENT_DEVELOPER_GUIDE.md)
 - [Portfolio Migration Guide](./MIGRATION_TO_PORTFOLIO.md)
 - [Collection Integration Guide](./COLLECTION_INTEGRATION.md)
 - [GitHub Authentication Setup](./GITHUB_AUTH_SETUP.md)
+
+---
+
+## Element Source Priority API (v1.10.0)
+
+### Overview
+
+The Element Source Priority API provides deterministic control over the order in which element sources are checked during search and installation operations. This ensures predictable behavior and allows users to customize which sources take precedence.
+
+### ElementSource Enum
+
+Defines the available element sources.
+
+**TypeScript Definition:**
+```typescript
+enum ElementSource {
+  /** Local portfolio (~/.dollhouse/portfolio/) */
+  LOCAL = 'local',
+
+  /** User's GitHub portfolio repository */
+  GITHUB = 'github',
+
+  /** DollhouseMCP community collection */
+  COLLECTION = 'collection'
+}
+```
+
+**Values:**
+- `local` - Local portfolio on the filesystem
+- `github` - User's GitHub dollhouse-portfolio repository
+- `collection` - DollhouseMCP community collection
+
+**Example:**
+```typescript
+import { ElementSource } from '@dollhousemcp/mcp-server';
+
+const priority = [
+  ElementSource.LOCAL,
+  ElementSource.GITHUB,
+  ElementSource.COLLECTION
+];
+```
+
+### SourcePriorityConfig Interface
+
+Configuration schema for source priority behavior.
+
+**TypeScript Definition:**
+```typescript
+interface SourcePriorityConfig {
+  /**
+   * Ordered list of sources to check (first = highest priority)
+   */
+  priority: ElementSource[];
+
+  /**
+   * Stop searching after finding element in first source
+   * @default true
+   */
+  stopOnFirst: boolean;
+
+  /**
+   * Check all sources for version comparison
+   * @default false
+   */
+  checkAllForUpdates: boolean;
+
+  /**
+   * Try next source when current source fails
+   * @default true
+   */
+  fallbackOnError: boolean;
+}
+```
+
+**Fields:**
+- `priority` - Array of ElementSource values in priority order
+- `stopOnFirst` - Early termination optimization
+- `checkAllForUpdates` - Always check all sources for latest version
+- `fallbackOnError` - Resilience against source failures
+
+**Example:**
+```typescript
+const config: SourcePriorityConfig = {
+  priority: [ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION],
+  stopOnFirst: true,
+  checkAllForUpdates: false,
+  fallbackOnError: true
+};
+```
+
+### UnifiedSearchOptions Interface
+
+Extended search options with source priority controls.
+
+**TypeScript Definition:**
+```typescript
+interface UnifiedSearchOptions {
+  /** Search query string */
+  query: string;
+
+  /** Include local portfolio in search (default: true) */
+  includeLocal?: boolean;
+
+  /** Include GitHub portfolio in search (default: true) */
+  includeGitHub?: boolean;
+
+  /** Include collection in search (default: false) */
+  includeCollection?: boolean;
+
+  /** Filter by specific element type */
+  elementType?: ElementType;
+
+  /** Page number for pagination (default: 1) */
+  page?: number;
+
+  /** Number of results per page (default: 20) */
+  pageSize?: number;
+
+  /** Sort order for results (default: 'relevance') */
+  sortBy?: 'relevance' | 'source' | 'name' | 'version';
+
+  // Source priority options
+
+  /**
+   * Force search all enabled sources, ignoring stopOnFirst (default: false)
+   *
+   * When true, searches all enabled sources even if earlier sources return results.
+   */
+  includeAll?: boolean;
+
+  /**
+   * Prefer a specific source to search first
+   *
+   * Overrides the default priority order to search the specified source first.
+   * Other sources are searched in default priority order after the preferred source.
+   */
+  preferredSource?: ElementSource;
+
+  /**
+   * Custom source priority order
+   *
+   * Completely overrides the default source priority order.
+   * Sources are searched in the order specified.
+   */
+  sourcePriority?: ElementSource[];
+}
+```
+
+**Example - Basic search:**
+```typescript
+const results = await unifiedIndex.search({
+  query: 'creative-writer',
+  includeLocal: true,
+  includeGitHub: true,
+  includeCollection: false
+});
+```
+
+**Example - Search all sources:**
+```typescript
+const results = await unifiedIndex.search({
+  query: 'code-reviewer',
+  includeAll: true  // Don't stop at first match
+});
+```
+
+**Example - Preferred source:**
+```typescript
+const results = await unifiedIndex.search({
+  query: 'data-analyst',
+  preferredSource: ElementSource.COLLECTION  // Check collection first
+});
+```
+
+**Example - Custom priority:**
+```typescript
+const results = await unifiedIndex.search({
+  query: 'api-helper',
+  sourcePriority: [ElementSource.GITHUB, ElementSource.LOCAL, ElementSource.COLLECTION]
+});
+```
+
+### Configuration Functions
+
+#### getSourcePriorityConfig()
+
+Retrieves the current source priority configuration.
+
+**Signature:**
+```typescript
+function getSourcePriorityConfig(): SourcePriorityConfig
+```
+
+**Returns:** Current configuration (defaults, env vars, or config file)
+
+**Configuration priority:**
+1. Environment variable `SOURCE_PRIORITY` (for testing)
+2. Config file `~/.dollhouse/config.yml`
+3. Default configuration
+
+**Example:**
+```typescript
+import { getSourcePriorityConfig } from '@dollhousemcp/mcp-server';
+
+const config = getSourcePriorityConfig();
+console.log(config.priority);  // [ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION]
+console.log(config.stopOnFirst);  // true
+```
+
+#### saveSourcePriorityConfig()
+
+Saves source priority configuration to the config file.
+
+**Signature:**
+```typescript
+async function saveSourcePriorityConfig(config: SourcePriorityConfig): Promise<void>
+```
+
+**Parameters:**
+- `config` - Configuration to save
+
+**Throws:**
+- `Error` if configuration is invalid
+- `Error` if save operation fails
+
+**Example:**
+```typescript
+import { saveSourcePriorityConfig, ElementSource } from '@dollhousemcp/mcp-server';
+
+await saveSourcePriorityConfig({
+  priority: [ElementSource.GITHUB, ElementSource.LOCAL, ElementSource.COLLECTION],
+  stopOnFirst: false,
+  checkAllForUpdates: true,
+  fallbackOnError: true
+});
+```
+
+#### validateSourcePriority()
+
+Validates a source priority configuration.
+
+**Signature:**
+```typescript
+function validateSourcePriority(config: SourcePriorityConfig): ValidationResult
+```
+
+**Parameters:**
+- `config` - Configuration to validate
+
+**Returns:**
+```typescript
+interface ValidationResult {
+  isValid: boolean;
+  errors: string[];
+}
+```
+
+**Validation checks:**
+- Priority list is not empty
+- No duplicate sources in priority list
+- All sources are valid ElementSource values
+
+**Example:**
+```typescript
+import { validateSourcePriority, ElementSource } from '@dollhousemcp/mcp-server';
+
+const config = {
+  priority: [ElementSource.LOCAL, ElementSource.GITHUB],
+  stopOnFirst: true,
+  checkAllForUpdates: false,
+  fallbackOnError: true
+};
+
+const result = validateSourcePriority(config);
+if (!result.isValid) {
+  console.error('Validation errors:', result.errors);
+}
+```
+
+#### getSourceDisplayName()
+
+Gets user-friendly display name for an element source.
+
+**Signature:**
+```typescript
+function getSourceDisplayName(source: ElementSource): string
+```
+
+**Parameters:**
+- `source` - ElementSource to get display name for
+
+**Returns:** Human-readable source name
+
+**Throws:**
+- `Error` if source is invalid
+
+**Example:**
+```typescript
+import { getSourceDisplayName, ElementSource } from '@dollhousemcp/mcp-server';
+
+console.log(getSourceDisplayName(ElementSource.LOCAL));       // "Local Portfolio"
+console.log(getSourceDisplayName(ElementSource.GITHUB));      // "GitHub Portfolio"
+console.log(getSourceDisplayName(ElementSource.COLLECTION));  // "Community Collection"
+```
+
+#### parseSourcePriorityOrder()
+
+Parses source priority order from various input formats.
+
+**Signature:**
+```typescript
+function parseSourcePriorityOrder(value: unknown): ElementSource[]
+```
+
+**Parameters:**
+- `value` - Value to parse (array of sources or JSON string)
+
+**Returns:** Array of ElementSource values
+
+**Throws:**
+- `Error` if value cannot be parsed
+- `Error` if sources are invalid
+
+**Example:**
+```typescript
+import { parseSourcePriorityOrder } from '@dollhousemcp/mcp-server';
+
+// From array of strings
+const order1 = parseSourcePriorityOrder(['local', 'github', 'collection']);
+
+// From JSON string
+const order2 = parseSourcePriorityOrder('["github", "local"]');
+
+// From ElementSource values
+const order3 = parseSourcePriorityOrder([ElementSource.LOCAL, ElementSource.GITHUB]);
+```
+
+### Configuration Tool Methods
+
+#### dollhouse_config Tool
+
+The `dollhouse_config` tool provides access to source priority configuration through the MCP interface.
+
+**Get source priority configuration:**
+```bash
+mcp__DollhouseMCP__dollhouse_config \
+  --action get \
+  --setting source_priority
+```
+
+**Set source priority order:**
+```bash
+mcp__DollhouseMCP__dollhouse_config \
+  --action set \
+  --setting source_priority.priority \
+  --value '["github", "local", "collection"]'
+```
+
+**Set stopOnFirst:**
+```bash
+mcp__DollhouseMCP__dollhouse_config \
+  --action set \
+  --setting source_priority.stopOnFirst \
+  --value false
+```
+
+**Reset to defaults:**
+```bash
+mcp__DollhouseMCP__dollhouse_config \
+  --action reset \
+  --section source_priority
+```
+
+**Export configuration:**
+```bash
+mcp__DollhouseMCP__dollhouse_config \
+  --action export \
+  --format yaml
+```
+
+### Default Configuration
+
+**Default source priority:**
+```typescript
+const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
+  priority: [ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION],
+  stopOnFirst: true,
+  checkAllForUpdates: false,
+  fallbackOnError: true
+};
+```
+
+**Rationale:**
+- **Local first**: User's local customizations take precedence
+- **GitHub second**: User's synced elements from personal repository
+- **Collection last**: Community elements as fallback
+- **Early termination**: Faster searches by stopping at first match
+- **No update checking**: Reduces network traffic and API calls
+- **Fallback enabled**: Resilience against individual source failures
+
+### Environment Variables
+
+Override configuration for testing or CI/CD:
+
+```bash
+export SOURCE_PRIORITY='{"priority":["local","github","collection"],"stopOnFirst":true,"checkAllForUpdates":false,"fallbackOnError":true}'
+```
+
+### Configuration File
+
+Source priority is stored in `~/.dollhouse/config.yml`:
+
+```yaml
+source_priority:
+  priority:
+    - local
+    - github
+    - collection
+  stopOnFirst: true
+  checkAllForUpdates: false
+  fallbackOnError: true
+```
+
+### Search Behavior Examples
+
+#### Example 1: Default behavior
+
+```typescript
+// Default: Check local → github → collection, stop at first match
+const results = await unifiedIndex.search({
+  query: 'creative-writer'
+});
+
+// Results from first source that has the element
+```
+
+#### Example 2: Search all sources
+
+```typescript
+// Check all sources to see all versions
+const results = await unifiedIndex.search({
+  query: 'creative-writer',
+  includeAll: true
+});
+
+// Results from all sources (local, github, collection)
+```
+
+#### Example 3: Preferred source
+
+```typescript
+// Check collection first, then default order
+const results = await unifiedIndex.search({
+  query: 'creative-writer',
+  preferredSource: ElementSource.COLLECTION
+});
+
+// Collection checked first, then local, then github
+```
+
+#### Example 4: Custom priority
+
+```typescript
+// Check github first, then local, skip collection
+const results = await unifiedIndex.search({
+  query: 'creative-writer',
+  sourcePriority: [ElementSource.GITHUB, ElementSource.LOCAL]
+});
+
+// Only github and local checked, in that order
+```
+
+### Error Handling
+
+**Invalid configuration:**
+```typescript
+try {
+  await saveSourcePriorityConfig({
+    priority: [],  // Invalid: empty array
+    stopOnFirst: true,
+    checkAllForUpdates: false,
+    fallbackOnError: true
+  });
+} catch (error) {
+  console.error('Configuration error:', error.message);
+  // "Invalid source priority configuration: Priority list cannot be empty"
+}
+```
+
+**Source failure with fallback:**
+```typescript
+const results = await unifiedIndex.search({
+  query: 'creative-writer',
+  includeLocal: true,
+  includeGitHub: true,  // Fails (network error)
+  includeCollection: true
+});
+
+// With fallbackOnError: true (default)
+// GitHub fails → continues to collection → returns collection results
+
+// With fallbackOnError: false
+// GitHub fails → search fails with error
+```
+
+### Performance Characteristics
+
+**Early termination (stopOnFirst: true):**
+- Best case: O(1) - Element found in first source
+- Average case: O(n/2) - Element in middle source
+- Worst case: O(n) - Element in last source or not found
+
+**Full search (stopOnFirst: false, includeAll: true):**
+- Always O(n) - All sources searched
+- Higher latency but complete results
+
+**Recommendations:**
+- Use `stopOnFirst: true` for typical searches
+- Use `includeAll: true` when comparing versions
+- Use `preferredSource` for known source locations
+- Use custom `sourcePriority` for workflow-specific optimization
+
+### Type Definitions
+
+Complete TypeScript type definitions:
+
+```typescript
+export enum ElementSource {
+  LOCAL = 'local',
+  GITHUB = 'github',
+  COLLECTION = 'collection'
+}
+
+export interface SourcePriorityConfig {
+  priority: ElementSource[];
+  stopOnFirst: boolean;
+  checkAllForUpdates: boolean;
+  fallbackOnError: boolean;
+}
+
+export interface ValidationResult {
+  isValid: boolean;
+  errors: string[];
+}
+
+export interface UnifiedSearchOptions {
+  query: string;
+  includeLocal?: boolean;
+  includeGitHub?: boolean;
+  includeCollection?: boolean;
+  elementType?: ElementType;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'relevance' | 'source' | 'name' | 'version';
+  includeAll?: boolean;
+  preferredSource?: ElementSource;
+  sourcePriority?: ElementSource[];
+}
+
+export function getSourcePriorityConfig(): SourcePriorityConfig;
+export function saveSourcePriorityConfig(config: SourcePriorityConfig): Promise<void>;
+export function validateSourcePriority(config: SourcePriorityConfig): ValidationResult;
+export function getSourceDisplayName(source: ElementSource): string;
+export function parseSourcePriorityOrder(value: unknown): ElementSource[];
+```
+
+### Migration Notes
+
+See [Migration Guide](MIGRATION_GUIDE.md#migrating-to-source-priority-v1100) for upgrading from older versions.
+
+---
 
