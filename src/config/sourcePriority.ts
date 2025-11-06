@@ -358,6 +358,49 @@ export function getSourceDisplayName(source: ElementSource): string {
 }
 
 /**
+ * Parse a single item from source priority array
+ *
+ * Converts a single source item (string or ElementSource) to a validated
+ * ElementSource enum value. Handles both string names (case-insensitive)
+ * and ElementSource enum values.
+ *
+ * @param {unknown} item - Item to parse (string source name or ElementSource value)
+ * @returns {ElementSource} Validated ElementSource enum value
+ * @throws {Error} If item is not a valid source
+ * @private
+ *
+ * @example
+ * // Parse from lowercase string
+ * parseSourceItem('local'); // Returns: ElementSource.LOCAL
+ *
+ * @example
+ * // Parse from ElementSource value
+ * parseSourceItem(ElementSource.GITHUB); // Returns: ElementSource.GITHUB
+ *
+ * @example
+ * // Invalid source throws error
+ * parseSourceItem('invalid'); // Throws: Unknown source: invalid
+ */
+function parseSourceItem(item: unknown): ElementSource {
+  // Handle string input (case-insensitive)
+  if (typeof item === 'string') {
+    const lowerItem = item.toLowerCase();
+    if (VALID_SOURCES.includes(lowerItem as ElementSource)) {
+      return lowerItem as ElementSource;
+    }
+    throw new Error(`Unknown source: ${item}. Valid sources: ${VALID_SOURCES.join(', ')}`);
+  }
+
+  // Handle ElementSource enum value
+  if (Object.values(ElementSource).includes(item as ElementSource)) {
+    return item as ElementSource;
+  }
+
+  // Invalid type or value
+  throw new Error(`Invalid source value: ${item}`);
+}
+
+/**
  * Parse source priority order from various input formats
  *
  * Accepts arrays of ElementSource values or string source names and
@@ -397,23 +440,6 @@ export function parseSourcePriorityOrder(value: unknown): ElementSource[] {
     throw new TypeError('Source priority order must be an array');
   }
 
-  // Convert string values to ElementSource enum values
-  const sources: ElementSource[] = [];
-  for (const item of value) {
-    if (typeof item === 'string') {
-      const lowerItem = item.toLowerCase();
-      // Check if the lowercase value matches a valid ElementSource value
-      if (VALID_SOURCES.includes(lowerItem as ElementSource)) {
-        sources.push(lowerItem as ElementSource);
-      } else {
-        throw new Error(`Unknown source: ${item}. Valid sources: ${VALID_SOURCES.join(', ')}`);
-      }
-    } else if (Object.values(ElementSource).includes(item as ElementSource)) {
-      sources.push(item as ElementSource);
-    } else {
-      throw new Error(`Invalid source value: ${item}`);
-    }
-  }
-
-  return sources;
+  // Convert each item to ElementSource enum value
+  return value.map(item => parseSourceItem(item));
 }
