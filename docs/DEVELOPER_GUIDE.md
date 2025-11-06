@@ -17,6 +17,67 @@
 
 The element source priority system provides deterministic, configurable ordering for element discovery across multiple sources. The system consists of three main components working together:
 
+#### Visual: Component Architecture
+
+```mermaid
+flowchart TB
+    subgraph "Configuration Layer"
+        Config[SourcePriorityConfig]
+        Validation[Configuration Validation]
+        Persistence[Config File Storage]
+    end
+
+    subgraph "Search Layer"
+        UnifiedIndex[UnifiedIndexManager]
+        SourceOrder[Source Order Determination]
+        Fallback[Fallback & Error Handling]
+        Dedup[Duplicate Detection & Merging]
+    end
+
+    subgraph "Installation Layer"
+        Installer[ElementInstaller]
+        ExistCheck[Existence Checking]
+        Download[Element Download]
+    end
+
+    subgraph "Data Sources"
+        Local[(Local Portfolio)]
+        GitHub[(GitHub Portfolio)]
+        Collection[(Community Collection)]
+    end
+
+    Config --> UnifiedIndex
+    Config --> Installer
+    UnifiedIndex --> SourceOrder
+    SourceOrder --> Fallback
+    Fallback --> Dedup
+
+    Installer --> ExistCheck
+    ExistCheck --> UnifiedIndex
+    Installer --> Download
+
+    UnifiedIndex --> Local
+    UnifiedIndex --> GitHub
+    UnifiedIndex --> Collection
+
+    Download --> Local
+    Download --> GitHub
+    Download --> Collection
+
+    style Config fill:#e1f5ff
+    style UnifiedIndex fill:#fff4e1
+    style Installer fill:#f0e1ff
+    style Local fill:#90EE90
+    style GitHub fill:#90EE90
+    style Collection fill:#90EE90
+```
+
+**Component Interactions:**
+- Configuration layer provides settings to search and installation layers
+- UnifiedIndexManager uses configuration to determine source order
+- ElementInstaller queries UnifiedIndexManager to check for existing elements
+- All layers interact with the three data sources (local, GitHub, collection)
+
 #### 1. Configuration Layer (`src/config/sourcePriority.ts`)
 
 **Purpose**: Centralized configuration for source priority behavior.
@@ -319,6 +380,57 @@ describe('Enterprise Source Priority', () => {
 ### Configuration System Design
 
 The source priority configuration uses a **layered approach** with clear precedence:
+
+#### Visual: Configuration Priority Layers
+
+```mermaid
+flowchart TD
+    subgraph Layer1 ["Layer 1: Runtime Override (Highest Priority)"]
+        Runtime[Search/Install Options<br/>sourcePriority parameter<br/>Temporary, not persisted]
+    end
+
+    subgraph Layer2 ["Layer 2: Config File"]
+        ConfigFile[~/.dollhouse/config.yml<br/>User preferences<br/>Persists across restarts]
+    end
+
+    subgraph Layer3 ["Layer 3: Environment Variables"]
+        EnvVars[SOURCE_PRIORITY env var<br/>For testing and CI/CD<br/>System-level configuration]
+    end
+
+    subgraph Layer4 ["Layer 4: Default Configuration (Lowest Priority)"]
+        Defaults[Hard-coded defaults<br/>src/config/sourcePriority.ts<br/>Fallback when nothing else set]
+    end
+
+    Request[Configuration Request] --> Runtime
+    Runtime --> |Not Set| ConfigFile
+    ConfigFile --> |Not Set| EnvVars
+    EnvVars --> |Not Set| Defaults
+    Runtime --> |Set| UseValue[Use Configuration]
+    ConfigFile --> |Set| UseValue
+    EnvVars --> |Set| UseValue
+    Defaults --> UseValue
+
+    UseValue --> Validation{Valid?}
+    Validation -->|Yes| Apply[Apply Configuration]
+    Validation -->|No| Fallback[Use Default Configuration]
+
+    Apply --> End([Configuration Active])
+    Fallback --> End
+
+    style Layer1 fill:#FFB6C6
+    style Layer2 fill:#FFD9B3
+    style Layer3 fill:#FFF4B3
+    style Layer4 fill:#E1F5FF
+    style Apply fill:#90EE90
+    style Fallback fill:#F0E1FF
+```
+
+**Priority Rules:**
+- Higher layers override lower layers
+- First valid configuration wins
+- Invalid configurations fall back to defaults
+- Runtime overrides are temporary (per-operation)
+- All other layers persist until changed
 
 #### Configuration Layers (highest to lowest priority)
 

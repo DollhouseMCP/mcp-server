@@ -65,6 +65,40 @@ Here's how it works step-by-step:
 - You maintain full control over which version is used
 - Duplicates are automatically detected
 
+#### Visual: Source Priority Search Flow
+
+The following diagram shows how DollhouseMCP searches for elements across sources:
+
+```mermaid
+flowchart TD
+    Start([User Searches for Element]) --> Local{Check Local<br/>Portfolio}
+    Local -->|Found| ReturnLocal[Return Local Element]
+    Local -->|Not Found| GitHub{Check GitHub<br/>Portfolio}
+    GitHub -->|Found| ReturnGitHub[Return GitHub Element]
+    GitHub -->|Not Found| Collection{Check Community<br/>Collection}
+    Collection -->|Found| ReturnCollection[Return Collection Element]
+    Collection -->|Not Found| NotFound[Element Not Found]
+
+    ReturnLocal --> End([Search Complete])
+    ReturnGitHub --> End
+    ReturnCollection --> End
+    NotFound --> End
+
+    style Local fill:#e1f5ff
+    style GitHub fill:#fff4e1
+    style Collection fill:#f0e1ff
+    style ReturnLocal fill:#90EE90
+    style ReturnGitHub fill:#90EE90
+    style ReturnCollection fill:#90EE90
+    style NotFound fill:#FFB6C6
+```
+
+**Key Points:**
+- Search stops at first match (early termination)
+- Higher priority sources checked first
+- Only proceeds to next source if not found
+- Fastest when element is in highest priority source
+
 ### When to Customize Source Priority
 
 **The default priority works for 99% of users**, but you may want to customize if:
@@ -238,6 +272,57 @@ When searching through MCP tools, use search options that include all sources:
 ```
 
 **Result**: Only collection elements are returned.
+
+---
+
+#### Visual: Installation Decision Flow
+
+The following diagram shows how DollhouseMCP decides which source to use when installing elements:
+
+```mermaid
+flowchart TD
+    Start([Install Element Request]) --> CheckLocal{Element exists<br/>in Local Portfolio?}
+    CheckLocal -->|Yes| ForceFlag{Force flag<br/>enabled?}
+    ForceFlag -->|Yes| DetermineSource[Determine Installation Source]
+    ForceFlag -->|No| ErrorExists[Error: Element Already Exists]
+
+    CheckLocal -->|No| DetermineSource
+
+    DetermineSource --> PreferredSet{Preferred source<br/>specified?}
+    PreferredSet -->|Yes| SearchPreferred[Search Preferred Source]
+    PreferredSet -->|No| SearchPriority[Search Sources by Priority Order]
+
+    SearchPreferred --> FoundPreferred{Found in<br/>preferred source?}
+    FoundPreferred -->|Yes| Install[Download and Install Element]
+    FoundPreferred -->|No| ErrorNotFound[Error: Element Not Found]
+
+    SearchPriority --> SearchFirst{Found in<br/>first source?}
+    SearchFirst -->|Yes| Install
+    SearchFirst -->|No| SearchNext{More sources<br/>to check?}
+    SearchNext -->|Yes| SearchPriority
+    SearchNext -->|No| ErrorNotFound
+
+    Install --> UpdateIndex[Update Local Index]
+    UpdateIndex --> Success([Installation Complete])
+
+    ErrorExists --> End([End])
+    ErrorNotFound --> End
+    Success --> End
+
+    style CheckLocal fill:#e1f5ff
+    style ForceFlag fill:#fff4e1
+    style PreferredSet fill:#f0e1ff
+    style Install fill:#90EE90
+    style Success fill:#90EE90
+    style ErrorExists fill:#FFB6C6
+    style ErrorNotFound fill:#FFB6C6
+```
+
+**Key Decision Points:**
+- Local existence check prevents duplicates
+- Force flag allows overwriting existing elements
+- Preferred source bypasses priority order
+- Priority order determines fallback sequence
 
 ---
 

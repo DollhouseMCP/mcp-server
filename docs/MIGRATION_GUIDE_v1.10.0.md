@@ -59,6 +59,59 @@ While not breaking, you may notice these behavior differences:
 
 ## Do I Need to Migrate?
 
+### Visual: Migration Decision Tree
+
+Use this flowchart to determine if you need to take action:
+
+```mermaid
+flowchart TD
+    Start([Upgraded to v1.10.0]) --> Q1{Using default<br/>search behavior?}
+    Q1 -->|Yes| Q2{Local customizations<br/>should take priority?}
+    Q1 -->|No| ReviewCode[Review Custom Search Code]
+
+    Q2 -->|Yes| NoAction1[No Migration Needed<br/>Default works perfectly]
+    Q2 -->|No| Configure1[Configure Custom Priority]
+
+    ReviewCode --> Q3{Code depends on<br/>parallel search timing?}
+    Q3 -->|Yes| UpdateCode[Update Code for Sequential Search]
+    Q3 -->|No| Q4{Code specifies<br/>source order?}
+
+    Q4 -->|Yes| TestCode[Test with New Options]
+    Q4 -->|No| NoAction2[No Migration Needed<br/>Compatible automatically]
+
+    Configure1 --> SetPriority[Set source_priority.priority]
+    UpdateCode --> SetPriority
+    TestCode --> SetPriority
+
+    SetPriority --> Verify[Test Search & Install]
+    NoAction1 --> End([Ready to Use])
+    NoAction2 --> End
+
+    Verify --> Working{Everything<br/>working as expected?}
+    Working -->|Yes| Done[Migration Complete]
+    Working -->|No| Debug[Review Troubleshooting Guide]
+
+    Done --> End
+    Debug --> End
+
+    style Q1 fill:#e1f5ff
+    style Q2 fill:#fff4e1
+    style Q3 fill:#f0e1ff
+    style Q4 fill:#ffe1e1
+    style NoAction1 fill:#90EE90
+    style NoAction2 fill:#90EE90
+    style Done fill:#90EE90
+    style Configure1 fill:#FFD9B3
+    style UpdateCode fill:#FFB6C6
+    style Debug fill:#FFB6C6
+```
+
+**Quick Assessment:**
+- Green boxes = No action needed, you're good to go
+- Orange boxes = Configuration recommended
+- Red boxes = Code changes may be needed
+- Blue boxes = Decision points
+
 ### No Migration Required If:
 
 - You want local customizations to take precedence (default behavior)
