@@ -14,7 +14,7 @@
  * Issue #1449 - Phase 5 of Element Sourcing Priority feature
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { UnifiedIndexManager } from '../../../src/portfolio/UnifiedIndexManager.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { ElementSource, SourcePriorityConfig } from '../../../src/config/sourcePriority.js';
@@ -29,7 +29,6 @@ import {
 
 describe('Source Priority Integration Tests', () => {
   let portfolioDir: string;
-  let tempDir: string;
   let cleanup: () => Promise<void>;
   let unifiedIndex: UnifiedIndexManager;
   let portfolioManager: PortfolioManager;
@@ -41,7 +40,6 @@ describe('Source Priority Integration Tests', () => {
     // Setup test environment
     const env = await setupSourcePriorityTestEnv();
     portfolioDir = env.portfolioDir;
-    tempDir = env.tempDir;
     cleanup = env.cleanup;
 
     // Initialize managers with test directory

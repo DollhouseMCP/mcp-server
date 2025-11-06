@@ -12,7 +12,7 @@
  * Issue #1449 - Phase 5 of Element Sourcing Priority feature
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { ElementInstaller } from '../../../src/collection/ElementInstaller.js';
 import { GitHubClient } from '../../../src/collection/GitHubClient.js';
 import { APICache } from '../../../src/cache/APICache.js';
@@ -32,7 +32,6 @@ import {
 
 describe('Element Installation Priority Integration Tests', () => {
   let portfolioDir: string;
-  let tempDir: string;
   let cleanup: () => Promise<void>;
   let elementInstaller: ElementInstaller;
   let githubClient: GitHubClient;
@@ -47,7 +46,6 @@ describe('Element Installation Priority Integration Tests', () => {
     // Setup test environment
     const env = await setupSourcePriorityTestEnv();
     portfolioDir = env.portfolioDir;
-    tempDir = env.tempDir;
     cleanup = env.cleanup;
 
     // Initialize API cache and rate limit tracker

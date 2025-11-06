@@ -9,8 +9,8 @@
  * - Test environment setup and cleanup
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { ElementSource, SourcePriorityConfig, DEFAULT_SOURCE_PRIORITY } from '../../../../src/config/sourcePriority.js';
 import { createTempDir } from './file-utils.js';
@@ -53,7 +53,8 @@ export function createElementContent(element: TestElement): string {
   const frontmatterYaml = Object.entries(frontmatter)
     .map(([key, value]) => {
       if (Array.isArray(value)) {
-        return `${key}:\n${value.map(v => `  - ${v}`).join('\n')}`;
+        const items = value.map(v => `  - ${v}`).join('\n');
+        return `${key}:\n${items}`;
       }
       return `${key}: ${value}`;
     })
@@ -70,7 +71,7 @@ ${content}`;
  * Generate filename from element name
  */
 export function elementNameToFilename(name: string, elementType: ElementType): string {
-  const baseName = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  const baseName = name.toLowerCase().replaceAll(/\s+/g, '-').replaceAll(/[^a-z0-9-]/g, '');
   const extension = '.md';
   return `${baseName}${extension}`;
 }
