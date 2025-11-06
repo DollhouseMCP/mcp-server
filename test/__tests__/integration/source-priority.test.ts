@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { UnifiedIndexManager } from '../../../src/portfolio/UnifiedIndexManager.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
-import { ElementSource, SourcePriorityConfig } from '../../../src/config/sourcePriority.js';
+import { ElementSource } from '../../../src/config/sourcePriority.js';
 import {
   setupSourcePriorityTestEnv,
   createLocalElement,

@@ -23,7 +23,6 @@ import {
   createLocalElement,
   localElementExists,
   deleteLocalElement,
-  createMockCollectionElement,
   setTestSourcePriority,
   resetSourcePriority,
   createTestSourcePriorityConfig,
@@ -109,7 +108,6 @@ describe('Element Installation Priority Integration Tests', () => {
       // Action: Force install (this will attempt to fetch from collection)
       // Note: In a real scenario, we would mock the GitHub API response
       // For this test, we verify the force flag is respected
-      const collectionPath = 'library/personas/test-creative-writer.md';
 
       // We can't actually complete the installation without mocking the GitHub API,
       // but we can verify the element exists before and the force flag is accepted
@@ -132,11 +130,9 @@ describe('Element Installation Priority Integration Tests', () => {
 
     it('should respect preferredSource option', async () => {
       // Setup: Configure preferred source
-      const elementName = 'Test Preferred Element';
 
       // Action: Install with preferred source (collection)
       // In a real scenario, this would attempt collection first
-      const collectionPath = 'library/personas/test-preferred-element.md';
 
       // Verify preferred source is specified in options
       const options = {
@@ -168,7 +164,6 @@ describe('Element Installation Priority Integration Tests', () => {
 
     it('should handle installation errors gracefully', async () => {
       // Setup: Invalid collection path
-      const elementName = 'Test Invalid Element';
       const invalidPath = 'invalid/path';
 
       // Action: Try to install with invalid path
