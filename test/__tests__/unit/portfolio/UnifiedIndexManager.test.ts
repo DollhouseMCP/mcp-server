@@ -776,9 +776,12 @@ describe('UnifiedIndexManager', () => {
         // Should search all sources even though local had results
         expect(results.length).toBeGreaterThanOrEqual(2);
 
-        // Extract sources for validation (avoiding deep nesting)
-        const hasLocal = results.some(r => r.source === 'local');
-        const hasGitHub = results.some(r => r.source === 'github');
+        // FIX: Extract sources for validation (reducing function nesting depth)
+        // Previously: Used arrow functions inside .some() causing 5-level nesting (SonarCloud limit: 4)
+        // Now: Extract sources array first, then check with includes()
+        const resultSources = results.map(r => r.source);
+        const hasLocal = resultSources.includes('local');
+        const hasGitHub = resultSources.includes('github');
 
         expect(hasLocal).toBe(true);
         expect(hasGitHub).toBe(true);
