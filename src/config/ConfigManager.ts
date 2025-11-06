@@ -156,6 +156,13 @@ export interface WizardConfig {
   skippedSections?: string[]; // Track which sections were skipped
 }
 
+export interface SourcePriorityConfigData {
+  order: string[];  // Array of 'local' | 'github' | 'collection'
+  stop_on_first: boolean;
+  check_all_for_updates: boolean;
+  fallback_on_error: boolean;
+}
+
 export interface DollhouseConfig {
   version: string;
   user: UserConfig;
@@ -166,6 +173,7 @@ export interface DollhouseConfig {
   elements: ElementsConfig;
   display: DisplayConfig;
   wizard: WizardConfig;
+  source_priority?: SourcePriorityConfigData;
 }
 
 export interface ConfigUpdateResult {
