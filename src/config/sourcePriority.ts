@@ -8,6 +8,8 @@
  * @module config/sourcePriority
  */
 
+import { logger } from '../utils/logger.js';
+
 /**
  * Enumeration of available element sources
  *
@@ -153,10 +155,10 @@ export function getSourcePriorityConfig(): SourcePriorityConfig {
       if (validation.isValid) {
         return envConfig;
       }
-      console.warn('SOURCE_PRIORITY environment variable contains invalid configuration, using defaults');
+      logger.warn('SOURCE_PRIORITY environment variable contains invalid configuration, using defaults');
     } catch (error) {
       // Invalid JSON in environment variable, fall through to default
-      console.warn('Failed to parse SOURCE_PRIORITY environment variable, using defaults:', error instanceof Error ? error.message : String(error));
+      logger.warn('Failed to parse SOURCE_PRIORITY environment variable, using defaults', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
