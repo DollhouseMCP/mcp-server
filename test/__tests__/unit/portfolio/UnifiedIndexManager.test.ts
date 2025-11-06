@@ -775,9 +775,13 @@ describe('UnifiedIndexManager', () => {
 
         // Should search all sources even though local had results
         expect(results.length).toBeGreaterThanOrEqual(2);
-        const sources = results.map(r => r.source);
-        expect(sources).toContain('local');
-        expect(sources).toContain('github');
+
+        // Extract sources for validation (avoiding deep nesting)
+        const hasLocal = results.some(r => r.source === 'local');
+        const hasGitHub = results.some(r => r.source === 'github');
+
+        expect(hasLocal).toBe(true);
+        expect(hasGitHub).toBe(true);
       });
 
       it('should fallback to next source when current source fails', async () => {

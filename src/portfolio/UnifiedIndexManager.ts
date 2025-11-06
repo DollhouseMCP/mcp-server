@@ -279,10 +279,10 @@ export class UnifiedIndexManager {
   ]);
 
   // Cache for source availability checks (Issue #1446 - Code Review)
-  private sourceAvailabilityCache: Map<string, boolean> = new Map();
+  private readonly sourceAvailabilityCache: Map<string, boolean> = new Map();
 
   // Telemetry for source usage patterns (Issue #1446 - Code Review)
-  private sourceUsageTelemetry: Map<string, {
+  private readonly sourceUsageTelemetry: Map<string, {
     searchCount: number;
     resultCount: number;
     totalDuration: number;
@@ -378,21 +378,21 @@ export class UnifiedIndexManager {
     }
 
     // Validate that priority array contains valid sources
-    const validSources = [ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION];
+    const validSources = new Set([ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION]);
     for (const source of config.priority) {
-      if (!validSources.includes(source)) {
+      if (!validSources.has(source)) {
         throw new Error(`Invalid source in priority configuration: ${source}`);
       }
     }
 
     // Validate that stopOnFirst is a boolean
     if (typeof config.stopOnFirst !== 'boolean') {
-      throw new Error('stopOnFirst must be a boolean value');
+      throw new TypeError('stopOnFirst must be a boolean value');
     }
 
     // Validate that fallbackOnError is a boolean
     if (typeof config.fallbackOnError !== 'boolean') {
-      throw new Error('fallbackOnError must be a boolean value');
+      throw new TypeError('fallbackOnError must be a boolean value');
     }
   }
 
@@ -1111,8 +1111,6 @@ export class UnifiedIndexManager {
       case ElementSource.COLLECTION:
         isEnabled = options.includeCollection === true;
         break;
-      default:
-        isEnabled = false;
     }
 
     // Cache result
