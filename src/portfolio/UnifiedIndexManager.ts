@@ -24,20 +24,102 @@ import { PerformanceMonitor, SearchMetrics } from '../utils/PerformanceMonitor.j
 import { IndexEntry as CollectionIndexEntry, CollectionIndex } from '../types/collection.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { getSourcePriorityConfig, SourcePriorityConfig, ElementSource, getSourceDisplayName } from '../config/sourcePriority.js';
 
+/**
+ * Unified search options for searching across local, GitHub, and collection portfolios
+ */
 export interface UnifiedSearchOptions {
+  /** Search query string */
   query: string;
-  includeLocal?: boolean;     // default true
-  includeGitHub?: boolean;    // default true
-  includeCollection?: boolean; // default false
+
+  /**
+   * Include local portfolio in search (default: true)
+   *
+   * Local portfolio contains elements stored on the local filesystem in ~/.dollhouse/portfolio/.
+   * This is typically the primary source for user's custom elements.
+   */
+  includeLocal?: boolean;
+
+  /**
+   * Include GitHub portfolio in search (default: true)
+   *
+   * GitHub portfolio contains elements stored in the user's GitHub dollhouse-portfolio repository.
+   * This provides backup and sync capabilities for elements.
+   */
+  includeGitHub?: boolean;
+
+  /**
+   * Include collection in search (default: false)
+   *
+   * The collection contains community-contributed elements from the DollhouseMCP collection repository.
+   *
+   * **Why default is false:**
+   * - Collection searches require network access and are slower than local/GitHub searches
+   * - Most searches are for user's own elements, not community elements
+   * - Reduces unnecessary network traffic and API rate limit usage
+   * - Users can explicitly opt-in when browsing community content
+   *
+   * **When to use includeCollection: true:**
+   * - Browsing or searching for community-contributed elements
+   * - Looking for examples or templates from the collection
+   * - Checking for updates to collection-sourced elements
+   * - Using the browse/search collection features
+   */
+  includeCollection?: boolean;
+
+  /** Filter by specific element type */
   elementType?: ElementType;
+
+  /** Page number for pagination (default: 1) */
   page?: number;
+
+  /** Number of results per page (default: 20) */
   pageSize?: number;
+
+  /** Sort order for results (default: 'relevance') */
   sortBy?: 'relevance' | 'source' | 'name' | 'version';
-  streamResults?: boolean; // Enable result streaming
-  cursor?: string; // For pagination cursor
-  maxResults?: number; // Hard limit on results
-  lazyLoad?: boolean; // Enable lazy loading
+
+  /** Enable result streaming for large result sets */
+  streamResults?: boolean;
+
+  /** Pagination cursor for streaming results */
+  cursor?: string;
+
+  /** Hard limit on total results returned */
+  maxResults?: number;
+
+  /** Enable lazy loading of result details */
+  lazyLoad?: boolean;
+
+  // Source priority options (Issue #1446)
+
+  /**
+   * Force search all enabled sources, ignoring stopOnFirst optimization (default: false)
+   *
+   * When true, searches all enabled sources even if earlier sources return results.
+   * Useful for:
+   * - Checking for duplicates across sources
+   * - Finding all versions of an element
+   * - Comprehensive searches where you need complete results
+   */
+  includeAll?: boolean;
+
+  /**
+   * Prefer a specific source to search first
+   *
+   * Overrides the default priority order to search the specified source first.
+   * Other sources are searched in default priority order after the preferred source.
+   */
+  preferredSource?: ElementSource;
+
+  /**
+   * Custom source priority order
+   *
+   * Completely overrides the default source priority order.
+   * Sources are searched in the order specified.
+   */
+  sourcePriority?: ElementSource[];
 }
 
 export interface VersionConflict {
@@ -167,29 +249,59 @@ export interface UnifiedIndexStats {
 
 export class UnifiedIndexManager {
   private static instance: UnifiedIndexManager | null = null;
-  
+
   private localIndexManager: PortfolioIndexManager;
   private githubIndexer: GitHubPortfolioIndexer;
   private collectionIndexCache: CollectionIndexCache;
   private githubClient: GitHubClient;
-  
+
   // Performance monitoring and caching
   private performanceMonitor: PerformanceMonitor;
   private resultCache: LRUCache<UnifiedSearchResult[]>;
   private indexCache: LRUCache<any>;
   private readonly BATCH_SIZE = 50; // For streaming results
   private readonly MAX_CONCURRENT_SOURCES = 3;
+
+  // Source priority configuration (Issue #1446)
+  private readonly sourcePriorityConfig: SourcePriorityConfig;
+
+  // Lookup tables for optimized enum conversions (Issue #1446 - Code Review)
+  private static readonly SOURCE_ENUM_TO_STRING_MAP: ReadonlyMap<ElementSource, 'local' | 'github' | 'collection'> = new Map([
+    [ElementSource.LOCAL, 'local'],
+    [ElementSource.GITHUB, 'github'],
+    [ElementSource.COLLECTION, 'collection']
+  ]);
+
+  private static readonly SOURCE_STRING_TO_ENUM_MAP: ReadonlyMap<'local' | 'github' | 'collection', ElementSource> = new Map([
+    ['local', ElementSource.LOCAL],
+    ['github', ElementSource.GITHUB],
+    ['collection', ElementSource.COLLECTION]
+  ]);
+
+  // Cache for source availability checks (Issue #1446 - Code Review)
+  private readonly sourceAvailabilityCache: Map<string, boolean> = new Map();
+
+  // Telemetry for source usage patterns (Issue #1446 - Code Review)
+  private readonly sourceUsageTelemetry: Map<string, {
+    searchCount: number;
+    resultCount: number;
+    totalDuration: number;
+    lastUsed: Date;
+  }> = new Map();
   
   private constructor() {
     this.localIndexManager = PortfolioIndexManager.getInstance();
     this.githubIndexer = GitHubPortfolioIndexer.getInstance();
-    
+
     // Initialize GitHubClient with required dependencies
     const apiCache = new APICache();
     const rateLimitTracker = new Map<string, number[]>();
     this.githubClient = new GitHubClient(apiCache, rateLimitTracker);
     this.collectionIndexCache = new CollectionIndexCache(this.githubClient);
-    
+
+    // Initialize and validate source priority configuration (Issue #1446)
+    this.sourcePriorityConfig = this.initializeSourcePriorityConfig();
+
     // Initialize performance monitoring and caching
     this.performanceMonitor = PerformanceMonitor.getInstance();
     this.performanceMonitor.startMonitoring();
@@ -223,142 +335,112 @@ export class UnifiedIndexManager {
   }
 
   /**
+   * Initialize and validate source priority configuration
+   *
+   * Extracts configuration initialization into a separate method for testability
+   * and adds validation to ensure configuration is valid.
+   *
+   * @returns Validated source priority configuration
+   * @throws Error if configuration is invalid
+   */
+  private initializeSourcePriorityConfig(): SourcePriorityConfig {
+    const config = getSourcePriorityConfig();
+
+    // Validate configuration
+    this.validateSourcePriorityConfig(config);
+
+    logger.debug('Source priority configuration initialized', {
+      priority: config.priority.map(s => getSourceDisplayName(s)),
+      stopOnFirst: config.stopOnFirst,
+      fallbackOnError: config.fallbackOnError
+    });
+
+    return config;
+  }
+
+  /**
+   * Validate source priority configuration
+   *
+   * @param config - Configuration to validate
+   * @throws Error if configuration is invalid
+   */
+  private validateSourcePriorityConfig(config: SourcePriorityConfig): void {
+    if (!config) {
+      throw new Error('Source priority configuration is required');
+    }
+
+    if (!config.priority || !Array.isArray(config.priority)) {
+      throw new Error('Source priority configuration must have a valid priority array');
+    }
+
+    if (config.priority.length === 0) {
+      throw new Error('Source priority array cannot be empty');
+    }
+
+    // Validate that priority array contains valid sources
+    const validSources = new Set([ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION]);
+    for (const source of config.priority) {
+      if (!validSources.has(source)) {
+        throw new Error(`Invalid source in priority configuration: ${source}`);
+      }
+    }
+
+    // Validate that stopOnFirst is a boolean
+    if (typeof config.stopOnFirst !== 'boolean') {
+      throw new TypeError('stopOnFirst must be a boolean value');
+    }
+
+    // Validate that fallbackOnError is a boolean
+    if (typeof config.fallbackOnError !== 'boolean') {
+      throw new TypeError('fallbackOnError must be a boolean value');
+    }
+  }
+
+  /**
    * Enhanced search across local, GitHub, and collection portfolios with performance optimization
    */
   public async search(searchOptions: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
     const startTime = Date.now();
     const memoryBefore = process.memoryUsage().heapUsed;
-    const { query, includeLocal = true, includeGitHub = true, includeCollection = false } = searchOptions;
-    
-    // Normalize query to prevent Unicode-based attacks
-    const validationResult = UnicodeValidator.normalize(query);
-    const normalizedQuery = validationResult.normalizedContent;
-    
-    // Use normalized query in all subsequent operations
-    const normalizedSearchOptions = {
-      ...searchOptions,
-      query: normalizedQuery
-    };
-    
-    // SECURITY FIX (DMCP-SEC-006): Add audit logging for security monitoring
-    // Log unified search operations for security audit trail
-    SecurityMonitor.logSecurityEvent({
-      type: 'PORTFOLIO_FETCH_SUCCESS',
-      severity: 'LOW',
-      source: 'UnifiedIndexManager.search',
-      details: `Unified search performed with query length: ${normalizedQuery.length}, sources: ${JSON.stringify({
-        local: includeLocal,
-        github: includeGitHub,
-        collection: includeCollection
-      })}`
-    });
-    
-    logger.debug('Starting optimized unified portfolio search', normalizedSearchOptions);
-    
-    // Check cache first (use normalized search options)
-    const cacheKey = this.createCacheKey(normalizedSearchOptions);
-    const cached = this.resultCache.get(cacheKey);
-    if (cached) {
-      const duration = Date.now() - startTime;
-      this.recordSearchMetrics({
-        query: normalizedQuery,
-        duration,
-        resultCount: cached.length,
-        sources: this.getEnabledSources(normalizedSearchOptions),
-        cacheHit: true,
-        memoryBefore,
-        memoryAfter: process.memoryUsage().heapUsed,
-        timestamp: new Date()
-      });
-      logger.debug('Using cached search results', { resultCount: cached.length });
-      return cached;
+
+    // Normalize and validate search options
+    const normalizedOptions = this.normalizeSearchOptions(searchOptions);
+
+    // Log security audit event
+    this.logSearchSecurityEvent(normalizedOptions, searchOptions);
+
+    logger.debug('Starting optimized unified portfolio search', normalizedOptions);
+
+    // Check cache first
+    const cachedResult = await this.checkSearchCache(normalizedOptions, startTime, memoryBefore);
+    if (cachedResult) {
+      return cachedResult;
     }
-    
+
     try {
-      // Use streaming search for better performance with large result sets
-      if (normalizedSearchOptions.streamResults) {
-        return await this.streamSearch(normalizedSearchOptions);
+      // Handle streaming search separately
+      if (normalizedOptions.streamResults) {
+        return await this.streamSearch(normalizedOptions);
       }
-      
-      // Lazy loading: Only load indices when needed
-      const searchPromises: Promise<UnifiedSearchResult[]>[] = [];
-      const enabledSources = this.getEnabledSources(normalizedSearchOptions);
-      
-      // Limit concurrent source searches for memory efficiency
-      const concurrentLimit = Math.min(this.MAX_CONCURRENT_SOURCES, enabledSources.length);
-      const sourceBatches = this.batchSources(enabledSources, concurrentLimit);
-      
-      const allResults: UnifiedSearchResult[] = [];
-      const sourceCount = { local: 0, github: 0, collection: 0 };
-      
-      // Process sources in batches to control memory usage
-      for (const batch of sourceBatches) {
-        const batchPromises = batch.map(source => 
-          this.searchWithFallback(source as 'local' | 'github' | 'collection', normalizedQuery, normalizedSearchOptions)
-        );
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach((result, index) => {
-          const sourceName = batch[index] as 'local' | 'github' | 'collection';
-          if (result.status === 'fulfilled') {
-            sourceCount[sourceName] += result.value.length;
-            allResults.push(...result.value);
-          } else {
-            logger.warn(`Search failed for source ${sourceName}`, {
-              error: result.reason instanceof Error ? result.reason.message : String(result.reason)
-            });
-          }
-        });
-        
-        // Memory check between batches
-        const currentMemory = process.memoryUsage().heapUsed / (1024 * 1024);
-        if (currentMemory > 200) { // 200MB threshold
-          logger.warn('High memory usage during search, triggering cleanup', {
-            memoryMB: currentMemory
-          });
-          this.triggerMemoryCleanup();
-        }
-      }
-      
-      // Apply advanced processing with memory-efficient batching
-      const processedResults = await this.processSearchResultsOptimized(allResults, normalizedSearchOptions);
-      
-      // Apply pagination
-      const paginatedResults = this.applyPagination(processedResults, normalizedSearchOptions);
-      
-      // Cache results with memory limit check
-      if (paginatedResults.length < 1000) { // Don't cache very large result sets
-        this.resultCache.set(cacheKey, paginatedResults);
-      }
-      
-      const duration = Date.now() - startTime;
-      const memoryAfter = process.memoryUsage().heapUsed;
-      
-      this.recordSearchMetrics({
-        query: normalizedQuery,
-        duration,
-        resultCount: paginatedResults.length,
-        sources: enabledSources,
-        cacheHit: false,
+
+      // Perform priority-based search
+      const { results, sourceCount, enabledSources } = await this.performPriorityBasedSearch(normalizedOptions);
+
+      // Process, paginate, and cache results
+      const finalResults = await this.processFinalResults(
+        results,
+        normalizedOptions,
+        startTime,
         memoryBefore,
-        memoryAfter,
-        timestamp: new Date()
-      });
-      
-      logger.info('Optimized unified portfolio search completed', {
-        query: normalizedQuery.substring(0, 50),
-        sources: { ...sourceCount, total: allResults.length },
-        finalResults: paginatedResults.length,
-        duration: `${duration}ms`,
-        memoryUsageMB: (memoryAfter - memoryBefore) / (1024 * 1024)
-      });
-      
-      return paginatedResults;
-      
+        sourceCount,
+        enabledSources
+      );
+
+      return finalResults;
+
     } catch (error) {
       const duration = Date.now() - startTime;
-      ErrorHandler.logError('UnifiedIndexManager.search', error, { query: normalizedSearchOptions, duration });
+      ErrorHandler.logError('UnifiedIndexManager.search', error, { query: normalizedOptions, duration });
       throw ErrorHandler.wrapError(error, 'Failed to perform unified portfolio search', ErrorCategory.SYSTEM_ERROR);
     }
   }
@@ -420,14 +502,16 @@ export class UnifiedIndexManager {
   /**
    * Check for duplicates across all sources
    */
-  public async checkDuplicates(name: string): Promise<DuplicateInfo[]> {
+  public async checkDuplicates(name: string, options?: Partial<UnifiedSearchOptions>): Promise<DuplicateInfo[]> {
     try {
       const searchOptions: UnifiedSearchOptions = {
         query: name,
         includeLocal: true,
         includeGitHub: true,
         includeCollection: true,
-        pageSize: 100
+        includeAll: true, // Force search all sources to detect duplicates (Issue #1446)
+        pageSize: 100,
+        ...options
       };
       
       const results = await this.search(searchOptions);
@@ -588,6 +672,277 @@ export class UnifiedIndexManager {
     }
   }
 
+  // =====================================================
+  // SEARCH HELPER METHODS (Extracted to reduce complexity)
+  // =====================================================
+
+  /**
+   * Normalize search options and query (extracted from search())
+   */
+  private normalizeSearchOptions(searchOptions: UnifiedSearchOptions): UnifiedSearchOptions {
+    const { query } = searchOptions;
+    const validationResult = UnicodeValidator.normalize(query);
+    const normalizedQuery = validationResult.normalizedContent;
+
+    return {
+      ...searchOptions,
+      query: normalizedQuery
+    };
+  }
+
+  /**
+   * Log security event for search operation (extracted from search())
+   */
+  private logSearchSecurityEvent(normalizedOptions: UnifiedSearchOptions, originalOptions: UnifiedSearchOptions): void {
+    const { includeLocal = true, includeGitHub = true, includeCollection = false } = originalOptions;
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_FETCH_SUCCESS',
+      severity: 'LOW',
+      source: 'UnifiedIndexManager.search',
+      details: `Unified search performed with query length: ${normalizedOptions.query.length}, sources: ${JSON.stringify({
+        local: includeLocal,
+        github: includeGitHub,
+        collection: includeCollection
+      })}`
+    });
+  }
+
+  /**
+   * Check search cache and return cached results if available (extracted from search())
+   */
+  private async checkSearchCache(
+    normalizedOptions: UnifiedSearchOptions,
+    startTime: number,
+    memoryBefore: number
+  ): Promise<UnifiedSearchResult[] | null> {
+    const cacheKey = this.createCacheKey(normalizedOptions);
+    const cached = this.resultCache.get(cacheKey);
+
+    if (cached) {
+      const duration = Date.now() - startTime;
+      this.recordSearchMetrics({
+        query: normalizedOptions.query,
+        duration,
+        resultCount: cached.length,
+        sources: this.getEnabledSources(normalizedOptions),
+        cacheHit: true,
+        memoryBefore,
+        memoryAfter: process.memoryUsage().heapUsed,
+        timestamp: new Date()
+      });
+      logger.debug('Using cached search results', { resultCount: cached.length });
+      return cached;
+    }
+
+    return null;
+  }
+
+  /**
+   * Perform priority-based search across sources (extracted from search())
+   */
+  private async performPriorityBasedSearch(normalizedOptions: UnifiedSearchOptions): Promise<{
+    results: UnifiedSearchResult[];
+    sourceCount: { local: number; github: number; collection: number };
+    enabledSources: ('local' | 'github' | 'collection')[];
+  }> {
+    const allResults: UnifiedSearchResult[] = [];
+    const sourceCount = { local: 0, github: 0, collection: 0 };
+
+    // Get enabled sources in priority order
+    const enabledSources = this.getEnabledSourcesByPriority(normalizedOptions);
+
+    // Determine if we should stop on first result
+    const stopOnFirst = normalizedOptions.includeAll ? false : this.sourcePriorityConfig.stopOnFirst;
+
+    // Search sources sequentially in priority order
+    for (const source of enabledSources) {
+      const shouldContinue = await this.searchSingleSource(
+        source,
+        normalizedOptions,
+        allResults,
+        sourceCount,
+        stopOnFirst
+      );
+
+      if (!shouldContinue) {
+        break;
+      }
+
+      // Memory check between sources
+      this.checkMemoryUsage();
+    }
+
+    return { results: allResults, sourceCount, enabledSources };
+  }
+
+  /**
+   * Search a single source and update results (extracted from search())
+   */
+  private async searchSingleSource(
+    source: 'local' | 'github' | 'collection',
+    normalizedOptions: UnifiedSearchOptions,
+    allResults: UnifiedSearchResult[],
+    sourceCount: { local: number; github: number; collection: number },
+    stopOnFirst: boolean
+  ): Promise<boolean> {
+    const sourceStartTime = Date.now();
+
+    try {
+      const sourceResults = await this.searchWithFallback(
+        source,
+        normalizedOptions.query,
+        normalizedOptions
+      );
+
+      const sourceDuration = Date.now() - sourceStartTime;
+
+      // Record telemetry for this source
+      this.recordSourceUsage(source, sourceResults.length, sourceDuration);
+
+      if (sourceResults.length > 0) {
+        sourceCount[source] += sourceResults.length;
+        allResults.push(...sourceResults);
+
+        logger.debug(`Found ${sourceResults.length} results in ${getSourceDisplayName(this.mapSourceStringToEnum(source))}`, {
+          source,
+          resultCount: sourceResults.length,
+          duration: `${sourceDuration}ms`
+        });
+
+        // Early termination if stopOnFirst is enabled and we found results
+        if (stopOnFirst && allResults.length > 0) {
+          logger.debug('Stopping search early (stopOnFirst enabled)', {
+            source,
+            totalResults: allResults.length
+          });
+          return false;
+        }
+      }
+    } catch (error) {
+      const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
+
+      if (shouldFallback) {
+        logger.warn(`Search failed for source ${source}, continuing to next source`, {
+          error: error instanceof Error ? error.message : String(error),
+          source
+        });
+      } else {
+        logger.error(`Search failed for source ${source}, halting search`, {
+          error: error instanceof Error ? error.message : String(error),
+          source
+        });
+        throw error;
+      }
+    }
+
+    return true; // Continue to next source
+  }
+
+  /**
+   * Check memory usage and trigger cleanup if needed (extracted from search())
+   */
+  private checkMemoryUsage(): void {
+    const currentMemory = process.memoryUsage().heapUsed / (1024 * 1024);
+    if (currentMemory > 200) { // 200MB threshold
+      logger.warn('High memory usage during search, triggering cleanup', {
+        memoryMB: currentMemory
+      });
+      this.triggerMemoryCleanup();
+    }
+  }
+
+  /**
+   * Process final results: apply processing, pagination, caching, and metrics (extracted from search())
+   */
+  private async processFinalResults(
+    results: UnifiedSearchResult[],
+    normalizedOptions: UnifiedSearchOptions,
+    startTime: number,
+    memoryBefore: number,
+    sourceCount: { local: number; github: number; collection: number },
+    enabledSources: ('local' | 'github' | 'collection')[]
+  ): Promise<UnifiedSearchResult[]> {
+    // Apply advanced processing with memory-efficient batching
+    const processedResults = await this.processSearchResultsOptimized(results, normalizedOptions);
+
+    // Apply pagination
+    const paginatedResults = this.applyPagination(processedResults, normalizedOptions);
+
+    // Cache results with memory limit check
+    if (paginatedResults.length < 1000) {
+      const cacheKey = this.createCacheKey(normalizedOptions);
+      this.resultCache.set(cacheKey, paginatedResults);
+    }
+
+    // Record metrics and log completion
+    const duration = Date.now() - startTime;
+    const memoryAfter = process.memoryUsage().heapUsed;
+
+    this.recordSearchMetrics({
+      query: normalizedOptions.query,
+      duration,
+      resultCount: paginatedResults.length,
+      sources: enabledSources,
+      cacheHit: false,
+      memoryBefore,
+      memoryAfter,
+      timestamp: new Date()
+    });
+
+    logger.info('Optimized unified portfolio search completed', {
+      query: normalizedOptions.query.substring(0, 50),
+      sources: { ...sourceCount, total: results.length },
+      finalResults: paginatedResults.length,
+      duration: `${duration}ms`,
+      memoryUsageMB: (memoryAfter - memoryBefore) / (1024 * 1024)
+    });
+
+    return paginatedResults;
+  }
+
+  /**
+   * Check for updates across all sources (Issue #1446)
+   *
+   * Searches all enabled sources to find version information and detect updates,
+   * ignoring the stopOnFirst setting to ensure all sources are checked.
+   *
+   * @param name - Element name to check for updates
+   * @param options - Optional search options
+   * @returns Version information across all sources, or null if not found
+   *
+   * @example
+   * // Check for updates to a persona
+   * const versionInfo = await unifiedManager.checkForUpdates('Creative Writer');
+   * if (versionInfo && versionInfo.updateAvailable) {
+   *   console.log(`Update available from ${versionInfo.updateFrom}: ${versionInfo.recommended.reason}`);
+   * }
+   */
+  public async checkForUpdates(name: string, options: Partial<UnifiedSearchOptions> = {}): Promise<VersionInfo | null> {
+    try {
+      logger.debug('Checking for updates across all sources', { name });
+
+      // Get version comparison (which internally uses includeAll)
+      const versionInfo = await this.getVersionComparison(name);
+
+      if (versionInfo) {
+        logger.debug('Update check completed', {
+          name,
+          updateAvailable: versionInfo.updateAvailable,
+          recommendedSource: versionInfo.recommended.source
+        });
+      } else {
+        logger.debug('No versions found for update check', { name });
+      }
+
+      return versionInfo;
+
+    } catch (error) {
+      ErrorHandler.logError('UnifiedIndexManager.checkForUpdates', error, { name });
+      return null;
+    }
+  }
+
   /**
    * Invalidate caches after user actions with performance monitoring
    */
@@ -662,7 +1017,149 @@ export class UnifiedIndexManager {
   // =====================================================
   // PRIVATE HELPER METHODS
   // =====================================================
-  
+
+  /**
+   * Get enabled sources in priority order (Issue #1446)
+   *
+   * Respects user's source preferences and priority configuration.
+   * Supports preferredSource and sourcePriority overrides.
+   *
+   * @param options - Search options
+   * @returns Array of enabled sources in priority order
+   */
+  private getEnabledSourcesByPriority(options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
+    // Determine priority order based on options
+    const priorityOrder = this.determinePriorityOrder(options);
+
+    // Filter to only enabled sources
+    const enabledSources = this.filterEnabledSources(priorityOrder, options);
+
+    logger.debug('Enabled sources in priority order', {
+      sources: enabledSources.map(s => getSourceDisplayName(this.mapSourceStringToEnum(s)))
+    });
+
+    return enabledSources;
+  }
+
+  /**
+   * Determine source priority order from options (extracted from getEnabledSourcesByPriority)
+   */
+  private determinePriorityOrder(options: UnifiedSearchOptions): ElementSource[] {
+    if (options.sourcePriority && options.sourcePriority.length > 0) {
+      logger.debug('Using custom source priority', { priority: options.sourcePriority });
+      return options.sourcePriority;
+    }
+
+    if (options.preferredSource) {
+      const priorityOrder = [
+        options.preferredSource,
+        ...this.sourcePriorityConfig.priority.filter(s => s !== options.preferredSource)
+      ];
+      logger.debug('Using preferred source priority', {
+        preferredSource: options.preferredSource,
+        priority: priorityOrder
+      });
+      return priorityOrder;
+    }
+
+    return this.sourcePriorityConfig.priority;
+  }
+
+  /**
+   * Filter sources to only those that are enabled (extracted from getEnabledSourcesByPriority)
+   */
+  private filterEnabledSources(priorityOrder: ElementSource[], options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
+    const enabledSources: ('local' | 'github' | 'collection')[] = [];
+
+    for (const source of priorityOrder) {
+      if (this.isSourceEnabled(source, options)) {
+        enabledSources.push(this.mapSourceEnumToString(source));
+      }
+    }
+
+    return enabledSources;
+  }
+
+  /**
+   * Check if a source is enabled in search options (Issue #1446)
+   *
+   * Uses caching to avoid repeated availability checks within the same search operation.
+   *
+   * @param source - Element source to check
+   * @param options - Search options
+   * @returns True if source is enabled
+   */
+  private isSourceEnabled(source: ElementSource, options: UnifiedSearchOptions): boolean {
+    // Create cache key from source and options
+    const cacheKey = `${source}:${options.includeLocal}:${options.includeGitHub}:${options.includeCollection}`;
+
+    // Check cache first
+    const cached = this.sourceAvailabilityCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    // Calculate availability
+    let isEnabled = false;
+    switch (source) {
+      case ElementSource.LOCAL:
+        isEnabled = options.includeLocal !== false;
+        break;
+      case ElementSource.GITHUB:
+        isEnabled = options.includeGitHub !== false;
+        break;
+      case ElementSource.COLLECTION:
+        isEnabled = options.includeCollection === true;
+        break;
+    }
+
+    // Cache result
+    this.sourceAvailabilityCache.set(cacheKey, isEnabled);
+
+    return isEnabled;
+  }
+
+  /**
+   * Clear source availability cache
+   *
+   * Should be called when search options change or between search operations.
+   */
+  private clearSourceAvailabilityCache(): void {
+    this.sourceAvailabilityCache.clear();
+  }
+
+  /**
+   * Map ElementSource enum to source string (Issue #1446)
+   *
+   * Uses lookup table for O(1) performance instead of switch statement.
+   *
+   * @param source - ElementSource enum value
+   * @returns Source string
+   */
+  private mapSourceEnumToString(source: ElementSource): 'local' | 'github' | 'collection' {
+    const result = UnifiedIndexManager.SOURCE_ENUM_TO_STRING_MAP.get(source);
+    if (!result) {
+      throw new Error(`Unknown source: ${source}`);
+    }
+    return result;
+  }
+
+  /**
+   * Map source string to ElementSource enum (Issue #1446)
+   *
+   * Uses lookup table for O(1) performance instead of switch statement.
+   *
+   * @param source - Source string
+   * @returns ElementSource enum value
+   */
+  private mapSourceStringToEnum(source: 'local' | 'github' | 'collection'): ElementSource {
+    const result = UnifiedIndexManager.SOURCE_STRING_TO_ENUM_MAP.get(source);
+    if (!result) {
+      throw new Error(`Unknown source: ${source}`);
+    }
+    return result;
+  }
+
   /**
    * Search with fallback strategies for resilient operation
    */
@@ -1842,5 +2339,122 @@ export class UnifiedIndexManager {
       },
       trends: this.performanceMonitor.analyzeTrends()
     };
+  }
+
+  // =====================================================
+  // SOURCE USAGE TELEMETRY (Issue #1446 - Code Review)
+  // =====================================================
+
+  /**
+   * Record source usage telemetry
+   *
+   * Tracks which sources are used, how often, and their performance.
+   * Useful for understanding user patterns and optimizing source priority.
+   *
+   * @param source - Source that was used
+   * @param resultCount - Number of results returned
+   * @param duration - Duration of source search in ms
+   */
+  private recordSourceUsage(source: 'local' | 'github' | 'collection', resultCount: number, duration: number): void {
+    const existing = this.sourceUsageTelemetry.get(source);
+
+    if (existing) {
+      existing.searchCount++;
+      existing.resultCount += resultCount;
+      existing.totalDuration += duration;
+      existing.lastUsed = new Date();
+    } else {
+      this.sourceUsageTelemetry.set(source, {
+        searchCount: 1,
+        resultCount,
+        totalDuration: duration,
+        lastUsed: new Date()
+      });
+    }
+  }
+
+  /**
+   * Get source usage telemetry statistics
+   *
+   * Returns aggregated statistics about source usage patterns.
+   * Can be used to optimize default source priority based on actual usage.
+   *
+   * @returns Source usage statistics
+   */
+  public getSourceUsageTelemetry(): {
+    local: { searchCount: number; resultCount: number; avgDuration: number; avgResults: number; lastUsed: Date | null };
+    github: { searchCount: number; resultCount: number; avgDuration: number; avgResults: number; lastUsed: Date | null };
+    collection: { searchCount: number; resultCount: number; avgDuration: number; avgResults: number; lastUsed: Date | null };
+    totalSearches: number;
+    mostUsedSource: 'local' | 'github' | 'collection';
+    fastestSource: 'local' | 'github' | 'collection';
+  } {
+    const getStats = (source: 'local' | 'github' | 'collection') => {
+      const telemetry = this.sourceUsageTelemetry.get(source);
+      if (!telemetry) {
+        return {
+          searchCount: 0,
+          resultCount: 0,
+          avgDuration: 0,
+          avgResults: 0,
+          lastUsed: null
+        };
+      }
+
+      return {
+        searchCount: telemetry.searchCount,
+        resultCount: telemetry.resultCount,
+        avgDuration: telemetry.totalDuration / telemetry.searchCount,
+        avgResults: telemetry.resultCount / telemetry.searchCount,
+        lastUsed: telemetry.lastUsed
+      };
+    };
+
+    const local = getStats('local');
+    const github = getStats('github');
+    const collection = getStats('collection');
+
+    const totalSearches = local.searchCount + github.searchCount + collection.searchCount;
+
+    // Determine most used source
+    let mostUsedSource: 'local' | 'github' | 'collection' = 'local';
+    let maxSearchCount = local.searchCount;
+    if (github.searchCount > maxSearchCount) {
+      mostUsedSource = 'github';
+      maxSearchCount = github.searchCount;
+    }
+    if (collection.searchCount > maxSearchCount) {
+      mostUsedSource = 'collection';
+    }
+
+    // Determine fastest source (among those with searches)
+    let fastestSource: 'local' | 'github' | 'collection' = 'local';
+    let minAvgDuration = local.searchCount > 0 ? local.avgDuration : Number.POSITIVE_INFINITY;
+    if (github.searchCount > 0 && github.avgDuration < minAvgDuration) {
+      fastestSource = 'github';
+      minAvgDuration = github.avgDuration;
+    }
+    if (collection.searchCount > 0 && collection.avgDuration < minAvgDuration) {
+      fastestSource = 'collection';
+    }
+
+    return {
+      local,
+      github,
+      collection,
+      totalSearches,
+      mostUsedSource,
+      fastestSource
+    };
+  }
+
+  /**
+   * Reset source usage telemetry
+   *
+   * Clears all recorded telemetry data. Useful for testing or resetting statistics.
+   */
+  public resetSourceUsageTelemetry(): void {
+    this.sourceUsageTelemetry.clear();
+    logger.debug('Source usage telemetry reset');
   }
 }

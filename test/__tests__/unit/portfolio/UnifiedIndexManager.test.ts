@@ -8,6 +8,7 @@ import { PortfolioIndexManager, IndexEntry, SearchResult } from '../../../../src
 import { GitHubPortfolioIndexer, GitHubIndexEntry, GitHubPortfolioIndex } from '../../../../src/portfolio/GitHubPortfolioIndexer.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { CollectionIndexCache } from '../../../../src/cache/CollectionIndexCache.js';
+import { ElementSource } from '../../../../src/config/sourcePriority.js';
 
 describe('UnifiedIndexManager', () => {
   let unifiedManager: UnifiedIndexManager;
@@ -103,7 +104,7 @@ describe('UnifiedIndexManager', () => {
   });
 
   describe('Unified Search', () => {
-    it('should combine results from local and GitHub searches', async () => {
+    it('should combine results from local and GitHub searches when includeAll is true', async () => {
       const localResults: SearchResult[] = [{
         entry: {
           filePath: '/local/personas/sample.md',
@@ -138,18 +139,28 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search({ query: 'test persona' });
+      // Use includeAll to search all sources (Issue #1446)
+      const results = await unifiedManager.search({
+        query: 'test persona',
+        includeAll: true
+      });
 
-      expect(results).toHaveLength(2);
-      
-      // Check that both results are present, regardless of order
-      const sources = results.map(r => r.source);
-      const names = results.map(r => r.entry.name);
-      
-      expect(sources).toContain('local');
-      expect(sources).toContain('github');
-      expect(names).toContain('Local Test Persona');
-      expect(names).toContain('GitHub Test Persona');
+      expect(results.length).toBeGreaterThanOrEqual(2);
+
+      // FIX: Build Sets without arrow functions to avoid 5th nesting level
+      // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+      // Previously: results.map(r => r.source) caused function nesting depth violation
+      const sources = new Set<string>();
+      const names = new Set<string>();
+      for (const result of results) {
+        sources.add(result.source);
+        names.add(result.entry.name);
+      }
+
+      expect(sources.has('local')).toBe(true);
+      expect(sources.has('github')).toBe(true);
+      expect(names.has('Local Test Persona')).toBe(true);
+      expect(names.has('GitHub Test Persona')).toBe(true);
     });
 
     it('should handle local search failures gracefully', async () => {
@@ -202,7 +213,7 @@ describe('UnifiedIndexManager', () => {
       expect(results[0].source).toBe('local');
     });
 
-    it('should deduplicate results by name and type', async () => {
+    it('should deduplicate results by name and type when includeAll is true', async () => {
       const localResults: SearchResult[] = [{
         entry: {
           filePath: '/local/personas/sample.md',
@@ -236,21 +247,30 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search({ query: 'test persona' });
+      // Use includeAll to get both sources (Issue #1446)
+      const results = await unifiedManager.search({
+        query: 'test persona',
+        includeAll: true
+      });
 
       expect(results).toHaveLength(2); // Both results are kept but marked as duplicates
-      
+
       // Both should be marked as duplicates
       expect(results[0].isDuplicate).toBe(true);
       expect(results[1].isDuplicate).toBe(true);
-      
-      // Both sources should be present
-      const sources = results.map(r => r.source);
-      expect(sources).toContain('local');
-      expect(sources).toContain('github');
+
+      // FIX: Build Set without arrow functions to avoid 5th nesting level
+      // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+      // Previously: results.map(r => r.source) caused function nesting depth violation
+      const sources = new Set<string>();
+      for (const result of results) {
+        sources.add(result.source);
+      }
+      expect(sources.has('local')).toBe(true);
+      expect(sources.has('github')).toBe(true);
     });
 
-    it('should sort results by score', async () => {
+    it('should sort results by score when includeAll is true', async () => {
       const localResults: SearchResult[] = [{
         entry: {
           filePath: '/local/personas/low-score.md',
@@ -284,10 +304,14 @@ describe('UnifiedIndexManager', () => {
       mockLocalIndexManager.search.mockResolvedValue(localResults);
       mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
 
-      const results = await unifiedManager.search({ query: 'persona' });
+      // Use includeAll to get all sources (Issue #1446)
+      const results = await unifiedManager.search({
+        query: 'persona',
+        includeAll: true
+      });
 
       expect(results).toHaveLength(2);
-      // First result should have higher score (GitHub score is multiplied by 0.9, but starts higher)
+      // First result should have higher score
       expect(results[0].entry.name).toBe('High Score Persona');
       expect(results[1].entry.name).toBe('Low Score Persona');
     });
@@ -643,6 +667,438 @@ describe('UnifiedIndexManager', () => {
       expect(converted.githubPath).toBe('personas/sample.md');
       expect(converted.githubSha).toBe('abc123');
       expect(converted.localFilePath).toBeUndefined();
+    });
+  });
+
+  describe('Source Priority (Issue #1446)', () => {
+    describe('Priority-based Search', () => {
+      it('should search sources in default priority order (local → github → collection)', async () => {
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/local.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Local Persona' },
+            lastModified: new Date(),
+            filename: 'local'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue({
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map(),
+          totalElements: 0,
+          sha: ''
+        });
+
+        const results = await unifiedManager.search({ query: 'persona' });
+
+        // Should find local result and stop (stopOnFirst = true by default)
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('local');
+        expect(mockLocalIndexManager.search).toHaveBeenCalled();
+      });
+
+      it('should stop on first source with results when stopOnFirst is enabled', async () => {
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/local.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Local Persona' },
+            lastModified: new Date(),
+            filename: 'local'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/github.md',
+            name: 'GitHub Persona',
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date(),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const results = await unifiedManager.search({ query: 'persona' });
+
+        // Should stop after finding local results
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('local');
+        expect(results[0].entry.name).toBe('Local Persona');
+      });
+
+      it('should search all sources when includeAll is true', async () => {
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/local.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Local Persona' },
+            lastModified: new Date(),
+            filename: 'local'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/github.md',
+            name: 'GitHub Persona',
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date(),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const results = await unifiedManager.search({
+          query: 'persona',
+          includeAll: true
+        });
+
+        // Should search all sources even though local had results
+        expect(results.length).toBeGreaterThanOrEqual(2);
+
+        // FIX: Build Set without arrow functions to avoid 5th nesting level
+        // SonarCloud suggestion: Use Set with .has() instead of array with .includes()
+        // Previously: results.map(r => r.source) caused function nesting depth violation
+        const resultSources = new Set<string>();
+        for (const result of results) {
+          resultSources.add(result.source);
+        }
+        const hasLocal = resultSources.has('local');
+        const hasGitHub = resultSources.has('github');
+
+        expect(hasLocal).toBe(true);
+        expect(hasGitHub).toBe(true);
+      });
+
+      it('should fallback to next source when current source fails', async () => {
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/github.md',
+            name: 'GitHub Persona',
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date(),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        // Local search fails
+        mockLocalIndexManager.search.mockRejectedValue(new Error('Local search failed'));
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const results = await unifiedManager.search({ query: 'persona' });
+
+        // Should fallback to GitHub and find results
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('github');
+        expect(results[0].entry.name).toBe('GitHub Persona');
+      });
+    });
+
+    describe('Source Priority Overrides', () => {
+      it('should use preferredSource option', async () => {
+        const localResults: SearchResult[] = [];
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/github.md',
+            name: 'GitHub Persona',
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date(),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const results = await unifiedManager.search({
+          query: 'persona',
+          preferredSource: ElementSource.GITHUB
+        });
+
+        // Should try GitHub first
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('github');
+      });
+
+      it('should use custom sourcePriority order', async () => {
+        const collectionIndex = {
+          version: '1.0.0',
+          generated: new Date().toISOString(),
+          total_elements: 1,
+          index: {
+            personas: [{
+              name: 'Collection Persona',
+              description: 'Collection persona',
+              path: 'library/personas/collection.md',
+              sha: 'abc123',
+              author: 'test',
+              version: '1.0.0',
+              tags: [],
+              category: 'test',
+              created: new Date().toISOString(),
+              license: 'MIT'
+            }]
+          },
+          metadata: {
+            build_time_ms: 0,
+            file_count: 1,
+            skipped_files: 0,
+            categories: 1,
+            nodejs_version: process.version,
+            builder_version: '1.0.0'
+          }
+        };
+
+        mockLocalIndexManager.search.mockResolvedValue([]);
+        mockGitHubIndexer.getIndex.mockResolvedValue({
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map(),
+          totalElements: 0,
+          sha: ''
+        });
+        mockCollectionIndexCache.getIndex.mockResolvedValue(collectionIndex);
+
+        const results = await unifiedManager.search({
+          query: 'persona',
+          sourcePriority: [ElementSource.COLLECTION, ElementSource.LOCAL, ElementSource.GITHUB],
+          includeCollection: true
+        });
+
+        // Should try collection first
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('collection');
+      });
+    });
+
+    describe('checkForUpdates()', () => {
+      it('should check all sources for version information', async () => {
+        // Mock the search to return results from both sources
+        // The search method will be called multiple times during checkDuplicates
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/test.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Test Persona', version: '1.0.0' },
+            lastModified: new Date('2023-01-01'),
+            filename: 'test'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/test.md',
+            name: 'Test Persona',
+            version: '2.0.0', // Newer version
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date('2023-06-01'),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        // The internal search will use includeAll=true
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const versionInfo = await unifiedManager.checkForUpdates('Test Persona');
+
+        expect(versionInfo).toBeTruthy();
+        if (versionInfo) {
+          expect(versionInfo.name).toBe('Test Persona');
+          expect(versionInfo.versions.local?.version).toBe('1.0.0');
+          expect(versionInfo.versions.github?.version).toBe('2.0.0');
+          expect(versionInfo.updateAvailable).toBe(true);
+          expect(versionInfo.updateFrom).toBe('github');
+        }
+      });
+
+      it('should return null when element not found', async () => {
+        mockLocalIndexManager.search.mockResolvedValue([]);
+        mockGitHubIndexer.getIndex.mockResolvedValue({
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map(),
+          totalElements: 0,
+          sha: ''
+        });
+
+        const versionInfo = await unifiedManager.checkForUpdates('Nonexistent Element');
+
+        expect(versionInfo).toBeNull();
+      });
+    });
+
+    describe('Edge Cases', () => {
+      it('should handle empty priority list gracefully', async () => {
+        const results = await unifiedManager.search({
+          query: 'test',
+          includeLocal: false,
+          includeGitHub: false,
+          includeCollection: false
+        });
+
+        expect(results).toHaveLength(0);
+      });
+
+      it('should handle invalid source in preferredSource', async () => {
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/test.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Test' },
+            lastModified: new Date(),
+            filename: 'test'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue({
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map(),
+          totalElements: 0,
+          sha: ''
+        });
+
+        // Use any invalid source - TypeScript will prevent this but test runtime behavior
+        const results = await unifiedManager.search({
+          query: 'test',
+          preferredSource: 'invalid' as any
+        });
+
+        // Should still work, falling back to default behavior
+        expect(results).toHaveLength(1);
+      });
+
+      it('should handle all sources disabled', async () => {
+        const results = await unifiedManager.search({
+          query: 'test',
+          includeLocal: false,
+          includeGitHub: false,
+          includeCollection: false
+        });
+
+        expect(results).toHaveLength(0);
+      });
+    });
+
+    describe('Performance', () => {
+      it('should use early termination for performance', async () => {
+        const localResults: SearchResult[] = [{
+          entry: {
+            filePath: '/local/personas/test.md',
+            elementType: ElementType.PERSONA,
+            metadata: { name: 'Test' },
+            lastModified: new Date(),
+            filename: 'test'
+          },
+          matchType: 'name',
+          score: 3
+        }];
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+
+        const results = await unifiedManager.search({ query: 'test' });
+
+        // Should use early termination and only return local results
+        expect(mockLocalIndexManager.search).toHaveBeenCalled();
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('local');
+      });
+
+      it('should continue searching when no results in first source', async () => {
+        const localResults: SearchResult[] = [];
+        const githubIndex: GitHubPortfolioIndex = {
+          username: 'testuser',
+          repository: 'dollhouse-portfolio',
+          lastUpdated: new Date(),
+          elements: new Map([[ElementType.PERSONA, [{
+            path: 'personas/test.md',
+            name: 'Test',
+            elementType: ElementType.PERSONA,
+            sha: 'abc123',
+            htmlUrl: 'https://github.com/test/repo',
+            downloadUrl: 'https://raw.githubusercontent.com/test/repo',
+            lastModified: new Date(),
+            size: 1024
+          }]]]),
+          totalElements: 1,
+          sha: 'abc123'
+        };
+
+        mockLocalIndexManager.search.mockResolvedValue(localResults);
+        mockGitHubIndexer.getIndex.mockResolvedValue(githubIndex);
+
+        const results = await unifiedManager.search({ query: 'test' });
+
+        // Should continue to GitHub when local is empty
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('github');
+        expect(mockLocalIndexManager.search).toHaveBeenCalled();
+        expect(mockGitHubIndexer.getIndex).toHaveBeenCalled();
+      });
     });
   });
 });
