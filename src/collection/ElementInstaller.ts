@@ -127,6 +127,7 @@ export class ElementInstaller {
    *   { preferredSource: ElementSource.COLLECTION });
    *
    * REFACTORED: Reduced cognitive complexity by extracting helper methods
+   * ENHANCEMENT (PR #1453): Added input validation for elementName
    */
   async installElement(
     elementName: string,
@@ -134,6 +135,17 @@ export class ElementInstaller {
     collectionPath: string,
     options: InstallOptions = {}
   ): Promise<InstallResult> {
+    // ENHANCEMENT: Validate elementName is not empty/null before processing
+    // This prevents errors during filename generation and provides clear feedback
+    if (!elementName || elementName.trim().length === 0) {
+      throw new Error(
+        'Invalid element name: Element name cannot be empty.\n\n' +
+        'Suggestions:\n' +
+        '  • Provide a valid element name (e.g., "creative-writer", "code-review-skill")\n' +
+        '  • Check that the element name parameter is being passed correctly'
+      );
+    }
+
     const {
       preferredSource,
       force = false,
@@ -260,6 +272,8 @@ export class ElementInstaller {
    * Try installing from a single source with error handling
    * Extracted from trySourcesInOrder() to reduce cognitive complexity
    *
+   * ENHANCEMENT (PR #1453): Added detailed error context and retry suggestions
+   *
    * @param source - Source to try
    * @param elementName - Name of element
    * @param elementType - Type of element
@@ -287,10 +301,10 @@ export class ElementInstaller {
       const err = error instanceof Error ? error : new Error(String(error));
 
       if (!fallbackOnError) {
-        // Don't try other sources, fail immediately
-        throw new Error(
-          `Installation from ${getSourceDisplayName(source)} failed: ${err.message}`
-        );
+        // Don't try other sources, fail immediately with helpful context
+        // ENHANCEMENT: Include source context and retry suggestions
+        const errorMessage = this.formatInstallationError(source, elementName, err);
+        throw new Error(errorMessage);
       }
 
       return {
@@ -302,22 +316,82 @@ export class ElementInstaller {
   }
 
   /**
+   * Format detailed error message with context and retry suggestions
+   * ENHANCEMENT (PR #1453): Provides helpful guidance to users when installation fails
+   *
+   * @param source - Source that failed
+   * @param elementName - Name of element
+   * @param error - Original error
+   * @returns Formatted error message with suggestions
+   * @private
+   */
+  private formatInstallationError(
+    source: ElementSource,
+    elementName: string,
+    error: Error
+  ): string {
+    const sourceName = getSourceDisplayName(source);
+    let message = `Installation from ${sourceName} failed: ${error.message}`;
+
+    // Add helpful suggestions based on the source that failed
+    const suggestions: string[] = [];
+
+    switch (source) {
+      case ElementSource.LOCAL:
+        suggestions.push('Element not found in local portfolio');
+        suggestions.push('Try: force=true to reinstall, or check element name spelling');
+        break;
+
+      case ElementSource.GITHUB:
+        suggestions.push('Element not found in GitHub portfolio or connection failed');
+        suggestions.push('Try: Check GitHub authentication, verify element exists in portfolio');
+        suggestions.push('Consider: preferredSource=\'collection\' to install from community collection');
+        break;
+
+      case ElementSource.COLLECTION:
+        suggestions.push('Element not found in community collection or download failed');
+        suggestions.push('Try: Check element name and path, verify network connection');
+        suggestions.push('Consider: Search collection first to verify element exists');
+        break;
+    }
+
+    if (suggestions.length > 0) {
+      message += '\n\nSuggestions:\n' + suggestions.map(s => `  • ${s}`).join('\n');
+    }
+
+    return message;
+  }
+
+  /**
    * Create comprehensive error for when all sources fail
    * Extracted to reduce cognitive complexity
    *
+   * ENHANCEMENT (PR #1453): Added retry suggestions when all sources fail
+   *
    * @param errors - Array of errors from each source
-   * @returns Error with formatted summary
+   * @returns Error with formatted summary and suggestions
    * @private
    */
   private createAllSourcesFailedError(
     errors: Array<{ source: ElementSource; error: Error }>
   ): Error {
     const errorSummary = errors
-      .map(({ source, error }) => `${getSourceDisplayName(source)}: ${error.message}`)
+      .map(({ source, error }) => `  • ${getSourceDisplayName(source)}: ${error.message}`)
       .join('\n');
 
+    // ENHANCEMENT: Provide helpful next steps when all sources fail
+    const suggestions = [
+      'Verify the element name is correct',
+      'Check network connectivity',
+      'Try with preferredSource option to target specific source',
+      'Search the collection first to confirm the element exists',
+      'Check GitHub authentication if trying to install from portfolio'
+    ];
+
+    const suggestionText = suggestions.map(s => `  • ${s}`).join('\n');
+
     return new Error(
-      `Failed to install element from all sources:\n${errorSummary}`
+      `Failed to install element from all sources:\n\n${errorSummary}\n\nSuggestions:\n${suggestionText}`
     );
   }
 
@@ -405,6 +479,8 @@ export class ElementInstaller {
    *
    * Fetches element from user's GitHub dollhouse-portfolio repository.
    *
+   * ENHANCEMENT (PR #1453): Added elementName validation before filename generation
+   *
    * @param elementName - Name of element to install
    * @param elementType - Type of element
    * @returns InstallResult
@@ -415,6 +491,12 @@ export class ElementInstaller {
     elementType: ElementType
   ): Promise<InstallResult> {
     try {
+      // ENHANCEMENT: Validate elementName before using it for filename generation
+      // This should never be hit due to validation in installElement(), but provides defense in depth
+      if (!elementName || elementName.trim().length === 0) {
+        throw new Error('Element name cannot be empty');
+      }
+
       // Search GitHub portfolio for the element
       const results = await this.unifiedIndexManager.search({
         query: elementName,
@@ -478,7 +560,7 @@ export class ElementInstaller {
         throw new Error('Invalid content: missing required name or description');
       }
 
-      // Generate filename
+      // Generate filename (elementName already validated above)
       const filename = validateFilename(`${elementName}.md`);
       const elementDir = this.portfolioManager.getElementDir(elementType);
       const localPath = path.join(elementDir, filename);
