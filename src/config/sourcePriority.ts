@@ -141,18 +141,9 @@ export const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
  * }
  */
 export function getSourcePriorityConfig(): SourcePriorityConfig {
-  // Try to load from ConfigManager if initialized
-  try {
-    // Lazy import using dynamic import (ESM-compatible)
-    // Note: This is synchronous code but we can't use await here
-    // So we'll need to handle this differently or accept that config loading happens
-    // at startup before this is called
-    // For now, environment variable and defaults only
-  } catch (error) {
-    // ConfigManager not available or not initialized, fall through to defaults
-    // This is expected during initialization phase, no action needed
-    console.debug('ConfigManager not yet available, using environment or default configuration');
-  }
+  // Note: ConfigManager integration for source priority loading would require async support
+  // For now, we rely on environment variables and defaults
+  // Future enhancement: Add async getSourcePriorityConfigAsync() that can load from ConfigManager
 
   // Environment variable support for testing
   if (process.env.SOURCE_PRIORITY) {

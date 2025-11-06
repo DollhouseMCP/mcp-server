@@ -381,6 +381,17 @@ Customize how DollhouseMCP shows information.
     // Apply friendly replacements
     replaceFriendlyValue(friendly);
 
+    // Apply legacy manual replacements and defaults
+    this.applyLegacyReplacements(friendly);
+
+    return friendly;
+  }
+
+  /**
+   * Apply legacy manual replacements for backward compatibility
+   * Extracted to reduce cognitive complexity
+   */
+  private applyLegacyReplacements(friendly: any): void {
     // Legacy manual replacements for backward compatibility
     // (These will be removed once we fully migrate to template system)
     if (friendly.sync) {
@@ -414,8 +425,6 @@ Customize how DollhouseMCP shows information.
     if (friendly.wizard) {
       friendly.wizard._status = this.getWizardStatusMessage(friendly.wizard);
     }
-
-    return friendly;
   }
 
   /**
