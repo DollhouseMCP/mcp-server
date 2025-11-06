@@ -10,7 +10,9 @@ import {
   DEFAULT_SOURCE_PRIORITY,
   getSourcePriorityConfig,
   validateSourcePriority,
-  getSourceDisplayName
+  getSourceDisplayName,
+  parseSourcePriorityOrder,
+  saveSourcePriorityConfig
 } from '../../../../src/config/sourcePriority.js';
 
 describe('sourcePriority', () => {
@@ -578,6 +580,132 @@ describe('sourcePriority', () => {
       for (const result of results) {
         expect(result).toEqual(first);
       }
+    });
+  });
+
+  describe('parseSourcePriorityOrder', () => {
+    it('should parse array of string source names', () => {
+      const input = ['local', 'github', 'collection'];
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([
+        ElementSource.LOCAL,
+        ElementSource.GITHUB,
+        ElementSource.COLLECTION
+      ]);
+    });
+
+    it('should parse JSON string array', () => {
+      const input = '["github", "local", "collection"]';
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([
+        ElementSource.GITHUB,
+        ElementSource.LOCAL,
+        ElementSource.COLLECTION
+      ]);
+    });
+
+    it('should parse array of ElementSource values', () => {
+      const input = [ElementSource.LOCAL, ElementSource.GITHUB];
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([ElementSource.LOCAL, ElementSource.GITHUB]);
+    });
+
+    it('should handle mixed case source names', () => {
+      const input = ['LOCAL', 'GitHub', 'COLLECTION'];
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([
+        ElementSource.LOCAL,
+        ElementSource.GITHUB,
+        ElementSource.COLLECTION
+      ]);
+    });
+
+    it('should throw error for invalid JSON string', () => {
+      const input = 'not valid json';
+      expect(() => parseSourcePriorityOrder(input)).toThrow('Invalid JSON');
+    });
+
+    it('should throw error for non-array input (non-JSON string)', () => {
+      const input = 'local';
+      // Single word strings will try JSON.parse which will fail
+      expect(() => parseSourcePriorityOrder(input)).toThrow('Invalid JSON');
+    });
+
+    it('should throw error for unknown source', () => {
+      const input = ['local', 'unknown', 'github'];
+      expect(() => parseSourcePriorityOrder(input)).toThrow('Unknown source: unknown');
+    });
+
+    it('should throw error for invalid source value', () => {
+      const input = ['local', 123, 'github'];
+      expect(() => parseSourcePriorityOrder(input)).toThrow('Invalid source value');
+    });
+
+    it('should handle empty array', () => {
+      const input: string[] = [];
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([]);
+    });
+
+    it('should handle partial source list', () => {
+      const input = ['github', 'local'];
+      const result = parseSourcePriorityOrder(input);
+      expect(result).toEqual([ElementSource.GITHUB, ElementSource.LOCAL]);
+    });
+  });
+
+  describe('saveSourcePriorityConfig', () => {
+    // Note: These tests verify the validation and error handling.
+    // Actual persistence is tested through integration tests.
+
+    it('should throw error for invalid configuration', async () => {
+      const invalidConfig: SourcePriorityConfig = {
+        priority: [ElementSource.LOCAL, ElementSource.LOCAL], // Duplicate
+        stopOnFirst: true,
+        checkAllForUpdates: false,
+        fallbackOnError: true
+      };
+
+      await expect(saveSourcePriorityConfig(invalidConfig))
+        .rejects
+        .toThrow('Invalid source priority configuration');
+    });
+
+    it('should throw error for empty priority list', async () => {
+      const invalidConfig: SourcePriorityConfig = {
+        priority: [],
+        stopOnFirst: true,
+        checkAllForUpdates: false,
+        fallbackOnError: true
+      };
+
+      await expect(saveSourcePriorityConfig(invalidConfig))
+        .rejects
+        .toThrow('Priority list cannot be empty');
+    });
+
+    it('should accept valid configuration', async () => {
+      const validConfig: SourcePriorityConfig = {
+        priority: [ElementSource.GITHUB, ElementSource.LOCAL, ElementSource.COLLECTION],
+        stopOnFirst: false,
+        checkAllForUpdates: true,
+        fallbackOnError: true
+      };
+
+      // Should not throw
+      await expect(saveSourcePriorityConfig(validConfig)).resolves.not.toThrow();
+    });
+
+    it('should accept minimal valid configuration', async () => {
+      const validConfig: SourcePriorityConfig = {
+        priority: [ElementSource.LOCAL],
+        stopOnFirst: true,
+        checkAllForUpdates: false,
+        fallbackOnError: false
+      };
+
+      // Should not throw
+      await expect(saveSourcePriorityConfig(validConfig)).resolves.not.toThrow();
     });
   });
 });

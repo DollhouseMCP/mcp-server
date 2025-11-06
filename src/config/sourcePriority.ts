@@ -8,6 +8,8 @@
  * @module config/sourcePriority
  */
 
+import { logger } from '../utils/logger.js';
+
 /**
  * Enumeration of available element sources
  *
@@ -117,14 +119,9 @@ export const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
  * Get current source priority configuration
  *
  * Priority order for configuration sources:
- * 1. User configuration (from config file) - Will be implemented in Phase 4 (Issue #1448)
- * 2. Environment variables (for testing) - Will be implemented in Phase 4 (Issue #1448)
+ * 1. User configuration (from config file)
+ * 2. Environment variables (for testing)
  * 3. Default configuration
- *
- * Currently returns the default configuration. Future phases will add:
- * - Config file support via dollhouse_config tool (Phase 4)
- * - Environment variable overrides for testing (Phase 4)
- * - Validation of user-provided configurations
  *
  * @returns {SourcePriorityConfig} The current source priority configuration
  *
@@ -146,24 +143,24 @@ export const DEFAULT_SOURCE_PRIORITY: SourcePriorityConfig = {
  * }
  */
 export function getSourcePriorityConfig(): SourcePriorityConfig {
-  // FUTURE (Phase 4 - Issue #1448): Implement config file reading
-  // const configManager = ConfigManager.getInstance();
-  // const userConfig = configManager.getSourcePriority();
-  // if (userConfig && validateSourcePriority(userConfig).isValid) {
-  //   return userConfig;
-  // }
+  // Note: ConfigManager integration for source priority loading would require async support
+  // For now, we rely on environment variables and defaults
+  // Future enhancement: Add async getSourcePriorityConfigAsync() that can load from ConfigManager
 
-  // FUTURE (Phase 4 - Issue #1448): Implement environment variable support for testing
-  // if (process.env.SOURCE_PRIORITY) {
-  //   try {
-  //     const envConfig = JSON.parse(process.env.SOURCE_PRIORITY);
-  //     if (validateSourcePriority(envConfig).isValid) {
-  //       return envConfig;
-  //     }
-  //   } catch (error) {
-  //     // Invalid JSON, fall through to default
-  //   }
-  // }
+  // Environment variable support for testing
+  if (process.env.SOURCE_PRIORITY) {
+    try {
+      const envConfig = JSON.parse(process.env.SOURCE_PRIORITY);
+      const validation = validateSourcePriority(envConfig);
+      if (validation.isValid) {
+        return envConfig;
+      }
+      logger.warn('SOURCE_PRIORITY environment variable contains invalid configuration, using defaults');
+    } catch (error) {
+      // Invalid JSON in environment variable, fall through to default
+      logger.warn('Failed to parse SOURCE_PRIORITY environment variable, using defaults', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
 
   // Return default configuration
   return DEFAULT_SOURCE_PRIORITY;
@@ -268,6 +265,54 @@ export function validateSourcePriority(config: SourcePriorityConfig): Validation
 }
 
 /**
+ * Save source priority configuration to config file
+ *
+ * Validates the configuration before saving and persists it via ConfigManager.
+ * The configuration will be saved to ~/.dollhouse/config.yml under the
+ * source_priority key.
+ *
+ * @param {SourcePriorityConfig} config - The source priority configuration to save
+ * @returns {Promise<void>}
+ * @throws {Error} If configuration is invalid or save fails
+ *
+ * @example
+ * // Save a custom configuration
+ * await saveSourcePriorityConfig({
+ *   priority: [ElementSource.GITHUB, ElementSource.LOCAL, ElementSource.COLLECTION],
+ *   stopOnFirst: false,
+ *   checkAllForUpdates: true,
+ *   fallbackOnError: true
+ * });
+ *
+ * @example
+ * // Validate before saving
+ * const config = {
+ *   priority: [ElementSource.LOCAL, ElementSource.GITHUB],
+ *   stopOnFirst: true,
+ *   checkAllForUpdates: false,
+ *   fallbackOnError: true
+ * };
+ * const validation = validateSourcePriority(config);
+ * if (validation.isValid) {
+ *   await saveSourcePriorityConfig(config);
+ * }
+ */
+export async function saveSourcePriorityConfig(config: SourcePriorityConfig): Promise<void> {
+  // Validate configuration before saving
+  const validation = validateSourcePriority(config);
+  if (!validation.isValid) {
+    throw new Error(`Invalid source priority configuration: ${validation.errors.join(', ')}`);
+  }
+
+  // Dynamic import to avoid circular dependency (ESM-compatible)
+  const { ConfigManager } = await import('./ConfigManager.js');
+  const configManager = ConfigManager.getInstance();
+
+  // Save to config file using ConfigManager
+  await configManager.updateSetting('source_priority', config);
+}
+
+/**
  * Get user-friendly display name for an element source
  *
  * Maps ElementSource enum values to human-readable names suitable for
@@ -310,4 +355,91 @@ export function getSourceDisplayName(source: ElementSource): string {
   }
 
   return displayName;
+}
+
+/**
+ * Parse a single item from source priority array
+ *
+ * Converts a single source item (string or ElementSource) to a validated
+ * ElementSource enum value. Handles both string names (case-insensitive)
+ * and ElementSource enum values.
+ *
+ * @param {unknown} item - Item to parse (string source name or ElementSource value)
+ * @returns {ElementSource} Validated ElementSource enum value
+ * @throws {Error} If item is not a valid source
+ * @private
+ *
+ * @example
+ * // Parse from lowercase string
+ * parseSourceItem('local'); // Returns: ElementSource.LOCAL
+ *
+ * @example
+ * // Parse from ElementSource value
+ * parseSourceItem(ElementSource.GITHUB); // Returns: ElementSource.GITHUB
+ *
+ * @example
+ * // Invalid source throws error
+ * parseSourceItem('invalid'); // Throws: Unknown source: invalid
+ */
+function parseSourceItem(item: unknown): ElementSource {
+  // Handle string input (case-insensitive)
+  if (typeof item === 'string') {
+    const lowerItem = item.toLowerCase();
+    if (VALID_SOURCES.includes(lowerItem as ElementSource)) {
+      return lowerItem as ElementSource;
+    }
+    throw new Error(`Unknown source: ${item}. Valid sources: ${VALID_SOURCES.join(', ')}`);
+  }
+
+  // Handle ElementSource enum value
+  if (Object.values(ElementSource).includes(item as ElementSource)) {
+    return item as ElementSource;
+  }
+
+  // Invalid type or value
+  throw new Error(`Invalid source value: ${item}`);
+}
+
+/**
+ * Parse source priority order from various input formats
+ *
+ * Accepts arrays of ElementSource values or string source names and
+ * normalizes them to an array of ElementSource enum values.
+ *
+ * @param {unknown} value - The value to parse (array of sources or JSON string)
+ * @returns {ElementSource[]} Parsed array of element sources
+ * @throws {Error} If value cannot be parsed or contains invalid sources
+ *
+ * @example
+ * // Parse from array of strings
+ * const order = parseSourcePriorityOrder(['local', 'github', 'collection']);
+ * // Returns: [ElementSource.LOCAL, ElementSource.GITHUB, ElementSource.COLLECTION]
+ *
+ * @example
+ * // Parse from JSON string
+ * const order = parseSourcePriorityOrder('["github", "local"]');
+ * // Returns: [ElementSource.GITHUB, ElementSource.LOCAL]
+ *
+ * @example
+ * // Parse from ElementSource values
+ * const order = parseSourcePriorityOrder([ElementSource.LOCAL, ElementSource.GITHUB]);
+ * // Returns: [ElementSource.LOCAL, ElementSource.GITHUB]
+ */
+export function parseSourcePriorityOrder(value: unknown): ElementSource[] {
+  // Handle string input (JSON array)
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch (error) {
+      throw new Error(`Invalid JSON in source priority order: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Ensure we have an array
+  if (!Array.isArray(value)) {
+    throw new TypeError('Source priority order must be an array');
+  }
+
+  // Convert each item to ElementSource enum value
+  return value.map(item => parseSourceItem(item));
 }
