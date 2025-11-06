@@ -3,7 +3,7 @@
  * Tests the element source priority configuration functionality
  */
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect } from '@jest/globals';
 import {
   ElementSource,
   SourcePriorityConfig,

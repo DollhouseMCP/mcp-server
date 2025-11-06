@@ -150,6 +150,8 @@ export function getSourcePriorityConfig(): SourcePriorityConfig {
     // For now, environment variable and defaults only
   } catch (error) {
     // ConfigManager not available or not initialized, fall through to defaults
+    // This is expected during initialization phase, no action needed
+    console.debug('ConfigManager not yet available, using environment or default configuration');
   }
 
   // Environment variable support for testing
@@ -160,8 +162,10 @@ export function getSourcePriorityConfig(): SourcePriorityConfig {
       if (validation.isValid) {
         return envConfig;
       }
+      console.warn('SOURCE_PRIORITY environment variable contains invalid configuration, using defaults');
     } catch (error) {
-      // Invalid JSON, fall through to default
+      // Invalid JSON in environment variable, fall through to default
+      console.warn('Failed to parse SOURCE_PRIORITY environment variable, using defaults:', error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -397,7 +401,7 @@ export function parseSourcePriorityOrder(value: unknown): ElementSource[] {
 
   // Ensure we have an array
   if (!Array.isArray(value)) {
-    throw new Error('Source priority order must be an array');
+    throw new TypeError('Source priority order must be an array');
   }
 
   // Convert string values to ElementSource enum values

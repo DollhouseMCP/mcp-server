@@ -12,7 +12,6 @@ import {
   validateSourcePriority,
   parseSourcePriorityOrder,
   getSourceDisplayName,
-  ElementSource,
   DEFAULT_SOURCE_PRIORITY,
   type SourcePriorityConfig
 } from '../config/sourcePriority.js';
@@ -365,12 +364,12 @@ Customize how DollhouseMCP shows information.
    */
   private makeFriendlyConfig(config: any): any {
     const friendly = JSON.parse(JSON.stringify(config)); // Deep clone
-    
+
     // Helper function to replace null values with friendly messages
     const replaceFriendlyValue = (obj: any, path: string = '') => {
       for (const key in obj) {
         const currentPath = path ? `${path}.${key}` : key;
-        
+
         if (obj[key] === null) {
           obj[key] = getFriendlyNullValue(currentPath);
         } else if (typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
@@ -378,10 +377,10 @@ Customize how DollhouseMCP shows information.
         }
       }
     };
-    
+
     // Apply friendly replacements
     replaceFriendlyValue(friendly);
-    
+
     // Legacy manual replacements for backward compatibility
     // (These will be removed once we fully migrate to template system)
     if (friendly.sync) {
@@ -392,7 +391,7 @@ Customize how DollhouseMCP shows information.
         friendly.sync.remote_url = "(no remote repository)";
       }
     }
-    
+
     // Display settings
     if (friendly.display) {
       // These are typically booleans, but handle nulls just in case
@@ -400,7 +399,7 @@ Customize how DollhouseMCP shows information.
         friendly.display.show_persona_indicator = true; // Default value
       }
     }
-    
+
     // Collection settings
     if (friendly.collection) {
       if (friendly.collection.auto_submit === null) {
@@ -410,19 +409,30 @@ Customize how DollhouseMCP shows information.
         friendly.collection.last_cache_update = "(cache not initialized)";
       }
     }
-    
+
     // Wizard settings - show friendly status
     if (friendly.wizard) {
-      if (friendly.wizard.completed === false && friendly.wizard.dismissed === false) {
-        friendly.wizard._status = "⏳ Ready to run (not completed)";
-      } else if (friendly.wizard.completed === true) {
-        friendly.wizard._status = "✅ Completed";
-      } else if (friendly.wizard.dismissed === true) {
-        friendly.wizard._status = "⏭️ Dismissed";
-      }
+      friendly.wizard._status = this.getWizardStatusMessage(friendly.wizard);
     }
-    
+
     return friendly;
+  }
+
+  /**
+   * Get friendly status message for wizard configuration
+   * Extracted to reduce cognitive complexity
+   */
+  private getWizardStatusMessage(wizard: any): string {
+    if (wizard.completed === false && wizard.dismissed === false) {
+      return "⏳ Ready to run (not completed)";
+    }
+    if (wizard.completed === true) {
+      return "✅ Completed";
+    }
+    if (wizard.dismissed === true) {
+      return "⏭️ Dismissed";
+    }
+    return "";
   }
 
   /**
@@ -484,11 +494,12 @@ To change settings, use:
         // Validate before saving
         const validation = validateSourcePriority(newConfig);
         if (!validation.isValid) {
+          const errorList = validation.errors.map(e => `- ${e}`).join('\n');
           return {
             content: [{
               type: "text",
               text: `${indicator}❌ **Invalid Source Priority Configuration**\n\n` +
-                    `Errors:\n${validation.errors.map(e => `- ${e}`).join('\n')}\n\n` +
+                    `Errors:\n${errorList}\n\n` +
                     `Valid sources: local, github, collection\n` +
                     `Example: ["local", "github", "collection"]`
             }]

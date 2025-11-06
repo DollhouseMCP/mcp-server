@@ -278,7 +278,7 @@ describe('ConfigHandler - Source Priority', () => {
 
     it('should convert string "true" to boolean', async () => {
       // Act
-      const result = await configHandler.handleConfigOperation({
+      await configHandler.handleConfigOperation({
         action: 'set',
         setting: 'source_priority.stop_on_first',
         value: 'true'
@@ -292,7 +292,7 @@ describe('ConfigHandler - Source Priority', () => {
 
     it('should convert string "false" to boolean', async () => {
       // Act
-      const result = await configHandler.handleConfigOperation({
+      await configHandler.handleConfigOperation({
         action: 'set',
         setting: 'source_priority.stop_on_first',
         value: 'false'
@@ -445,7 +445,7 @@ describe('ConfigHandler - Source Priority', () => {
   describe('camelCase vs snake_case Settings', () => {
     it('should handle stopOnFirst (camelCase)', async () => {
       // Act
-      const result = await configHandler.handleConfigOperation({
+      await configHandler.handleConfigOperation({
         action: 'set',
         setting: 'source_priority.stopOnFirst',
         value: true
@@ -459,7 +459,7 @@ describe('ConfigHandler - Source Priority', () => {
 
     it('should handle checkAllForUpdates (camelCase)', async () => {
       // Act
-      const result = await configHandler.handleConfigOperation({
+      await configHandler.handleConfigOperation({
         action: 'set',
         setting: 'source_priority.checkAllForUpdates',
         value: true
@@ -473,7 +473,7 @@ describe('ConfigHandler - Source Priority', () => {
 
     it('should handle fallbackOnError (camelCase)', async () => {
       // Act
-      const result = await configHandler.handleConfigOperation({
+      await configHandler.handleConfigOperation({
         action: 'set',
         setting: 'source_priority.fallbackOnError',
         value: false
