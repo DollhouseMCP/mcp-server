@@ -24,6 +24,7 @@ import { PerformanceMonitor, SearchMetrics } from '../utils/PerformanceMonitor.j
 import { IndexEntry as CollectionIndexEntry, CollectionIndex } from '../types/collection.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { getSourcePriorityConfig, SourcePriorityConfig, ElementSource, getSourceDisplayName } from '../config/sourcePriority.js';
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -38,6 +39,11 @@ export interface UnifiedSearchOptions {
   cursor?: string; // For pagination cursor
   maxResults?: number; // Hard limit on results
   lazyLoad?: boolean; // Enable lazy loading
+
+  // Source priority options (Issue #1446)
+  includeAll?: boolean; // Force search all sources (ignore stopOnFirst)
+  preferredSource?: ElementSource; // Try specific source first
+  sourcePriority?: ElementSource[]; // Override default priority order
 }
 
 export interface VersionConflict {
@@ -167,29 +173,35 @@ export interface UnifiedIndexStats {
 
 export class UnifiedIndexManager {
   private static instance: UnifiedIndexManager | null = null;
-  
+
   private localIndexManager: PortfolioIndexManager;
   private githubIndexer: GitHubPortfolioIndexer;
   private collectionIndexCache: CollectionIndexCache;
   private githubClient: GitHubClient;
-  
+
   // Performance monitoring and caching
   private performanceMonitor: PerformanceMonitor;
   private resultCache: LRUCache<UnifiedSearchResult[]>;
   private indexCache: LRUCache<any>;
   private readonly BATCH_SIZE = 50; // For streaming results
   private readonly MAX_CONCURRENT_SOURCES = 3;
+
+  // Source priority configuration (Issue #1446)
+  private sourcePriorityConfig: SourcePriorityConfig;
   
   private constructor() {
     this.localIndexManager = PortfolioIndexManager.getInstance();
     this.githubIndexer = GitHubPortfolioIndexer.getInstance();
-    
+
     // Initialize GitHubClient with required dependencies
     const apiCache = new APICache();
     const rateLimitTracker = new Map<string, number[]>();
     this.githubClient = new GitHubClient(apiCache, rateLimitTracker);
     this.collectionIndexCache = new CollectionIndexCache(this.githubClient);
-    
+
+    // Initialize source priority configuration (Issue #1446)
+    this.sourcePriorityConfig = getSourcePriorityConfig();
+
     // Initialize performance monitoring and caching
     this.performanceMonitor = PerformanceMonitor.getInstance();
     this.performanceMonitor.startMonitoring();
@@ -280,38 +292,64 @@ export class UnifiedIndexManager {
         return await this.streamSearch(normalizedSearchOptions);
       }
       
-      // Lazy loading: Only load indices when needed
-      const searchPromises: Promise<UnifiedSearchResult[]>[] = [];
-      const enabledSources = this.getEnabledSources(normalizedSearchOptions);
-      
-      // Limit concurrent source searches for memory efficiency
-      const concurrentLimit = Math.min(this.MAX_CONCURRENT_SOURCES, enabledSources.length);
-      const sourceBatches = this.batchSources(enabledSources, concurrentLimit);
-      
+      // PRIORITY-BASED SEARCH (Issue #1446)
+      // Replace parallel search with sequential priority-based search
       const allResults: UnifiedSearchResult[] = [];
       const sourceCount = { local: 0, github: 0, collection: 0 };
-      
-      // Process sources in batches to control memory usage
-      for (const batch of sourceBatches) {
-        const batchPromises = batch.map(source => 
-          this.searchWithFallback(source as 'local' | 'github' | 'collection', normalizedQuery, normalizedSearchOptions)
-        );
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach((result, index) => {
-          const sourceName = batch[index] as 'local' | 'github' | 'collection';
-          if (result.status === 'fulfilled') {
-            sourceCount[sourceName] += result.value.length;
-            allResults.push(...result.value);
-          } else {
-            logger.warn(`Search failed for source ${sourceName}`, {
-              error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+
+      // Get enabled sources in priority order
+      const enabledSources = this.getEnabledSourcesByPriority(normalizedSearchOptions);
+
+      // Determine if we should stop on first result
+      const stopOnFirst = normalizedSearchOptions.includeAll
+        ? false
+        : this.sourcePriorityConfig.stopOnFirst;
+
+      // Search sources sequentially in priority order
+      for (const source of enabledSources) {
+        try {
+          const sourceResults = await this.searchWithFallback(
+            source,
+            normalizedQuery,
+            normalizedSearchOptions
+          );
+
+          if (sourceResults.length > 0) {
+            sourceCount[source] += sourceResults.length;
+            allResults.push(...sourceResults);
+
+            logger.debug(`Found ${sourceResults.length} results in ${getSourceDisplayName(this.mapSourceStringToEnum(source))}`, {
+              source,
+              resultCount: sourceResults.length
             });
+
+            // Early termination if stopOnFirst is enabled and we found results
+            if (stopOnFirst && allResults.length > 0) {
+              logger.debug('Stopping search early (stopOnFirst enabled)', {
+                source,
+                totalResults: allResults.length
+              });
+              break;
+            }
           }
-        });
-        
-        // Memory check between batches
+        } catch (error) {
+          const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
+
+          if (shouldFallback) {
+            logger.warn(`Search failed for source ${source}, continuing to next source`, {
+              error: error instanceof Error ? error.message : String(error),
+              source
+            });
+          } else {
+            logger.error(`Search failed for source ${source}, halting search`, {
+              error: error instanceof Error ? error.message : String(error),
+              source
+            });
+            throw error;
+          }
+        }
+
+        // Memory check between sources
         const currentMemory = process.memoryUsage().heapUsed / (1024 * 1024);
         if (currentMemory > 200) { // 200MB threshold
           logger.warn('High memory usage during search, triggering cleanup', {
@@ -420,14 +458,16 @@ export class UnifiedIndexManager {
   /**
    * Check for duplicates across all sources
    */
-  public async checkDuplicates(name: string): Promise<DuplicateInfo[]> {
+  public async checkDuplicates(name: string, options?: Partial<UnifiedSearchOptions>): Promise<DuplicateInfo[]> {
     try {
       const searchOptions: UnifiedSearchOptions = {
         query: name,
         includeLocal: true,
         includeGitHub: true,
         includeCollection: true,
-        pageSize: 100
+        includeAll: true, // Force search all sources to detect duplicates (Issue #1446)
+        pageSize: 100,
+        ...options
       };
       
       const results = await this.search(searchOptions);
@@ -589,6 +629,59 @@ export class UnifiedIndexManager {
   }
 
   /**
+   * Check for updates across all sources (Issue #1446)
+   *
+   * Searches all enabled sources to find version information and detect updates,
+   * ignoring the stopOnFirst setting to ensure all sources are checked.
+   *
+   * @param name - Element name to check for updates
+   * @param options - Optional search options
+   * @returns Version information across all sources, or null if not found
+   *
+   * @example
+   * // Check for updates to a persona
+   * const versionInfo = await unifiedManager.checkForUpdates('Creative Writer');
+   * if (versionInfo && versionInfo.updateAvailable) {
+   *   console.log(`Update available from ${versionInfo.updateFrom}: ${versionInfo.recommended.reason}`);
+   * }
+   */
+  public async checkForUpdates(name: string, options: Partial<UnifiedSearchOptions> = {}): Promise<VersionInfo | null> {
+    try {
+      logger.debug('Checking for updates across all sources', { name });
+
+      // Force check all sources by setting includeAll
+      const searchOptions: UnifiedSearchOptions = {
+        query: name,
+        includeLocal: options.includeLocal ?? true,
+        includeGitHub: options.includeGitHub ?? true,
+        includeCollection: options.includeCollection ?? true,
+        includeAll: true, // Force search all sources
+        pageSize: 100,
+        ...options
+      };
+
+      // Get version comparison (which internally uses includeAll)
+      const versionInfo = await this.getVersionComparison(name);
+
+      if (versionInfo) {
+        logger.debug('Update check completed', {
+          name,
+          updateAvailable: versionInfo.updateAvailable,
+          recommendedSource: versionInfo.recommended.source
+        });
+      } else {
+        logger.debug('No versions found for update check', { name });
+      }
+
+      return versionInfo;
+
+    } catch (error) {
+      ErrorHandler.logError('UnifiedIndexManager.checkForUpdates', error, { name });
+      return null;
+    }
+  }
+
+  /**
    * Invalidate caches after user actions with performance monitoring
    */
   public invalidateAfterAction(action: string): void {
@@ -662,7 +755,113 @@ export class UnifiedIndexManager {
   // =====================================================
   // PRIVATE HELPER METHODS
   // =====================================================
-  
+
+  /**
+   * Get enabled sources in priority order (Issue #1446)
+   *
+   * Respects user's source preferences and priority configuration.
+   * Supports preferredSource and sourcePriority overrides.
+   *
+   * @param options - Search options
+   * @returns Array of enabled sources in priority order
+   */
+  private getEnabledSourcesByPriority(options: UnifiedSearchOptions): ('local' | 'github' | 'collection')[] {
+    // Start with default priority from config (or use override)
+    let priorityOrder: ElementSource[];
+
+    if (options.sourcePriority && options.sourcePriority.length > 0) {
+      // Use custom priority order from options
+      priorityOrder = options.sourcePriority;
+      logger.debug('Using custom source priority', { priority: priorityOrder });
+    } else if (options.preferredSource) {
+      // Put preferred source first, then others in default order
+      priorityOrder = [
+        options.preferredSource,
+        ...this.sourcePriorityConfig.priority.filter(s => s !== options.preferredSource)
+      ];
+      logger.debug('Using preferred source priority', {
+        preferredSource: options.preferredSource,
+        priority: priorityOrder
+      });
+    } else {
+      // Use default priority from config
+      priorityOrder = this.sourcePriorityConfig.priority;
+    }
+
+    // Filter to only enabled sources
+    const enabledSources: ('local' | 'github' | 'collection')[] = [];
+
+    for (const source of priorityOrder) {
+      if (this.isSourceEnabled(source, options)) {
+        enabledSources.push(this.mapSourceEnumToString(source));
+      }
+    }
+
+    logger.debug('Enabled sources in priority order', {
+      sources: enabledSources.map(s => getSourceDisplayName(this.mapSourceStringToEnum(s)))
+    });
+
+    return enabledSources;
+  }
+
+  /**
+   * Check if a source is enabled in search options (Issue #1446)
+   *
+   * @param source - Element source to check
+   * @param options - Search options
+   * @returns True if source is enabled
+   */
+  private isSourceEnabled(source: ElementSource, options: UnifiedSearchOptions): boolean {
+    switch (source) {
+      case ElementSource.LOCAL:
+        return options.includeLocal !== false;
+      case ElementSource.GITHUB:
+        return options.includeGitHub !== false;
+      case ElementSource.COLLECTION:
+        return options.includeCollection === true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Map ElementSource enum to source string (Issue #1446)
+   *
+   * @param source - ElementSource enum value
+   * @returns Source string
+   */
+  private mapSourceEnumToString(source: ElementSource): 'local' | 'github' | 'collection' {
+    switch (source) {
+      case ElementSource.LOCAL:
+        return 'local';
+      case ElementSource.GITHUB:
+        return 'github';
+      case ElementSource.COLLECTION:
+        return 'collection';
+      default:
+        throw new Error(`Unknown source: ${source}`);
+    }
+  }
+
+  /**
+   * Map source string to ElementSource enum (Issue #1446)
+   *
+   * @param source - Source string
+   * @returns ElementSource enum value
+   */
+  private mapSourceStringToEnum(source: 'local' | 'github' | 'collection'): ElementSource {
+    switch (source) {
+      case 'local':
+        return ElementSource.LOCAL;
+      case 'github':
+        return ElementSource.GITHUB;
+      case 'collection':
+        return ElementSource.COLLECTION;
+      default:
+        throw new Error(`Unknown source: ${source}`);
+    }
+  }
+
   /**
    * Search with fallback strategies for resilient operation
    */
