@@ -1038,14 +1038,13 @@ describe('UnifiedIndexManager', () => {
         }];
 
         mockLocalIndexManager.search.mockResolvedValue(localResults);
-        const githubGetIndex = mockGitHubIndexer.getIndex;
 
-        await unifiedManager.search({ query: 'test' });
+        const results = await unifiedManager.search({ query: 'test' });
 
-        // GitHub getIndex should NOT be called due to early termination
+        // Should use early termination and only return local results
         expect(mockLocalIndexManager.search).toHaveBeenCalled();
-        // We can't directly check if getIndex wasn't called since it might be called for other reasons
-        // but we can verify only local results were returned
+        expect(results).toHaveLength(1);
+        expect(results[0].source).toBe('local');
       });
 
       it('should continue searching when no results in first source', async () => {
