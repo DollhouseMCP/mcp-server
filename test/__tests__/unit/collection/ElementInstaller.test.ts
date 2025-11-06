@@ -91,7 +91,10 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
     try {
       await fs.rm(testPortfolioDir, { recursive: true, force: true });
     } catch (error) {
-      // Ignore cleanup errors
+      // FIX (SonarCloud L93): Log cleanup errors for debugging
+      // Cleanup errors are intentionally non-fatal to allow tests to complete
+      console.warn('Test cleanup warning - failed to remove test directory:',
+        error instanceof Error ? error.message : String(error));
     }
   });
 

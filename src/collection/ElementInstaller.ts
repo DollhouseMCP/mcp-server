@@ -509,8 +509,15 @@ export class ElementInstaller {
           result?.entry?.name?.toLowerCase() === elementName.toLowerCase()
       );
     } catch (error) {
+      // FIX (SonarCloud L511): Log error before fallback to filesystem check
       // If index check fails, fall back to filesystem check
       // This is a graceful degradation when the index is unavailable
+      logger.debug('Index check failed, falling back to filesystem check', {
+        elementName,
+        elementType,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
       try {
         const elementDir = this.portfolioManager.getElementDir(elementType);
         const files = await fs.readdir(elementDir).catch(() => []);
@@ -521,7 +528,13 @@ export class ElementInstaller {
           return nameWithoutExt.toLowerCase() === elementName.toLowerCase();
         });
       } catch (fallbackError) {
+        // FIX (SonarCloud L523): Log fallback error before returning
         // Both index and filesystem checks failed - assume element doesn't exist
+        logger.debug('Filesystem check also failed, assuming element does not exist', {
+          elementName,
+          elementType,
+          fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        });
         return false;
       }
     }
@@ -701,7 +714,8 @@ export class ElementInstaller {
     const { sanitizedContent, metadata } = await this.validateCollectionContent(content);
 
     // STEP 3: PREPARE FILE PATH AND CHECK EXISTENCE
-    const { filename, localPath, elementDir } = this.prepareFilePath(sanitizedPath, elementType);
+    // FIX (SonarCloud L704): Remove unused elementDir variable
+    const { filename, localPath } = this.prepareFilePath(sanitizedPath, elementType);
 
     // SECURITY: Check if file already exists before any write operations
     const existsResult = await this.checkFileExists(localPath, filename);
