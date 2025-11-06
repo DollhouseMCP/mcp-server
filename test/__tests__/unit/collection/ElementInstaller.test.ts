@@ -13,14 +13,14 @@
  */
 
 import { jest } from '@jest/globals';
-import { ElementInstaller, InstallResult, InstallOptions } from '../../../../src/collection/ElementInstaller.js';
+import { ElementInstaller, InstallOptions } from '../../../../src/collection/ElementInstaller.js';
 import { GitHubClient } from '../../../../src/collection/GitHubClient.js';
 import { UnifiedIndexManager, UnifiedSearchResult } from '../../../../src/portfolio/UnifiedIndexManager.js';
-import { PortfolioManager, ElementType } from '../../../../src/portfolio/PortfolioManager.js';
+import { ElementType } from '../../../../src/portfolio/PortfolioManager.js';
 import { ElementSource } from '../../../../src/config/sourcePriority.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 // Test timeout
 jest.setTimeout(30000);
@@ -113,7 +113,7 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
             localFilePath: '/test/path.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -152,7 +152,7 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/skills/test-skill.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -267,7 +267,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/skills/github-preferred.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -463,7 +463,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/skills/github-skill.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -550,7 +550,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/templates/github-fail.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -602,7 +602,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/personas/security-test.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -614,7 +614,7 @@ category: "test"
 ---
 # Security Test`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(maliciousContent)
       } as any);
@@ -668,14 +668,14 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/skills/oversized.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
       // Mock fetch with oversized content (> 2MB)
       const oversizedContent = 'A'.repeat(3 * 1024 * 1024); // 3MB
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(oversizedContent)
       } as any);
@@ -723,7 +723,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/templates/yaml-test.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -736,7 +736,7 @@ __proto__: malicious
 ---
 # YAML Test`;
 
-      global.fetch = jest.fn().mockResolvedValueOnce({
+      globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,
         text: jest.fn().mockResolvedValue(yamlContent)
       } as any);
@@ -789,7 +789,7 @@ category: "test"
             githubDownloadUrl: 'https://raw.githubusercontent.com/user/repo/main/agents/atomic-test.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 
@@ -889,7 +889,7 @@ category: "test"
             localFilePath: '/test/path.md'
           },
           matchType: 'exact',
-          score: 1.0
+          score: 1
         } as UnifiedSearchResult
       ]);
 

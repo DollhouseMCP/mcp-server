@@ -22,8 +22,8 @@
  * but before final success confirmation, creating a window where malicious content could persist.
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { GitHubClient } from './GitHubClient.js';
 import { IElementMetadata } from '../types/elements/IElement.js';
 import { validatePath, validateFilename, validateContentSize } from '../security/InputValidator.js';
@@ -383,14 +383,20 @@ export class ElementInstaller {
       );
     } catch (error) {
       // If index check fails, fall back to filesystem check
-      const elementDir = this.portfolioManager.getElementDir(elementType);
-      const files = await fs.readdir(elementDir).catch(() => []);
+      // This is a graceful degradation when the index is unavailable
+      try {
+        const elementDir = this.portfolioManager.getElementDir(elementType);
+        const files = await fs.readdir(elementDir).catch(() => []);
 
-      // Check if any file matches the element name
-      return files.some(file => {
-        const nameWithoutExt = file.replace(/\.(md|yaml|yml)$/, '');
-        return nameWithoutExt.toLowerCase() === elementName.toLowerCase();
-      });
+        // Check if any file matches the element name
+        return files.some(file => {
+          const nameWithoutExt = file.replace(/\.(md|yaml|yml)$/, '');
+          return nameWithoutExt.toLowerCase() === elementName.toLowerCase();
+        });
+      } catch (fallbackError) {
+        // Both index and filesystem checks failed - assume element doesn't exist
+        return false;
+      }
     }
   }
 
@@ -425,7 +431,7 @@ export class ElementInstaller {
           result.entry.name.toLowerCase() === elementName.toLowerCase()
       );
 
-      if (!match || !match.entry.githubDownloadUrl) {
+      if (!match?.entry.githubDownloadUrl) {
         return {
           success: false,
           message: `Element "${elementName}" not found in GitHub portfolio`
