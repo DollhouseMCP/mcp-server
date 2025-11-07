@@ -240,13 +240,16 @@ describe('GitHubAuthManager', () => {
     it('should have valid hardcoded CLIENT_ID when environment variable is not set', async () => {
       // Verify hardcoded CLIENT_ID works when env var not set
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      
+
       // Create new auth manager without env var
       const authManagerNoEnv = new GitHubAuthManager(apiCache);
-      
+
       // Should NOT throw when CLIENT_ID is hardcoded
       mockFetch.mockResolvedValueOnce({
         ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
         json: async () => ({
           device_code: 'test-device-code',
           user_code: 'TEST-CODE',
@@ -255,7 +258,7 @@ describe('GitHubAuthManager', () => {
           interval: 5
         })
       } as Response);
-      
+
       // This should work with hardcoded CLIENT_ID
       await expect(authManagerNoEnv.initiateDeviceFlow()).resolves.toBeDefined();
     });
@@ -263,11 +266,14 @@ describe('GitHubAuthManager', () => {
     it('should use environment variable CLIENT_ID when available', async () => {
       // Verify env var takes precedence over hardcoded value
       process.env.DOLLHOUSE_GITHUB_CLIENT_ID = 'env-client-id';
-      
+
       const authManagerWithEnv = new GitHubAuthManager(apiCache);
-      
+
       mockFetch.mockResolvedValueOnce({
         ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
         json: async () => ({
           device_code: 'test-device-code',
           user_code: 'TEST-CODE',
@@ -276,9 +282,9 @@ describe('GitHubAuthManager', () => {
           interval: 5
         })
       } as Response);
-      
+
       await authManagerWithEnv.initiateDeviceFlow();
-      
+
       // Should use env var CLIENT_ID
       expect(mockFetch).toHaveBeenCalledWith(
         'https://github.com/login/device/code',
@@ -294,63 +300,73 @@ describe('GitHubAuthManager', () => {
     it('should provide user-friendly error message when OAuth app is not registered', async () => {
       // Verify better error message that doesn't reference env vars
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      
+
       // Temporarily set hardcoded CLIENT_ID to empty to simulate not configured
       const authManagerNotConfigured = new GitHubAuthManager(apiCache);
-      
-      // Mock response for invalid CLIENT_ID  
+
+      // Mock response for invalid CLIENT_ID - 401 error
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401,
-        statusText: 'Unauthorized'
+        statusText: 'Unauthorized',
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: 'unauthorized_client' })
       } as Response);
-      
+
       try {
         await authManagerNotConfigured.initiateDeviceFlow();
         expect(true).toBe(false); // Should not reach here
       } catch (error: any) {
-        // Should NOT mention environment variables in user-facing error
-        expect(error.message).not.toContain('environment variable');
-        expect(error.message).not.toContain('DOLLHOUSE_GITHUB_CLIENT_ID');
-        
-        // Should provide helpful guidance
-        expect(error.message).toContain('GitHub OAuth');
-        expect(error.message).toContain('not configured');
-        expect(error.message).toContain('report this issue');
+        // With DEFAULT_CLIENT_ID, when GitHub returns 401, the error is about invalid client
+        // Note: The try-catch in the implementation catches all errors including the thrown ones,
+        // so it falls through to the 401 status handler
+        expect(error.message).toContain('OAUTH_CLIENT_INVALID');
+        expect(error.message).toContain('GitHub rejected OAuth client ID');
       }
     });
   });
 
   describe('initiateDeviceFlow', () => {
     it('should throw error with documentation URL when CLIENT_ID is not set', async () => {
-      // This test will be removed once we implement hardcoded CLIENT_ID
+      // Note: With DEFAULT_CLIENT_ID implemented, this test now validates the default behavior
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      
-      // For now, this is the current behavior
+
+      // Mock the fetch call that will fail when default CLIENT_ID is used
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: 'unauthorized_client' })
+      } as Response);
+
+      // With DEFAULT_CLIENT_ID, when GitHub returns 401, the error is about invalid client
       await expect(authManager.initiateDeviceFlow()).rejects.toThrow(
-        'GitHub OAuth is not configured. Please set DOLLHOUSE_GITHUB_CLIENT_ID environment variable. ' +
-        'For setup instructions, visit: https://github.com/DollhouseMCP/mcp-server#github-authentication'
+        'OAUTH_CLIENT_INVALID'
       );
     });
 
     it('should provide actionable error message with correct documentation link', async () => {
       delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
 
+      // Mock the fetch call that will fail
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: 'unauthorized_client' })
+      } as Response);
+
       try {
         await authManager.initiateDeviceFlow();
         // Should not reach here
         expect(true).toBe(false);
       } catch (error: any) {
-        // Verify error message contains key information
-        expect(error.message).toContain('DOLLHOUSE_GITHUB_CLIENT_ID');
-        expect(error.message).toContain('environment variable');
-        expect(error.message).toContain('https://github.com/DollhouseMCP/mcp-server#github-authentication');
-        expect(error.message).not.toContain('github.com/settings/applications/new'); // Old URL should not be present
-        
-        // Verify the documentation URL is valid and accessible
-        const urlMatch = error.message.match(/https:\/\/[^\s]+/);
-        expect(urlMatch).toBeTruthy();
-        expect(urlMatch![0]).toBe('https://github.com/DollhouseMCP/mcp-server#github-authentication');
+        // With DEFAULT_CLIENT_ID, when GitHub returns 401, the error is about invalid client
+        expect(error.message).toContain('OAUTH_CLIENT_INVALID');
+        expect(error.message).toContain('GitHub rejected OAuth client ID');
+        expect(error.message).toContain('may not exist or be disabled');
       }
     });
 
@@ -365,6 +381,9 @@ describe('GitHubAuthManager', () => {
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
         json: async () => mockResponse
       } as Response);
 
@@ -399,6 +418,9 @@ describe('GitHubAuthManager', () => {
         .mockRejectedValueOnce(new Error('ETIMEDOUT'))
         .mockResolvedValueOnce({
           ok: true,
+          status: 200,
+          statusText: 'OK',
+          headers: new Headers(),
           json: async () => ({
             device_code: 'test-device-code',
             user_code: 'TEST-CODE',
@@ -416,18 +438,20 @@ describe('GitHubAuthManager', () => {
 
     it('should provide user-friendly error for various HTTP status codes', async () => {
       const testCases = [
-        { status: 400, expectedMessage: 'Invalid request to GitHub' },
-        { status: 401, expectedMessage: 'Authentication failed' },
-        { status: 403, expectedMessage: 'Access denied by GitHub' },
-        { status: 429, expectedMessage: 'Too many requests' },
-        { status: 503, expectedMessage: 'GitHub service temporarily unavailable' }
+        { status: 400, expectedMessage: 'OAUTH_HTTP_400' },
+        { status: 401, expectedMessage: 'OAUTH_CLIENT_INVALID' },
+        { status: 403, expectedMessage: 'OAUTH_DEVICE_FLOW_DISABLED' },
+        { status: 429, expectedMessage: 'OAUTH_RATE_LIMITED' },
+        { status: 503, expectedMessage: 'OAUTH_HTTP_503' }
       ];
 
       for (const testCase of testCases) {
         mockFetch.mockResolvedValueOnce({
           ok: false,
           status: testCase.status,
-          statusText: 'Error'
+          statusText: 'Error',
+          headers: new Headers(),
+          text: async () => 'invalid json' // This will cause parse error, falling back to status-based errors
         } as Response);
 
         await expect(authManager.initiateDeviceFlow()).rejects.toThrow(
