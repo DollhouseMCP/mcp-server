@@ -1,5 +1,70 @@
 ## 🏷️ Version History
 
+### v1.9.26 - 2025-11-07
+
+**Major Feature Release**: Element Source Priority System & Critical Bug Fixes
+
+#### ✨ Features
+- **Element Source Priority System** (#1451-#1456) 🌟
+  - Intelligent element selection based on configurable source priority
+  - Priority levels: `local` (highest) → `github` → `collection` (lowest)
+  - User-facing API for configuration via `dollhouse_config` tool
+  - Automatic conflict resolution for duplicate elements
+  - Search and installation integration
+  - Configuration persistence to `~/.dollhouse/config.yaml`
+
+#### 🐛 Bug Fixes
+- **Memory Content Preservation** (#1442) - Fixed data loss during YAML parsing
+- **VerbTriggerManager Critical Bugs** (#1443) - Fixed verb trigger extraction reliability
+- **OAuth Terminal Error Propagation** (#1444) - RFC 6749/8628 compliance for device flow
+- **GitHubAuthManager Test Mocks** (#1459) - Fixed 8 test failures from incomplete mocks
+
+#### 🔧 Technical
+- jsdom rollback to 27.0.0 for stability (#1458)
+- SonarCloud badges restored to README chunk file
+
+#### 📦 Dependencies
+- @modelcontextprotocol/sdk 1.20.2 → 1.21.0
+- posthog-node 5.10.3 → 5.11.0
+- @types/archiver 6.0.4 → 7.0.0
+- @types/node 24.9.1 → 24.10.0
+
+---
+
+### v1.9.25 - 2025-10-30
+
+**Major Feature Release**: Auto-Load Baseline Memories & Production Stability
+
+#### ✨ Features
+- **Auto-Load Baseline Memories** (#1430, #1431) 🌟
+  - Self-aware DollhouseMCP: Server loads baseline knowledge automatically on startup
+  - Eliminates 20-40k token searches - now instant with zero search
+  - Users can mark ANY memory for auto-load via `autoLoad: true` metadata flag
+  - Priority-based loading system with configurable token budget
+  - Includes seed memory: `dollhousemcp-baseline-knowledge.yaml` (~2500 tokens)
+  - Configuration via `~/.dollhouse/config.yaml`
+  - Token estimate caching (~50% performance improvement)
+  - 3 new seed memory guides for custom auto-load memories
+
+#### 🐛 Bug Fixes (CRITICAL)
+- **Extended Node Compatibility CI Failures** (#1432-#1434)
+  - Fixed ALL 6 platforms (Ubuntu/macOS/Windows × Node 20.x/22.x)
+  - Root cause: JSDOM/parse5 ESM race condition during Jest teardown
+  - 19 test files broken - now ALL passing ✅
+  - Platform-specific memory thresholds for Windows Node 22.x
+
+- **README Badge Issues** (#1432, #1435)
+  - Restored 6 SonarCloud quality metrics badges
+  - Fixed Extended Node Compatibility and Docker Testing badge URLs
+  - All badges now point to develop branch
+
+#### 🔧 Technical
+- LICENSE synchronization with main (763-line monolithic structure)
+- Jest configuration optimization with maxConcurrency: 1
+- Comprehensive documentation updates
+
+---
+
 ### v1.9.24 - 2025-10-27
 
 **Documentation Release**: Claude Skills Compatibility & Dependency Updates
