@@ -2,6 +2,112 @@
 
 ## [Unreleased]
 
+## [1.9.26] - 2025-11-07
+
+**Major Feature Release**: Element Source Priority System & Critical Bug Fixes
+
+### ✨ Features
+
+- **Element Source Priority System** (#1451, #1452, #1453, #1454, #1455, #1456) 🌟
+  - **Intelligent element selection** based on configurable source priority
+  - Replaces simple source filtering with advanced priority-based ranking
+  - **Priority levels** (configurable per element type):
+    - `local` - User's portfolio (highest priority by default)
+    - `github` - Personal GitHub portfolio
+    - `collection` - Community collection (lowest priority by default)
+  - **User-facing API** for source priority configuration via `dollhouse_config` tool
+  - **Automatic conflict resolution** when same element exists in multiple sources
+  - **Search integration** - UnifiedIndexManager respects source priority in all searches
+  - **Installation integration** - ElementInstaller follows priority when installing elements
+  - **Comprehensive documentation** - User guides and technical references
+  - **Full test coverage** - 3000+ lines of tests including integration tests
+  - **Non-breaking** - Falls back to local-first behavior if priority not configured
+  - **Configuration persistence** - Saves to `~/.dollhouse/config.yaml`
+
+### 🐛 Bug Fixes
+
+- **Memory Content Preservation** (#1442)
+  - Fixed bug where memory content was lost during YAML import/parsing
+  - Ensures all memory data persists correctly through serialization
+  - Improved error handling for YAML parsing edge cases
+
+- **VerbTriggerManager Critical Bugs** (#1443)
+  - Fixed three critical bugs in verb trigger extraction and management
+  - Improved reliability of verb-based element search
+  - Enhanced error handling and validation
+
+- **OAuth Terminal Error Propagation** (#1444)
+  - Implements RFC 6749/8628 compliance for OAuth device flow
+  - Errors now propagate immediately to terminal instead of hanging
+  - Better user experience during authentication failures
+
+- **GitHubAuthManager Test Mocks** (#1459)
+  - Fixed incomplete Response mock objects causing 8 test failures
+  - Added missing `status`, `statusText`, and `headers` properties
+  - Ensures proper Fetch API compatibility in tests
+
+### 🔧 Technical Improvements
+
+- **jsdom Stability** (#1458)
+  - Rolled back jsdom from 27.1.0 to 27.0.0 to maintain test stability
+  - Avoids ESM/CommonJS incompatibility with parse5 v8
+  - Maintains stable test environment across all platforms
+
+- **SonarCloud Badges** (docs commit 0f30386b)
+  - Restored SonarCloud quality badges to README chunk file
+  - Prevents auto-sync workflow from removing badges
+  - Ensures badges persist across README regeneration
+
+### 📦 Dependency Updates
+
+- **@modelcontextprotocol/sdk** 1.20.2 → 1.21.0 (#1439)
+- **posthog-node** 5.10.3 → 5.11.0 (#1441)
+- **@types/archiver** 6.0.4 → 7.0.0 (#1440)
+- **@types/node** 24.9.1 → 24.10.0 (#1438)
+
+### 📖 Documentation
+
+- **Element Source Priority Documentation** (#1456)
+  - Complete user guide for source priority configuration
+  - Technical implementation details
+  - Best practices and usage examples
+
+- **Session Notes**: Comprehensive documentation of:
+  - Element Source Priority implementation (6 phases)
+  - Bug fixes and investigations
+  - Release preparation process
+
+### 🎯 Impact
+
+**Element Source Priority System**:
+- Advanced element selection replacing simple filtering
+- User control over which sources take precedence
+- Automatic conflict resolution for duplicate elements
+- Foundation for future multi-source element management
+- Seamless integration with existing search and installation flows
+
+**Bug Fixes**:
+- Memory data integrity guaranteed
+- Verb-based search reliability improved
+- OAuth authentication experience enhanced
+- Test suite fully passing across all platforms
+
+### 🔗 Related Issues & PRs
+
+- PR #1451: Source priority configuration system
+- PR #1452: UnifiedIndexManager source priority integration
+- PR #1453: ElementInstaller source priority support
+- PR #1454: User-facing configuration API
+- PR #1455: Integration tests for source priority
+- PR #1456: Comprehensive documentation
+- PR #1442: Memory content preservation fix
+- PR #1443: VerbTriggerManager bug fixes
+- PR #1444: OAuth error propagation
+- PR #1458: jsdom rollback for stability
+- PR #1459: GitHubAuthManager test fixes
+
+---
+
 ## [1.9.25] - 2025-10-30
 
 **Major Feature Release**: Auto-Load Baseline Memories & Production Stability
