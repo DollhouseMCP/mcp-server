@@ -124,6 +124,11 @@ Auto-load content here.
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
       expect(autoLoadMemories).toHaveLength(1);
       expect(autoLoadMemories[0].metadata.name).toBe('baseline-knowledge');
+
+      // ENHANCED: Verify content is preserved (Issue #1442)
+      const entries = autoLoadMemories[0].getAllEntries();
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries[0].content).toContain('Auto-load content here');
     });
 
     it('should not return memories with autoLoad explicitly set to false', async () => {
@@ -188,6 +193,11 @@ Medium priority content
       expect(autoLoadMemories[0].metadata.name).toBe('high-priority');
       expect(autoLoadMemories[1].metadata.name).toBe('medium-priority');
       expect(autoLoadMemories[2].metadata.name).toBe('low-priority');
+
+      // ENHANCED: Verify all memories have content (Issue #1442)
+      expect(autoLoadMemories[0].getAllEntries()[0].content).toContain('High priority');
+      expect(autoLoadMemories[1].getAllEntries()[0].content).toContain('Medium priority');
+      expect(autoLoadMemories[2].getAllEntries()[0].content).toContain('Low priority');
     });
 
     it('should treat missing priority as lowest priority (999)', async () => {
@@ -438,6 +448,12 @@ This is a custom version that should not be overwritten.
       const seedMemory = autoLoadMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
       expect(seedMemory).toBeDefined();
       expect(seedMemory?.metadata.priority).toBe(1);
+
+      // ENHANCED: Verify seed has substantial content (Issue #1442)
+      const entries = seedMemory!.getAllEntries();
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries[0].content).toContain('DollhouseMCP');
+      expect(entries[0].content.length).toBeGreaterThan(100);
     });
   });
 

@@ -89,14 +89,79 @@ export class GitHubAuthManager {
   // Polling configuration
   private static readonly DEFAULT_POLL_INTERVAL = 5000; // 5 seconds
   private static readonly MAX_POLL_ATTEMPTS = 180; // 15 minutes total
-  
+
+  /**
+   * OAuth error codes that require immediate propagation per RFC 6749/8628.
+   * These are terminal errors that cannot be recovered by retrying.
+   */
+  private static readonly TERMINAL_OAUTH_ERROR_CODES = [
+    'expired_token',      // Authorization code has expired
+    'access_denied',      // User explicitly denied authorization
+    'unsupported_grant_type',  // Invalid grant type (configuration error)
+    'invalid_grant'       // Invalid or expired device code
+  ] as const;
+
+  /**
+   * Error message patterns that indicate terminal OAuth errors.
+   * Used for message-based error detection when error codes aren't available.
+   */
+  private static readonly TERMINAL_ERROR_PATTERNS = [
+    'authorization code has expired',
+    'Authorization was denied',
+    'Authentication failed',
+    'expired_token',
+    'access_denied'
+  ] as const;
+
   private apiCache: APICache;
   private activePolling: AbortController | null = null;
   
   constructor(apiCache: APICache) {
     this.apiCache = apiCache;
   }
-  
+
+  /**
+   * Determines if an OAuth error is terminal and should propagate immediately.
+   *
+   * Per RFC 6749 (OAuth 2.0) and RFC 8628 (Device Authorization Grant):
+   * - Terminal errors (expired_token, access_denied) MUST stop polling immediately
+   * - Transient errors (network failures, slow_down) should be retried
+   *
+   * Error Detection Priority (most to least reliable):
+   * 1. Explicit error code parameter (from GitHub API response)
+   * 2. Error code embedded in Error object properties
+   * 3. Message pattern matching (fallback for compatibility)
+   *
+   * @param error - The error to check
+   * @param errorCode - Optional OAuth error code from API response
+   * @returns true if error is terminal and should propagate, false if retriable
+   *
+   * @see https://datatracker.ietf.org/doc/html/rfc8628#section-3.5
+   * @see https://docs.github.com/en/developers/apps/authorizing-oauth-apps
+   */
+  private static isTerminalOAuthError(error: Error, errorCode?: string): boolean {
+    // PRIORITY 1: Check explicit error code parameter (most reliable)
+    // This comes directly from GitHub's API response: { error: "expired_token" }
+    if (errorCode && GitHubAuthManager.TERMINAL_OAUTH_ERROR_CODES.includes(errorCode as any)) {
+      return true;
+    }
+
+    // PRIORITY 2: Check if error has embedded error code in properties
+    // GitHub often includes error code in Error object properties
+    const errorObj = error as any;
+    if (errorObj.code && GitHubAuthManager.TERMINAL_OAUTH_ERROR_CODES.includes(errorObj.code)) {
+      return true;
+    }
+
+    // PRIORITY 3: Fall back to message pattern matching (least reliable)
+    // Only used for backward compatibility and unknown error formats
+    // Message text can change, so this is brittle but necessary for robustness
+    const errorMessage = error.message.toLowerCase();
+    return GitHubAuthManager.TERMINAL_ERROR_PATTERNS.some(pattern =>
+      errorMessage.includes(pattern.toLowerCase())
+    );
+  }
+
   /**
    * Execute a network request with retry logic
    */
@@ -310,7 +375,39 @@ export class GitHubAuthManager {
   }
   
   /**
-   * Poll for token after user has authorized the device
+   * Poll GitHub for OAuth token using device flow.
+   *
+   * Implements OAuth 2.0 Device Authorization Grant (RFC 8628) with proper error handling.
+   *
+   * ## OAuth 2.0 Compliance (RFC 6749/8628)
+   *
+   * ### Terminal Errors (MUST propagate immediately):
+   * - `expired_token` - Authorization code has expired, user must restart flow
+   * - `access_denied` - User explicitly denied authorization
+   * - `unsupported_grant_type` - Invalid grant type (configuration error)
+   * - `invalid_grant` - Invalid or expired device code
+   *
+   * ### Transient Errors (should be retried):
+   * - `authorization_pending` - User hasn't completed authorization yet
+   * - `slow_down` - Polling too frequently, increase interval
+   * - Network errors (ECONNREFUSED, ETIMEDOUT, etc.)
+   *
+   * ### Error Handling Flow:
+   * 1. GitHub returns error code in response (e.g., `{error: "expired_token"}`)
+   * 2. Check if error is terminal using `isTerminalOAuthError()`
+   * 3. Terminal errors throw immediately, stopping polling
+   * 4. Transient errors are logged and polling continues
+   * 5. After MAX_POLL_ATTEMPTS (15 minutes), timeout error is thrown
+   *
+   * @param deviceCode - Device code from GitHub authorization flow
+   * @param interval - Polling interval in milliseconds (default: 5000ms)
+   * @returns Promise resolving to TokenResponse with access token
+   * @throws {Error} Terminal OAuth errors (expired_token, access_denied, etc.)
+   * @throws {Error} Timeout after MAX_POLL_ATTEMPTS (180 attempts = 15 minutes)
+   * @throws {Error} Network errors that persist beyond retry logic
+   *
+   * @see https://datatracker.ietf.org/doc/html/rfc8628 - OAuth 2.0 Device Authorization Grant
+   * @see https://datatracker.ietf.org/doc/html/rfc6749 - OAuth 2.0 Authorization Framework
    */
   async pollForToken(deviceCode: string, interval: number = GitHubAuthManager.DEFAULT_POLL_INTERVAL): Promise<TokenResponse> {
     // Create new abort controller for this polling session
@@ -343,46 +440,89 @@ export class GitHubAuthManager {
         });
         
         const data = await response.json();
-        
-        // Check for various response states
+
+        // RFC 8628 Section 3.5: Handle OAuth device flow responses
         if (data.error) {
-          switch (data.error) {
-            case 'authorization_pending':
-              // User hasn't authorized yet, keep polling
+          const errorCode = data.error;  // Extract error code for robust detection
+
+          switch (errorCode) {
+            case 'authorization_pending': {
+              // Transient: User hasn't authorized yet, continue polling
+              logger.debug('Authorization pending, continuing to poll', { attempt: attempts });
               break;
-              
-            case 'slow_down':
-              // Increase polling interval
+            }
+
+            case 'slow_down': {
+              // Transient: Server requests slower polling, adjust interval
               interval = Math.min(interval * 1.5, 30000); // Max 30 seconds
-              logger.debug('Slowing down polling interval', { newInterval: interval });
+              logger.debug('Slowing down polling interval per server request', {
+                newInterval: interval,
+                attempt: attempts
+              });
               break;
-              
-            case 'expired_token':
+            }
+
+            case 'expired_token': {
+              // TERMINAL: Authorization code expired (RFC 8628 Section 3.5)
               throw new Error('The authorization code has expired. Please start over.');
-              
-            case 'access_denied':
+            }
+
+            case 'access_denied': {
+              // TERMINAL: User explicitly denied authorization (RFC 8628 Section 3.5)
               throw new Error('Authorization was denied. Please try again.');
-              
-            default:
-              // Log the actual error for debugging
-              logger.debug('OAuth device flow error', { 
-                error: data.error, 
-                description: data.error_description 
+            }
+
+            case 'unsupported_grant_type':
+            case 'invalid_grant': {
+              // TERMINAL: Configuration or code issue (RFC 6749 Section 5.2)
+              logger.error('OAuth grant error', {
+                error: errorCode,
+                description: data.error_description
               });
               throw new Error('Authentication failed. Please try starting the process again.');
+            }
+
+            default: {
+              // Unknown error - treat as terminal to avoid infinite polling
+              logger.debug('Unknown OAuth error, treating as terminal', {
+                error: errorCode,
+                description: data.error_description
+              });
+              // Embed error code in Error object for isTerminalOAuthError detection
+              const unknownError = new Error('Authentication failed. Please try starting the process again.');
+              (unknownError as any).code = errorCode;
+              throw unknownError;
+            }
           }
         } else if (data.access_token) {
-          // Success!
+          // Success! User authorized and token is ready
+          logger.info('OAuth device flow completed successfully', { attempts });
           return data as TokenResponse;
         }
-        
-        // Wait before next poll
-        // Wait for interval with abort support
+
+        // No error and no token - wait and continue polling
         await this.waitWithAbort(interval, signal);
-        
+
       } catch (error) {
-        // Network errors shouldn't stop polling
-        ErrorHandler.logError('GitHubAuthManager.pollForToken', error, { attempt: attempts });
+        // RFC 6749/8628 Compliance: Terminal errors MUST propagate immediately
+        // Use helper function for robust terminal error detection
+        // Pass error code if available for priority detection
+        const errorCode = (error as any)?.code;
+        if (error instanceof Error && GitHubAuthManager.isTerminalOAuthError(error, errorCode)) {
+          logger.debug('Terminal OAuth error detected, stopping polling', {
+            error: error.message,
+            errorCode: errorCode,
+            attempt: attempts
+          });
+          throw error;  // Terminal error - propagate immediately, stop polling
+        }
+
+        // Transient errors (network failures, etc.) - log and retry
+        // These shouldn't stop polling as they may be temporary issues
+        ErrorHandler.logError('GitHubAuthManager.pollForToken', error, {
+          attempt: attempts,
+          willRetry: true
+        });
         await this.waitWithAbort(interval, signal);
       }
     }
