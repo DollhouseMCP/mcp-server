@@ -1,0 +1,84 @@
+name: Publish to npm
+
+# This workflow publishes the package to npm registry when a release is published.
+# Uses npm Trusted Publishing (OIDC) for secure, token-free authentication.
+#
+# Trusted Publishing Setup Required:
+# 1. Go to https://www.npmjs.com/package/@dollhousemcp/mcp-server/access
+# 2. Add Trusted Publisher:
+#    - Provider: GitHub Actions
+#    - Organization: DollhouseMCP
+#    - Repository: mcp-server
+#    - Workflow: publish-npm.yml
+#    - Environment: (leave blank)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without publishing)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # Required for OIDC/Trusted Publishing
+  contents: read    # Required for checkout
+
+jobs:
+  publish-npm:
+    name: Publish to npm Registry
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check package version
+        id: package_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Publish to npm (with provenance)
+        if: github.event.inputs.dry_run != 'true'
+        shell: bash
+        run: |
+          # Publish with provenance for supply chain security
+          # Uses OIDC authentication (no token needed!)
+          npm publish --provenance --access public
+
+      - name: Dry run (skip publish)
+        if: github.event.inputs.dry_run == 'true'
+        shell: bash
+        run: |
+          echo "🧪 DRY RUN MODE - Skipping publication"
+          echo "Package would be published: @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }}"
+          npm publish --dry-run
+
+      - name: Notify success
+        if: success() && github.event.inputs.dry_run != 'true'
+        shell: bash
+        run: |
+          echo "✅ Successfully published @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }} to npm!"
+          echo "📦 View at: https://www.npmjs.com/package/@dollhousemcp/mcp-server/v/${{ steps.package_version.outputs.version }}"
