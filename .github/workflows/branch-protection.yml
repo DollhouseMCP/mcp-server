@@ -26,14 +26,15 @@ jobs:
             
             console.log(`PR from ${headRef} to ${baseRef}`);
             
-            // Allow PRs to main only from develop or hotfix branches
+            // Allow PRs to main only from develop, hotfix, release, or dependabot branches
             if (baseRef === 'main') {
               const isFromDevelop = headRef === 'develop';
               const isHotfix = headRef.startsWith('hotfix/');
               const isRelease = headRef.startsWith('release/');
-              
-              if (!isFromDevelop && !isHotfix && !isRelease) {
-                core.setFailed(`PRs to main must come from develop, release/*, or hotfix/* branches. Current branch: ${headRef}`);
+              const isDependabot = headRef.startsWith('dependabot/');
+
+              if (!isFromDevelop && !isHotfix && !isRelease && !isDependabot) {
+                core.setFailed(`PRs to main must come from develop, release/*, hotfix/*, or dependabot/* branches. Current branch: ${headRef}`);
                 
                 // Add comment to PR
                 await github.rest.issues.createComment({
@@ -41,32 +42,38 @@ jobs:
                   repo: context.repo.repo,
                   issue_number: pr.number,
                   body: `## ❌ Branch Protection Policy Violation
-                  
+
                   PRs to \`main\` branch must originate from:
                   - \`develop\` branch (for regular releases)
                   - \`release/*\` branches (for release candidates)
                   - \`hotfix/*\` branches (for emergency fixes)
-                  
+                  - \`dependabot/*\` branches (for automated security updates)
+
                   **Current branch**: \`${headRef}\`
-                  
+
                   ### Recommended Actions:
                   1. If this is a regular feature, merge to \`develop\` first
                   2. If this is a hotfix, rename your branch to \`hotfix/description\`
                   3. If this is a release, create from \`develop\` as \`release/version\`
-                  
+
                   Please follow our [GitFlow branching strategy](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md#branching-strategy).`
                 });
               } else {
                 console.log(`✅ Valid source branch: ${headRef}`);
-                
-                // Add approval comment
+
+                // Add approval comment with context-specific message
+                const prType = isDependabot ? 'automated security update' :
+                              isRelease ? 'release' :
+                              isHotfix ? 'hotfix' :
+                              'release from develop';
+
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pr.number,
                   body: `## ✅ Branch Protection Check Passed
-                  
-                  This PR correctly targets \`main\` from \`${headRef}\`.`
+
+                  This PR correctly targets \`main\` from \`${headRef}\` (${prType}).`
                 });
               }
             }
