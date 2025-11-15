@@ -51,7 +51,6 @@ jobs:
 
       - name: Run tests
         run: npm test
-        continue-on-error: true  # Temporary: Skip test failures for dry-run testing
 
       - name: Check package version
         id: package_version
