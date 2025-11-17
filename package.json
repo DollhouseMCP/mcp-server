@@ -141,7 +141,7 @@
     "extract-zip": "^2.0.1",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
-    "jsdom": "27.0.0",
+    "jsdom": "27.2.0",
     "node-fetch": "^3.3.2",
     "posthog-node": "^5.11.2",
     "uuid": "^11.1.0",
