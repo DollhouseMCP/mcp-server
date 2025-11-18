@@ -140,7 +140,7 @@
     "express": "^5.1.0",
     "extract-zip": "^2.0.1",
     "gray-matter": "^4.0.3",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.1.1",
     "jsdom": "27.0.0",
     "node-fetch": "^3.3.2",
     "posthog-node": "^5.11.0",
@@ -167,5 +167,13 @@
   "engines": {
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
+  },
+  "overrides": {
+    "gray-matter": {
+      "js-yaml": "3.14.2"
+    },
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "3.14.2"
+    }
   }
 }
