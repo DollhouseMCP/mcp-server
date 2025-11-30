@@ -47,7 +47,7 @@ const config = {
   roots: ['<rootDir>'],
   testTimeout: 30000, // Increased to 30s to prevent teardown issues with async file operations
   transformIgnorePatterns: [
-    'node_modules/(?!(@modelcontextprotocol|zod)/)'
+    'node_modules/(?!(@modelcontextprotocol|zod|jsdom|parse5|entities|whatwg-url|tr46|webidl-conversions)/)'
   ],
   resolver: 'ts-jest-resolver',
   // FIX: Force serial test execution in CI to prevent worker teardown race conditions
