@@ -47,7 +47,9 @@ const config = {
   roots: ['<rootDir>'],
   testTimeout: 30000, // Increased to 30s to prevent teardown issues with async file operations
   transformIgnorePatterns: [
-    'node_modules/(?!(@modelcontextprotocol|zod|jsdom|parse5|entities|whatwg-url|tr46|webidl-conversions)/)'
+    // Match ESM packages at any nesting level in node_modules
+    // The .* allows matching nested node_modules (e.g., node_modules/jsdom/node_modules/parse5)
+    'node_modules/(?!(.*/)?(@modelcontextprotocol|zod|jsdom|parse5|entities|whatwg-url|tr46|webidl-conversions)/)'
   ],
   resolver: 'ts-jest-resolver',
   // FIX: Force serial test execution in CI to prevent worker teardown race conditions
