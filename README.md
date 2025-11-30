@@ -1741,7 +1741,3 @@ If you have questions about the license or what you can do with DollhouseMCP:
 ---
 
 *Copyright © 2025 DollhouseMCP. All rights reserved.*
-
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=DollhouseMCP/mcp-server&type=Date)](https://star-history.com/#DollhouseMCP/mcp-server&Date)
