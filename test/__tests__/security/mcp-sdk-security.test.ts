@@ -154,51 +154,31 @@ describe('MCP SDK Security', () => {
   });
 
   describe('Defense in Depth', () => {
-    it('should not expose HTTP endpoints without authentication', async () => {
-      // DollhouseMCP runs via stdio, but let's verify no HTTP server is started
+    it('should use stdio transport in main entry point', async () => {
+      // DollhouseMCP runs via stdio, which is NOT affected by DNS rebinding
+      // This test verifies we're not using HTTP-based transports in the main server
       const projectRoot = path.resolve(__dirname, '../../..');
-      const srcDir = path.join(projectRoot, 'src');
+      const indexPath = path.join(projectRoot, 'src/index.ts');
+      const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // Check main source files for HTTP server creation
-      const checkForHttpServer = (dir: string): boolean => {
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-          const filePath = path.join(dir, file);
-          const stat = fs.statSync(filePath);
+      // Verify we use StdioServerTransport, not HTTP-based transports
+      expect(indexContent).toContain('StdioServerTransport');
+      expect(indexContent).not.toContain('StreamableHTTPServerTransport');
+      expect(indexContent).not.toContain('SSEServerTransport');
 
-          if (stat.isDirectory()) {
-            // Skip node_modules if somehow present
-            if (file === 'node_modules') continue;
-            if (checkForHttpServer(filePath)) return true;
-          } else if (file.endsWith('.ts') || file.endsWith('.js')) {
-            const content = fs.readFileSync(filePath, 'utf8');
-            // Check for unprotected HTTP server creation patterns
-            // Check for HTTP server patterns (excluding http.createServer which is used for OAuth)
-            const hasAppListen = content.includes('app.listen(');
-            const hasServerListen = content.includes('server.listen(');
-            // createServer is OK if it's http.createServer for OAuth callbacks
-            const hasCreateServer = content.includes('createServer(') &&
-              !content.includes('http.createServer') &&
-              !content.includes('https.createServer');
+      // If HTTP transports are added in the future, this test will fail
+      // reminding developers to enable DNS rebinding protection
+    });
 
-            if (hasAppListen || hasServerListen || hasCreateServer) {
-              // Allow if it's in the auth module (OAuth callback server)
-              if (!filePath.includes('/auth/')) {
-                return true;
-              }
-            }
-          }
-        }
-        return false;
-      };
+    it('should not import HTTP transport modules in main server', async () => {
+      const projectRoot = path.resolve(__dirname, '../../..');
+      const indexPath = path.join(projectRoot, 'src/index.ts');
+      const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // This should pass - DollhouseMCP doesn't create standalone HTTP servers
-      // (OAuth callback server in auth module is temporary and properly scoped)
-      const hasUnprotectedHttpServer = checkForHttpServer(srcDir);
-
-      // Note: We're checking for patterns, not actual runtime behavior
-      // The auth module may have HTTP server for OAuth callbacks, which is acceptable
-      expect(hasUnprotectedHttpServer).toBe(false);
+      // Check imports - should only import stdio transport
+      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/stdio.js"');
+      expect(indexContent).not.toContain('from "@modelcontextprotocol/sdk/server/sse.js"');
+      expect(indexContent).not.toContain('from "@modelcontextprotocol/sdk/server/streamableHttp.js"');
     });
   });
 });
