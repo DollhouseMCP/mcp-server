@@ -63,7 +63,8 @@ describe('MCP SDK Security', () => {
       const specifiedVersion = packageJson.dependencies['@modelcontextprotocol/sdk'];
 
       // Extract version number from semver range (^1.24.0 -> 1.24.0)
-      const versionMatch = specifiedVersion.match(/(\d+\.\d+\.\d+)/);
+      // Using bounded quantifiers {1,10} to prevent ReDoS (SonarCloud typescript:S5852)
+      const versionMatch = specifiedVersion.match(/(\d{1,10}\.\d{1,10}\.\d{1,10})/);
       expect(versionMatch).not.toBeNull();
 
       const version = versionMatch![1];
