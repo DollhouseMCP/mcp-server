@@ -44,7 +44,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
+          # Note: Do NOT set registry-url here - it creates an .npmrc that
+          # requires NODE_AUTH_TOKEN and breaks OIDC/provenance authentication
           cache: 'npm'
 
       - name: Install dependencies
@@ -69,12 +70,10 @@ jobs:
       - name: Publish to npm (with provenance)
         if: github.event.inputs.dry_run != 'true'
         shell: bash
-        env:
-          # Clear any legacy token - OIDC handles auth via provenance
-          NODE_AUTH_TOKEN: ''
         run: |
           # Publish with provenance for supply chain security
-          # Uses OIDC authentication (no token needed!)
+          # Uses OIDC authentication - npm automatically gets an OIDC token
+          # from GitHub Actions when --provenance is specified
           npm publish --provenance --access public
 
       - name: Dry run (skip publish)
