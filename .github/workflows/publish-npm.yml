@@ -43,12 +43,18 @@ jobs:
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
-          # Node 22.x includes npm 11.x which is required for OIDC trusted publishing
-          # npm 10.x (bundled with Node 20.x) does not support OIDC authentication
+          # Node 22.x is required for npm 11.x compatibility
+          # Note: Node 22.x ships with npm 10.x by default, so we upgrade npm separately below
           node-version: '22.x'
           # NOTE: Do NOT use registry-url here! It creates .npmrc with token placeholder
           # that blocks OIDC detection. npm will use default registry automatically.
           cache: 'npm'
+
+      - name: Upgrade npm to 11.x for OIDC support
+        run: |
+          echo "Current npm version: $(npm --version)"
+          npm install -g npm@11
+          echo "Upgraded npm version: $(npm --version)"
 
       - name: Install dependencies
         run: npm ci
