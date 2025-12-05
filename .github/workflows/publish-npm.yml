@@ -43,9 +43,10 @@ jobs:
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
-          # Note: Do NOT set registry-url here - it creates an .npmrc that
-          # requires NODE_AUTH_TOKEN and breaks OIDC/provenance authentication
+          # Node 22.x includes npm 11.x which is required for OIDC trusted publishing
+          # npm 10.x (bundled with Node 20.x) does not support OIDC authentication
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
       - name: Install dependencies
