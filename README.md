@@ -890,7 +890,7 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.26 - 2025-11-07
+### v1.9.27 - 2025-11-07
 
 **Major Feature Release**: Element Source Priority System & Critical Bug Fixes
 
