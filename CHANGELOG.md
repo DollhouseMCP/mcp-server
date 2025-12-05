@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.9.27] - 2025-12-05
+
+- Version bump
+
 ## [Unreleased]
 
 ## [1.9.26] - 2025-11-07

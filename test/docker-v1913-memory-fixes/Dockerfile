@@ -12,10 +12,11 @@ WORKDIR /home/claude
 
 # Copy the local MCP server source with our v1.9.13 fixes
 # Note: Build context should be run from mcp-server root: docker build -f test/docker-v1913-memory-fixes/Dockerfile .
-COPY --chown=claude:claude package*.json /home/claude/mcp-server/
-COPY --chown=claude:claude tsconfig.json /home/claude/mcp-server/
-COPY --chown=claude:claude src /home/claude/mcp-server/src/
-COPY --chown=claude:claude scripts /home/claude/mcp-server/scripts/
+# Use --chmod to set read-only permissions for copied files (SonarCloud docker:S6504)
+COPY --chown=claude:claude --chmod=644 package*.json /home/claude/mcp-server/
+COPY --chown=claude:claude --chmod=644 tsconfig.json /home/claude/mcp-server/
+COPY --chown=claude:claude --chmod=644 src /home/claude/mcp-server/src/
+COPY --chown=claude:claude --chmod=755 scripts /home/claude/mcp-server/scripts/
 
 # Build the MCP server
 WORKDIR /home/claude/mcp-server
