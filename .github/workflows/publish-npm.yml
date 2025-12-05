@@ -43,9 +43,18 @@ jobs:
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
+          # Node 22.x is required for npm 11.x compatibility
+          # Note: Node 22.x ships with npm 10.x by default, so we upgrade npm separately below
+          node-version: '22.x'
+          # NOTE: Do NOT use registry-url here! It creates .npmrc with token placeholder
+          # that blocks OIDC detection. npm will use default registry automatically.
           cache: 'npm'
+
+      - name: Upgrade npm to 11.x for OIDC support
+        run: |
+          echo "Current npm version: $(npm --version)"
+          npm install -g npm@11
+          echo "Upgraded npm version: $(npm --version)"
 
       - name: Install dependencies
         run: npm ci
@@ -66,13 +75,40 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing version: $VERSION"
 
+      - name: Debug OIDC Environment
+        run: |
+          echo "=== OIDC Environment Check ==="
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT SET}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+SET (hidden)}"
+          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo ""
+          echo "=== npm version ==="
+          npm --version
+          echo ""
+          echo "=== .npmrc files ==="
+          cat ~/.npmrc 2>/dev/null || echo "No ~/.npmrc"
+          cat .npmrc 2>/dev/null || echo "No ./.npmrc"
+          echo ""
+          echo "=== NPM_CONFIG_* vars ==="
+          env | grep NPM_CONFIG || echo "No NPM_CONFIG vars"
+          echo ""
+          echo "=== NODE_AUTH_TOKEN ==="
+          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
+
       - name: Publish to npm (with provenance)
         if: github.event.inputs.dry_run != 'true'
         shell: bash
+        env:
+          # Ensure provenance is enabled for OIDC detection
+          NPM_CONFIG_PROVENANCE: 'true'
         run: |
           # Publish with provenance for supply chain security
-          # Uses OIDC authentication (no token needed!)
-          npm publish --provenance --access public
+          # Uses OIDC authentication automatically when:
+          # 1. id-token: write permission is set
+          # 2. Running on GitHub Actions
+          # 3. No .npmrc with token configuration (we removed registry-url from setup-node)
+          # Using --loglevel verbose to diagnose OIDC issues
+          npm publish --provenance --access public --loglevel verbose
 
       - name: Dry run (skip publish)
         if: github.event.inputs.dry_run == 'true'
