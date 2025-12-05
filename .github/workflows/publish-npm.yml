@@ -75,12 +75,13 @@ jobs:
           # Override any inherited NODE_AUTH_TOKEN with empty value
           # This forces npm to use OIDC authentication via --provenance
           NODE_AUTH_TOKEN: ''
-          # Prevent npm from using the .npmrc created by setup-node
+          # Unset NPM_CONFIG_USERCONFIG to prevent npm from using the .npmrc
+          # created by setup-node (which contains token reference that blocks OIDC)
           NPM_CONFIG_USERCONFIG: ''
         run: |
-          # Remove any .npmrc files that might contain stale tokens
-          rm -f ~/.npmrc
-          rm -f /home/runner/work/_temp/.npmrc
+          # Create a clean .npmrc with just the registry (no token reference)
+          # This allows npm to use OIDC while still knowing which registry to use
+          echo "registry=https://registry.npmjs.org/" > ~/.npmrc
 
           # Publish with provenance for supply chain security
           # Uses OIDC authentication - npm automatically gets an OIDC token
