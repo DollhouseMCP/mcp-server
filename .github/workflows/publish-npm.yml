@@ -69,6 +69,9 @@ jobs:
       - name: Publish to npm (with provenance)
         if: github.event.inputs.dry_run != 'true'
         shell: bash
+        env:
+          # Clear any legacy token - OIDC handles auth via provenance
+          NODE_AUTH_TOKEN: ''
         run: |
           # Publish with provenance for supply chain security
           # Uses OIDC authentication (no token needed!)
