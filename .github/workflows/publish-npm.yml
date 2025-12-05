@@ -98,13 +98,17 @@ jobs:
       - name: Publish to npm (with provenance)
         if: github.event.inputs.dry_run != 'true'
         shell: bash
+        env:
+          # Ensure provenance is enabled for OIDC detection
+          NPM_CONFIG_PROVENANCE: 'true'
         run: |
           # Publish with provenance for supply chain security
           # Uses OIDC authentication automatically when:
           # 1. id-token: write permission is set
           # 2. Running on GitHub Actions
           # 3. No .npmrc with token configuration (we removed registry-url from setup-node)
-          npm publish --provenance --access public
+          # Using --loglevel verbose to diagnose OIDC issues
+          npm publish --provenance --access public --loglevel verbose
 
       - name: Dry run (skip publish)
         if: github.event.inputs.dry_run == 'true'
