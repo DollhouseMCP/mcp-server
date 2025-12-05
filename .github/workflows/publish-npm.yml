@@ -69,6 +69,26 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing version: $VERSION"
 
+      - name: Debug OIDC Environment
+        run: |
+          echo "=== OIDC Environment Check ==="
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT SET}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+SET (hidden)}"
+          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo ""
+          echo "=== npm version ==="
+          npm --version
+          echo ""
+          echo "=== .npmrc files ==="
+          cat ~/.npmrc 2>/dev/null || echo "No ~/.npmrc"
+          cat .npmrc 2>/dev/null || echo "No ./.npmrc"
+          echo ""
+          echo "=== NPM_CONFIG_* vars ==="
+          env | grep NPM_CONFIG || echo "No NPM_CONFIG vars"
+          echo ""
+          echo "=== NODE_AUTH_TOKEN ==="
+          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
+
       - name: Publish to npm (with provenance)
         if: github.event.inputs.dry_run != 'true'
         shell: bash
