@@ -890,7 +890,27 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🏷️ Version History
 
-### v1.9.27 - 2025-11-07
+### v1.9.27 - 2025-12-05
+
+**Patch Release**: Dependency Updates & Bug Fixes
+
+#### 📦 Dependencies
+- express 5.1.0 → 5.2.1
+- posthog-node 5.11.0 → 5.14.1
+- tsx 4.20.6 → 4.21.0
+- zod 4.1.12 → 4.1.13
+- jsdom 27.0.0 → 27.2.0
+- @types/node 24.10.0 → 24.10.1
+
+#### 🐛 Bug Fixes
+- Jest ESM compatibility for jsdom nested modules (#1515, #1516)
+
+#### 🔒 Security
+- MCP SDK already updated to 1.24.0 in v1.9.26-hotfix (CVE-2025-66414)
+
+---
+
+### v1.9.26 - 2025-11-07
 
 **Major Feature Release**: Element Source Priority System & Critical Bug Fixes
 
@@ -914,7 +934,7 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 - SonarCloud badges restored to README chunk file
 
 #### 📦 Dependencies
-- @modelcontextprotocol/sdk 1.20.2 → 1.21.0
+- @modelcontextprotocol/sdk 1.20.2 → 1.24.0 (security update for CVE-2025-66414)
 - posthog-node 5.10.3 → 5.11.0
 - @types/archiver 6.0.4 → 7.0.0
 - @types/node 24.9.1 → 24.10.0
