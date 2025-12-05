@@ -72,6 +72,12 @@ jobs:
         if: github.event.inputs.dry_run != 'true'
         shell: bash
         run: |
+          # Clear any legacy token that might override OIDC authentication
+          # The setup-node action may inject NODE_AUTH_TOKEN from org/repo secrets
+          # which takes precedence over OIDC. We must remove it for OIDC to work.
+          rm -f ~/.npmrc
+          unset NODE_AUTH_TOKEN
+
           # Publish with provenance for supply chain security
           # Uses OIDC authentication - npm automatically gets an OIDC token
           # from GitHub Actions when --provenance is specified
