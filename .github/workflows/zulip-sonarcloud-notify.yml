@@ -38,18 +38,31 @@ jobs:
           # Get short SHA
           SHORT_SHA=$(echo "$SHA" | cut -c1-7)
 
+          # URL-encode branch name for SonarCloud link
+          ENCODED_BRANCH=$(printf '%s' "$BRANCH" | jq -sRr @uri)
+
           # Build message
           MESSAGE="${STATUS_EMOJI} **${STATUS_TEXT}** on \`${BRANCH}\`
 
           **Commit:** [${SHORT_SHA}](${RUN_URL})
           **Repository:** ${REPO}
 
-          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${BRANCH})"
+          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${ENCODED_BRANCH})"
 
-          # Send to Zulip
-          curl -s -X POST "https://chat.dollhousemcp.com/api/v1/messages" \
+          # Send to Zulip with timeout and error handling
+          HTTP_STATUS=$(curl -s -o /tmp/zulip_response.txt -w "%{http_code}" \
+            --max-time 30 \
+            -X POST "https://chat.dollhousemcp.com/api/v1/messages" \
             -u "sonarcloud-bot@chat.dollhousemcp.com:${ZULIP_API_KEY}" \
             -d "type=stream" \
             -d "to=sonarcloud" \
             -d "topic=mcp-server" \
-            -d "content=${MESSAGE}"
+            -d "content=${MESSAGE}")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✅ Notification sent successfully (HTTP ${HTTP_STATUS})"
+          else
+            echo "❌ Failed to send notification (HTTP ${HTTP_STATUS})"
+            cat /tmp/zulip_response.txt
+            exit 1
+          fi
