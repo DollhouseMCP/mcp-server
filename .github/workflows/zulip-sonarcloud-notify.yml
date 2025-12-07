@@ -15,33 +15,40 @@ jobs:
 
     steps:
       - name: Send notification to Zulip
+        env:
+          ZULIP_API_KEY: ${{ secrets.ZULIP_SONARCLOUD_API_KEY }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REPO: ${{ github.event.workflow_run.repository.full_name }}
         run: |
           # Determine status
-          if [ "${{ github.event.workflow_run.conclusion }}" == "success" ]; then
+          if [ "$CONCLUSION" == "success" ]; then
             STATUS_EMOJI="✅"
             STATUS_TEXT="Build passed"
-          elif [ "${{ github.event.workflow_run.conclusion }}" == "failure" ]; then
+          elif [ "$CONCLUSION" == "failure" ]; then
             STATUS_EMOJI="❌"
             STATUS_TEXT="Build failed"
           else
             STATUS_EMOJI="⚠️"
-            STATUS_TEXT="Build ${{ github.event.workflow_run.conclusion }}"
+            STATUS_TEXT="Build ${CONCLUSION}"
           fi
 
           # Get short SHA
-          SHORT_SHA=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+          SHORT_SHA=$(echo "$SHA" | cut -c1-7)
 
           # Build message
-          MESSAGE="${STATUS_EMOJI} **${STATUS_TEXT}** on \`${{ github.event.workflow_run.head_branch }}\`
+          MESSAGE="${STATUS_EMOJI} **${STATUS_TEXT}** on \`${BRANCH}\`
 
-          **Commit:** [${SHORT_SHA}](${{ github.event.workflow_run.html_url }})
-          **Repository:** ${{ github.event.workflow_run.repository.full_name }}
+          **Commit:** [${SHORT_SHA}](${RUN_URL})
+          **Repository:** ${REPO}
 
-          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${{ github.event.workflow_run.head_branch }})"
+          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${BRANCH})"
 
           # Send to Zulip
           curl -s -X POST "https://chat.dollhousemcp.com/api/v1/messages" \
-            -u "sonarcloud-bot@chat.dollhousemcp.com:${{ secrets.ZULIP_SONARCLOUD_API_KEY }}" \
+            -u "sonarcloud-bot@chat.dollhousemcp.com:${ZULIP_API_KEY}" \
             -d "type=stream" \
             -d "to=sonarcloud" \
             -d "topic=mcp-server" \
