@@ -1,0 +1,68 @@
+---
+name: Zulip SonarCloud Notification
+
+on:
+  workflow_run:
+    workflows: ["Core Build & Test"]
+    types:
+      - completed
+
+jobs:
+  notify:
+    name: Notify Zulip
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'develop'
+
+    steps:
+      - name: Send notification to Zulip
+        env:
+          ZULIP_API_KEY: ${{ secrets.ZULIP_SONARCLOUD_API_KEY }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REPO: ${{ github.event.workflow_run.repository.full_name }}
+        run: |
+          # Determine status
+          if [ "$CONCLUSION" == "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Build passed"
+          elif [ "$CONCLUSION" == "failure" ]; then
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Build failed"
+          else
+            STATUS_EMOJI="⚠️"
+            STATUS_TEXT="Build ${CONCLUSION}"
+          fi
+
+          # Get short SHA
+          SHORT_SHA=$(echo "$SHA" | cut -c1-7)
+
+          # URL-encode branch name for SonarCloud link
+          ENCODED_BRANCH=$(printf '%s' "$BRANCH" | jq -sRr @uri)
+
+          # Build message
+          MESSAGE="${STATUS_EMOJI} **${STATUS_TEXT}** on \`${BRANCH}\`
+
+          **Commit:** [${SHORT_SHA}](${RUN_URL})
+          **Repository:** ${REPO}
+
+          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${ENCODED_BRANCH})"
+
+          # Send to Zulip with timeout and error handling
+          HTTP_STATUS=$(curl -s -o /tmp/zulip_response.txt -w "%{http_code}" \
+            --max-time 30 \
+            -X POST "https://chat.dollhousemcp.com/api/v1/messages" \
+            -u "sonarcloud-bot@chat.dollhousemcp.com:${ZULIP_API_KEY}" \
+            -d "type=stream" \
+            -d "to=sonarcloud" \
+            -d "topic=mcp-server" \
+            -d "content=${MESSAGE}")
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✅ Notification sent successfully (HTTP ${HTTP_STATUS})"
+          else
+            echo "❌ Failed to send notification (HTTP ${HTTP_STATUS})"
+            cat /tmp/zulip_response.txt
+            exit 1
+          fi
