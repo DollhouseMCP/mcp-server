@@ -1,0 +1,48 @@
+---
+name: Zulip SonarCloud Notification
+
+on:
+  workflow_run:
+    workflows: ["Core Build & Test"]
+    types:
+      - completed
+
+jobs:
+  notify:
+    name: Notify Zulip
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'develop'
+
+    steps:
+      - name: Send notification to Zulip
+        run: |
+          # Determine status
+          if [ "${{ github.event.workflow_run.conclusion }}" == "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Build passed"
+          elif [ "${{ github.event.workflow_run.conclusion }}" == "failure" ]; then
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Build failed"
+          else
+            STATUS_EMOJI="⚠️"
+            STATUS_TEXT="Build ${{ github.event.workflow_run.conclusion }}"
+          fi
+
+          # Get short SHA
+          SHORT_SHA=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+
+          # Build message
+          MESSAGE="${STATUS_EMOJI} **${STATUS_TEXT}** on \`${{ github.event.workflow_run.head_branch }}\`
+
+          **Commit:** [${SHORT_SHA}](${{ github.event.workflow_run.html_url }})
+          **Repository:** ${{ github.event.workflow_run.repository.full_name }}
+
+          [View SonarCloud Analysis](https://sonarcloud.io/dashboard?id=DollhouseMCP_mcp-server&branch=${{ github.event.workflow_run.head_branch }})"
+
+          # Send to Zulip
+          curl -s -X POST "https://chat.dollhousemcp.com/api/v1/messages" \
+            -u "sonarcloud-bot@chat.dollhousemcp.com:${{ secrets.ZULIP_SONARCLOUD_API_KEY }}" \
+            -d "type=stream" \
+            -d "to=sonarcloud" \
+            -d "topic=mcp-server" \
+            -d "content=${MESSAGE}"
