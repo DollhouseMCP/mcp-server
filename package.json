@@ -146,7 +146,7 @@
     "node-fetch": "^3.3.2",
     "posthog-node": "^5.17.2",
     "uuid": "^11.1.0",
-    "zod": "^4.1.13"
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.2.0",
