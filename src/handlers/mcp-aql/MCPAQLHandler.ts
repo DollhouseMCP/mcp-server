@@ -83,6 +83,7 @@ import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { LogQueryOptions } from '../../logging/types.js';
+import type { MetricQueryOptions, MetricType } from '../../metrics/types.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '../../elements/agents/handoff.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
@@ -216,6 +217,39 @@ function validateLogQueryParams(params: Record<string, unknown>): LogQueryOption
   }
   if (typeof params.correlationId === 'string') {
     options.correlationId = params.correlationId;
+  }
+
+  return options;
+}
+
+const VALID_METRIC_TYPES = new Set<MetricType>(['counter', 'gauge', 'histogram']);
+
+function validateMetricQueryParams(params: Record<string, unknown>): MetricQueryOptions {
+  const options: MetricQueryOptions = {};
+
+  if (Array.isArray(params.names)) {
+    options.names = params.names.filter((n): n is string => typeof n === 'string');
+  }
+  if (typeof params.source === 'string') {
+    options.source = params.source;
+  }
+  if (typeof params.type === 'string' && VALID_METRIC_TYPES.has(params.type as MetricType)) {
+    options.type = params.type as MetricType;
+  }
+  if (typeof params.since === 'string') {
+    options.since = params.since;
+  }
+  if (typeof params.until === 'string') {
+    options.until = params.until;
+  }
+  if (typeof params.latest === 'boolean') {
+    options.latest = params.latest;
+  }
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit)) {
+    options.limit = params.limit;
+  }
+  if (typeof params.offset === 'number' && Number.isFinite(params.offset)) {
+    options.offset = params.offset;
   }
 
   return options;
@@ -411,6 +445,8 @@ export interface HandlerRegistry {
   verificationNotifier?: IVerificationNotifier;
   // Issue #528: MemoryLogSink for CRUDE-routed query_logs
   memorySink?: MemoryLogSink;
+  // Metrics: MemoryMetricsSink for CRUDE-routed query_metrics
+  metricsSink?: import('../../metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
 }
 
 /**
@@ -1172,6 +1208,11 @@ export class MCPAQLHandler {
     // Logging operations (Issue #528 - CRUDE migration)
     if (module === 'Logging') {
       return this.dispatchLogging(method, params as Record<string, unknown>);
+    }
+
+    // Metrics operations (CRUDE-routed query_metrics)
+    if (module === 'Metrics') {
+      return this.dispatchMetrics(method, params as Record<string, unknown>);
     }
 
     // Browser operations (Issue #774: open portfolio browser)
@@ -2962,6 +3003,31 @@ export class MCPAQLHandler {
       }
       default:
         throw new Error(`Unknown Logging method: ${method}`);
+    }
+  }
+
+  /**
+   * Dispatch Metrics operations.
+   *
+   * Routes query_metrics through the unified CRUDE pipeline, providing
+   * operation routing, gatekeeper policy enforcement, and structured response format.
+   */
+  private dispatchMetrics(
+    method: string,
+    params: Record<string, unknown>
+  ): unknown {
+    if (!this.handlers.metricsSink) {
+      throw new Error('MemoryMetricsSink not available — metrics query requires metrics sink');
+    }
+
+    switch (method) {
+      case 'query': {
+        const options = validateMetricQueryParams(params);
+        const result = this.handlers.metricsSink.query(options);
+        return { _type: 'MetricQueryResult', ...result };
+      }
+      default:
+        throw new Error(`Unknown Metrics method: ${method}`);
     }
   }
 

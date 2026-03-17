@@ -177,6 +177,16 @@ const envSchema = z.object({
   /** Rate limit window in ms for permission prompt and CLI approvals (default: 60000 = 60s) */
   DOLLHOUSE_PERMISSION_RATE_WINDOW_MS: z.coerce.number().default(60_000),
 
+  // ============================================================================
+  // Metrics Collection Configuration
+  // ============================================================================
+  DOLLHOUSE_METRICS_ENABLED: z.coerce.boolean().default(true),
+  DOLLHOUSE_METRICS_COLLECTION_INTERVAL_MS: z.coerce.number().min(1000).max(300000).default(15000),
+  DOLLHOUSE_METRICS_MAX_SNAPSHOT_SIZE: z.coerce.number().default(102400),
+  DOLLHOUSE_METRICS_COLLECTOR_FAILURE_THRESHOLD: z.coerce.number().min(1).max(100).default(10),
+  DOLLHOUSE_METRICS_COLLECTION_DURATION_WARN_MS: z.coerce.number().min(100).max(60000).default(5000),
+  DOLLHOUSE_METRICS_MEMORY_SNAPSHOT_CAPACITY: z.coerce.number().min(10).max(10000).default(240),
+
   // Pattern encryption settings for Memory Security (Issue #1321)
   DOLLHOUSE_DISABLE_ENCRYPTION: z.coerce.boolean().default(false),
   DOLLHOUSE_ENCRYPTION_SECRET: z.string().optional(),

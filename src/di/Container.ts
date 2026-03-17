@@ -24,7 +24,7 @@ import { PortfolioManager, ElementType } from "../portfolio/PortfolioManager.js"
 import { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexManager } from "../portfolio/EnhancedIndexManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
-import { MCPAQLHandler } from "../handlers/mcp-aql/MCPAQLHandler.js";
+import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { SkillManager } from "../elements/skills/index.js";
 import { TemplateManager } from "../elements/templates/TemplateManager.js";
@@ -113,6 +113,19 @@ import { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import { PlainTextFormatter } from '../logging/formatters/PlainTextFormatter.js';
 import { JsonlFormatter } from '../logging/formatters/JsonlFormatter.js';
 import { wireLogHooks, getTriggerMetricsLogListener } from '../logging/LogHooks.js';
+import { MetricsManager } from '../metrics/MetricsManager.js';
+import { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
+import { buildMetricsManagerConfig } from '../metrics/types.js';
+import {
+  PerformanceMonitorCollector,
+  LRUCacheCollector,
+  SecurityMonitorCollector,
+  SecurityTelemetryCollector,
+  FileLockManagerCollector,
+  DefaultElementProviderCollector,
+  TriggerMetricsTrackerCollector,
+  OperationalTelemetryCollector,
+} from '../metrics/collectors/index.js';
 
 // State is owned by PersonaManager and services
 
@@ -425,6 +438,20 @@ export class DollhouseContainer {
 
       return manager;
     });
+
+    // METRICS COLLECTION
+    const metricsConfig = buildMetricsManagerConfig(env);
+    if (metricsConfig.enabled) {
+      this.register('MetricsManager', () => {
+        const manager = new MetricsManager(metricsConfig, logger);
+
+        const memoryMetricsSink = new MemoryMetricsSink(metricsConfig.memorySnapshotCapacity);
+        manager.registerSink(memoryMetricsSink);
+        this.register('MemoryMetricsSink', () => memoryMetricsSink);
+
+        return manager;
+      });
+    }
 
     // TELEMETRY
     this.register('OperationalTelemetry', () => new OperationalTelemetry(
@@ -894,6 +921,18 @@ export class DollhouseContainer {
     }
     timer.endPhase('log_hooks');
 
+    // --- metrics_collectors (deferred) ---
+    timer.startPhase('metrics_collectors', false);
+    try {
+      const metricsManager = this.resolve<MetricsManager>('MetricsManager');
+      this.wireMetricsCollectors(metricsManager);
+      metricsManager.start();
+      logger.info('[Container] Metrics collection started');
+    } catch (error) {
+      logger.warn('[Container] Metrics wiring skipped:', error);
+    }
+    timer.endPhase('metrics_collectors');
+
     // --- danger_zone_init (deferred) ---
     timer.startPhase('danger_zone_init', false);
     try {
@@ -1206,7 +1245,10 @@ export class DollhouseContainer {
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
     // Issue #402: Pass DangerZoneEnforcer via HandlerRegistry
-    const mcpAqlHandler = new MCPAQLHandler({
+    // Build handler registry, then add lazy metricsSink getter.
+    // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
+    // so it isn't available at handler construction time — resolve on first access instead.
+    const handlerDeps: HandlerRegistry = {
       elementCRUD: elementCrudHandler,
       memoryManager: this.resolve('MemoryManager'),
       agentManager: this.resolve('AgentManager'),
@@ -1227,7 +1269,14 @@ export class DollhouseContainer {
       verificationStore: this.resolve('VerificationStore'),  // Issue #142: Verification codes
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
-    }, this.resolve<ContextTracker>('ContextTracker'));
+    };
+    const containerRef = this;
+    Object.defineProperty(handlerDeps, 'metricsSink', {
+      get() { try { return containerRef.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
@@ -1394,7 +1443,91 @@ export class DollhouseContainer {
     }
   }
 
+  /**
+   * Wire all metric collectors into the MetricsManager.
+   * Mirrors wireLogHooks() — keeps collector registration out of the constructor.
+   */
+  private wireMetricsCollectors(metricsManager: MetricsManager): void {
+    // PerformanceMonitor (instance)
+    try {
+      const monitor = this.resolve<import('../utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor');
+      metricsManager.registerCollector(new PerformanceMonitorCollector(monitor));
+    } catch { /* not registered */ }
+
+    // LRUCache instances — API cache + all element manager caches
+    try {
+      const caches: Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> = [];
+      try {
+        const apiCache = this.resolve<{ getStats(): import('../cache/LRUCache.js').CacheStats }>('APICache');
+        // APICache wraps LRUCache but exposes getStats() directly — treat it as LRUCache-compatible
+        caches.push({ name: 'APICache', instance: apiCache as any });
+      } catch { /* not available */ }
+
+      // Element manager caches (elements + pathIndex per type)
+      const managerNames = [
+        'PersonaManager', 'SkillManager', 'AgentManager',
+        'MemoryManager', 'EnsembleManager', 'TemplateManager',
+      ] as const;
+      for (const name of managerNames) {
+        try {
+          const mgr = this.resolve<import('../elements/base/BaseElementManager.js').BaseElementManager<any>>(name);
+          caches.push(...mgr.getMetricsCaches());
+        } catch { /* not registered */ }
+      }
+
+      if (caches.length > 0) {
+        metricsManager.registerCollector(new LRUCacheCollector(caches));
+      }
+    } catch { /* skip */ }
+
+    // SecurityMonitor (static)
+    try {
+      metricsManager.registerCollector(new SecurityMonitorCollector());
+    } catch { /* not available */ }
+
+    // SecurityTelemetry (instance)
+    try {
+      const telemetry = this.resolve<import('../security/telemetry/SecurityTelemetry.js').SecurityTelemetry>('SecurityTelemetry');
+      metricsManager.registerCollector(new SecurityTelemetryCollector(telemetry));
+    } catch { /* not registered */ }
+
+    // FileLockManager (instance)
+    try {
+      const lockManager = this.resolve<import('../security/fileLockManager.js').FileLockManager>('FileLockManager');
+      metricsManager.registerCollector(new FileLockManagerCollector(lockManager));
+    } catch { /* not registered */ }
+
+    // DefaultElementProvider (static)
+    try {
+      metricsManager.registerCollector(new DefaultElementProviderCollector());
+    } catch { /* not available */ }
+
+    // TriggerMetricsTracker (instance — created inside EnhancedIndexManager factory)
+    try {
+      const enhancedIndex = this.resolve<import('../portfolio/EnhancedIndexManager.js').EnhancedIndexManager>('EnhancedIndexManager');
+      // EnhancedIndexManager exposes tracker via public getter if available
+      if ('triggerMetricsTracker' in enhancedIndex) {
+        const tracker = (enhancedIndex as any).triggerMetricsTracker;
+        if (tracker) {
+          metricsManager.registerCollector(new TriggerMetricsTrackerCollector(tracker));
+        }
+      }
+    } catch { /* not registered */ }
+
+    // OperationalTelemetry (instance)
+    try {
+      const opTelemetry = this.resolve<import('../telemetry/OperationalTelemetry.js').OperationalTelemetry>('OperationalTelemetry');
+      metricsManager.registerCollector(new OperationalTelemetryCollector(opTelemetry));
+    } catch { /* not registered */ }
+  }
+
   public async dispose(): Promise<void> {
+    // Close MetricsManager before general disposal (flush final snapshot)
+    try {
+      const metricsManager = this.resolve<MetricsManager>('MetricsManager');
+      await metricsManager.close();
+    } catch { /* metrics not enabled or not registered */ }
+
     // Clean up log hooks before disposing services
     try {
       const cleanups = this.resolve<(() => void)[]>('_logHookCleanups');
