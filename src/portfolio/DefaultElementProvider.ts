@@ -533,13 +533,6 @@ export class DefaultElementProvider {
     const bufferMisses = DefaultElementProvider.bufferPoolStats.misses;
     const totalRequests = bufferHits + bufferMisses;
 
-    DefaultElementProvider.logListener?.('debug', 'Report buffer pool stats', {
-      hits: bufferHits,
-      misses: bufferMisses,
-      hitRate: totalRequests > 0 ? bufferHits / totalRequests : 0,
-      poolSize: DefaultElementProvider.bufferPool.length,
-    });
-
     return {
       bufferPool: {
         hits: bufferHits,

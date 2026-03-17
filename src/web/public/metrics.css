@@ -1,0 +1,241 @@
+/**
+ * Metrics Dashboard Styles — Grid layout, card-based sections
+ */
+
+/* ── Dashboard container ──────────────────────────────────────── */
+.metrics-dashboard {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+  font-family: var(--font-body);
+}
+
+@media (max-width: 900px) {
+  .metrics-dashboard {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.metrics-card {
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.metrics-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+
+.metrics-card-header:hover {
+  background: var(--surface-2);
+}
+
+.metrics-card-title {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-900);
+  letter-spacing: 0.02em;
+}
+
+.metrics-card-toggle {
+  font-size: 12px;
+  color: var(--ink-500);
+  transition: transform 0.2s;
+}
+
+.metrics-card.collapsed .metrics-card-toggle {
+  transform: rotate(-90deg);
+}
+
+.metrics-card.collapsed .metrics-card-body {
+  display: none;
+}
+
+.metrics-card-body {
+  padding: 14px;
+}
+
+/* ── Status bar ───────────────────────────────────────────────── */
+.metrics-status-bar {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-500);
+  font-family: var(--font-mono);
+}
+
+.metrics-time-range {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.metrics-time-btn {
+  background: var(--paper-strong);
+  color: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.metrics-time-btn.active {
+  background: var(--signal);
+  color: #fff;
+  border-color: var(--signal);
+}
+
+.metrics-time-btn:hover:not(.active) {
+  background: var(--surface-2);
+}
+
+/* ── Stat values ──────────────────────────────────────────────── */
+.metrics-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.metrics-stat {
+  padding: 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.metrics-stat-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink-950);
+  line-height: 1.2;
+}
+
+.metrics-stat-label {
+  font-size: 10.5px;
+  color: var(--ink-500);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+}
+
+.metrics-stat-unit {
+  font-size: 11px;
+  color: var(--ink-500);
+}
+
+/* ── Tables ───────────────────────────────────────────────────── */
+.metrics-card-body {
+  overflow-x: auto;
+}
+
+.metrics-table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.metrics-table th {
+  text-align: left;
+  padding: 5px 6px;
+  color: var(--ink-500);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line);
+}
+
+.metrics-table td {
+  padding: 4px 6px;
+  color: var(--ink-900);
+  border-bottom: 1px solid var(--surface-1);
+}
+
+.metrics-table tr:hover td {
+  background: var(--surface-2);
+}
+
+.metrics-table tfoot td {
+  border-top: 2px solid var(--line);
+  padding-top: 6px;
+  color: var(--ink-950);
+}
+
+/* ── Charts ───────────────────────────────────────────────────── */
+.metrics-chart-container {
+  width: 100%;
+  margin-top: 12px;
+  /* uPlot sets explicit pixel sizes on its wrapper — let it control height */
+}
+
+/* Prevent uPlot canvas from overflowing card width */
+.metrics-chart-container .u-wrap {
+  max-width: 100%;
+}
+
+/* ── Alerts / warnings ────────────────────────────────────────── */
+.metrics-alert {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  margin-bottom: 8px;
+}
+
+.metrics-alert.warn {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.metrics-alert.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* ── Progress bars ────────────────────────────────────────────── */
+.metrics-bar {
+  height: 8px;
+  background: var(--surface-1);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.metrics-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--signal-2);
+  transition: width 0.3s ease;
+}
+
+.metrics-bar-fill.high { background: #f59e0b; }
+.metrics-bar-fill.critical { background: #ef4444; }
+
+/* ── Loading state ────────────────────────────────────────────── */
+.metrics-loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--ink-500);
+  font-size: 13px;
+}

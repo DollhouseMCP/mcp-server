@@ -1027,13 +1027,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/logging/sinks/SSELogSink.ts',
-    reason: 'JSON-serializes pre-constructed UnifiedLogEntry objects over SSE. No HTML rendering; the viewer (viewerHtml.ts) handles HTML escaping via document.createTextNode. PR #471'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/logging/viewer/viewerHtml.ts',
-    reason: 'All dynamic content (timestamp, category, source, message, correlationId) is HTML-escaped via escHtml() using document.createTextNode before DOM insertion. PR #471'
+    file: 'src/web/routes/logRoutes.ts',
+    reason: 'JSON-serializes pre-constructed UnifiedLogEntry objects over SSE. All query parameters are validated strings passed to MemoryLogSink.query(). No HTML rendering.'
   },
   {
     rule: 'DMCP-SEC-004',

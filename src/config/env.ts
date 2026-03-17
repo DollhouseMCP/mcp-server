@@ -121,6 +121,12 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_VIEWER_PORT: z.coerce.number().default(9100),
 
   // ============================================================================
+  // Web Console Configuration
+  // ============================================================================
+  /** Enable the unified web console (logs + metrics tabs on port 3939) */
+  DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
+
+  // ============================================================================
   // Security Configuration
   // ============================================================================
   /**

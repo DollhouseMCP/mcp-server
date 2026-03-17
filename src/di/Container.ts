@@ -32,7 +32,8 @@ import { TemplateRenderer } from "../utils/TemplateRenderer.js";
 import { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
 import { MemoryManager } from "../elements/memories/MemoryManager.js";
-import { SSELogSink } from "../logging/sinks/SSELogSink.js";
+import { WebSSELogSink } from "../web/sinks/WebSSELogSink.js";
+import { WebSSEMetricsSink } from "../web/sinks/WebSSEMetricsSink.js";
 import { EnsembleManager } from "../elements/ensembles/EnsembleManager.js";
 import { PersonaExporter, PersonaImporter } from "../persona/export-import/index.js";
 import { PersonaManager } from "../persona/PersonaManager.js";
@@ -410,14 +411,13 @@ export class DollhouseContainer {
       // Register as named service for Phase 5's MCP query tool
       this.register('MemoryLogSink', () => memorySink);
 
-      // Phase 6: SSELogSink (opt-in HTTP debug viewer)
+      // Standalone SSELogSink removed — replaced by unified web console.
+      // Log deprecation warning if the old env var is set.
       if (config.viewerEnabled) {
-        const sseSink = new SSELogSink({
-          port: config.viewerPort,
-          memorySink: memorySink,
-        });
-        manager.registerSink(sseSink);
-        void sseSink.start();
+        logger.info(
+          '[Container] DOLLHOUSE_LOG_VIEWER/DOLLHOUSE_LOG_VIEWER_PORT are deprecated. ' +
+          'Use the management console at port 3939 instead (DOLLHOUSE_WEB_CONSOLE=true).'
+        );
       }
 
       // Startup marker — first entry in every server session
@@ -432,7 +432,7 @@ export class DollhouseContainer {
           version: VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
-          viewer: config.viewerEnabled ? `http://127.0.0.1:${config.viewerPort}` : 'disabled',
+          console: env.DOLLHOUSE_WEB_CONSOLE ? 'http://dollhouse.localhost:3939' : 'disabled',
         },
       });
 
@@ -933,6 +933,45 @@ export class DollhouseContainer {
     }
     timer.endPhase('metrics_collectors');
 
+    // --- web_console (deferred) ---
+    timer.startPhase('web_console', false);
+    try {
+      if (env.DOLLHOUSE_WEB_CONSOLE) {
+        const { startWebServer } = await import('../web/server.js');
+        const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
+        const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+
+        let metricsSink: MemoryMetricsSink | undefined;
+        try {
+          metricsSink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
+        } catch { /* metrics not available */ }
+
+        const webResult = await startWebServer({
+          portfolioDir: portfolioManager.getBaseDir(),
+          memorySink,
+          metricsSink,
+        });
+
+        // Wire WebSSE sinks into LogManager and MetricsManager
+        if (webResult.logBroadcast) {
+          const logManager = this.resolve<LogManager>('LogManager');
+          logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+        }
+
+        if (webResult.metricsOnSnapshot && metricsSink) {
+          try {
+            const metricsManager = this.resolve<MetricsManager>('MetricsManager');
+            metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
+          } catch { /* metrics manager not available */ }
+        }
+
+        logger.info('[Container] Web console started');
+      }
+    } catch (error) {
+      logger.warn('[Container] Web console startup failed:', error);
+    }
+    timer.endPhase('web_console');
+
     // --- danger_zone_init (deferred) ---
     timer.startPhase('danger_zone_init', false);
     try {
@@ -1270,9 +1309,8 @@ export class DollhouseContainer {
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
     };
-    const containerRef = this;
     Object.defineProperty(handlerDeps, 'metricsSink', {
-      get() { try { return containerRef.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
       configurable: true,
       enumerable: true,
     });

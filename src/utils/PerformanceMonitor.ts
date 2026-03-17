@@ -5,6 +5,7 @@
 
 import { logger } from './logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { freemem, totalmem, loadavg } from 'node:os';
 
 export interface PerformanceMetrics {
   searchTimes: number[];
@@ -497,13 +498,11 @@ export class PerformanceMonitor {
   }
 
   private getSystemStats(): SystemStats {
-    const os = require('os');
-    
     return {
       cpuUsage: process.cpuUsage().user / 1000000, // Convert to seconds
-      loadAverage: os.loadavg(),
-      freeMemory: os.freemem(),
-      totalMemory: os.totalmem(),
+      loadAverage: loadavg(),
+      freeMemory: freemem(),
+      totalMemory: totalmem(),
       uptime: process.uptime()
     };
   }

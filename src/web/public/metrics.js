@@ -1,0 +1,505 @@
+/**
+ * DollhouseMCP Metrics Dashboard
+ *
+ * Displays system health, cache efficiency, security, and more.
+ * Fetches data via polling (GET /api/metrics).
+ * Uses uPlot for time-series charts when available.
+ */
+
+(() => {
+  const POLL_INTERVAL_MS = 15000;
+  const TIME_RANGES = {
+    '15m': 15 * 60 * 1000,
+    '30m': 30 * 60 * 1000,
+    '1h':  60 * 60 * 1000,
+  };
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let pollTimer = null;
+  let activeRange = '15m';
+  let lastSnapshot = null;
+  let historySnapshots = []; // for time-series charts
+  let charts = {};           // uPlot instances by section
+  let uPlotAvailable = false;
+  let initialized = false;
+
+  // ── Public API ───────────────────────────────────────────────────────────
+  window.DollhouseConsole = window.DollhouseConsole || {};
+  window.DollhouseConsole.metrics = {
+    init: initMetrics,
+    destroy: destroyMetrics,
+    refresh: () => {
+      if (lastSnapshot) {
+        requestAnimationFrame(() => renderAll(lastSnapshot.metrics));
+      }
+    },
+  };
+
+  function initMetrics() {
+    const container = document.getElementById('metrics-dashboard-root');
+    if (!container || container.dataset.initialized === 'true') return;
+    container.dataset.initialized = 'true';
+
+    uPlotAvailable = typeof window.uPlot !== 'undefined';
+    buildDOM(container);
+    bindEvents();
+    fetchLatest();
+    pollTimer = setInterval(fetchLatest, POLL_INTERVAL_MS);
+    initialized = true;
+  }
+
+  function destroyMetrics() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    for (const chart of Object.values(charts)) {
+      if (chart && chart.destroy) chart.destroy();
+    }
+    charts = {};
+    initialized = false;
+  }
+
+  // ── DOM construction ─────────────────────────────────────────────────────
+  function buildDOM(container) {
+    container.innerHTML = `
+      <div class="metrics-status-bar">
+        <span id="metrics-last-update">No data yet</span>
+        <span id="metrics-collection-info"></span>
+        <div class="metrics-time-range">
+          <button class="metrics-time-btn active" data-range="15m">15m</button>
+          <button class="metrics-time-btn" data-range="30m">30m</button>
+          <button class="metrics-time-btn" data-range="1h">1h</button>
+        </div>
+      </div>
+      <div class="metrics-dashboard" id="metrics-grid">
+        ${buildCard('system', 'System Health')}
+        ${buildCard('search', 'Search Performance')}
+        ${buildCard('cache', 'Cache Efficiency')}
+        ${buildCard('security', 'Security')}
+        ${buildCard('locks', 'Locks & I/O')}
+        ${buildCard('meta', 'Metrics System')}
+      </div>
+    `;
+  }
+
+  function buildCard(id, title) {
+    return `
+      <div class="metrics-card" id="metrics-card-${id}">
+        <div class="metrics-card-header" data-card="${id}">
+          <span class="metrics-card-title">${title}</span>
+          <span class="metrics-card-toggle">&#9660;</span>
+        </div>
+        <div class="metrics-card-body" id="metrics-body-${id}">
+          <div class="metrics-loading">Waiting for data...</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindEvents() {
+    document.getElementById('metrics-grid').addEventListener('click', (e) => {
+      const header = e.target.closest('.metrics-card-header');
+      if (!header) return;
+      header.parentElement.classList.toggle('collapsed');
+    });
+
+    document.querySelector('.metrics-time-range').addEventListener('click', (e) => {
+      const btn = e.target.closest('.metrics-time-btn');
+      if (!btn) return;
+      document.querySelectorAll('.metrics-time-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeRange = btn.dataset.range;
+      fetchHistory();
+    });
+  }
+
+  // ── Data fetching ────────────────────────────────────────────────────────
+  async function fetchLatest() {
+    try {
+      const res = await fetch('/api/metrics?latest=true');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.snapshots && data.snapshots.length > 0) {
+        lastSnapshot = data.snapshots[0];
+        // Deduplicate by snapshot id
+        if (!historySnapshots.some(s => s.id === lastSnapshot.id)) {
+          historySnapshots.push(lastSnapshot);
+        }
+        // Trim history
+        const cutoff = Date.now() - TIME_RANGES['1h'];
+        historySnapshots = historySnapshots.filter(s => new Date(s.timestamp).getTime() > cutoff);
+        renderAll(lastSnapshot.metrics);
+      }
+    } catch { /* network error, will retry */ }
+  }
+
+  async function fetchHistory() {
+    try {
+      const since = new Date(Date.now() - TIME_RANGES[activeRange]).toISOString();
+      const res = await fetch(`/api/metrics?latest=false&since=${since}&limit=100`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.snapshots) {
+        historySnapshots = data.snapshots.reverse(); // oldest first
+        if (lastSnapshot) renderAll(lastSnapshot.metrics);
+      }
+    } catch { /* network error */ }
+  }
+
+  // ── Rendering ────────────────────────────────────────────────────────────
+  function renderAll(metrics) {
+    if (!metrics) return;
+
+    updateStatus();
+    renderSystemHealth(metrics);
+    renderSearchPerf(metrics);
+    renderCacheEfficiency(metrics);
+    renderSecurity(metrics);
+    renderLocks(metrics);
+    renderMetaSystem(metrics);
+  }
+
+  function updateStatus() {
+    const el = document.getElementById('metrics-last-update');
+    const infoEl = document.getElementById('metrics-collection-info');
+    if (el && lastSnapshot) {
+      const d = new Date(lastSnapshot.timestamp);
+      el.textContent = 'Last update: ' + d.toLocaleTimeString();
+    }
+    if (infoEl && lastSnapshot) {
+      infoEl.textContent = lastSnapshot.metrics.length + ' metrics | ' + lastSnapshot.durationMs + 'ms collection';
+    }
+  }
+
+  // ── Section renderers ────────────────────────────────────────────────────
+
+  // Cache last-known-good system values so intermittent collector failures don't blank the card
+  let lastSystemVals = {};
+
+  function renderSystemHealth(metrics) {
+    const body = document.getElementById('metrics-body-system');
+    if (!body) return;
+
+    const heapUsed = findVal(metrics, 'system.memory.heap_used_bytes');
+    const rss = findVal(metrics, 'system.memory.rss_bytes');
+    const growthRate = findVal(metrics, 'system.memory.growth_rate');
+    const cpu = findVal(metrics, 'system.cpu.usage_seconds');
+    const uptime = findVal(metrics, 'system.uptime_seconds');
+
+    // Update cache with any non-null values
+    if (heapUsed != null) lastSystemVals.heapUsed = heapUsed;
+    if (rss != null) lastSystemVals.rss = rss;
+    if (growthRate != null) lastSystemVals.growthRate = growthRate;
+    if (cpu != null) lastSystemVals.cpu = cpu;
+    if (uptime != null) lastSystemVals.uptime = uptime;
+
+    const v = lastSystemVals;
+    const statsHtml = '<div class="metrics-stat-grid" id="system-stats">' +
+      statBox('Heap Used', formatBytes(v.heapUsed)) +
+      statBox('RSS', formatBytes(v.rss)) +
+      statBox('Growth', v.growthRate != null ? formatNumber(v.growthRate, 2) + ' MB/s' : '-') +
+      statBox('CPU', v.cpu != null ? formatNumber(v.cpu, 2) + ' s' : '-') +
+      statBox('Uptime', formatDuration(v.uptime)) +
+      '</div>';
+
+    const statsEl = body.querySelector('#system-stats');
+    if (statsEl) {
+      statsEl.outerHTML = statsHtml;
+    } else {
+      let html = statsHtml;
+      if (uPlotAvailable) {
+        html += '<div class="metrics-chart-container" id="chart-system"></div>';
+      }
+      body.innerHTML = html;
+    }
+
+    if (uPlotAvailable && historySnapshots.length >= 3 && v.heapUsed != null) {
+      updateChart('chart-system', 'system',
+        ['system.memory.heap_used_bytes', 'system.memory.rss_bytes'],
+        ['Heap', 'RSS'], formatBytes);
+    }
+  }
+
+  function renderSearchPerf(metrics) {
+    const body = document.getElementById('metrics-body-search');
+    if (!body) return;
+
+    const duration = findEntry(metrics, 'performance.search.duration');
+    const hitRate = findVal(metrics, 'performance.search.cache_hit_rate');
+    const slowCount = findVal(metrics, 'performance.search.slow_query_count');
+
+    const hasSearchMetrics = duration != null || hitRate != null || slowCount != null;
+
+    if (!hasSearchMetrics) {
+      body.innerHTML = '<div class="metrics-loading">No search metrics available — PerformanceMonitor collector may not be active</div>';
+      return;
+    }
+
+    let html = '<div class="metrics-stat-grid">';
+    if (duration && duration.type === 'histogram') {
+      const v = duration.value;
+      html += statBox('Avg', fmtMs(v.avg));
+      html += statBox('P50', fmtMs(v.p50));
+      html += statBox('P95', fmtMs(v.p95));
+      html += statBox('P99', fmtMs(v.p99));
+      html += statBox('Count', formatNumber(v.count || 0));
+    }
+    html += statBox('Cache Hit', hitRate != null ? formatPercent(hitRate) : '-');
+    html += statBox('Slow Queries', slowCount != null ? formatNumber(slowCount) : '-');
+    html += '</div>';
+
+    body.innerHTML = html;
+  }
+
+  function renderCacheEfficiency(metrics) {
+    const body = document.getElementById('metrics-body-cache');
+    if (!body) return;
+
+    const cacheMetrics = metrics.filter(m => m.name.startsWith('cache.lru.'));
+    if (cacheMetrics.length === 0) {
+      body.innerHTML = '<div class="metrics-loading">No cache metrics available</div>';
+      return;
+    }
+
+    // Group by labels.cache_name
+    const caches = new Map();
+    for (const m of cacheMetrics) {
+      const name = m.labels && (m.labels.cache_name || m.labels.cache) ? (m.labels.cache_name || m.labels.cache) : 'unknown';
+      if (!caches.has(name)) caches.set(name, {});
+      caches.get(name)[m.name.replace('cache.lru.', '')] = m.value;
+    }
+
+    let totalMemMB = 0;
+    let html = '<table class="metrics-table"><thead><tr>' +
+      '<th>Cache</th><th>Hit Rate</th><th>Hits</th><th>Misses</th><th>Size</th><th>Evictions</th><th>Memory</th>' +
+      '</tr></thead><tbody>';
+
+    for (const [name, vals] of caches) {
+      const memMB = vals.memory_used_megabytes || 0;
+      totalMemMB += memMB;
+      html += '<tr>' +
+        '<td>' + escapeHtml(name) + '</td>' +
+        '<td>' + (vals.hit_rate != null ? formatPercent(vals.hit_rate) : '-') + '</td>' +
+        '<td>' + formatNumber(vals.hits_total || 0) + '</td>' +
+        '<td>' + formatNumber(vals.misses_total || 0) + '</td>' +
+        '<td>' + formatNumber(vals.size_current || 0) + '</td>' +
+        '<td>' + formatNumber(vals.evictions_total || 0) + '</td>' +
+        '<td>' + formatMB(memMB) + '</td>' +
+        '</tr>';
+    }
+
+    html += '</tbody><tfoot><tr class="metrics-table-total">' +
+      '<td colspan="6" style="text-align:right;font-weight:700">Total Cache Memory</td>' +
+      '<td style="font-weight:700">' + formatMB(totalMemMB) + '</td>' +
+      '</tr></tfoot></table>';
+    body.innerHTML = html;
+  }
+
+  function renderSecurity(metrics) {
+    const body = document.getElementById('metrics-body-security');
+    if (!body) return;
+
+    const blocked24h = findVal(metrics, 'security.telemetry.blocked_24h');
+    const attacksPerHour = findVal(metrics, 'security.telemetry.attacks_per_hour');
+
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Blocked (24h)', blocked24h != null ? formatNumber(blocked24h) : '0');
+    html += statBox('Attacks/hour', attacksPerHour != null ? formatNumber(attacksPerHour, 1) : '0');
+    html += '</div>';
+
+    body.innerHTML = html;
+  }
+
+  function renderLocks(metrics) {
+    const body = document.getElementById('metrics-body-locks');
+    if (!body) return;
+
+    const requests = findVal(metrics, 'lock.file.requests_total');
+    const active = findVal(metrics, 'lock.file.active_current');
+    const timeouts = findVal(metrics, 'lock.file.timeouts_total');
+    const waits = findVal(metrics, 'lock.file.concurrent_waits_total');
+
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Requests', formatNumber(requests || 0));
+    html += statBox('Active', formatNumber(active || 0));
+    html += statBox('Timeouts', formatNumber(timeouts || 0));
+    html += statBox('Waits', formatNumber(waits || 0));
+    html += '</div>';
+
+    body.innerHTML = html;
+  }
+
+  function renderMetaSystem(metrics) {
+    const body = document.getElementById('metrics-body-meta');
+    if (!body) return;
+
+    const registered = findVal(metrics, 'metrics.manager.collectors_registered');
+    const disabled = findVal(metrics, 'metrics.manager.disabled_collectors');
+    const errors = findVal(metrics, 'metrics.manager.collector_errors_total');
+    const duration = findVal(metrics, 'metrics.manager.last_collection_duration_ms');
+
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Collectors', formatNumber(registered || 0));
+    html += statBox('Disabled', formatNumber(disabled || 0));
+    html += statBox('Errors', formatNumber(errors || 0));
+    html += statBox('Duration', duration != null ? formatNumber(duration, 1) + ' ms' : '-');
+    html += '</div>';
+
+    if (disabled > 0) {
+      html += '<div class="metrics-alert warn">' + disabled + ' collector(s) disabled due to repeated failures</div>';
+    }
+
+    body.innerHTML = html;
+  }
+
+  // ── Chart rendering (uPlot) ──────────────────────────────────────────────
+  function updateChart(containerId, chartKey, metricNames, labels, formatter) {
+    const container = document.getElementById(containerId);
+    if (!container || !uPlotAvailable) return;
+
+    // Defer if container hasn't been laid out yet (hidden tab)
+    const width = container.clientWidth;
+    if (width < 100) {
+      requestAnimationFrame(() => updateChart(containerId, chartKey, metricNames, labels, formatter));
+      return;
+    }
+
+    // Build data arrays
+    const times = historySnapshots.map(s => Math.floor(new Date(s.timestamp).getTime() / 1000));
+    const seriesData = metricNames.map(name => {
+      return historySnapshots.map(s => {
+        const m = s.metrics.find(m => m.name === name);
+        if (!m) return null;
+        return typeof m.value === 'number' ? m.value : null;
+      });
+    });
+
+    // If we already have a chart, update its data instead of recreating
+    if (charts[chartKey]) {
+      try {
+        charts[chartKey].setData([times, ...seriesData]);
+        return;
+      } catch {
+        // If setData fails, fall through to recreate
+        charts[chartKey].destroy();
+        delete charts[chartKey];
+      }
+    }
+
+    const isDark = document.documentElement.dataset.theme === 'dark';
+    const colors = ['#3b82f6', '#f59e0b', '#22c55e', '#ef4444'];
+
+    const opts = {
+      width: width,
+      height: 200,
+      cursor: { show: true },
+      legend: { show: true },
+      scales: {
+        x: { time: true },
+        y: { auto: true },
+      },
+      axes: [
+        {
+          stroke: isDark ? '#7b93a7' : '#677893',
+          grid: { stroke: isDark ? '#2b3445' : '#e0e0e0', width: 1 },
+          font: '10px sans-serif',
+          size: 40,
+        },
+        {
+          stroke: isDark ? '#7b93a7' : '#677893',
+          grid: { stroke: isDark ? '#2b3445' : '#e0e0e0', width: 1 },
+          font: '10px sans-serif',
+          size: 70,
+          values: (u, vals) => vals.map(v => v == null ? '' : formatter ? formatter(v) : String(v)),
+        },
+      ],
+      series: [
+        {},
+        ...labels.map((label, i) => ({
+          label: label,
+          stroke: colors[i % colors.length],
+          width: 2,
+          fill: colors[i % colors.length] + '18',
+          points: { show: true, size: 5, fill: colors[i % colors.length] },
+          spanGaps: true,
+        })),
+      ],
+    };
+
+    try {
+      container.innerHTML = '';
+      charts[chartKey] = new uPlot(opts, [times, ...seriesData], container);
+    } catch {
+      container.innerHTML = '<div class="metrics-loading">Chart unavailable</div>';
+    }
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+
+  function findVal(metrics, name) {
+    const m = metrics.find(m => m.name === name);
+    if (!m) return null;
+    return typeof m.value === 'number' ? m.value : null;
+  }
+
+  function findEntry(metrics, name) {
+    return metrics.find(m => m.name === name) || null;
+  }
+
+  function statBox(label, value) {
+    return '<div class="metrics-stat">' +
+      '<div class="metrics-stat-value">' + value + '</div>' +
+      '<div class="metrics-stat-label">' + label + '</div>' +
+      '</div>';
+  }
+
+  function formatMB(mb) {
+    if (mb == null) return '-';
+    if (mb < 0.01) return '< 0.01 MB';
+    if (mb < 1) return (mb * 1024).toFixed(0) + ' KB';
+    return mb.toFixed(2) + ' MB';
+  }
+
+  function formatBytes(bytes) {
+    if (bytes == null) return '-';
+    if (bytes < 1024) return Math.round(bytes) + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function formatNumber(n, decimals) {
+    if (n == null) return '-';
+    if (decimals !== undefined) return Number(n).toFixed(decimals);
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(Math.round(n * 100) / 100);
+  }
+
+  function formatPercent(v) {
+    if (v == null) return '-';
+    return (v * 100).toFixed(1) + '%';
+  }
+
+  function fmtMs(v) {
+    if (v == null) return '-';
+    return Number(v).toFixed(1) + ' ms';
+  }
+
+  function formatDuration(seconds) {
+    if (seconds == null) return '-';
+    seconds = Math.floor(seconds);
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h + 'h ' + m + 'm';
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+})();
