@@ -6,3 +6,5 @@ export { FileLockManagerCollector } from './FileLockManagerCollector.js';
 export { DefaultElementProviderCollector } from './DefaultElementProviderCollector.js';
 export { TriggerMetricsTrackerCollector } from './TriggerMetricsTrackerCollector.js';
 export { OperationalTelemetryCollector } from './OperationalTelemetryCollector.js';
+export { OperationMetricsCollector } from './OperationMetricsCollector.js';
+export { GatekeeperMetricsCollector } from './GatekeeperMetricsCollector.js';

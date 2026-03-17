@@ -84,6 +84,9 @@ import type { BuildInfoService } from '../../services/BuildInfoService.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { LogQueryOptions } from '../../logging/types.js';
 import type { MetricQueryOptions, MetricType } from '../../metrics/types.js';
+import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
+import type { OperationMetricsTracker } from '../../metrics/OperationMetricsTracker.js';
+import type { GatekeeperMetricsTracker } from '../../metrics/GatekeeperMetricsTracker.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '../../elements/agents/handoff.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
@@ -447,6 +450,12 @@ export interface HandlerRegistry {
   memorySink?: MemoryLogSink;
   // Metrics: MemoryMetricsSink for CRUDE-routed query_metrics
   metricsSink?: import('../../metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
+  // Search metrics: PerformanceMonitor for recordSearch()
+  performanceMonitor?: PerformanceMonitor;
+  // Operation metrics: OperationMetricsTracker for CRUD operation stats
+  operationMetricsTracker?: OperationMetricsTracker;
+  // Gatekeeper metrics: GatekeeperMetricsTracker for policy enforcement stats
+  gatekeeperMetricsTracker?: GatekeeperMetricsTracker;
 }
 
 /**
@@ -850,6 +859,14 @@ export class MCPAQLHandler {
           skipElementPolicies: isGatekeeperInfraOperation(operation),
         });
 
+        // Record Gatekeeper decision for metrics
+        this.handlers.gatekeeperMetricsTracker?.record({
+          allowed: decision.allowed,
+          permissionLevel: decision.permissionLevel,
+          policySource: decision.policySource,
+          confirmationPending: decision.confirmationPending,
+        });
+
         if (!decision.allowed) {
           if (decision.confirmationPending) {
             // Issue #1653: Auto-confirm when the host (Claude Code, etc.) has already
@@ -967,11 +984,16 @@ export class MCPAQLHandler {
           parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
         }
       });
+      const durationMs = performance.now() - startTime;
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
       return this.success(data, startTime);
     } catch (error) {
       // Catch all errors and return as OperationFailure
       const message = error instanceof Error ? error.message : String(error);
       const isSecurityViolation = message.includes('Security violation');
+
+      const durationMs = performance.now() - startTime;
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, false);
 
       // Log security events with appropriate severity
       SecurityMonitor.logSecurityEvent({
@@ -1892,6 +1914,8 @@ export class MCPAQLHandler {
    * @returns Search results with matched elements and relevance info
    */
   private async handleSearchElements(input: OperationInput): Promise<unknown> {
+    const searchStart = Date.now();
+    const memoryBefore = process.memoryUsage().heapUsed;
     const { elementType, params } = input;
     const p = params as Record<string, unknown>;
     const query = (p.query as string)?.trim();
@@ -1975,6 +1999,18 @@ export class MCPAQLHandler {
         logger.debug(`Failed to load elements for search: ${type}`, { error });
       }
     }
+
+    // Record search metrics via PerformanceMonitor
+    this.handlers.performanceMonitor?.recordSearch({
+      query,
+      duration: Date.now() - searchStart,
+      resultCount: allResults.length,
+      sources: elementTypes,
+      cacheHit: false,
+      memoryBefore,
+      memoryAfter: process.memoryUsage().heapUsed,
+      timestamp: new Date(),
+    });
 
     // Sort results (currently only 'name' is supported as a sort field)
     const sortedResults = [...allResults].sort((a, b) => {

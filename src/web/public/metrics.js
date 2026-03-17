@@ -75,8 +75,10 @@
       <div class="metrics-dashboard" id="metrics-grid">
         ${buildCard('system', 'System Health')}
         ${buildCard('search', 'Search Performance')}
+        ${buildCard('operations', 'MCP-AQL Operations')}
         ${buildCard('cache', 'Cache Efficiency')}
         ${buildCard('security', 'Security')}
+        ${buildCard('gatekeeper', 'Gatekeeper Policy')}
         ${buildCard('locks', 'Locks & I/O')}
         ${buildCard('meta', 'Metrics System')}
       </div>
@@ -154,8 +156,10 @@
     updateStatus();
     renderSystemHealth(metrics);
     renderSearchPerf(metrics);
+    renderOperations(metrics);
     renderCacheEfficiency(metrics);
     renderSecurity(metrics);
+    renderGatekeeper(metrics);
     renderLocks(metrics);
     renderMetaSystem(metrics);
   }
@@ -252,6 +256,57 @@
     body.innerHTML = html;
   }
 
+  function renderOperations(metrics) {
+    const body = document.getElementById('metrics-body-operations');
+    if (!body) return;
+
+    const totalOps = findVal(metrics, 'mcpaql.operations_total');
+    const failedOps = findVal(metrics, 'mcpaql.operations_failed_total');
+    const duration = findEntry(metrics, 'mcpaql.duration');
+
+    if (totalOps == null && duration == null) {
+      body.innerHTML = '<div class="metrics-loading">No operation metrics yet</div>';
+      return;
+    }
+
+    const errorRate = totalOps > 0 ? (failedOps || 0) / totalOps : 0;
+
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Total Ops', formatNumber(totalOps || 0));
+    html += statBox('Error Rate', formatPercent(errorRate));
+    if (duration && duration.type === 'histogram') {
+      const v = duration.value;
+      html += statBox('Avg', fmtMs(v.avg));
+      html += statBox('P95', fmtMs(v.p95));
+    }
+    html += '</div>';
+
+    // Per-endpoint breakdown
+    const endpointMetrics = metrics.filter(m => m.name === 'mcpaql.by_endpoint');
+    if (endpointMetrics.length > 0) {
+      html += '<table class="metrics-table"><thead><tr><th>Endpoint</th><th>Count</th></tr></thead><tbody>';
+      for (const m of endpointMetrics) {
+        const ep = m.labels && m.labels.endpoint ? m.labels.endpoint : '?';
+        html += '<tr><td>' + escapeHtml(ep) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+
+    // Top operations mini-table
+    const opMetrics = metrics.filter(m => m.name === 'mcpaql.by_operation');
+    if (opMetrics.length > 0) {
+      const sorted = opMetrics.slice().sort((a, b) => (b.value || 0) - (a.value || 0));
+      html += '<table class="metrics-table"><thead><tr><th>Operation</th><th>Count</th></tr></thead><tbody>';
+      for (const m of sorted) {
+        const op = m.labels && m.labels.operation ? m.labels.operation : '?';
+        html += '<tr><td>' + escapeHtml(op) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+
+    body.innerHTML = html;
+  }
+
   function renderCacheEfficiency(metrics) {
     const body = document.getElementById('metrics-body-cache');
     if (!body) return;
@@ -296,6 +351,11 @@
     body.innerHTML = html;
   }
 
+  // Security card: cache for recent events fetch
+  let securityEventsCache = null;
+  let securityEventsCacheTime = 0;
+  const SECURITY_CACHE_TTL = 30000;
+
   function renderSecurity(metrics) {
     const body = document.getElementById('metrics-body-security');
     if (!body) return;
@@ -307,6 +367,129 @@
     html += statBox('Blocked (24h)', blocked24h != null ? formatNumber(blocked24h) : '0');
     html += statBox('Attacks/hour', attacksPerHour != null ? formatNumber(attacksPerHour, 1) : '0');
     html += '</div>';
+
+    html += '<div id="security-recent-events"><div class="metrics-loading">Loading recent events...</div></div>';
+
+    body.innerHTML = html;
+
+    // Fetch recent security events (cached for 30s)
+    const now = Date.now();
+    if (securityEventsCache && (now - securityEventsCacheTime) < SECURITY_CACHE_TTL) {
+      renderSecurityEvents(securityEventsCache);
+    } else {
+      fetch('/api/logs?category=security&level=warn&limit=5')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data && data.entries) {
+            securityEventsCache = data.entries;
+            securityEventsCacheTime = Date.now();
+            renderSecurityEvents(data.entries);
+          }
+        })
+        .catch(() => {
+          const el = document.getElementById('security-recent-events');
+          if (el) el.innerHTML = '';
+        });
+    }
+  }
+
+  function renderSecurityEvents(entries) {
+    const el = document.getElementById('security-recent-events');
+    if (!el) return;
+
+    if (!entries || entries.length === 0) {
+      el.innerHTML = '<div class="metrics-loading">No recent security events</div>';
+      return;
+    }
+
+    let html = '<table class="metrics-table"><thead><tr><th>Time</th><th>Source</th><th>Message</th></tr></thead><tbody>';
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const ago = formatTimeAgo(entry.timestamp);
+      const source = escapeHtml(entry.source || '');
+      const fullMsg = escapeHtml(entry.message || '');
+      const truncated = fullMsg.length > 80 ? fullMsg.substring(0, 80) + '...' : fullMsg;
+      const needsExpand = fullMsg.length > 80;
+      html += '<tr><td>' + ago + '</td><td>' + source + '</td><td>';
+      if (needsExpand) {
+        html += '<span class="sec-msg-short" id="sec-msg-short-' + i + '" style="cursor:pointer" title="Click to expand">' + truncated + '</span>';
+        html += '<span class="sec-msg-full" id="sec-msg-full-' + i + '" style="display:none;white-space:pre-wrap;word-break:break-word;cursor:pointer" title="Click to collapse">' + fullMsg + '</span>';
+      } else {
+        html += truncated;
+      }
+      html += '</td></tr>';
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+
+    // Bind click handlers for expandable messages
+    for (let i = 0; i < entries.length; i++) {
+      const short = document.getElementById('sec-msg-short-' + i);
+      const full = document.getElementById('sec-msg-full-' + i);
+      if (short && full) {
+        short.addEventListener('click', () => { short.style.display = 'none'; full.style.display = 'inline'; });
+        full.addEventListener('click', () => { full.style.display = 'none'; short.style.display = 'inline'; });
+      }
+    }
+  }
+
+  function formatTimeAgo(timestamp) {
+    if (!timestamp) return '-';
+    const diff = Date.now() - new Date(timestamp).getTime();
+    if (diff < 60000) return Math.floor(diff / 1000) + 's ago';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    return Math.floor(diff / 86400000) + 'd ago';
+  }
+
+  function renderGatekeeper(metrics) {
+    const body = document.getElementById('metrics-body-gatekeeper');
+    if (!body) return;
+
+    const total = findVal(metrics, 'gatekeeper.decisions_total');
+    const allowed = findVal(metrics, 'gatekeeper.allowed_total');
+    const denied = findVal(metrics, 'gatekeeper.denied_total');
+    const confirmations = findVal(metrics, 'gatekeeper.confirmations_pending_total');
+
+    if (total == null || total === 0) {
+      body.innerHTML = '<div class="metrics-loading">No Gatekeeper decisions yet</div>';
+      return;
+    }
+
+    const allowRate = total > 0 ? allowed / total : 0;
+
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Decisions', formatNumber(total));
+    html += statBox('Allowed', formatNumber(allowed || 0));
+    html += statBox('Denied', formatNumber(denied || 0));
+    html += statBox('Allow Rate', formatPercent(allowRate));
+    if (confirmations > 0) {
+      html += statBox('Confirmations', formatNumber(confirmations));
+    }
+    html += '</div>';
+
+    // Policy source breakdown
+    const sourceMetrics = metrics.filter(m => m.name === 'gatekeeper.by_policy_source');
+    if (sourceMetrics.length > 0) {
+      html += '<table class="metrics-table"><thead><tr><th>Policy Source</th><th>Count</th><th>Share</th></tr></thead><tbody>';
+      for (const m of sourceMetrics) {
+        const src = m.labels && m.labels.policy_source ? m.labels.policy_source : '?';
+        const share = total > 0 ? formatPercent(m.value / total) : '-';
+        html += '<tr><td>' + escapeHtml(src) + '</td><td>' + formatNumber(m.value) + '</td><td>' + share + '</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+
+    // Permission level breakdown
+    const levelMetrics = metrics.filter(m => m.name === 'gatekeeper.by_permission_level');
+    if (levelMetrics.length > 0) {
+      html += '<table class="metrics-table"><thead><tr><th>Permission Level</th><th>Count</th></tr></thead><tbody>';
+      for (const m of levelMetrics) {
+        const lvl = m.labels && m.labels.permission_level ? m.labels.permission_level : '?';
+        html += '<tr><td>' + escapeHtml(lvl) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
 
     body.innerHTML = html;
   }

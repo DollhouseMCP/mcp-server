@@ -126,7 +126,11 @@ import {
   DefaultElementProviderCollector,
   TriggerMetricsTrackerCollector,
   OperationalTelemetryCollector,
+  OperationMetricsCollector,
+  GatekeeperMetricsCollector,
 } from '../metrics/collectors/index.js';
+import { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
+import { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
 
 // State is owned by PersonaManager and services
 
@@ -731,6 +735,9 @@ export class DollhouseContainer {
       monitor.startMonitoring();
       return monitor;
     });
+
+    this.register('OperationMetricsTracker', () => new OperationMetricsTracker(), { singleton: true });
+    this.register('GatekeeperMetricsTracker', () => new GatekeeperMetricsTracker(), { singleton: true });
   }
 
   public getPersonasDir(): string | null {
@@ -1308,6 +1315,9 @@ export class DollhouseContainer {
       verificationStore: this.resolve('VerificationStore'),  // Issue #142: Verification codes
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
+      performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
+      gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
@@ -1556,6 +1566,18 @@ export class DollhouseContainer {
     try {
       const opTelemetry = this.resolve<import('../telemetry/OperationalTelemetry.js').OperationalTelemetry>('OperationalTelemetry');
       metricsManager.registerCollector(new OperationalTelemetryCollector(opTelemetry));
+    } catch { /* not registered */ }
+
+    // OperationMetricsTracker (instance)
+    try {
+      const opTracker = this.resolve<OperationMetricsTracker>('OperationMetricsTracker');
+      metricsManager.registerCollector(new OperationMetricsCollector(opTracker));
+    } catch { /* not registered */ }
+
+    // GatekeeperMetricsTracker (instance)
+    try {
+      const gkTracker = this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker');
+      metricsManager.registerCollector(new GatekeeperMetricsCollector(gkTracker));
     } catch { /* not registered */ }
   }
 

@@ -97,7 +97,7 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
     clients.add(client);
 
     // Backfill recent history (oldest-first for chronological order)
-    const history = memorySink.query({ category: 'all', limit: 500 });
+    const history = memorySink.query({ category: 'all', limit: 5000 });
     const entries = history.entries.slice().reverse();
     for (const entry of entries) {
       if (matchesFilter(entry, filter)) {
