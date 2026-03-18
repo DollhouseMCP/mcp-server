@@ -33,6 +33,7 @@ export interface TokenValidationResult {
  * Secure GitHub token manager with validation and protection
  */
 export class TokenManager {
+  private static tokenLoggedOnce = false;
   private static readonly GITHUB_TOKEN_PATTERNS = {
     // More flexible patterns - accept any content after the prefix
     PERSONAL_ACCESS_TOKEN: /^ghp_.+$/,      // Personal access tokens
@@ -148,10 +149,13 @@ export class TokenManager {
     }
 
     // codeql[js/clear-text-logging] — Only token type name and first 4 chars (tokenPrefix) are logged, never the full token
-    logger.debug('Valid GitHub token found', {
-      tokenType: this.getTokenType(token),
-      tokenPrefix: this.getTokenPrefix(token)
-    });
+    if (!TokenManager.tokenLoggedOnce) {
+      logger.debug('Valid GitHub token found', {
+        tokenType: this.getTokenType(token),
+        tokenPrefix: this.getTokenPrefix(token)
+      });
+      TokenManager.tokenLoggedOnce = true;
+    }
 
     return token;
   }

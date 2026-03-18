@@ -230,17 +230,13 @@ describe('EnhancedIndexManager Telemetry', () => {
       // Call extractActionTriggers which includes telemetry
       (manager as any).extractActionTriggers(elementDef, 'test-element', triggers);
 
-      // Should log telemetry data
-      expect(loggerDebugSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Telemetry:'),
-        expect.objectContaining({
-          duration: expect.any(Number),
-          elementName: 'test-element',
-          elementType: 'persona',
-          triggersExtracted: 3,
-          uniqueTriggers: 3
-        })
-      );
+      // Telemetry is aggregated internally (per-element debug logs suppressed for fast ops <50ms).
+      // Verify metrics were recorded in the aggregation map instead.
+      const telemetryMetrics = (manager as any).telemetryMetrics;
+      const stats = telemetryMetrics.get('extractActionTriggers');
+      expect(stats).toBeDefined();
+      expect(stats.count).toBeGreaterThanOrEqual(1);
+      expect(stats.lastMetrics.elementName).toBe('test-element');
     });
 
     it('should not track metrics when telemetry is disabled', () => {
@@ -301,8 +297,11 @@ describe('EnhancedIndexManager Telemetry', () => {
       // Restore original random
       Math.random = originalRandom;
 
-      // Both calls should be tracked with 100% sample rate
-      expect(loggerDebugSpy).toHaveBeenCalledTimes(2);
+      // Both calls should be tracked in aggregation (debug logs suppressed for fast ops)
+      const telemetryMetrics = (manager as any).telemetryMetrics;
+      const stats = telemetryMetrics.get('extractActionTriggers');
+      expect(stats).toBeDefined();
+      expect(stats.count).toBe(2);
     });
   });
 

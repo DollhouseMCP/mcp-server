@@ -194,7 +194,10 @@ export class ElementStorageLayer implements IStorageLayer {
       // 2. Diff against manifest
       const diff = this.manifest.diff(stats);
 
-      logger.debug(`ElementStorageLayer.scan: DISK SCAN for ${path.basename(this.elementDir)} — ${files.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed, ${diff.unchanged.length} unchanged`);
+      const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
+      if (hasChanges) {
+        logger.debug(`ElementStorageLayer.scan: DISK SCAN for ${path.basename(this.elementDir)} — ${files.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
+      }
 
       // 3. For added/modified: read frontmatter, update index
       const toIndex = [...diff.added, ...diff.modified];

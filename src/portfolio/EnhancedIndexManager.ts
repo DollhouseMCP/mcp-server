@@ -212,16 +212,17 @@ export class EnhancedIndexManager {
         // Try to load from file first
         logger.info('Loading Enhanced Index from cache file');
         await this.loadIndex();
-      } else {
-        logger.debug('Using cached Enhanced Index from memory');
       }
 
       const elapsed = Date.now() - startTime;
-      logger.info('Enhanced Index operation completed', {
-        operation,
-        elapsedMs: elapsed,
-        elements: this.index?.metadata?.total_elements || 0
-      });
+      // Only log at info for non-trivial operations (actual loads/builds)
+      if (operation !== 'cached' || elapsed > 10) {
+        logger.info('Enhanced Index operation completed', {
+          operation,
+          elapsedMs: elapsed,
+          elements: this.index?.metadata?.total_elements || 0
+        });
+      }
 
       if (elapsed > 1000) {
         logger.warn('Enhanced Index operation took longer than expected', {
@@ -761,11 +762,14 @@ export class EnhancedIndexManager {
     stats.minDuration = Math.min(stats.minDuration, duration);
     stats.lastMetrics = { ...metrics, duration };
 
-    // Log detailed metrics in debug mode
-    logger.debug(`Telemetry: ${operationName}`, {
-      duration,
-      ...metrics,
-    });
+    // Per-element telemetry aggregated in periodic Telemetry Report;
+    // only log slow operations (>50ms) individually
+    if (duration > 50) {
+      logger.debug(`Slow telemetry: ${operationName}`, {
+        duration,
+        ...metrics,
+      });
+    }
 
     // Schedule periodic reporting
     this.scheduleTelemetryReport();
@@ -881,8 +885,7 @@ export class EnhancedIndexManager {
         return false; // We can load the fresh file, no rebuild needed
       }
 
-      // File is fresh and we have it in memory
-      logger.debug('Enhanced index is current, no rebuild needed');
+      // File is fresh and we have it in memory — no rebuild needed
       return false;
     } catch (error) {
       logger.error('Error checking if rebuild needed', error);
@@ -1295,8 +1298,6 @@ export class EnhancedIndexManager {
     if (timeSinceLastCleanup < minCleanupInterval) {
       return;
     }
-
-    logger.debug('Performing memory cleanup for Enhanced Index');
 
     // Clear NLP scoring caches
     if (this.nlpScoring) {

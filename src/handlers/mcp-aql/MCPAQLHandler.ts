@@ -971,19 +971,21 @@ export class MCPAQLHandler {
       // Apply field filtering if fields param provided
       const data = this.applyFieldSelection(rawData, params as Record<string, unknown>);
 
-      // Step 6: Log successful operation and return result
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_COMPLETED',
-        severity: 'LOW',
-        source: `MCPAQLHandler.${endpoint.toLowerCase()}`,
-        details: `${endpoint} '${operation}' completed on ${elementType || 'unspecified'}`,
-        additionalData: {
-          endpoint,
-          operation,
-          elementType,
-          parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
-        }
-      });
+      // Step 6: Log successful operation — only mutations are security-relevant
+      if (endpoint !== 'READ') {
+        SecurityMonitor.logSecurityEvent({
+          type: 'OPERATION_COMPLETED',
+          severity: 'LOW',
+          source: `MCPAQLHandler.${endpoint.toLowerCase()}`,
+          details: `${endpoint} '${operation}' completed${elementType ? ` on ${elementType}` : ''}`,
+          additionalData: {
+            endpoint,
+            operation,
+            elementType,
+            parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
+          }
+        });
+      }
       const durationMs = performance.now() - startTime;
       this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
       return this.success(data, startTime);

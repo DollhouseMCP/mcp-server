@@ -28,7 +28,7 @@ export class SemanticRelationshipService {
     const elementCount = Object.values(index.elements)
       .reduce((sum, elements) => sum + Object.keys(elements).length, 0);
 
-    logger.info('Starting semantic relationship calculation', {
+    logger.debug('Starting semantic relationship calculation', {
       elementCount,
       maxForFullMatrix: config.performance.maxElementsForFullMatrix
     });

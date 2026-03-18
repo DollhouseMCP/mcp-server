@@ -110,7 +110,7 @@ export class SecurityMonitor {
     
     // Log critical security alerts with structured data
     // DO NOT use console.error in MCP servers as it breaks the JSON-RPC protocol
-    logger.error('🚨 CRITICAL SECURITY ALERT 🚨', {
+    logger.error('[CRITICAL SECURITY ALERT]', {
       type: event.type,
       details: event.details,
       timestamp: event.timestamp,

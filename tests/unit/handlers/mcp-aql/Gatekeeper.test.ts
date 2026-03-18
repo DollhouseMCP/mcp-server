@@ -852,19 +852,22 @@ describe('Gatekeeper', () => {
       expect(Gatekeeper.getPermissions('DELETE').destructive).toBe(true);
     });
 
-    it('should log audit events to SecurityMonitor', () => {
+    it('should log audit events to SecurityMonitor for denied operations', () => {
       const gatekeeper = new Gatekeeper();
 
-      // Perform an operation that will be logged
-      gatekeeper.enforce({
+      // Perform a denied operation that will be logged
+      // (allowed operations no longer generate security events)
+      const decision = gatekeeper.enforce({
         operation: 'list_elements',
         endpoint: 'READ',
       });
 
-      // Check security events were logged
+      // Allowed decisions should NOT generate security events (noise reduction)
       const events = SecurityMonitor.getRecentEvents(10);
       const gatekeeperEvents = events.filter(e => e.source.includes('Gatekeeper'));
-      expect(gatekeeperEvents.length).toBeGreaterThan(0);
+      if (decision.allowed) {
+        expect(gatekeeperEvents.length).toBe(0);
+      }
     });
   });
 

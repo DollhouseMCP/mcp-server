@@ -39,7 +39,6 @@
  */
 
 import { parseElementId, formatElementId } from '../../utils/elementId.js';
-import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 
 /**
@@ -344,21 +343,8 @@ export function createRelationship(
 
   const element = formatElementId(normalizedType.normalizedContent, normalizedName.normalizedContent);
 
-  // FIX: Add security audit logging for relationship creation
-  // Previously: No logging of relationship operations
-  // Now: Log relationship creation for security audit trail
-  SecurityMonitor.logSecurityEvent({
-    type: 'ELEMENT_CREATED',
-    severity: 'LOW',
-    source: 'RelationshipTypes.createRelationship',
-    details: `Created relationship to ${element}`,
-    metadata: {
-      targetType: normalizedType.normalizedContent,
-      targetName: normalizedName.normalizedContent,
-      relationType: normalizedRelType || 'unspecified',
-      strength: strength ?? 1.0
-    }
-  });
+  // Relationship creation is internal index construction, not a security event.
+  // Aggregate counts logged in "Relationship discovery completed" summary.
 
   return {
     element,

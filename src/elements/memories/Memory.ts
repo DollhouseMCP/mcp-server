@@ -170,6 +170,7 @@ export class Memory extends BaseElement implements IElement {
   // instructions inherited from BaseElement (v2.0 dual-field architecture)
   // content: overridden below with a custom getter that returns formatted entries
 
+  private static readonly createdMemoryNames = new Set<string>();
   private static memoryManagerResolver?: () => { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void>; } | undefined;
 
   /**
@@ -327,13 +328,16 @@ export class Memory extends BaseElement implements IElement {
     };
     this.searchIndex = new MemorySearchIndex(indexConfig);
 
-    // Log memory creation
-    SecurityMonitor.logSecurityEvent({
-      type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
-      severity: 'LOW',
-      source: 'Memory.constructor',
-      details: `Memory created: ${this.metadata.name} with ${this.storageBackend} backend`
-    });
+    // Log memory creation (once per unique name per server lifetime)
+    if (!Memory.createdMemoryNames.has(this.metadata.name)) {
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
+        severity: 'LOW',
+        source: 'Memory.constructor',
+        details: `Memory created: ${this.metadata.name} with ${this.storageBackend} backend`
+      });
+      Memory.createdMemoryNames.add(this.metadata.name);
+    }
   }
 
   /**
