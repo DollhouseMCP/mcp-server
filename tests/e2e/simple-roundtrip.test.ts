@@ -141,33 +141,8 @@ describe('Simple Roundtrip Workflow Tests', () => {
     }, TEST_TIMEOUT);
   });
   
-  describe('Documentation', () => {
-    test('should validate testing guide exists', async () => {
-      const guidePath = path.join(process.cwd(), 'docs/agent/archive/testing/ROUNDTRIP_TESTING_GUIDE.md');
-      
-      const stats = await fs.stat(guidePath);
-      expect(stats.isFile()).toBe(true);
-      
-      const content = await fs.readFile(guidePath, 'utf-8');
-      expect(content).toMatch(/# Roundtrip Workflow Testing Guide/);
-      expect(content).toMatch(/## Test Environment Setup/);
-      expect(content).toMatch(/## Running Tests/);
-      expect(content).toMatch(/## Verification Procedures/);
-    }, TEST_TIMEOUT);
-    
-    test('should validate testing summary exists', async () => {
-      const summaryPath = path.join(process.cwd(), 'docs/agent/archive/testing/ROUNDTRIP_TESTING_SUMMARY.md');
-      
-      const stats = await fs.stat(summaryPath);
-      expect(stats.isFile()).toBe(true);
-      
-      const content = await fs.readFile(summaryPath, 'utf-8');
-      expect(content).toMatch(/# Roundtrip Workflow Testing Implementation Summary/);
-      expect(content).toMatch(/## What Was Created/);
-      expect(content).toMatch(/## Key Testing Features/);
-      expect(content).toMatch(/## Testing Coverage Assessment/);
-    }, TEST_TIMEOUT);
-  });
+  // Documentation tests removed — referenced internal dev docs (docs/agent/)
+  // that are not included in the public repository.
   
   describe('Environment Validation', () => {
     test('should check environment variables setup', () => {
