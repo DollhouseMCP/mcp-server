@@ -907,7 +907,7 @@ export class DollhouseContainer {
     // --- pattern_encryption (deferred) ---
     timer.startPhase('pattern_encryption', false);
     try {
-      const patternEncryptor = this.resolve('PatternEncryptor') as any;
+      const patternEncryptor = this.resolve('PatternEncryptor') as PatternEncryptor;
       await patternEncryptor.initialize();
       logger.info("Pattern encryption initialized");
     } catch (error) {
