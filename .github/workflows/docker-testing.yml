@@ -23,103 +23,10 @@ env:
   BUILDKIT_PROGRESS: plain
 
 jobs:
-  # Self-hosted Docker build test (fast iteration for mickdarling)
-  # Runs when: mickdarling + not main branch
-  self-hosted-docker-build-test:
-    name: Docker Build & Test (linux/amd64)
-    permissions:
-      contents: read
-    if: |
-      github.actor == 'mickdarling' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, Linux]
-    timeout-minutes: 15
-    env:
-      SELF_HOSTED_DOCKER: 'true'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          platforms: linux/amd64
-
-      - name: Build Docker image (builder stage)
-        shell: bash
-        run: |
-          echo "🏗️ Building Docker image (self-hosted)..."
-          docker buildx build \
-            --platform linux/amd64 \
-            --target builder \
-            --tag dollhousemcp:builder-linux-amd64 \
-            --progress=plain \
-            --load \
-            --file docker/Dockerfile \
-            .
-
-      - name: Build Docker image (production stage)
-        shell: bash
-        run: |
-          echo "🏗️ Building production Docker image (self-hosted)..."
-          docker buildx build \
-            --platform linux/amd64 \
-            --target production \
-            --tag dollhousemcp:latest-linux-amd64 \
-            --progress=plain \
-            --load \
-            --file docker/Dockerfile \
-            .
-
-      - name: Test MCP server initialization
-        shell: bash
-        run: |
-          echo "🧪 Testing MCP server initialization..."
-          MCP_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
-          docker_output=$(timeout 10 sh -c "echo '$MCP_JSON_REQUEST' | docker run -i \
-            --platform linux/amd64 \
-            --user 1001:1001 \
-            --security-opt no-new-privileges \
-            --read-only \
-            --tmpfs /tmp:noexec,nosuid,mode=1777 \
-            --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
-            --memory 512m \
-            --cpus 0.5 \
-            --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
-            --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
-            --env NODE_ENV=test \
-            dollhousemcp:latest-linux-amd64 2>&1" || true)
-
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
-            echo "✅ MCP server initialization test passed"
-          else
-            echo "❌ MCP server initialization test failed"
-            echo "$docker_output"
-            exit 1
-          fi
-
-      - name: Cleanup containers
-        if: always()
-        shell: bash
-        run: docker system prune -f --volumes || true
-
-      - name: Self-hosted Docker test complete
-        shell: bash
-        run: echo "✅ Self-hosted Docker test complete"
-
-  # GitHub-hosted Docker build test (for other contributors or main branch)
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
     permissions:
       contents: read
-    if: |
-      github.actor != 'mickdarling' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
@@ -129,14 +36,8 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
-          # ⚠️ ARM64 DISABLED FOR PRIVATE REPOSITORIES
-          # GitHub Actions does not support ARM64 runners (ubuntu-22.04-arm, ubuntu-24.04-arm)
-          # for private repositories. ARM64 runners are FREE for public repositories.
-          #
-          # ACTION REQUIRED: Uncomment the lines below when this code is merged to the
-          # PUBLIC production repository (DollhouseMCP/mcp-server).
-          # - platform: linux/arm64
-          #   runner: ubuntu-24.04-arm
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: 🚀 Session Start - Log System Information
@@ -158,7 +59,7 @@ jobs:
             echo "🚀 AMD64: Using standard runner"
           fi
           echo "======================================"
-          
+
           echo "\n🖥️ SYSTEM RESOURCES:"
           echo "CPU Info:"
           nproc || echo "nproc not available"
@@ -169,7 +70,7 @@ jobs:
           df -h / || echo "df command not available"
           echo "\nLoad Average:"
           uptime || echo "uptime not available"
-          
+
           echo "\n🐳 DOCKER ENVIRONMENT:"
           echo "Docker Version:"
           docker --version || echo "Docker not found"
@@ -177,11 +78,11 @@ jobs:
           docker info | head -20 || echo "Docker info failed"
           echo "Docker System Status:"
           docker system df || echo "Docker system df failed"
-          
+
           echo "\n🌐 NETWORK & CONNECTIVITY:"
           echo "Checking network connectivity..."
           ping -c 2 8.8.8.8 || echo "Network connectivity test failed"
-          
+
           echo "======================================"
           echo "⏰ System Info Complete: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "======================================"
@@ -204,17 +105,17 @@ jobs:
           echo "⏰ Buildx Setup Start: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📍 Target Platform: ${{ matrix.platform }}"
           echo "======================================"
-          
+
           echo "\n🔍 Pre-Buildx Docker State:"
           docker version || echo "Docker version failed"
           docker buildx version || echo "Buildx not available"
           docker buildx ls || echo "No buildx instances"
-          
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           platforms: ${{ matrix.platform }}
-          
+
       - name: 🔍 Buildx Post-Setup Diagnostics
         shell: bash
         run: |
@@ -225,11 +126,11 @@ jobs:
           docker buildx inspect
           echo "\nSupported platforms:"
           docker buildx inspect | grep -A 10 "Platforms:" || echo "Platform info not available"
-          
+
           echo "\n🧪 Platform Test:"
           echo "Testing basic platform compatibility..."
           docker buildx build --platform ${{ matrix.platform }} - <<< 'FROM alpine:latest' || echo "Platform test failed"
-          
+
           echo "======================================"
           echo "⏰ Buildx Setup Complete: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "======================================"
@@ -250,28 +151,28 @@ jobs:
           echo "⏰ Builder Stage Start: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📍 Platform: ${{ matrix.platform }}"
           echo "======================================"
-          
+
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
-          
+
           echo "\n🔍 Pre-Build Environment:"
           echo "Working Directory: $(pwd)"
           echo "Available Memory: $(free -h | grep Mem || echo 'Memory info unavailable')"
           echo "Docker Status: $(docker system df || echo 'Docker df failed')"
           echo "Build Context Size:"
           du -sh . || echo "Size calculation failed"
-          
+
           echo "\n🏗️ Starting Docker Build with VERBOSE output..."
           echo "Command: docker buildx build --platform ${{ matrix.platform }} --target builder --progress=plain"
-          
+
           # Store start time
           BUILD_START=$(date +%s)
           echo "⏰ Build Start Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          
+
           # Run build with verbose output and error handling
           set +e  # Don't exit on error, we want to capture it
-          
+
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target builder \
@@ -282,28 +183,28 @@ jobs:
             --load \
             --file docker/Dockerfile \
             . 2>&1 | tee /tmp/build-output.log
-          
+
           BUILD_EXIT_CODE=$?
           BUILD_END=$(date +%s)
           BUILD_DURATION=$((BUILD_END - BUILD_START))
-          
+
           echo "\n======================================"
           echo "⏰ Build End Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "⏱️ Build Duration: ${BUILD_DURATION} seconds"
           echo "🔄 Exit Code: ${BUILD_EXIT_CODE}"
           echo "======================================"
-          
+
           echo "\n🔍 Post-Build Analysis:"
           echo "Final 50 lines of build output:"
           tail -50 /tmp/build-output.log || echo "Could not read build log"
-          
+
           echo "\nDocker Images After Build:"
           docker images | grep dollhousemcp || echo "No dollhousemcp images found"
-          
+
           echo "\nSystem Resources After Build:"
           free -h | grep Mem || echo "Memory info unavailable"
           docker system df || echo "Docker df failed"
-          
+
           # Exit with the actual build exit code
           if [ $BUILD_EXIT_CODE -ne 0 ]; then
             echo "❌ BUILDER STAGE FAILED!"
@@ -313,7 +214,7 @@ jobs:
           else
             echo "✅ Builder stage completed successfully"
           fi
-          
+
           set -e  # Re-enable exit on error
 
       - name: 🏗️ Build Docker image (production stage) - VERBOSE
@@ -323,24 +224,24 @@ jobs:
           echo "⏰ Production Stage Start: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📍 Platform: ${{ matrix.platform }}"
           echo "======================================"
-          
+
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
-          
+
           echo "\n🔍 Pre-Production Build State:"
           echo "Available Images:"
           docker images | grep dollhousemcp || echo "No dollhousemcp images found"
           echo "Available Memory: $(free -h | grep Mem || echo 'Memory info unavailable')"
           echo "Docker Status: $(docker system df || echo 'Docker df failed')"
-          
+
           # Store start time
           PROD_START=$(date +%s)
           echo "⏰ Production Build Start: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          
+
           # Run production build with verbose output
           set +e  # Don't exit on error, we want to capture it
-          
+
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --target production \
@@ -351,24 +252,24 @@ jobs:
             --load \
             --file docker/Dockerfile \
             . 2>&1 | tee /tmp/prod-build-output.log
-          
+
           PROD_EXIT_CODE=$?
           PROD_END=$(date +%s)
           PROD_DURATION=$((PROD_END - PROD_START))
-          
+
           echo "\n======================================"
           echo "⏰ Production Build End: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "⏱️ Production Duration: ${PROD_DURATION} seconds"
           echo "🔄 Exit Code: ${PROD_EXIT_CODE}"
           echo "======================================"
-          
+
           echo "\n🔍 Post-Production Analysis:"
           echo "Final production images:"
           docker images | grep dollhousemcp || echo "No dollhousemcp images found"
-          
+
           echo "\nImage layers and size:"
           docker history dollhousemcp:latest-${PLATFORM_TAG} || echo "Could not inspect image history"
-          
+
           # Exit with the actual build exit code
           if [ $PROD_EXIT_CODE -ne 0 ]; then
             echo "❌ PRODUCTION STAGE FAILED!"
@@ -378,7 +279,7 @@ jobs:
           else
             echo "✅ Production stage completed successfully"
           fi
-          
+
           set -e  # Re-enable exit on error
 
       - name: Scan Docker image for vulnerabilities
@@ -398,11 +299,11 @@ jobs:
           echo "📍 Platform: ${{ matrix.platform }}"
           echo "🎯 Test: MCP Server Initialization"
           echo "========================================="
-          
+
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
-          
+
           echo "\n🔍 Pre-Test Environment Check:"
           echo "Available Images:"
           docker images | grep dollhousemcp || echo "No dollhousemcp images found - THIS IS A PROBLEM!"
@@ -410,7 +311,7 @@ jobs:
           free -h | grep Mem || echo "Memory info unavailable"
           echo "Available CPU: $(nproc || echo 'nproc unavailable')"
           echo "Load Average: $(uptime || echo 'uptime unavailable')"
-          
+
           echo "\n🧪 Container Preparation Test:"
           echo "Testing basic container creation for platform ${{ matrix.platform }}..."
           docker run --rm --platform ${{ matrix.platform }} dollhousemcp:latest-${PLATFORM_TAG} echo "Container creation test passed" || {
@@ -418,11 +319,11 @@ jobs:
             echo "This indicates a fundamental platform compatibility issue."
             exit 1
           }
-          
+
           echo "\n📝 Constructing MCP Test Command:"
           MCP_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
           echo "JSON Request: $MCP_JSON_REQUEST"
-          
+
           DOCKER_CMD="docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
@@ -436,9 +337,9 @@ jobs:
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
             dollhousemcp:latest-${PLATFORM_TAG}"
-          
+
           echo "\nDocker Command: $DOCKER_CMD"
-          
+
           echo "\n⏰ Starting MCP Test with Platform-Specific Timeout:"
           if [ "${{ matrix.platform }}" = "linux/arm64" ]; then
             TIMEOUT_DURATION=10
@@ -447,30 +348,30 @@ jobs:
             TIMEOUT_DURATION=5
             echo "🚀 AMD64 Platform: Using standard timeout of ${TIMEOUT_DURATION}s"
           fi
-          
+
           # Store test start time
           TEST_START=$(date +%s)
           echo "⏰ Test Start Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          
+
           # Run the test with comprehensive error capture
           set +e  # Don't exit on error, we want to analyze it
-          
+
           echo "\n🔄 Executing MCP Server Test..."
           docker_output=$(timeout $TIMEOUT_DURATION sh -c "echo '$MCP_JSON_REQUEST' | $DOCKER_CMD 2>&1" || true)
           test_exit_code=$?
-          
+
           TEST_END=$(date +%s)
           TEST_DURATION=$((TEST_END - TEST_START))
-          
+
           echo "\n========================================="
           echo "⏰ Test End Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "⏱️ Test Duration: ${TEST_DURATION} seconds (timeout was ${TIMEOUT_DURATION}s)"
           echo "🔄 Exit Code: ${test_exit_code}"
           echo "========================================="
-          
+
           echo "\n📊 DETAILED OUTPUT ANALYSIS:"
           echo "Raw output length: ${#docker_output} characters"
-          
+
           if [ -z "$docker_output" ]; then
             echo "❌ CRITICAL: No output captured at all!"
             echo "This suggests the container failed to start or produce any output."
@@ -481,14 +382,14 @@ jobs:
             echo "$docker_output" | head -c 5000
             echo ""
             echo "--- END OUTPUT ---"
-            
+
             # Extract and display JSON-RPC response if present
             echo "\n🔍 SEARCHING FOR JSON-RPC RESPONSE:"
             json_response=$(echo "$docker_output" | grep -o '{"jsonrpc":"2.0"[^}]*}' || echo "")
             if [ -n "$json_response" ]; then
               echo "✅ FOUND JSON-RPC RESPONSE:"
               echo "$json_response" | jq '.' 2>/dev/null || echo "$json_response"
-              
+
               # Extract specific fields for validation
               echo "\n📊 RESPONSE DETAILS:"
               echo "- Protocol: $(echo "$json_response" | grep -o '"jsonrpc":"[^"]*"' || echo 'Not found')"
@@ -502,7 +403,7 @@ jobs:
               echo "$docker_output" | grep -o '{.*}' | head -5 || echo "No JSON patterns found"
             fi
           fi
-          
+
           echo "\n🔍 PLATFORM-SPECIFIC ANALYSIS:"
           if [ "${{ matrix.platform }}" = "linux/arm64" ]; then
             echo "🚀 ARM64 Analysis:"
@@ -511,7 +412,7 @@ jobs:
             echo "- Expected native performance"
             echo "- Timeout duration: ${TIMEOUT_DURATION}s"
             echo "- Actual duration: ${TEST_DURATION}s"
-            
+
             if [ $TEST_DURATION -ge $TIMEOUT_DURATION ]; then
               echo "⚠️ Test hit timeout limit - investigate performance issue!"
             else
@@ -523,11 +424,11 @@ jobs:
             echo "- Expected fast performance"
             echo "- Duration: ${TEST_DURATION}s"
           fi
-          
+
           echo "\n🧪 JSON-RPC RESPONSE VALIDATION:"
           if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
             echo "✅ Valid JSON-RPC response structure found"
-            
+
             if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
               echo "✅ Correct serverInfo found - MCP server is working properly"
               echo "\n🎉 TEST PASSED FOR ${{ matrix.platform }}!"
@@ -538,18 +439,18 @@ jobs:
           else
             echo "❌ FAILED: No valid JSON-RPC response found"
             echo "\n🔍 FAILURE ANALYSIS:"
-            
+
             # Check for common failure patterns
             if echo "$docker_output" | grep -qi "error\|failed\|exception"; then
               echo "🔥 Error messages found in output:"
               echo "$docker_output" | grep -i "error\|failed\|exception" || echo "Could not extract error messages"
             fi
-            
+
             if echo "$docker_output" | grep -qi "timeout\|killed"; then
               echo "⏰ Timeout-related messages:"
               echo "$docker_output" | grep -i "timeout\|killed" || echo "Could not extract timeout messages"
             fi
-            
+
             if [ $test_exit_code -eq 124 ]; then
               echo "⏰ TIMEOUT CONFIRMED: Test was killed by timeout command"
               echo "This means the server took longer than ${TIMEOUT_DURATION}s to respond"
@@ -559,12 +460,12 @@ jobs:
             elif [ $test_exit_code -ne 0 ]; then
               echo "💥 NON-ZERO EXIT: Docker command failed with code $test_exit_code"
             fi
-            
+
             echo "\n❌ MCP SERVER TEST FAILED FOR ${{ matrix.platform }}"
             set -e
             exit 1
           fi
-          
+
           set -e  # Re-enable exit on error
           echo "\n========================================="
           echo "✅ MCP INITIALIZATION TEST COMPLETED SUCCESSFULLY"
@@ -580,15 +481,15 @@ jobs:
           echo "📍 Platform: ${{ matrix.platform }}"
           echo "🎯 Test: MCP Server Tools/List Functionality"
           echo "========================================="
-          
+
           # Convert platform to tag-safe format (replace / with -)
           PLATFORM_TAG=$(echo "${{ matrix.platform }}" | sed 's/\//-/g')
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
-          
+
           echo "\n📝 Constructing Tools/List Test Command:"
           TOOLS_JSON_REQUEST='{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}'
           echo "JSON Request: $TOOLS_JSON_REQUEST"
-          
+
           echo "\n⏰ Starting Tools/List Test with Platform-Specific Timeout:"
           if [ "${{ matrix.platform }}" = "linux/arm64" ]; then
             TIMEOUT_DURATION=10
@@ -597,14 +498,14 @@ jobs:
             TIMEOUT_DURATION=5
             echo "🚀 AMD64 Platform: Using standard timeout of ${TIMEOUT_DURATION}s"
           fi
-          
+
           # Store test start time
           TOOLS_START=$(date +%s)
           echo "⏰ Tools Test Start Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          
+
           # Run the tools/list test
           set +e  # Don't exit on error, we want to analyze it
-          
+
           echo "\n🔄 Executing Tools/List Test..."
           docker_output=$(timeout $TIMEOUT_DURATION sh -c "echo '$TOOLS_JSON_REQUEST' | \
             docker run -i \
@@ -620,23 +521,23 @@ jobs:
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
-          
+
           tools_exit_code=$?
           TOOLS_END=$(date +%s)
           TOOLS_DURATION=$((TOOLS_END - TOOLS_START))
-          
+
           echo "\n========================================="
           echo "⏰ Tools Test End Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "⏱️ Tools Test Duration: ${TOOLS_DURATION} seconds"
           echo "🔄 Exit Code: ${tools_exit_code}"
           echo "========================================="
-          
+
           echo "\n📋 TOOLS/LIST RAW OUTPUT (first 5000 chars):"
           echo "--- BEGIN OUTPUT ---"
           echo "$docker_output" | head -c 5000
           echo ""
           echo "--- END OUTPUT ---"
-          
+
           # Extract and display tools/list response
           echo "\n🔍 EXTRACTING TOOLS/LIST JSON-RPC RESPONSE:"
           tools_response=$(echo "$docker_output" | grep -o '{"jsonrpc":"2.0".*}' || echo "")
@@ -644,12 +545,12 @@ jobs:
             echo "✅ FOUND TOOLS/LIST JSON-RPC RESPONSE:"
             # Try to pretty print with jq, fall back to raw if jq fails
             echo "$tools_response" | jq '.' 2>/dev/null || echo "$tools_response"
-            
+
             # Extract details about the tools
             echo "\n📊 TOOLS/LIST RESPONSE ANALYSIS:"
             echo "- Protocol Version: $(echo "$tools_response" | grep -o '"jsonrpc":"[^"]*"' || echo 'Not found')"
             echo "- Request ID: $(echo "$tools_response" | grep -o '"id":[^,}]*' || echo 'Not found')"
-            
+
             # Check if we have tools in the response
             if echo "$tools_response" | grep -q '"tools":\['; then
               echo "- Tools Array: ✅ Present"
@@ -674,11 +575,11 @@ jobs:
             echo "Checking for any JSON-like patterns..."
             echo "$docker_output" | grep -o '{.*}' | head -3 || echo "No JSON patterns detected"
           fi
-          
+
           echo "\n🧪 JSON-RPC RESPONSE VALIDATION:"
           if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":2'; then
             echo "✅ Valid JSON-RPC response structure found for tools/list"
-            
+
             if echo "$docker_output" | grep -q '"result"'; then
               echo "✅ Response contains result field - server is fully functional"
               echo "\n🎉 TOOLS/LIST TEST PASSED FOR ${{ matrix.platform }}!"
@@ -689,19 +590,19 @@ jobs:
           else
             echo "❌ FAILED: No valid JSON-RPC response found for tools/list"
             echo "\n🔍 TOOLS/LIST FAILURE ANALYSIS:"
-            
+
             if [ $tools_exit_code -eq 124 ]; then
               echo "⏰ TIMEOUT: Tools/list test was killed by timeout"
               echo "Duration: ${TOOLS_DURATION}s (limit: ${TIMEOUT_DURATION}s)"
             else
               echo "💥 Command failed with exit code: $tools_exit_code"
             fi
-            
+
             echo "\n❌ TOOLS/LIST TEST FAILED FOR ${{ matrix.platform }}"
             set -e
             exit 1
           fi
-          
+
           set -e  # Re-enable exit on error
           echo "\n========================================="
           echo "✅ TOOLS/LIST TEST COMPLETED SUCCESSFULLY"
@@ -731,73 +632,10 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "All tests passed successfully"
 
-  # Self-hosted Docker Compose test (for mickdarling)
-  self-hosted-docker-compose-test:
-    name: Docker Compose Test
-    permissions:
-      contents: read
-    if: |
-      github.actor == 'mickdarling' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, Linux]
-    timeout-minutes: 15
-    env:
-      SELF_HOSTED_DOCKER: 'true'
-      COMPOSE_PROJECT_NAME: dollhouse-${{ github.run_id }}-${{ github.run_attempt }}-selfhosted
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Test MINIMAL Docker Compose
-        shell: bash
-        run: |
-          echo "🧪 Testing MINIMAL Docker Compose..."
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml build minimal-test
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml run --rm minimal-test
-          echo "✅ Minimal Docker test passed!"
-
-      - name: Test Docker Compose build
-        shell: bash
-        run: |
-          echo "🐳 Testing Docker Compose build..."
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml build dollhousemcp
-
-      - name: Test Docker Compose startup
-        shell: bash
-        run: |
-          echo "🚀 Testing Docker Compose startup..."
-          docker_output=$(timeout 10 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
-            echo "✅ Docker Compose MCP server test passed"
-          else
-            echo "❌ Docker Compose MCP server test failed"
-            echo "$docker_output"
-            exit 1
-          fi
-
-      - name: Cleanup Docker Compose
-        if: always()
-        run: |
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f
-
-      - name: Self-hosted Docker Compose test complete
-        shell: bash
-        run: echo "✅ Self-hosted Docker Compose test complete"
-
-  # GitHub-hosted Docker Compose test
   docker-compose-test:
     name: Docker Compose Test
     permissions:
       contents: read
-    if: |
-      github.actor != 'mickdarling' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -817,7 +655,7 @@ jobs:
           docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml build minimal-test
           docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml run --rm minimal-test
           echo "✅ Minimal Docker test passed!"
-          
+
       - name: Test Docker Compose build
         shell: bash
         run: |
@@ -836,18 +674,18 @@ jobs:
         shell: bash
         run: |
           echo "🚀 Testing Docker Compose startup..."
-          
+
           # Run MCP server with initialize command via Docker Compose
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           # Use timeout since MCP server runs indefinitely
           docker_output=$(timeout 5 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
           exit_code=$?
-          
+
           echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"
           echo "$docker_output"
-          
+
           # Check for successful MCP response from Docker Compose
           if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
             echo "✅ Docker Compose MCP server returned valid JSON-RPC response"

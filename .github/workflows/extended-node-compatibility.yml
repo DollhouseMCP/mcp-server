@@ -21,70 +21,8 @@ env:
   # TEST_GITHUB_TOKEN removed - not used in workflow steps, causes PR fork issues
 
 jobs:
-  # Self-hosted Linux tests (fast iteration for mickdarling)
-  # Tests both Node 20.x and 22.x on Linux self-hosted runners
-  self-hosted-compatibility:
-    name: Test (self-hosted Linux, Node ${{ matrix.node-version }})
-    if: |
-      github.actor == 'mickdarling' &&
-      !contains(github.event.head_commit.message, '[full-matrix]') &&
-      !contains(github.event.pull_request.title, '[full-matrix]') &&
-      github.event_name != 'schedule' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, Linux]
-    timeout-minutes: 15
-    env:
-      SELF_HOSTED_DOCKER: 'true'
-
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ['20.x', '22.x']
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Fetch tags for signature verification
-        shell: bash
-        run: git fetch --tags --force
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Run test suite
-        run: npm test
-
-      - name: Self-hosted compatibility test complete
-        shell: bash
-        run: |
-          echo "✅ Self-hosted Node Compatibility Complete!"
-          echo "Node.js: ${{ matrix.node-version }}"
-          echo "For full cross-platform testing, add [full-matrix] to commit/PR title"
-
-  # GitHub-hosted full matrix (for other contributors, main branch, or full-matrix request)
   extended-compatibility:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: |
-      github.actor != 'mickdarling' ||
-      contains(github.event.head_commit.message, '[full-matrix]') ||
-      contains(github.event.pull_request.title, '[full-matrix]') ||
-      github.event_name == 'schedule' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
@@ -112,18 +50,18 @@ jobs:
           echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
           echo "NODE_OPTIONS: $NODE_OPTIONS"
           echo "CI: $CI"
-          
+
           # Verify TEST_PERSONAS_DIR is set
           if [ -z "$TEST_PERSONAS_DIR" ]; then
             echo "❌ TEST_PERSONAS_DIR is not set!"
             exit 1
           fi
-          
+
           # Display workspace info for debugging
           echo "GitHub workspace: ${{ github.workspace }}"
           echo "Runner OS: ${{ runner.os }}"
           echo "Current directory: $(pwd)"
-          
+
           echo "✅ Environment validation passed"
 
       - name: Setup Node.js ${{ matrix.node-version }}

@@ -14,88 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  # Self-hosted security audit (fast iteration for mickdarling)
-  # Runs when: mickdarling + not main branch + not scheduled
-  self-hosted-security-audit:
-    name: Security Audit (self-hosted)
-    if: |
-      github.actor == 'mickdarling' &&
-      github.event_name != 'schedule' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, Linux]
-    timeout-minutes: 15
-    env:
-      SELF_HOSTED_DOCKER: 'true'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Run Security Audit
-        id: security-audit
-        shell: bash
-        run: |
-          # Create security audit script
-          cat > run-audit.js << 'EOF'
-          import { SecurityAuditor } from './dist/security/audit/index.js';
-          import { MarkdownReporter } from './dist/security/audit/reporters/MarkdownReporter.js';
-          import { FileOperationsService } from './dist/services/FileOperationsService.js';
-          import { FileLockManager } from './dist/security/fileLockManager.js';
-
-          async function runAudit() {
-            const fileLockManager = new FileLockManager();
-            const fileOperations = new FileOperationsService(fileLockManager);
-            const config = await SecurityAuditor.getDefaultConfig(fileOperations);
-            config.reporting.formats = ['console', 'markdown', 'json'];
-            config.reporting.createIssues = false;
-            config.reporting.commentOnPr = false;
-            const auditor = new SecurityAuditor(config, fileOperations);
-            try {
-              const result = await auditor.audit();
-              const fs = await import('fs/promises');
-              await fs.writeFile('security-audit-result.json', JSON.stringify(result, null, 2));
-              const markdownReporter = new MarkdownReporter(result);
-              const markdownReport = markdownReporter.generate();
-              await fs.writeFile('security-audit-report.md', markdownReport);
-              if (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0) {
-                process.exitCode = 1;
-              }
-            } catch (error) {
-              console.error('Security audit failed:', error);
-              process.exitCode = 1;
-            }
-          }
-          runAudit();
-          EOF
-
-          if ! node run-audit.js; then
-            echo "AUDIT_FAILED=true" >> $GITHUB_ENV
-            echo "::warning::Security audit encountered errors but workflow will continue"
-            echo '{"findings": [], "summary": {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}, "error": "Audit failed to complete"}' > security-audit-result.json
-          fi
-
-      - name: Self-hosted security audit complete
-        shell: bash
-        run: |
-          echo "✅ Self-hosted security audit complete"
-          echo "For full GitHub-hosted testing, push to main or use [full-matrix] flag"
-
-  # GitHub-hosted security audit (for other contributors or main branch)
   security-audit:
     name: Security Audit
     permissions:
@@ -104,11 +22,6 @@ jobs:
       issues: write
       pull-requests: write
       security-events: write
-    if: |
-      github.actor != 'mickdarling' ||
-      github.event_name == 'schedule' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ubuntu-latest
 
     steps:
@@ -178,7 +91,7 @@ jobs:
 
           runAudit();
           EOF
-          
+
           # Run the audit with error handling
           if ! node run-audit.js; then
             echo "AUDIT_FAILED=true" >> $GITHUB_ENV
@@ -204,10 +117,10 @@ jobs:
           # Convert our JSON report to SARIF format
           cat > convert-to-sarif.js << 'EOF'
           import { readFile, writeFile } from 'fs/promises';
-          
+
           async function convertToSarif() {
             const result = JSON.parse(await readFile('security-audit-result.json', 'utf-8'));
-            
+
             const sarif = {
               version: '2.1.0',
               runs: [{
@@ -238,10 +151,10 @@ jobs:
                 }))
               }]
             };
-            
+
             await writeFile('security-audit.sarif', JSON.stringify(sarif, null, 2));
           }
-          
+
           function mapSeverityToLevel(severity) {
             switch (severity) {
               case 'critical':
@@ -253,10 +166,10 @@ jobs:
                 return 'note';
             }
           }
-          
+
           convertToSarif().catch(console.error);
           EOF
-          
+
           # Convert with validation
           if node convert-to-sarif.js; then
             echo "✅ SARIF report generated successfully"
@@ -328,11 +241,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            
+
             try {
               const result = JSON.parse(fs.readFileSync('security-audit-result.json', 'utf8'));
               const criticalFindings = result.findings.filter(f => f.severity === 'critical');
-              
+
               for (const finding of criticalFindings.slice(0, 5)) { // Limit to 5 issues
                 const title = `Security: ${finding.message}`;
                 const body = `## Security Issue Detected
@@ -355,7 +268,7 @@ jobs:
 
                 ---
                 *This issue was automatically created by the Security Audit workflow.*`;
-                
+
                 await github.rest.issues.create({
                   owner: context.repo.owner,
                   repo: context.repo.repo,

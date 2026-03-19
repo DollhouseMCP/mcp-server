@@ -7,12 +7,6 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
-    inputs:
-      full_matrix:
-        description: 'Run full cross-platform matrix'
-        required: false
-        default: 'false'
-        type: boolean
 
 permissions:
   contents: read
@@ -24,73 +18,8 @@ env:
   TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 
 jobs:
-  # Self-hosted single-platform test (fast iteration for mickdarling)
-  # Runs when: mickdarling + no [full-matrix] flag + not main branch
-  self-hosted-test:
-    name: Test (self-hosted macOS)
-    if: |
-      github.actor == 'mickdarling' &&
-      !contains(github.event.head_commit.message, '[full-matrix]') &&
-      !contains(github.event.pull_request.title, '[full-matrix]') &&
-      !contains(github.event.pull_request.labels.*.name, 'full-matrix') &&
-      github.event.inputs.full_matrix != 'true' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, macOS]
-    timeout-minutes: 15
-    env:
-      # Flag for tests to skip cases that don't work in Docker root environment
-      SELF_HOSTED_DOCKER: 'true'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          fetch-tags: true
-          persist-credentials: true
-
-      - name: Setup Node.js 20.x
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Set TEST_PERSONAS_DIR
-        shell: bash
-        run: |
-          TEST_PERSONAS_DIR=$(node -e "console.log(require('path').join(process.cwd(), 'test-personas'))")
-          echo "TEST_PERSONAS_DIR=$TEST_PERSONAS_DIR" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Run test suite
-        run: npm test
-
-      - name: Self-hosted test complete
-        shell: bash
-        run: |
-          echo "✅ Self-hosted test complete (single platform)"
-          echo "For full cross-platform testing, add [full-matrix] to commit message or PR title"
-
-  # GitHub-hosted full matrix test (for other contributors or full-matrix requests)
-  # GitHub-hosted full matrix test
-  # Runs when: NOT (mickdarling without full-matrix override)
   hosted-test:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: |
-      github.actor != 'mickdarling' ||
-      contains(github.event.head_commit.message, '[full-matrix]') ||
-      contains(github.event.pull_request.title, '[full-matrix]') ||
-      contains(github.event.pull_request.labels.*.name, 'full-matrix') ||
-      github.event.inputs.full_matrix == 'true' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
@@ -131,18 +60,18 @@ jobs:
           echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
           echo "NODE_OPTIONS: $NODE_OPTIONS"
           echo "CI: $CI"
-          
+
           # Verify TEST_PERSONAS_DIR is set
           if [ -z "$TEST_PERSONAS_DIR" ]; then
             echo "❌ TEST_PERSONAS_DIR is not set!"
             exit 1
           fi
-          
+
           # Display workspace info for debugging
           echo "GitHub workspace: ${{ github.workspace }}"
           echo "Runner OS: ${{ runner.os }}"
           echo "Current directory: $(pwd)"
-          
+
           echo "✅ Environment validation passed"
 
       # Temporarily disabled TypeScript cache to debug CI issues
@@ -229,7 +158,7 @@ jobs:
           else
             echo "✗ package.json NOT FOUND"
           fi
-          
+
       - name: Run compiled tests approach
         if: false  # Temporarily disabled - see PR #845
         # Original condition: if: steps.original_tests.outcome == 'failure'
@@ -248,66 +177,3 @@ jobs:
           echo "✅ Core Build & Test Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
-
-  # Label PRs that only ran partial CI (single platform)
-  # Runs on self-hosted to avoid GitHub outage issues
-  label-partial-ci:
-    name: Label Partial CI
-    permissions:
-      pull-requests: write
-    needs: [self-hosted-test]
-    if: |
-      always() &&
-      needs.self-hosted-test.result == 'success' &&
-      github.event_name == 'pull_request'
-    runs-on: [self-hosted, macOS]
-    steps:
-      - name: Add partial-ci label
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-
-            // Add partial-ci label
-            try {
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number,
-                labels: ['partial-ci']
-              });
-              console.log('Added partial-ci label');
-            } catch (e) {
-              console.log('Could not add label (may already exist):', e.message);
-            }
-
-            // Add comment if not already present
-            const comments = await github.rest.issues.listComments({
-              owner,
-              repo,
-              issue_number,
-            });
-
-            const marker = '<!-- partial-ci-notice -->';
-            const hasComment = comments.data.some(c => c.body.includes(marker));
-
-            if (!hasComment) {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: `${marker}
-            ## ⚡ Partial CI Run
-
-            This PR ran **single-platform CI** (macOS only) for faster iteration.
-
-            **Before merging**, ensure full cross-platform testing by either:
-            - Adding \`[full-matrix]\` to the PR title
-            - Adding the \`full-matrix\` label to this PR
-            - Merging to \`main\` (automatically triggers full matrix)
-
-            <sub>This comment was added automatically because the PR was triggered by @mickdarling without the full-matrix flag.</sub>`
-              });
-              console.log('Added partial-ci comment');
-            }

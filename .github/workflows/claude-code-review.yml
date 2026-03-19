@@ -16,8 +16,7 @@ jobs:
     # Can manually request reviews with @claude mention if needed
     if: github.actor != 'dependabot[bot]'
 
-    # Use self-hosted for mickdarling (faster), GitHub-hosted for others
-    runs-on: ${{ github.actor == 'mickdarling' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read

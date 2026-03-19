@@ -14,11 +14,10 @@ on:
 
 jobs:
   doc-validation:
-    # Only run for mickdarling (self-hosted runner with Claude Code access)
-    # Skip Dependabot PRs
-    if: github.actor == 'mickdarling' && github.actor != 'dependabot[bot]'
+    # Skip Dependabot PRs since they don't have access to secrets (CLAUDE_CODE_OAUTH_TOKEN)
+    if: github.actor != 'dependabot[bot]'
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write  # Needed for use_sticky_comment (post/update PR comments)

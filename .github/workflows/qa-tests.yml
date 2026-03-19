@@ -17,76 +17,8 @@ env:
   TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 
 jobs:
-  # Self-hosted QA tests (fast iteration for mickdarling)
-  # Runs when: mickdarling + not main branch
-  self-hosted-qa-tests:
-    name: QA Tests (self-hosted)
-    if: |
-      github.actor == 'mickdarling' &&
-      github.ref != 'refs/heads/main' &&
-      github.base_ref != 'main'
-    runs-on: [self-hosted, Linux]
-    timeout-minutes: 10
-    continue-on-error: true
-    env:
-      SELF_HOSTED_DOCKER: 'true'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Setup Node.js 20.x
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Validate QA environment
-        shell: bash
-        run: |
-          echo "🔍 Validating QA test environment..."
-          echo "Running on self-hosted runner"
-          mkdir -p "$TEST_PERSONAS_DIR"
-          echo "✅ QA environment validation passed"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Verify QA scripts exist
-        shell: bash
-        run: |
-          echo "🔍 Verifying QA test scripts..."
-          [ -f "scripts/qa-test-runner.js" ] && echo "✅ QA test runner found"
-          [ -f "scripts/qa-utils.js" ] && echo "✅ QA utils found"
-          mkdir -p docs/QA
-          echo "✅ QA results directory ready"
-
-      - name: Run QA Test Suite
-        id: qa_tests
-        shell: bash
-        run: |
-          echo "🚀 Starting QA test suite (self-hosted)..."
-          timeout 270 node scripts/qa-direct-test.js || echo "Direct SDK tests completed"
-          echo "qa_status=success" >> $GITHUB_OUTPUT
-
-      - name: Self-hosted QA tests complete
-        shell: bash
-        run: |
-          echo "✅ Self-hosted QA tests complete"
-
-  # GitHub-hosted QA tests (for other contributors or main branch)
   qa-tests:
     name: QA Automated Tests
-    if: |
-      github.actor != 'mickdarling' ||
-      github.ref == 'refs/heads/main' ||
-      github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
@@ -111,17 +43,17 @@ jobs:
           echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
           echo "NODE_OPTIONS: $NODE_OPTIONS"
           echo "CI: $CI"
-          
+
           # Verify TEST_PERSONAS_DIR is set
           if [ -z "$TEST_PERSONAS_DIR" ]; then
             echo "❌ TEST_PERSONAS_DIR is not set!"
             exit 1
           fi
-          
+
           # Create test personas directory if it doesn't exist
           mkdir -p "$TEST_PERSONAS_DIR"
           echo "✅ Test personas directory ready: $TEST_PERSONAS_DIR"
-          
+
           # Display workspace info for debugging
           echo "GitHub workspace: ${{ github.workspace }}"
           echo "Current directory: $(pwd)"
@@ -143,14 +75,14 @@ jobs:
             echo "❌ QA test runner not found!"
             exit 1
           fi
-          
+
           if [ -f "scripts/qa-utils.js" ]; then
             echo "✅ QA utils found"
           else
             echo "❌ QA utils not found!"
             exit 1
           fi
-          
+
           # Ensure docs/QA directory exists for results
           mkdir -p docs/QA
           echo "✅ QA results directory ready"
@@ -160,9 +92,9 @@ jobs:
         shell: bash
         run: |
           echo "🚀 Starting QA test suite..."
-          
+
           # Run BOTH test approaches for comprehensive validation:
-          
+
           # 1. Direct SDK tests (internal validation - fast and reliable)
           echo "📌 Running Direct SDK Tests (internal validation)..."
           timeout 270 node scripts/qa-direct-test.js || {
@@ -176,7 +108,7 @@ jobs:
             fi
             # Don't exit yet - run Inspector tests too
           }
-          
+
           # 2. Inspector CLI tests (CRITICAL: external client validation for protocol compliance)
           echo ""
           echo "📌 Running Inspector CLI Tests (EXTERNAL validation - protocol compliance)..."
@@ -192,7 +124,7 @@ jobs:
             fi
             # Don't fail the job yet - we want to see both results
           }
-          
+
           echo "✅ QA test suite completed"
           echo "qa_status=success" >> $GITHUB_OUTPUT
 
@@ -200,16 +132,16 @@ jobs:
         shell: bash
         run: |
           echo "📊 Checking QA test results..."
-          
+
           # Check if any result files were created (qa-direct-test creates different filename pattern)
           if ls docs/QA/qa-*-test-results-*.json 1> /dev/null 2>&1; then
             echo "✅ QA test results found:"
             ls -la docs/QA/qa-*-test-results-*.json
-            
+
             # Show summary of latest results
             latest_result=$(ls -t docs/QA/qa-*-test-results-*.json | head -1)
             echo "📋 Latest result summary from: $latest_result"
-            
+
             # Extract key metrics using jq if available, otherwise use grep
             if command -v jq >/dev/null 2>&1; then
               echo "Total Tests: $(jq -r '.summary.total_tests' "$latest_result")"
@@ -249,16 +181,16 @@ jobs:
         shell: bash
         run: |
           echo "📝 Preparing QA results summary for PR comment..."
-          
+
           # Create a summary comment for the PR
           if ls docs/QA/qa-test-results-*.json 1> /dev/null 2>&1; then
             latest_result=$(ls -t docs/QA/qa-test-results-*.json | head -1)
-            
+
             echo "## 🧪 QA Test Results" > qa_summary.md
             echo "" >> qa_summary.md
             echo "**Status:** ${{ steps.qa_tests.outputs.qa_status || 'unknown' }}" >> qa_summary.md
             echo "" >> qa_summary.md
-            
+
             if command -v jq >/dev/null 2>&1; then
               echo "**📊 Test Metrics:**" >> qa_summary.md
               echo "- Total Tests: $(jq -r '.summary.total_tests' "$latest_result")" >> qa_summary.md
@@ -271,12 +203,12 @@ jobs:
               echo "- Result file created: ✅" >> qa_summary.md
               echo "- Detailed metrics available in artifacts" >> qa_summary.md
             fi
-            
+
             echo "" >> qa_summary.md
             echo "*📎 Detailed results available in workflow artifacts*" >> qa_summary.md
             echo "" >> qa_summary.md
             echo "*🔧 This is a non-blocking test suite in development phase*" >> qa_summary.md
-            
+
             cat qa_summary.md
           else
             echo "⚠️ No QA results to summarize"
