@@ -964,6 +964,7 @@ export class SubmitToPortfolioTool {
       const isLongOperation = longOperations.includes(operationType);
 
       // Get token type to determine refresh capabilities
+      // codeql[js/clear-text-logging] — Only tokenType (a descriptive string like "OAuth Access Token") is logged, never the actual token value
       const tokenType = this.tokenManager.getTokenType(token);
       let refreshRecommended = false;
 

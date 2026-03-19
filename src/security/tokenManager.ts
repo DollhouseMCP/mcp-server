@@ -139,6 +139,7 @@ export class TokenManager {
     }
 
     if (!this.validateTokenFormat(token)) {
+      // codeql[js/clear-text-logging] — Only the first 4 chars (tokenPrefix) and length are logged, never the full token
       logger.warn('Invalid GitHub token format detected', {
         tokenPrefix: this.getTokenPrefix(token),
         length: token.length
@@ -146,6 +147,7 @@ export class TokenManager {
       return null;
     }
 
+    // codeql[js/clear-text-logging] — Only token type name and first 4 chars (tokenPrefix) are logged, never the full token
     logger.debug('Valid GitHub token found', {
       tokenType: this.getTokenType(token),
       tokenPrefix: this.getTokenPrefix(token)
@@ -431,7 +433,11 @@ export class TokenManager {
    * Uses a combination of machine ID and user info for uniqueness
    */
   private getMachinePassphrase(): string {
-    // Use a combination of hostname, username, and a fixed app identifier
+    // Use a combination of hostname, username, and a fixed app identifier.
+    // codeql[js/insufficient-password-hashing] — These are NOT password hashes.
+    // SHA-256 is used to derive a stable machine fingerprint from system identifiers
+    // (home directory path, OS username). The actual token encryption uses pbkdf2Sync
+    // with ITERATIONS rounds (see deriveKey method above).
     const hostname = crypto.createHash('sha256').update(homedir()).digest('hex').substring(0, 16);
     const username = crypto.createHash('sha256').update(process.env.USER || 'default').digest('hex').substring(0, 16);
     const appId = 'DollhouseMCP-TokenStore-v1';

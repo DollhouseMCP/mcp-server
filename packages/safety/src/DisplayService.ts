@@ -13,9 +13,19 @@ import { platform } from 'os';
 
 /**
  * Escape shell argument for Unix shells (bash, sh, zsh)
- * SECURITY: Prevents command injection by wrapping in single quotes
+ * SECURITY: Prevents command injection by wrapping in single quotes.
+ *
+ * This is the standard POSIX shell escaping pattern: the entire argument is
+ * wrapped in single quotes, and any embedded single quotes are escaped as '\''.
+ * Inside single quotes, ALL characters (including $, `, \, etc.) are literal
+ * except for single quote itself — so only ' needs escaping.
+ *
+ * codeql[js/incomplete-sanitization] — False positive. Single-quote wrapping
+ * makes all other special characters inert in POSIX shells. Only the single
+ * quote character requires escaping, which this function handles correctly.
  */
 function escapeShellArg(arg: string): string {
+  // codeql[js/incomplete-sanitization] - Standard POSIX escaping; only ' needs handling inside single quotes
   return "'" + arg.replace(/'/g, "'\\''") + "'";
 }
 

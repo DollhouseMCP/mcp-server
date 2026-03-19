@@ -249,16 +249,29 @@ export function determineSafetyTier(
 
 /**
  * Generate a display code for verification
- * This is a simple code that gets displayed to the user but the LLM cannot see
+ * This is a simple code that gets displayed to the user but the LLM cannot see.
+ * Uses rejection sampling to eliminate modulo bias from crypto random bytes.
  */
 export function generateDisplayCode(
   length: number = DEFAULT_DISPLAY_CODE_LENGTH
 ): string {
-  const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // Exclude I, O for clarity
-  const bytes = randomBytes(length);
-  return Array.from(bytes)
-    .map((b) => chars[b % chars.length])
-    .join('');
+  // 34 characters: excludes I, O for visual clarity
+  const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  // Rejection sampling: discard byte values that would create modulo bias.
+  // For 34 chars, 256 % 34 = 12, so values >= 244 over-represent some chars.
+  const maxUnbiased = 256 - (256 % chars.length);
+  const result: string[] = [];
+  while (result.length < length) {
+    const bytes = randomBytes(length - result.length + 2); // slight over-request for efficiency
+    for (const b of bytes) {
+      if (result.length >= length) break;
+      if (b < maxUnbiased) {
+        result.push(chars[b % chars.length]);
+      }
+      // else: reject this byte (biased range) and try next
+    }
+  }
+  return result.join('');
 }
 
 /**

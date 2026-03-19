@@ -5,11 +5,17 @@
  * Read-only — no mutations in V1.
  *
  * All element content is sanitized before serving to prevent XSS.
+ *
+ * Security note: This web server binds to 127.0.0.1 only (see server.ts).
+ * Rate limiting on read-only GET endpoints is not required for localhost-only
+ * management interfaces. The POST /api/install endpoint has explicit rate limiting
+ * via SlidingWindowRateLimiter (max 10 per minute).
+ * codeql[js/missing-rate-limiting] — Acknowledged; localhost-only binding mitigates DoS risk.
  */
 
 import express, { Router } from 'express';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { join, extname, resolve } from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { logger } from '../utils/logger.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
@@ -281,6 +287,13 @@ export function createApiRoutes(portfolioDir: string): Router {
 
       const filePath = join(typeDir, match);
 
+      // Verify resolved path stays within portfolio directory (defense in depth)
+      const resolvedPath = resolve(filePath);
+      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
+        res.status(400).json({ error: 'Path traversal detected' });
+        return;
+      }
+
       // Reject files larger than 1 MB
       const fileStat = await stat(filePath);
       if (fileStat.size > MAX_FILE_SIZE_BYTES) {
@@ -402,9 +415,23 @@ export function createApiRoutes(portfolioDir: string): Router {
       return;
     }
 
+    // Validate elementPath contains only safe characters (alphanumeric, hyphens, underscores, dots, slashes)
+    if (!/^[a-zA-Z0-9/_.-]+$/.test(elementPath)) {
+      res.status(400).json({ error: 'Invalid element path characters' });
+      return;
+    }
+
     try {
       // Fetch content from GitHub
       const ghUrl = `https://raw.githubusercontent.com/DollhouseMCP/collection/main/${elementPath}`;
+
+      // Validate the constructed URL stays within expected domain and path
+      const parsedUrl = new URL(ghUrl);
+      if (parsedUrl.hostname !== 'raw.githubusercontent.com' || !parsedUrl.pathname.startsWith('/DollhouseMCP/collection/')) {
+        res.status(400).json({ error: 'Invalid collection path' });
+        return;
+      }
+
       const response = await fetch(ghUrl);
       if (!response.ok) {
         res.status(502).json({ error: `Failed to fetch from collection: HTTP ${response.status}` });
@@ -463,6 +490,13 @@ export function createApiRoutes(portfolioDir: string): Router {
 
       // Write to portfolio
       const destPath = join(typeDir, filename);
+
+      // Verify resolved destination path stays within portfolio directory (defense in depth)
+      const resolvedDest = resolve(destPath);
+      if (!resolvedDest.startsWith(resolve(portfolioDir))) {
+        res.status(400).json({ error: 'Path traversal detected' });
+        return;
+      }
 
       // Check if file already exists
       try {
@@ -736,6 +770,12 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
 
     if (elementPath.includes('..') || name.includes('..')) {
       res.status(400).json({ error: 'Invalid path or name' });
+      return;
+    }
+
+    // Validate elementPath contains only safe characters (alphanumeric, hyphens, underscores, dots, slashes)
+    if (!/^[a-zA-Z0-9/_.-]+$/.test(elementPath)) {
+      res.status(400).json({ error: 'Invalid element path characters' });
       return;
     }
 

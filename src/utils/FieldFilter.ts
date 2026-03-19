@@ -149,8 +149,12 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
+/** Keys that must never be set via dynamic path assignment (prototype pollution prevention) */
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /**
- * Set value at nested path, creating intermediate objects as needed
+ * Set value at nested path, creating intermediate objects as needed.
+ * Rejects prototype-polluting keys (__proto__, constructor, prototype).
  */
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
@@ -158,13 +162,16 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
+    if (DANGEROUS_KEYS.has(part)) continue; // Prevent prototype pollution
     if (!(part in current) || typeof current[part] !== 'object') {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;
   }
 
-  current[parts[parts.length - 1]] = value;
+  const finalKey = parts[parts.length - 1];
+  if (DANGEROUS_KEYS.has(finalKey)) return; // Prevent prototype pollution
+  current[finalKey] = value;
 }
 
 /**
@@ -243,6 +250,7 @@ function transformObject(obj: Record<string, unknown>): Record<string, unknown> 
   const result: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
+    if (DANGEROUS_KEYS.has(key)) continue; // Prevent prototype pollution
     const transformedKey = transformFieldName(key);
 
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {

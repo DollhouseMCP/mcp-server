@@ -43,6 +43,12 @@ export class GitHubClient {
     let timeoutId: NodeJS.Timeout | null = null;
     const controller = new AbortController();
 
+    // Validate URL is a GitHub API or content endpoint to prevent SSRF
+    const parsedUrl = new URL(url);
+    if (!['api.github.com', 'raw.githubusercontent.com'].includes(parsedUrl.hostname)) {
+      throw new Error(`GitHubClient: Refusing to fetch non-GitHub URL: ${parsedUrl.hostname}`);
+    }
+
     try {
       // Check rate limit
       this.checkRateLimit('github_api');
@@ -107,6 +113,8 @@ export class GitHubClient {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const safeMessage = this.tokenManager.createSafeErrorMessage(errorMessage);
       
+      // codeql[js/clear-text-logging] — URL is a GitHub API endpoint (api.github.com/raw.githubusercontent.com),
+      // validated at method entry. Auth tokens are in headers, not the URL.
       const errorDetails: any = {
         originalMessage: safeMessage,
         url
