@@ -649,10 +649,8 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 
   async run() {
-    logger.info("DEBUG: DollhouseMCPServer.run() started.");
+    logger.debug("DollhouseMCPServer.run() started");
     logger.info("Starting DollhouseMCP server...");
-    // Docker build verification - proves we're running fresh code
-    logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
 
     const timer = this.container.resolve<StartupTimer>('StartupTimer');
 
@@ -676,7 +674,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
       logger.info("Portfolio and personas initialized successfully");
       logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
-      logger.info("DEBUG: DollhouseMCPServer.run() completed initialization successfully.");
+      logger.debug("DollhouseMCPServer.run() completed initialization");
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
       throw error; // Re-throw to prevent server from starting with incomplete initialization
