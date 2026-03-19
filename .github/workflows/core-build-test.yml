@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # For adding partial-ci label
 
 env:
   NODE_OPTIONS: '--max-old-space-size=6144 --experimental-vm-modules'
@@ -254,6 +253,8 @@ jobs:
   # Runs on self-hosted to avoid GitHub outage issues
   label-partial-ci:
     name: Label Partial CI
+    permissions:
+      pull-requests: write
     needs: [self-hosted-test]
     if: |
       always() &&

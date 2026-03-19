@@ -11,11 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read        # Needed for CodeQL action telemetry
   contents: read
-  issues: write
-  pull-requests: write
-  security-events: write
 
 jobs:
   # Self-hosted security audit (fast iteration for mickdarling)
@@ -102,6 +98,12 @@ jobs:
   # GitHub-hosted security audit (for other contributors or main branch)
   security-audit:
     name: Security Audit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+      security-events: write
     if: |
       github.actor != 'mickdarling' ||
       github.event_name == 'schedule' ||
