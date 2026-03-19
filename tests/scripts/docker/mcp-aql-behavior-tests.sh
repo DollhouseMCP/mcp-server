@@ -295,6 +295,10 @@ After completing a task, output a one-line confirmation of what was done and whi
 
 TASK: "
             ;;
+        *)
+            echo -e "${RED}Unknown TEST_MODE for system prefix: $TEST_MODE${NC}" >&2
+            exit 1
+            ;;
     esac
 fi
 
@@ -686,6 +690,10 @@ test_tool_schema_inspection() {
                 "$DEFAULT_TIMEOUT" \
                 "discovery" \
                 "false"
+            ;;
+        *)
+            echo -e "${RED}Unknown TEST_MODE for tool schema inspection: $TEST_MODE${NC}" >&2
+            exit 1
             ;;
     esac
 

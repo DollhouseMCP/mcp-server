@@ -46,7 +46,7 @@ describe('PersonaManager - Unicode Attack Prevention', () => {
   });
 
   afterEach(async () => {
-    await personaManager.dispose();
+    personaManager.dispose();
     rmSync(testDir, { recursive: true, force: true });
     delete process.env.DISABLE_ELEMENT_FILTERING;
   });

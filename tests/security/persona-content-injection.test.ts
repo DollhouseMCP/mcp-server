@@ -44,7 +44,7 @@ describe('PersonaManager - Content Injection Prevention', () => {
   });
 
   afterEach(async () => {
-    await personaManager.dispose();
+    personaManager.dispose();
     rmSync(testDir, { recursive: true, force: true });
     SecurityMonitor.clearAllEventsForTesting();
   });

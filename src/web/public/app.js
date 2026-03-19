@@ -73,6 +73,24 @@ function safeParseYaml(content) {
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
+  function mergeCollectionData(data) {
+    const CANONICAL_TYPES = new Set(['agents','personas','skills','templates','memories','ensembles']);
+    collectionElements = Object.entries(data.index)
+      .filter(([type]) => CANONICAL_TYPES.has(type))
+      .flatMap(([type, elements]) =>
+        elements.map(el => ({ ...el, type: SINGULAR_TYPE[type] || type }))
+      );
+    allElements = [...localElements, ...collectionElements];
+    renderTypeFilters();
+    renderTopicFilters();
+    applyFilters();
+    const statsEl = document.getElementById('stats');
+    if (statsEl) statsEl.innerHTML = `
+      <span class="stat"><strong>${localElements.length}</strong> portfolio</span>
+      <span class="stat"><strong>${collectionElements.length}</strong> collection</span>
+    `;
+  }
+
   async function init() {
     try {
       showGridMessage('loading', 'Loading portfolio…');
@@ -100,23 +118,7 @@ function safeParseYaml(content) {
       // Load community collection (non-blocking — portfolio shows immediately)
       fetch('/api/collection')
         .then(r => r.ok ? r.json() : Promise.reject('not available'))
-        .then(data => {
-          const CANONICAL_TYPES = new Set(['agents','personas','skills','templates','memories','ensembles']);
-          collectionElements = Object.entries(data.index)
-            .filter(([type]) => CANONICAL_TYPES.has(type))
-            .flatMap(([type, elements]) =>
-              elements.map(el => ({ ...el, type: SINGULAR_TYPE[type] || type }))
-            );
-          allElements = [...localElements, ...collectionElements];
-          renderTypeFilters();
-          renderTopicFilters();
-          applyFilters();
-          const statsEl = document.getElementById('stats');
-          if (statsEl) statsEl.innerHTML = `
-            <span class="stat"><strong>${localElements.length}</strong> portfolio</span>
-            <span class="stat"><strong>${collectionElements.length}</strong> collection</span>
-          `;
-        })
+        .then(mergeCollectionData)
         .catch(() => { /* collection not available — portfolio-only mode */ });
 
       const updated = document.getElementById('footer-updated');
@@ -1237,6 +1239,40 @@ function safeParseYaml(content) {
     return rows ? detailSection('Variables', rows) : '';
   }
 
+  function renderExtraValue(key, value) {
+    const label = key.replaceAll('_', ' ');
+    if (value == null || value === '') return '';
+    if (typeof value === 'boolean') return detailField(label, value ? 'Yes' : 'No');
+    if (typeof value === 'number' || typeof value === 'string') return detailField(label, String(value));
+    if (Array.isArray(value)) {
+      if (value.length === 0) return '';
+      // Array of simple values → pill list
+      if (value.every(v => typeof v === 'string' || typeof v === 'number')) {
+        return `<div class="detail-field"><span class="detail-label">${escapeHtml(label)}</span><span class="detail-value">${detailPillList(value.map(String))}</span></div>`;
+      }
+      // Array of objects → render each as a sub-block
+      const items = value.map(item => {
+        if (typeof item !== 'object' || item === null) return `<li>${escapeHtml(String(item))}</li>`;
+        const fields = Object.entries(item)
+          .map(([k, v]) => `<strong>${escapeHtml(k.replaceAll('_', ' '))}</strong>: ${escapeHtml(String(v))}`)
+          .join(' · ');
+        return `<li class="detail-prose">${fields}</li>`;
+      }).join('');
+      return detailSection(label, `<ul class="detail-list">${items}</ul>`);
+    }
+    if (typeof value === 'object') {
+      // Object → render as field list
+      const fields = Object.entries(value)
+        .map(([k, v]) => {
+          if (typeof v === 'object' && v !== null) return detailField(k.replaceAll('_', ' '), JSON.stringify(v));
+          return detailField(k.replaceAll('_', ' '), String(v));
+        })
+        .filter(Boolean).join('');
+      return fields ? detailSection(label, fields) : '';
+    }
+    return detailField(label, String(value));
+  }
+
   function renderDetailExtra(fm, body) {
     const knownFields = new Set([
       'name','type','description','author','version','category','license','age_rating',
@@ -1253,39 +1289,6 @@ function safeParseYaml(content) {
       'elements','allowNested','maxNestingDepth','components',
       'unique_id','content_flags','system_prompt','systemPrompt',
     ]);
-    function renderExtraValue(key, value) {
-      const label = key.replaceAll('_', ' ');
-      if (value == null || value === '') return '';
-      if (typeof value === 'boolean') return detailField(label, value ? 'Yes' : 'No');
-      if (typeof value === 'number' || typeof value === 'string') return detailField(label, String(value));
-      if (Array.isArray(value)) {
-        if (value.length === 0) return '';
-        // Array of simple values → pill list
-        if (value.every(v => typeof v === 'string' || typeof v === 'number')) {
-          return `<div class="detail-field"><span class="detail-label">${escapeHtml(label)}</span><span class="detail-value">${detailPillList(value.map(String))}</span></div>`;
-        }
-        // Array of objects → render each as a sub-block
-        const items = value.map(item => {
-          if (typeof item !== 'object' || item === null) return `<li>${escapeHtml(String(item))}</li>`;
-          const fields = Object.entries(item)
-            .map(([k, v]) => `<strong>${escapeHtml(k.replaceAll('_', ' '))}</strong>: ${escapeHtml(String(v))}`)
-            .join(' · ');
-          return `<li class="detail-prose">${fields}</li>`;
-        }).join('');
-        return detailSection(label, `<ul class="detail-list">${items}</ul>`);
-      }
-      if (typeof value === 'object') {
-        // Object → render as field list
-        const fields = Object.entries(value)
-          .map(([k, v]) => {
-            if (typeof v === 'object' && v !== null) return detailField(k.replaceAll('_', ' '), JSON.stringify(v));
-            return detailField(k.replaceAll('_', ' '), String(v));
-          })
-          .filter(Boolean).join('');
-        return fields ? detailSection(label, fields) : '';
-      }
-      return detailField(label, String(value));
-    }
 
     const extraFields = Object.entries(fm)
       .filter(([k]) => !knownFields.has(k))

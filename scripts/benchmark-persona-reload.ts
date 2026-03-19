@@ -176,7 +176,7 @@ async function main() {
 
   } finally {
     // Cleanup
-    await personaManager.dispose();
+    personaManager.dispose();
     await fs.rm(TEST_DIR, { recursive: true, force: true });
     console.log('Cleaned up test directory\n');
   }

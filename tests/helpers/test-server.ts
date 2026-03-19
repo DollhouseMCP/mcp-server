@@ -241,7 +241,7 @@ export class TestServer {
    */
   async cleanup(): Promise<void> {
     // Dispose PersonaManager to stop file watchers and prevent open handles
-    await this.personaManager.dispose();
+    this.personaManager.dispose();
 
     // Clear caches and trackers
     this.apiCache.clear();

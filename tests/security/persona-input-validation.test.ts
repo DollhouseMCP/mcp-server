@@ -45,7 +45,7 @@ describe('PersonaManager - Input Validation Security', () => {
 
   afterEach(async () => {
     // Cleanup
-    await personaManager.dispose();
+    personaManager.dispose();
     rmSync(testDir, { recursive: true, force: true });
     SecurityMonitor.clearAllEventsForTesting();
   });

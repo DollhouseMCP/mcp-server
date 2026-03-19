@@ -11,8 +11,7 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   NODE_OPTIONS: --max-old-space-size=4096
@@ -28,6 +27,8 @@ jobs:
   # Runs when: mickdarling + not main branch
   self-hosted-docker-build-test:
     name: Docker Build & Test (linux/amd64)
+    permissions:
+      contents: read
     if: |
       github.actor == 'mickdarling' &&
       github.ref != 'refs/heads/main' &&
@@ -113,6 +114,8 @@ jobs:
   # GitHub-hosted Docker build test (for other contributors or main branch)
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
+    permissions:
+      contents: read
     if: |
       github.actor != 'mickdarling' ||
       github.ref == 'refs/heads/main' ||
@@ -731,6 +734,8 @@ jobs:
   # Self-hosted Docker Compose test (for mickdarling)
   self-hosted-docker-compose-test:
     name: Docker Compose Test
+    permissions:
+      contents: read
     if: |
       github.actor == 'mickdarling' &&
       github.ref != 'refs/heads/main' &&
@@ -787,6 +792,8 @@ jobs:
   # GitHub-hosted Docker Compose test
   docker-compose-test:
     name: Docker Compose Test
+    permissions:
+      contents: read
     if: |
       github.actor != 'mickdarling' ||
       github.ref == 'refs/heads/main' ||

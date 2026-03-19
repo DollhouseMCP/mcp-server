@@ -284,7 +284,7 @@ export class SecureYamlParser {
    */
   static safeMatter(input: string, options?: matter.GrayMatterOption<string, any>, secureOptions?: SecureParseOptions): matter.GrayMatterFile<string> {
     // First, use our secure parser (for validation)
-    void this.parse(input, secureOptions);
+    this.parse(input, secureOptions);
 
     // Then use gray-matter with custom engines
     return matter(input, {

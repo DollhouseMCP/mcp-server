@@ -178,6 +178,8 @@ main() {
             --platform=*)
                 platform="${arg#*=}"
                 ;;
+            *)
+                ;;
         esac
     done
 

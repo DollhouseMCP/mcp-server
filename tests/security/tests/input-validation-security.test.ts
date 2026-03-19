@@ -157,8 +157,8 @@ describe('Input Validation Security Tests', () => {
       for (const attempt of attempts) {
         const start = process.hrtime.bigint();
         // Simulate constant-time comparison
-        void (attempt.length === secret.length &&
-                      attempt.split('').every((char, i) => char === secret[i]));
+        const _match = attempt.length === secret.length &&
+                      attempt.split('').every((char, i) => char === secret[i]);
         const end = process.hrtime.bigint();
 
         timings.push(Number(end - start));

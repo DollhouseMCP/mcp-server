@@ -129,7 +129,7 @@ describe('Ensemble Activation Integration Tests', () => {
       skillManager.dispose();
     }
     if (personaManager) {
-      await personaManager.dispose();
+      personaManager.dispose();
     }
 
     // Clean up test environment
