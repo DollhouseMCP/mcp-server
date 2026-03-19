@@ -1292,13 +1292,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Reset internal state; aligns PersonaManager with DI lifecycle hooks.
    * CRITICAL: Must call super.dispose() to clean up file watchers and prevent open handles
    */
-  override async dispose(): Promise<void> {
+  override dispose(): void {
     // Issue #281: Clear the active personas set
     this.activePersonas.clear();
     this.currentUser = null;
 
     // CRITICAL: Clean up base class resources (file watchers, caches)
-    await super.dispose();
+    super.dispose();
   }
 
   /**

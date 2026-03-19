@@ -117,7 +117,7 @@ export function aggregateElements(
 
     // Validate field against whitelist
     if (!ALLOWED_GROUP_BY_FIELDS.has(field)) {
-      const allowed = [...ALLOWED_GROUP_BY_FIELDS].sort().join(', ');
+      const allowed = [...ALLOWED_GROUP_BY_FIELDS].sort((a, b) => a.localeCompare(b)).join(', ');
       throw new Error(
         `Invalid group_by field '${field}'. Allowed fields: ${allowed}`
       );
@@ -159,7 +159,7 @@ export function validateAggregationOptions(options: AggregationOptions): string 
       return 'aggregate.group_by must be a string';
     }
     if (!ALLOWED_GROUP_BY_FIELDS.has(options.group_by)) {
-      const allowed = [...ALLOWED_GROUP_BY_FIELDS].sort().join(', ');
+      const allowed = [...ALLOWED_GROUP_BY_FIELDS].sort((a, b) => a.localeCompare(b)).join(', ');
       return `Invalid group_by field '${options.group_by}'. Allowed fields: ${allowed}`;
     }
   }
@@ -170,5 +170,5 @@ export function validateAggregationOptions(options: AggregationOptions): string 
  * Get the set of allowed group_by fields (for introspection/documentation).
  */
 export function getAllowedGroupByFields(): string[] {
-  return [...ALLOWED_GROUP_BY_FIELDS].sort();
+  return [...ALLOWED_GROUP_BY_FIELDS].sort((a, b) => a.localeCompare(b));
 }

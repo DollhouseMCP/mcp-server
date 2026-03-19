@@ -280,7 +280,7 @@ export class MemoryStorageLayer implements IStorageLayer {
       }
       // Sort date folders chronologically (oldest first → newest last)
       // so that nameToPath in MetadataIndex ends up pointing to the newest copy
-      dateFolders.sort();
+      dateFolders.sort((a, b) => a.localeCompare(b));
       subdirs.push(...dateFolders);
     } catch (error) {
       if ((error as any).code !== 'ENOENT') {

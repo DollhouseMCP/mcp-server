@@ -140,5 +140,5 @@ export function translateToolConfigToPolicy(
     return undefined;
   }
 
-  return { deny: Array.from(denySet).sort() };
+  return { deny: Array.from(denySet).sort((a, b) => a.localeCompare(b)) };
 }

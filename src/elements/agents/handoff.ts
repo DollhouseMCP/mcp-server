@@ -340,7 +340,7 @@ export function decompressHandoffState(encoded: string): HandoffState {
  * Compute SHA-256 checksum of a data payload.
  */
 function computeChecksum(data: Record<string, unknown>): string {
-  const json = JSON.stringify(data, Object.keys(data).sort());
+  const json = JSON.stringify(data, Object.keys(data).sort((a, b) => a.localeCompare(b)));
   return createHash('sha256').update(json).digest('hex');
 }
 

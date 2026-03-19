@@ -134,7 +134,7 @@ export class BackupService {
 
       const matching = entries
         .filter(e => e.startsWith(pattern) && e.endsWith(ext))
-        .sort(); // ISO timestamps sort lexicographically
+        .sort((a, b) => a.localeCompare(b)); // ISO timestamps sort lexicographically
 
       if (matching.length <= this.config.maxBackupsPerElement) {
         return;

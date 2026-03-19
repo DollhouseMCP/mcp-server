@@ -244,7 +244,7 @@ export class FilterService<T extends IElement = IElement> implements IFilterServ
       // Reject unknown filter keys
       const unknownKeys = Object.keys(criteria).filter(key => !KNOWN_FILTER_KEYS.has(key));
       if (unknownKeys.length > 0) {
-        const supported = [...KNOWN_FILTER_KEYS].sort().join(', ');
+        const supported = [...KNOWN_FILTER_KEYS].sort((a, b) => a.localeCompare(b)).join(', ');
         throw new Error(
           `Unknown filter key(s): ${unknownKeys.join(', ')}. Supported filters: ${supported}`
         );

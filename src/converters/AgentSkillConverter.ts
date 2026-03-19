@@ -617,7 +617,7 @@ export class AgentSkillConverter {
         deterministic: true,
         roundTripAvailable: true,
         warnings,
-        unsupportedFields: [...unsupportedFields].sort(),
+        unsupportedFields: [...unsupportedFields].sort((a, b) => a.localeCompare(b)),
       },
     };
   }
@@ -650,7 +650,7 @@ export class AgentSkillConverter {
             deterministic: true,
             roundTripAvailable: true,
             warnings,
-            unsupportedFields: [...unsupportedFields].sort(),
+            unsupportedFields: [...unsupportedFields].sort((a, b) => a.localeCompare(b)),
           },
         };
       }
@@ -765,7 +765,7 @@ export class AgentSkillConverter {
         deterministic: true,
         roundTripAvailable: false,
         warnings,
-        unsupportedFields: [...unsupportedFields].sort(),
+        unsupportedFields: [...unsupportedFields].sort((a, b) => a.localeCompare(b)),
       },
     };
   }

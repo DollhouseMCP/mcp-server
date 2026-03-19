@@ -374,7 +374,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Find all backups for this specific memory
       const memoryBackups = allFiles
         .filter(f => f.startsWith(`${baseName}.backup-`) && f.endsWith('.yaml'))
-        .sort(); // Lexicographic sort = chronological for ISO timestamps
+        .sort((a, b) => a.localeCompare(b)); // Lexicographic sort = chronological for ISO timestamps
 
       if (memoryBackups.length <= maxBackups) return;
 
