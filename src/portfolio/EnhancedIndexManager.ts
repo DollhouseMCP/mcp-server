@@ -847,7 +847,6 @@ export class EnhancedIndexManager {
         source: 'EnhancedIndexManager.writeToFile'
       });
 
-      logger.debug('Index saved to file', { path: this.indexPath });
     } catch (error) {
       logger.error('Failed to save index', error);
       throw error;

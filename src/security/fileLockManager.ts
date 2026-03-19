@@ -149,7 +149,6 @@ export class FileLockManager {
       // Atomic rename (on same filesystem)
       await fs.rename(tempPath, filePath);
       
-      logger.debug(`Atomic write completed: ${filePath}`);
     } catch (error) {
       // Clean up temp file on error
       try {

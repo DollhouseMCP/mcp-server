@@ -106,7 +106,7 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_RETENTION_DAYS: z.coerce.number().default(30),
   DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS: z.coerce.number().default(7),
   DOLLHOUSE_LOG_FLUSH_INTERVAL_MS: z.coerce.number().default(5000),
-  DOLLHOUSE_LOG_BUFFER_SIZE: z.coerce.number().default(1000),
+  DOLLHOUSE_LOG_BUFFER_SIZE: z.coerce.number().default(2000),
   DOLLHOUSE_LOG_MEMORY_CAPACITY: z.coerce.number().default(5000),
   DOLLHOUSE_LOG_MEMORY_APP_CAPACITY: z.coerce.number().default(10000),
   DOLLHOUSE_LOG_MEMORY_SECURITY_CAPACITY: z.coerce.number().default(5000),
