@@ -504,7 +504,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const entries = await this.fileOperations.listDirectory(this.memoriesDir);
       return entries
         .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name))
-        .sort()
+        .sort((a, b) => a.localeCompare(b))
         .reverse(); // Most recent first
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
