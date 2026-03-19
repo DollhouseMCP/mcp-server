@@ -104,6 +104,16 @@
     "email": "mick@dollhousemcp.com",
     "url": "https://github.com/mickdarling"
   },
+  "contributors": [
+    {
+      "name": "Todd Dibble",
+      "url": "https://github.com/insomnolence"
+    },
+    {
+      "name": "Jeet Singh",
+      "url": "https://github.com/jeetsingh008"
+    }
+  ],
   "license": "AGPL-3.0-or-later",
   "licenseNotice": "SUBJECT TO ADDITIONAL TERMS - See LICENSE file for complete terms including dual licensing, platform stability commitments, and creator protections. All terms are binding under AGPL Section 7.",
   "repository": {

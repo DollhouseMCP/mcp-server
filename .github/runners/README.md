@@ -1,11 +1,13 @@
-# Self-Hosted GitHub Actions Runners
+# Self-Hosted GitHub Actions Runners (Optional)
 
-This directory contains configuration for running GitHub Actions on self-hosted runners, providing faster CI feedback during development.
+This directory contains configuration for running GitHub Actions on your own self-hosted runners. This is **entirely optional** — the public repo uses GitHub-hosted runners by default. Self-hosted runners provide faster CI feedback for frequent contributors.
 
 ## Quick Start
 
 ```bash
 cd .github/runners
+cp .env.example .env
+# Edit .env with your GitHub token and runner name
 ./setup-runner.sh
 ```
 
@@ -13,32 +15,18 @@ This will:
 1. Check prerequisites (Docker, GitHub CLI)
 2. Generate a runner registration token
 3. Start the runner container
-4. Register with GitHub
+4. Register with your fork/repo
 
-## How It Works
+## When to Use Self-Hosted Runners
 
-### Runner Selection Logic
-
-The CI automatically chooses between self-hosted and GitHub-hosted runners:
-
-| Trigger | Actor | Override | Runner |
-|---------|-------|----------|--------|
-| Any | `mickdarling` | None | **Self-hosted** (macOS only) |
-| Any | `mickdarling` | `[full-matrix]` in commit/PR | GitHub-hosted (full matrix) |
-| Any | `mickdarling` | `full-matrix` label | GitHub-hosted (full matrix) |
-| Push to main | Any | - | GitHub-hosted (full matrix) |
-| Any | Other contributors | - | GitHub-hosted (full matrix) |
-
-### Partial CI Tracking
-
-When a PR runs with single-platform CI:
-- The `partial-ci` label is automatically added
-- A comment is posted explaining how to trigger full matrix testing
+- **You don't need this** for normal contributions — GitHub-hosted CI runs automatically on PRs
+- Self-hosted runners are useful if you're making frequent commits and want sub-minute CI feedback
+- They're also useful for testing Docker builds locally without waiting for GitHub's queue
 
 ## Commands
 
 ```bash
-# Start macOS runner
+# Start runner
 ./setup-runner.sh
 
 # Start both macOS and Linux runners
@@ -52,56 +40,6 @@ When a PR runs with single-platform CI:
 
 # Generate new token only
 ./setup-runner.sh --token
-```
-
-## Triggering Full Matrix
-
-Even as `mickdarling`, you can force full cross-platform testing:
-
-1. **Commit message**: Include `[full-matrix]` anywhere in the message
-   ```
-   fix: resolve timing issue [full-matrix]
-   ```
-
-2. **PR title**: Include `[full-matrix]` in the title
-   ```
-   fix: resolve timing issue [full-matrix]
-   ```
-
-3. **PR label**: Add the `full-matrix` label to the PR
-
-4. **Manual dispatch**: Use workflow_dispatch with `full_matrix: true`
-
-5. **Merge to main**: Always runs full matrix automatically
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Actions                            │
-├─────────────────────────────────────────────────────────────┤
-│  Workflow triggers                                           │
-│       │                                                      │
-│       ▼                                                      │
-│  ┌─────────────────┐                                        │
-│  │ runner-strategy │ Determines which runner to use         │
-│  └────────┬────────┘                                        │
-│           │                                                  │
-│     ┌─────┴─────┐                                           │
-│     ▼           ▼                                           │
-│ ┌────────┐  ┌────────┐                                      │
-│ │ self-  │  │ hosted │                                      │
-│ │ hosted │  │ -test  │                                      │
-│ │ -test  │  │        │                                      │
-│ └───┬────┘  └────────┘                                      │
-│     │           │                                            │
-│     ▼           │                                            │
-│ ┌────────┐      │                                            │
-│ │ label- │◄─────┘ (only for self-hosted)                    │
-│ │partial │                                                   │
-│ │ -ci    │                                                   │
-│ └────────┘                                                   │
-└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Docker Configuration
@@ -126,8 +64,6 @@ For local cross-platform testing, start the Linux runner:
 ```bash
 ./setup-runner.sh --linux
 ```
-
-This runs a Linux container alongside the macOS runner, allowing you to test both platforms locally.
 
 ## Troubleshooting
 
@@ -155,7 +91,7 @@ On macOS, ensure Docker Desktop is running and your user has access to the Docke
 - Self-hosted runners have access to your local machine
 - The runner container has access to the Docker socket (for DinD)
 - Never run untrusted code on self-hosted runners
-- This setup is for a private repo with trusted contributors only
+- Only use on repos where you trust all contributors
 
 ## Files
 
