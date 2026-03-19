@@ -2,18 +2,24 @@
  * Persona import functionality with validation
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
-import matter from 'gray-matter';
 import { Persona, PersonaMetadata } from '../../types/persona.js';
 import { ExportedPersona, ExportBundle } from './PersonaExporter.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { ContentValidator } from '../../security/contentValidator.js';
-import { validateFilename, validatePath, sanitizeInput, validateContentSize } from '../../security/InputValidator.js';
+import { validateFilename, validatePath, validateContentSize } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { generateUniqueId } from '../../utils/filesystem.js';
 import { logger } from '../../utils/logger.js';
+import matter from 'gray-matter';
+import { IFileOperationsService } from '../../services/FileOperationsService.js';
+
+// Map-like interface for existing personas lookup
+type PersonaMap = Map<string, Persona> | {
+  has: (key: string) => boolean;
+  keys: () => Iterable<string>;
+  [Symbol.iterator]: () => Iterator<[string, Persona]>;
+};
 
 export interface ImportResult {
   success: boolean;
@@ -23,16 +29,30 @@ export interface ImportResult {
   conflicts?: string[];
 }
 
+type CurrentUserProvider = () => string | null;
+
 export class PersonaImporter {
+  private readonly getCurrentUser: CurrentUserProvider;
+  private readonly fileOperations: IFileOperationsService;
+
   constructor(
-    private personasDir: string,
-    private currentUser: string | null
-  ) {}
+    _personasDir: string,
+    currentUser: string | null | CurrentUserProvider,
+    _fileLockManager?: unknown,
+    fileOperations?: IFileOperationsService
+  ) {
+    if (typeof currentUser === 'function') {
+      this.getCurrentUser = currentUser as CurrentUserProvider;
+    } else {
+      this.getCurrentUser = () => currentUser;
+    }
+    this.fileOperations = fileOperations!;
+  }
 
   /**
    * Import a persona from various sources
    */
-  async importPersona(source: string, existingPersonas: Map<string, Persona>, overwrite = false): Promise<ImportResult> {
+  async importPersona(source: string, existingPersonas: PersonaMap, overwrite = false): Promise<ImportResult> {
     try {
       // Determine source type
       let personaData: ExportedPersona | null = null;
@@ -86,7 +106,7 @@ export class PersonaImporter {
     try {
       // Validate path
       const validatedPath = validatePath(filePath);
-      const content = await fs.readFile(validatedPath, 'utf-8');
+      const content = await this.fileOperations.readFile(validatedPath, { source: 'PersonaImporter.importFromFile' });
 
       if (filePath.endsWith('.json')) {
         const parsed = JSON.parse(content);
@@ -97,7 +117,7 @@ export class PersonaImporter {
         }
       } else if (filePath.endsWith('.md')) {
         // Parse markdown file
-        const { data, content: mdContent } = matter(content);
+        const { data, content: mdContent } = SecureYamlParser.safeMatter(content);
         const filename = path.basename(filePath);
         return {
           metadata: data as PersonaMetadata,
@@ -135,13 +155,13 @@ export class PersonaImporter {
   /**
    * Import from raw markdown content
    */
-  private async importFromMarkdown(content: string, existingPersonas: Map<string, Persona>, overwrite: boolean): Promise<ImportResult> {
+  private async importFromMarkdown(content: string, existingPersonas: PersonaMap, overwrite: boolean): Promise<ImportResult> {
     try {
       // Validate content size
       validateContentSize(content, 100 * 1024); // 100KB limit
 
       // Try to parse as markdown with frontmatter
-      const { data, content: mdContent } = matter(content);
+      const { data, content: mdContent } = SecureYamlParser.safeMatter(content);
       
       if (!data.name || !data.description) {
         return {
@@ -158,7 +178,7 @@ export class PersonaImporter {
         content: mdContent,
         filename,
         exportedAt: new Date().toISOString(),
-        exportedBy: this.currentUser || undefined
+        exportedBy: this.getCurrentUser() || undefined
       };
 
       return await this.createPersonaFromExport(exportedPersona, existingPersonas, overwrite);
@@ -173,7 +193,7 @@ export class PersonaImporter {
   /**
    * Import a bundle of personas
    */
-  private async importBundle(bundle: ExportBundle, existingPersonas: Map<string, Persona>, overwrite: boolean): Promise<ImportResult> {
+  private async importBundle(bundle: ExportBundle, existingPersonas: PersonaMap, overwrite: boolean): Promise<ImportResult> {
     const results = {
       success: true,
       imported: [] as string[],
@@ -205,8 +225,8 @@ export class PersonaImporter {
    * Create persona from exported data
    */
   private async createPersonaFromExport(
-    exportData: ExportedPersona, 
-    existingPersonas: Map<string, Persona>, 
+    exportData: ExportedPersona,
+    existingPersonas: PersonaMap,
     overwrite: boolean
   ): Promise<ImportResult> {
     try {
@@ -240,22 +260,16 @@ export class PersonaImporter {
         };
       }
 
-      // Create the persona file
-      const personaPath = path.join(this.personasDir, filename);
-      const fileContent = matter.stringify(sanitizedContent, metadata);
-      
-      // Use file locking to prevent race conditions
-      await FileLockManager.withLock(`persona:${metadata.name}`, async () => {
-        await FileLockManager.atomicWriteFile(personaPath, fileContent);
-      });
-
       // Create persona object
       const persona: Persona = {
+        id: metadata.unique_id!,
+        type: 'persona' as any, // ElementType.PERSONA
+        version: metadata.version || '1.0',
         metadata,
         content: sanitizedContent,
         filename,
         unique_id: metadata.unique_id!
-      };
+      } as Persona;
 
       return {
         success: true,
@@ -299,12 +313,13 @@ export class PersonaImporter {
 
     // Generate unique_id if missing
     if (!metadata.unique_id) {
-      metadata.unique_id = generateUniqueId(metadata.name, this.currentUser || 'imported');
+      metadata.unique_id = generateUniqueId(metadata.name, this.getCurrentUser() || 'imported');
     }
 
     // Set defaults
     metadata.version = metadata.version || '1.0';
-    metadata.author = metadata.author || this.currentUser || 'imported';
+    const currentUser = this.getCurrentUser();
+    metadata.author = metadata.author || currentUser || 'imported';
     metadata.category = metadata.category || 'custom';
     metadata.created_date = metadata.created_date || new Date().toISOString();
 
@@ -317,7 +332,7 @@ export class PersonaImporter {
   /**
    * Find conflicts with existing personas
    */
-  private findConflicts(name: string, filename: string, existingPersonas: Map<string, Persona>): string[] {
+  private findConflicts(name: string, filename: string, existingPersonas: PersonaMap): string[] {
     const conflicts: string[] = [];
 
     for (const [key, persona] of existingPersonas) {

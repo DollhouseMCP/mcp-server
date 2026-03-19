@@ -45,6 +45,8 @@ export interface SecureParseOptions {
   allowedKeys?: string[];
   validateContent?: boolean;
   validateFields?: boolean; // Whether to apply field-specific validators (for persona metadata)
+  /** Content context for ContentValidator — exempts legitimate patterns (e.g., <script> in templates) */
+  contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
 }
 
 export interface ParsedContent {
@@ -133,7 +135,8 @@ export class SecureYamlParser {
     }
 
     // 2. Extract frontmatter boundaries
-    const frontmatterMatch = input.match(/^---\n([\s\S]*?)\n---/);
+    // FIX: Support both Unix (\n) and Windows (\r\n) line endings
+    const frontmatterMatch = input.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!frontmatterMatch) {
       // No frontmatter, return empty data
       return {
@@ -156,7 +159,7 @@ export class SecureYamlParser {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
-        source: 'secure_yaml_parser',
+        source: 'SecureYamlParser',
         details: 'Malicious YAML pattern detected during parsing'
       });
       throw new SecurityError('Malicious YAML content detected', 'critical');
@@ -172,7 +175,7 @@ export class SecureYamlParser {
           SecurityMonitor.logSecurityEvent({
             type: 'YAML_PARSING_WARNING',
             severity: 'LOW',
-            source: 'secure_yaml_parser',
+            source: 'SecureYamlParser',
             details: `YAML warning: ${warning.message}`
           });
         }
@@ -196,14 +199,19 @@ export class SecureYamlParser {
 
     // 8. Validate field types and content
     for (const [key, value] of Object.entries(data)) {
+      const hasFieldValidator = Object.prototype.hasOwnProperty.call(this.FIELD_VALIDATORS, key);
+      const fieldValidator = hasFieldValidator ? this.FIELD_VALIDATORS[key] : undefined;
+
       // Check field-specific validators only if field validation is enabled
-      if (opts.validateFields && this.FIELD_VALIDATORS[key] && !this.FIELD_VALIDATORS[key](value)) {
+      if (opts.validateFields && typeof fieldValidator === 'function' && !fieldValidator(value)) {
         throw new SecurityError(`Invalid value for field '${key}'`, 'medium');
       }
 
       // Validate string fields for injection patterns
       if (typeof value === 'string' && opts.validateContent) {
-        const validation = ContentValidator.validateAndSanitize(value);
+        const validation = ContentValidator.validateAndSanitize(value, {
+          contentContext: opts.contentContext,
+        });
         if (!validation.isValid && validation.severity === 'critical') {
           throw new SecurityError(`Security threat detected in field '${key}'`, 'critical');
         }
@@ -215,7 +223,9 @@ export class SecureYamlParser {
     // 9. Validate markdown content if requested
     let finalContent = markdownContent;
     if (opts.validateContent) {
-      const contentValidation = ContentValidator.validateAndSanitize(markdownContent);
+      const contentValidation = ContentValidator.validateAndSanitize(markdownContent, {
+        contentContext: opts.contentContext,
+      });
       if (!contentValidation.isValid && contentValidation.severity === 'critical') {
         throw new SecurityError('Security threat detected in content', 'critical');
       }
@@ -225,7 +235,7 @@ export class SecureYamlParser {
     SecurityMonitor.logSecurityEvent({
       type: 'YAML_PARSE_SUCCESS',
       severity: 'LOW',
-      source: 'secure_yaml_parser',
+      source: 'SecureYamlParser',
       details: `Successfully parsed YAML with ${Object.keys(data).length} fields`
     });
 
@@ -272,9 +282,9 @@ export class SecureYamlParser {
   /**
    * Safe wrapper for gray-matter with security validations
    */
-  static safeMatter(input: string, options?: matter.GrayMatterOption<string, any>): matter.GrayMatterFile<string> {
-    // First, use our secure parser
-    const secureParsed = this.parse(input);
+  static safeMatter(input: string, options?: matter.GrayMatterOption<string, any>, secureOptions?: SecureParseOptions): matter.GrayMatterFile<string> {
+    // First, use our secure parser (for validation)
+    void this.parse(input, secureOptions);
 
     // Then use gray-matter with custom engines
     return matter(input, {
@@ -303,5 +313,50 @@ export class SecureYamlParser {
         }
       }
     });
+  }
+
+  /**
+   * Parse raw YAML content safely (not frontmatter, just plain YAML)
+   *
+   * USE THIS FOR:
+   * - Export package data fields
+   * - Configuration snippets
+   * - Any pure YAML string that needs parsing
+   *
+   * This uses CORE_SCHEMA which only allows safe basic types:
+   * - strings, numbers, booleans, null
+   * - arrays and objects
+   * - NO custom types, functions, or code execution
+   *
+   * @param yamlContent - Raw YAML string to parse
+   * @param maxSize - Maximum allowed size (default 64KB)
+   * @returns Parsed object
+   * @throws SecurityError if content is too large or contains threats
+   */
+  static parseRawYaml(yamlContent: string, maxSize: number = 64 * 1024): Record<string, unknown> {
+    // Size validation
+    if (yamlContent.length > maxSize) {
+      throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
+    }
+
+    // Parse with safe schema
+    const parsed = yaml.load(yamlContent, {
+      schema: this.SAFE_SCHEMA,  // CORE_SCHEMA - safe basic types only
+      json: false
+    });
+
+    // Ensure result is an object
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new SecurityError('YAML content must parse to an object', 'medium');
+    }
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_PARSE_SUCCESS',
+      severity: 'LOW',
+      source: 'SecureYamlParser',
+      details: `Parsed raw YAML with ${Object.keys(parsed).length} keys`
+    });
+
+    return parsed as Record<string, unknown>;
   }
 }

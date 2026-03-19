@@ -2,10 +2,16 @@
  * Configuration and sync tool definitions for unified management
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import type { ConfigHandler } from '../../handlers/ConfigHandler.js';
+import type { SyncHandler } from '../../handlers/SyncHandlerV2.js';
 
-export function getConfigToolsV2(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
+type ConfigToolsHandler = {
+  handleConfigOperation: ConfigHandler['handleConfigOperation'];
+  handleSyncOperation: SyncHandler['handleSyncOperation'];
+};
+
+export function getConfigToolsV2(server: ConfigToolsHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
     {
       tool: {

@@ -55,7 +55,6 @@
  * );
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomBytes, createHash } from 'crypto';
 import { Readable } from 'stream';
@@ -71,6 +70,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { RateLimiter } from './RateLimiter.js';
 import { logger } from './logger.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 /**
  * Result of content validation
@@ -182,11 +182,15 @@ export class SecureDownloader {
   private readonly tempDir: string;
   private readonly globalRateLimiter: RateLimiter;
   private readonly urlRateLimiters: Map<string, RateLimiter>;
+  private readonly fileLockManager: FileLockManager;
+  private readonly fileOperations: IFileOperationsService;
 
   constructor(options?: {
     defaultTimeout?: number;
     defaultMaxSize?: number;
     tempDir?: string;
+    fileLockManager?: FileLockManager;
+    fileOperations?: IFileOperationsService;
     rateLimitOptions?: {
       maxRequestsPerUrl?: number;
       maxGlobalRequests?: number;
@@ -196,7 +200,9 @@ export class SecureDownloader {
     this.defaultTimeout = options?.defaultTimeout || 30000; // 30 seconds
     this.defaultMaxSize = options?.defaultMaxSize || SECURITY_LIMITS.MAX_FILE_SIZE;
     this.tempDir = options?.tempDir || '.tmp';
-    
+    this.fileLockManager = options?.fileLockManager ?? (undefined as unknown as FileLockManager);
+    this.fileOperations = options?.fileOperations ?? (undefined as unknown as IFileOperationsService);
+
     // Initialize rate limiters
     const rateLimitConfig = options?.rateLimitOptions || {};
     this.globalRateLimiter = new RateLimiter({
@@ -233,14 +239,9 @@ export class SecureDownloader {
       const validatedPath = await this.validateDestinationPath(destinationPath);
 
       // SECURITY: Check if file already exists (prevent accidental overwrites)
-      try {
-        await fs.access(validatedPath);
+      const fileExists = await this.fileOperations.exists(validatedPath);
+      if (fileExists) {
         throw DownloadError.filesystemError(`File already exists: ${destinationPath}`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error; // Re-throw if it's not a "file not found" error
-        }
-        // File doesn't exist, proceed with download
       }
 
       // STEP 1: Check rate limits before download
@@ -269,7 +270,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_COPIED',
         severity: 'LOW',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Downloaded ${content.length} bytes from ${url} to ${destinationPath}`,
         metadata: {
           url,
@@ -287,7 +288,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'MEDIUM',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Download failed: ${error instanceof Error ? error.message : String(error)}`,
         metadata: {
           url,
@@ -402,6 +403,10 @@ export class SecureDownloader {
       let downloadedSize = 0;
       let timeoutHandle: NodeJS.Timeout | undefined;
 
+      // Track write stream for cleanup (declared outside try for catch block access)
+      let writeStream: ReturnType<typeof createWriteStream> | undefined;
+      let writeStreamClosed = false;
+
       // Create abort controller for timeout handling
       const abortController = new AbortController();
       timeoutHandle = setTimeout(() => {
@@ -424,10 +429,15 @@ export class SecureDownloader {
         }
 
         // Ensure temp directory exists
-        await fs.mkdir(path.dirname(tempPath), { recursive: true });
+        await this.fileOperations.createDirectory(path.dirname(tempPath));
 
         // Create write stream to temporary file
-        const writeStream = createWriteStream(tempPath);
+        writeStream = createWriteStream(tempPath);
+
+        // Track whether write stream has been closed for cleanup
+        writeStream.on('close', () => {
+          writeStreamClosed = true;
+        });
 
         // Create a transform stream for validation and size checking
         const validationStream = new Readable({
@@ -466,7 +476,7 @@ export class SecureDownloader {
         };
 
         // Start the pump and pipeline concurrently
-        const [pumpResult] = await Promise.all([
+        await Promise.all([
           pump(),
           pipeline(validationStream, writeStream)
         ]);
@@ -478,7 +488,7 @@ export class SecureDownloader {
         }
 
         // SECURITY: Atomic rename to final destination
-        await fs.rename(tempPath, validatedPath);
+        await this.fileOperations.renameFile(tempPath, validatedPath);
 
         const duration = Date.now() - startTime;
         logger.info(`Streaming download completed: ${destinationPath} (${downloadedSize} bytes, ${duration}ms)`);
@@ -487,7 +497,7 @@ export class SecureDownloader {
         SecurityMonitor.logSecurityEvent({
           type: 'FILE_COPIED',
           severity: 'LOW',
-          source: 'secure_downloader',
+          source: 'SecureDownloader',
           details: `Streamed ${downloadedSize} bytes from ${url} to ${destinationPath}`,
           metadata: {
             url,
@@ -498,9 +508,21 @@ export class SecureDownloader {
         });
 
       } catch (error) {
+        // SECURITY: Ensure write stream is closed before cleanup to release file handle
+        // This is critical on macOS where unlink can fail or leave stale directory entries
+        // if the file handle is still open
+        if (writeStream && !writeStreamClosed) {
+          await new Promise<void>((resolve) => {
+            writeStream!.destroy();
+            writeStream!.once('close', () => resolve());
+            // Safety timeout in case close event never fires
+            setTimeout(() => resolve(), 100);
+          });
+        }
+
         // SECURITY: Guaranteed cleanup of temporary file
         try {
-          await fs.unlink(tempPath);
+          await this.fileOperations.deleteFile(tempPath, undefined, { source: 'SecureDownloader.downloadStream' });
           logger.debug(`Cleaned up temp file: ${tempPath}`);
         } catch (cleanupError) {
           logger.warn(`Failed to clean up temp file ${tempPath}: ${cleanupError}`);
@@ -520,7 +542,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'MEDIUM',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Streaming download failed: ${error instanceof Error ? error.message : String(error)}`,
         metadata: {
           url,
@@ -561,7 +583,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'UNICODE_VALIDATION_ERROR',
         severity: 'MEDIUM',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `URL contains suspicious Unicode patterns: ${unicodeValidation.detectedIssues?.join(', ')}`,
         metadata: { originalUrl: url, normalizedUrl }
       });
@@ -573,7 +595,7 @@ export class SecureDownloader {
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
-    } catch (error) {
+    } catch {
       throw DownloadError.validationError(`Invalid URL format: ${url}`);
     }
 
@@ -725,17 +747,16 @@ export class SecureDownloader {
   }
 
   /**
-   * Atomic file write using FileLockManager
+   * Atomic file write using FileOperationsService
    */
   private async atomicWriteFile(filePath: string, content: string): Promise<void> {
-    const resource = `download:${filePath}`;
-    
-    await FileLockManager.withLock(resource, async () => {
-      // Ensure directory exists
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      
-      // Use FileLockManager's atomic write
-      await FileLockManager.atomicWriteFile(filePath, content, { encoding: 'utf-8' });
+    // Ensure directory exists
+    await this.fileOperations.createDirectory(path.dirname(filePath));
+
+    // Use FileOperationsService's atomic write
+    await this.fileOperations.writeFile(filePath, content, {
+      source: 'SecureDownloader.atomicWriteFile',
+      atomic: true
     });
   }
 
@@ -744,10 +765,13 @@ export class SecureDownloader {
    */
   private async directWriteFile(filePath: string, content: string): Promise<void> {
     // Ensure directory exists
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    
+    await this.fileOperations.createDirectory(path.dirname(filePath));
+
     // Direct write
-    await fs.writeFile(filePath, content, 'utf-8');
+    await this.fileOperations.writeFile(filePath, content, {
+      source: 'SecureDownloader.directWriteFile',
+      atomic: false
+    });
   }
 
   /**
@@ -758,10 +782,10 @@ export class SecureDownloader {
     const basename = path.basename(originalPath);
     const random = randomBytes(8).toString('hex');
     const tempDir = path.join(dir, this.tempDir);
-    
+
     // Ensure temp directory exists
-    await fs.mkdir(tempDir, { recursive: true });
-    
+    await this.fileOperations.createDirectory(tempDir);
+
     return path.join(tempDir, `${basename}.${random}.tmp`);
   }
 
@@ -775,7 +799,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'MEDIUM',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Global download rate limit exceeded. Retry after ${globalStatus.retryAfterMs}ms`,
         metadata: { url, retryAfterMs: globalStatus.retryAfterMs }
       });
@@ -802,7 +826,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'MEDIUM',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Per-URL download rate limit exceeded for ${urlKey}. Retry after ${urlStatus.retryAfterMs}ms`,
         metadata: { url, urlKey, retryAfterMs: urlStatus.retryAfterMs }
       });
@@ -834,7 +858,7 @@ export class SecureDownloader {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
         severity: 'HIGH',
-        source: 'secure_downloader',
+        source: 'SecureDownloader',
         details: `Checksum mismatch detected - possible content tampering`,
         metadata: { 
           expectedChecksum: normalizedExpected,

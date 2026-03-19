@@ -17,9 +17,13 @@ import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { ContentValidator } from '../../security/contentValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
+import { MetadataService } from '../../services/MetadataService.js';
 
 // Extend IElementMetadata with skill-specific fields
 export interface SkillMetadata extends IElementMetadata {
+  type?: ElementType.SKILL;                // Skill type constraint for type safety
   languages?: string[];           // Programming/spoken languages this skill works with
   complexity?: 'beginner' | 'intermediate' | 'advanced' | 'expert';
   domains?: string[];             // Domain categories (e.g., web-dev, data-science, writing)
@@ -52,16 +56,19 @@ export interface SkillExample {
 
 export class Skill extends BaseElement implements IElement {
   public declare metadata: SkillMetadata;
-  public instructions: string;
+  // instructions and content inherited from BaseElement (v2.0 dual-field architecture)
   public parameters: Map<string, any> = new Map();
-  
+
   // SECURITY FIX #4: Memory management constants to prevent unbounded growth
   // Previously: No limits on parameter storage, could lead to memory exhaustion
   // Now: Enforced limits on both count and size
   private readonly MAX_PARAMETER_COUNT = 100;
   private readonly MAX_PARAMETER_SIZE = 10000; // Max size per parameter value
 
-  constructor(metadata: Partial<SkillMetadata>, instructions: string = '') {
+  // Store MetadataService for clone operation
+  private readonly metadataService: MetadataService;
+
+  constructor(metadata: Partial<SkillMetadata>, instructions: string = '', metadataService: MetadataService, content: string = '') {
     // SECURITY FIX #2: Validate and sanitize ALL metadata fields
     // Previously: metadata was used directly without validation
     // Now: All string inputs are Unicode normalized and sanitized to prevent:
@@ -73,11 +80,20 @@ export class Skill extends BaseElement implements IElement {
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
       description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : undefined
     };
-    
-    super(ElementType.SKILL, sanitizedMetadata);
+
+    super(ElementType.SKILL, sanitizedMetadata, metadataService);
+    this.metadataService = metadataService;
     // Ensure instructions is always a string, even if empty
-    this.instructions = instructions && instructions.trim() ? sanitizeInput(UnicodeValidator.normalize(instructions).normalizedContent, 10000) : '';
-    
+    // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
+    // while still detecting prompt injection attacks
+    if (instructions && instructions.trim()) {
+      const contentValidation = ContentValidator.validateAndSanitize(instructions, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'skill' });
+      this.instructions = contentValidation.sanitizedContent || '';
+    } else {
+      this.instructions = '';
+    }
+    this.content = content;
+
     // Ensure skill-specific metadata
     this.metadata = {
       ...this.metadata,
@@ -92,12 +108,18 @@ export class Skill extends BaseElement implements IElement {
 
     // Validate parameter definitions
     if (this.metadata.parameters) {
-      this.metadata.parameters = this.metadata.parameters.map(param => ({
-        ...param,
-        name: sanitizeInput(UnicodeValidator.normalize(param.name).normalizedContent, 50),
-        description: sanitizeInput(UnicodeValidator.normalize(param.description).normalizedContent, 200),
-        options: param.options?.map(opt => sanitizeInput(opt, 100))
-      }));
+      this.metadata.parameters = this.metadata.parameters.map(param => {
+        const sanitized: SkillParameter = {
+          ...param,
+          name: sanitizeInput(UnicodeValidator.normalize(param.name).normalizedContent, 50),
+          description: sanitizeInput(UnicodeValidator.normalize(param.description).normalizedContent, 200)
+        };
+        // Only include options if they exist (avoid undefined)
+        if (param.options) {
+          sanitized.options = param.options.map(opt => sanitizeInput(opt, 100));
+        }
+        return sanitized;
+      });
     }
 
     // Initialize parameter values with defaults
@@ -218,12 +240,13 @@ export class Skill extends BaseElement implements IElement {
     switch (param.type) {
       case 'string':
         return typeof value === 'string';
-      case 'number':
+      case 'number': {
         const num = Number(value);
         if (Number.isNaN(num)) return false;
         if (param.min !== undefined && num < param.min) return false;
         if (param.max !== undefined && num > param.max) return false;
         return true;
+      }
       case 'boolean':
         return typeof value === 'boolean';
       case 'enum':
@@ -354,6 +377,7 @@ export class Skill extends BaseElement implements IElement {
       version: this.version,
       metadata: this.metadata,
       instructions: this.instructions,
+      content: this.content,
       parameters: this.getAllParameters(),
       references: this.references,
       extensions: this.extensions,
@@ -419,6 +443,7 @@ export class Skill extends BaseElement implements IElement {
       
       // Update other properties
       this.instructions = parsed.instructions || '';
+      this.content = parsed.content || '';
       this.references = parsed.references || [];
       this.extensions = parsed.extensions || {};
       this.ratings = parsed.ratings || this.ratings;
@@ -463,20 +488,20 @@ export class Skill extends BaseElement implements IElement {
    * Clone the skill with different parameters
    */
   clone(newParameters?: Record<string, any>): Skill {
-    const cloned = new Skill(this.metadata, this.instructions);
-    
+    const cloned = new Skill(this.metadata, this.instructions, this.metadataService, this.content);
+
     // Copy current parameters
     this.parameters.forEach((value, key) => {
       cloned.parameters.set(key, value);
     });
-    
+
     // Override with new parameters if provided
     if (newParameters) {
       Object.entries(newParameters).forEach(([key, value]) => {
         cloned.setParameter(key, value);
       });
     }
-    
+
     return cloned;
   }
   

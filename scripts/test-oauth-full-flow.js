@@ -28,7 +28,7 @@ const execAsync = promisify(exec);
  * This script supports both PAT (testing) and OAuth device flow (production)
  * - PAT Mode: Set TEST_GITHUB_TOKEN environment variable
  * - OAuth Mode: Leave TEST_GITHUB_TOKEN unset
- * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
+ * See docs/developer-guide/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
  */
 
 class MCPOAuthTester {
@@ -202,7 +202,7 @@ class MCPOAuthTester {
    */
   async startOAuthFlow() {
     // WARNING: This code path differs for TESTING (PAT) vs PRODUCTION (OAuth)
-    // See docs/development/OAUTH_TESTING_VS_PRODUCTION.md
+    // See docs/developer-guide/OAUTH_TESTING_VS_PRODUCTION.md
     
     if (isTestMode()) {
       console.log(chalk.blue('\n🧪 TEST MODE: Using Personal Access Token\n'));
@@ -381,8 +381,8 @@ class MCPOAuthTester {
         }
       }
       
-      // Specific test: Try to access mickdarling/dollhouse-portfolio
-      console.log(chalk.blue('\n🎯 Attempting to access mickdarling/dollhouse-portfolio...\n'));
+      // Specific test: Try to access test portfolio repository
+      console.log(chalk.blue('\n🎯 Attempting to access test portfolio repository...\n'));
       
       // This would need a specific MCP tool that uses GitHub API
       // For now, we'll check if the OAuth token is stored properly
@@ -473,7 +473,7 @@ class MCPOAuthTester {
       await this.testGitHubAccess();
       
       // Step 4: Test specific repository access
-      await this.testRepositoryAccess('mickdarling', 'dollhouse-portfolio', 'templates');
+      await this.testRepositoryAccess('test-user', 'dollhouse-portfolio', 'templates');
       
       console.log(chalk.bold.green('\n' + '='.repeat(60)));
       console.log(chalk.bold.white('  ✅ OAuth Flow Test Complete!'));

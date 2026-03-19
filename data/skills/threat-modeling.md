@@ -32,8 +32,6 @@ parameters:
     description: "Regulatory requirements to consider"
     default: []
     enum: ["PCI-DSS", "HIPAA", "GDPR", "SOX", "ISO27001", "NIST"]
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

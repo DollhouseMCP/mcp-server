@@ -2,8 +2,8 @@
  * Portfolio management tool definitions and handlers
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import type { PortfolioHandler } from '../../handlers/PortfolioHandler.js';
 
 // Portfolio tool argument interfaces
 interface PortfolioStatusArgs {
@@ -54,7 +54,7 @@ interface SearchAllArgs {
 // Tool handler function type
 type ToolHandler<T> = (args: T) => Promise<any>;
 
-export function getPortfolioTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
+export function getPortfolioTools(server: PortfolioHandler): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> = [
     {
       tool: {

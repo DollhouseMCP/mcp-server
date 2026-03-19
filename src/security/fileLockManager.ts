@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
+import { getValidatedLockTimeout } from '../config/performance-constants.js';
 
 /**
  * FileLockManager - Prevents race conditions in concurrent file operations
@@ -16,21 +17,28 @@ import { randomBytes } from 'crypto';
  */
 export class FileLockManager {
   // Map of resource identifiers to their lock promises
-  private static locks = new Map<string, Promise<any>>();
-  
+  private locks = new Map<string, Promise<any>>();
+
   // Lock acquisition metrics for monitoring
-  private static metrics = {
+  private metrics = {
     totalLockRequests: 0,
     lockWaitTime: new Map<string, number[]>(),
     lockTimeouts: 0,
     concurrentWaits: 0
   };
 
-  // Default timeout for lock operations (10 seconds)
-  private static readonly DEFAULT_TIMEOUT_MS = 10000;
-  
+  private logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
+
+  addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
+
+  // Default timeout for lock operations - using centralized configuration
+  private readonly DEFAULT_TIMEOUT_MS = getValidatedLockTimeout();
+
   // Temporary file directory
-  private static readonly TEMP_DIR = '.tmp';
+  private readonly TEMP_DIR = '.tmp';
 
   /**
    * Execute an operation with exclusive lock on a resource
@@ -39,7 +47,7 @@ export class FileLockManager {
    * @param options - Lock options including timeout
    * @returns Result of the operation
    */
-  static async withLock<T>(
+  async withLock<T>(
     resource: string,
     operation: () => Promise<T>,
     options: { timeout?: number } = {}
@@ -54,10 +62,11 @@ export class FileLockManager {
     if (existingLock) {
       this.metrics.concurrentWaits++;
       logger.debug(`Waiting for existing lock on: ${resource}`);
+      this.logListener?.('debug', 'Detect lock contention', { resource });
       
       try {
         await existingLock;
-      } catch (error) {
+      } catch {
         // Previous operation failed, but we can proceed
         logger.debug(`Previous operation on ${resource} failed, proceeding`);
       }
@@ -81,19 +90,17 @@ export class FileLockManager {
       logger.debug(`Lock released for resource: ${resource} (${waitTime}ms)`);
       return result;
     } finally {
-      // Clean up lock atomically - compare and delete in one operation
-      const currentLock = this.locks.get(resource);
-      if (currentLock === lockPromise) {
-        this.locks.delete(resource);
-        logger.debug(`Lock queue cleaned up for resource: ${resource}`);
-      }
+      // Clean up lock - unconditional delete is safe and race-free
+      // This operation completed, so remove its lock from the map
+      this.locks.delete(resource);
+      logger.debug(`Lock queue cleaned up for resource: ${resource}`);
     }
   }
 
   /**
    * Execute operation with timeout protection
    */
-  private static async executeWithTimeout<T>(
+  private async executeWithTimeout<T>(
     operation: () => Promise<T>,
     timeoutMs: number,
     resource: string
@@ -103,6 +110,7 @@ export class FileLockManager {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         this.metrics.lockTimeouts++;
+        this.logListener?.('warn', 'Lock acquisition times out', { resource, timeoutMs });
         reject(new Error(`Lock operation timeout for resource: ${resource}`));
       }, timeoutMs);
     });
@@ -121,7 +129,7 @@ export class FileLockManager {
    * Perform atomic file write operation
    * Writes to temporary file then renames to ensure atomicity
    */
-  static async atomicWriteFile(
+  async atomicWriteFile(
     filePath: string,
     content: string,
     options?: { encoding?: BufferEncoding }
@@ -156,7 +164,7 @@ export class FileLockManager {
   /**
    * Perform atomic file read with lock
    */
-  static async atomicReadFile(
+  async atomicReadFile(
     filePath: string,
     options?: { encoding?: BufferEncoding }
   ): Promise<string> {
@@ -169,7 +177,7 @@ export class FileLockManager {
   /**
    * Generate temporary file path for atomic operations
    */
-  private static async getTempFilePath(originalPath: string): Promise<string> {
+  private async getTempFilePath(originalPath: string): Promise<string> {
     const dir = path.dirname(originalPath);
     const basename = path.basename(originalPath);
     const random = randomBytes(8).toString('hex');
@@ -179,7 +187,7 @@ export class FileLockManager {
   /**
    * Get lock metrics for monitoring
    */
-  static getMetrics() {
+  getMetrics() {
     const avgWaitTimes = new Map<string, number>();
     for (const [resource, times] of this.metrics.lockWaitTime.entries()) {
       if (times.length > 0) {
@@ -201,7 +209,7 @@ export class FileLockManager {
   /**
    * Clear all locks (use with caution - mainly for testing)
    */
-  static clearAllLocks(): void {
+  clearAllLocks(): void {
     this.locks.clear();
     logger.warn('All file locks cleared - use only for testing/recovery');
   }
@@ -209,7 +217,7 @@ export class FileLockManager {
   /**
    * Reset metrics
    */
-  static resetMetrics(): void {
+  resetMetrics(): void {
     this.metrics = {
       totalLockRequests: 0,
       lockWaitTime: new Map<string, number[]>(),

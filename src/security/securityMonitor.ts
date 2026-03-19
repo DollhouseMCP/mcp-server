@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { EvictingQueue } from '../utils/EvictingQueue.js';
 
 export interface SecurityEvent {
   type: 'CONTENT_INJECTION_ATTEMPT' | 'YAML_INJECTION_ATTEMPT' | 'PATH_TRAVERSAL_ATTEMPT' |
@@ -21,17 +22,35 @@ export interface SecurityEvent {
         'MEMORY_SAVE_FAILED' | 'MEMORY_LIST_ITEM_FAILED' | 'MEMORY_IMPORT_FAILED' |
         'MEMORY_DESERIALIZE_FAILED' | 'MEMORY_INTEGRITY_VIOLATION' | 'MEMORY_UNICODE_VALIDATION_FAILED' |
         'MEMORY_DUPLICATE_DETECTED' | 'SEED_MEMORY_INSTALLED' | 'SEED_MEMORY_INSTALLATION_FAILED' |
-        'ELEMENT_CREATED' | 'ELEMENT_DELETED' | 'AGENT_DECISION' |
+        'ELEMENT_CREATED' | 'ELEMENT_LOADED' | 'ELEMENT_EDITED' | 'ELEMENT_ACTIVATED' | 'ELEMENT_DEACTIVATED' |
+        'ELEMENT_VALIDATED' | 'ELEMENT_DELETED' |
+        'AGENT_ACTIVATED' | 'AGENT_ACTIVATION_FAILED' | 'AGENT_ACTIVATION_ROLLBACK' |
+        'AGENT_DEACTIVATED' | 'AGENT_EXECUTED' |
+        'CONFIG_UPDATED' | 'IDENTITY_CHANGED' |
+        'OPERATION_COMPLETED' | 'OPERATION_FAILED' | 'BATCH_COMPLETED' | 'BATCH_REJECTED' |
+        'CONFIRMATION_RECORDED' | 'GATEKEEPER_DECISION' |
+        'AUTH_FLOW_INITIATED' |
+        'AGENT_DECISION' |
         'RULE_ENGINE_CONFIG_UPDATE' | 'RULE_ENGINE_CONFIG_VALIDATION_ERROR' |
         'GOAL_TEMPLATE_APPLIED' | 'GOAL_TEMPLATE_VALIDATION' |
         'ENSEMBLE_CIRCULAR_DEPENDENCY' | 'ENSEMBLE_RESOURCE_LIMIT_EXCEEDED' |
-        'ENSEMBLE_ACTIVATION_TIMEOUT' | 'ENSEMBLE_SUSPICIOUS_CONDITION' |
+        'ENSEMBLE_ACTIVATION_TIMEOUT' | 'ENSEMBLE_ACTIVATION_FAILED' | 'ENSEMBLE_SUSPICIOUS_CONDITION' |
+        'ENSEMBLE_CONDITION_EVALUATION_FAILED' |
         'ENSEMBLE_NESTED_DEPTH_EXCEEDED' | 'ENSEMBLE_CONTEXT_SIZE_EXCEEDED' |
-        'ENSEMBLE_SAVED' | 'ENSEMBLE_IMPORTED' | 'ENSEMBLE_DELETED' |
+        'ENSEMBLE_CONTEXT_VALUE_TOO_LARGE' | 'ENSEMBLE_SAVED' | 'ENSEMBLE_IMPORTED' | 'ENSEMBLE_DELETED' |
         'PORTFOLIO_INITIALIZATION' | 'PORTFOLIO_POPULATED' | 'FILE_COPIED' | 'DIRECTORY_MIGRATION' |
         'PORTFOLIO_CACHE_INVALIDATION' | 'PORTFOLIO_FETCH_SUCCESS' | 'TEST_DATA_BLOCKED' |
         'TEST_PATH_SECURITY_RISK' | 'TEST_PRODUCTION_ACCESS_BLOCKED' | 'TEST_PATH_INVALID' |
-        'TEST_ENVIRONMENT_PRODUCTION_PATH' | 'TEST_ENVIRONMENT_DEPRECATED_VAR' | 'TOOL_CACHE_INVALIDATED';
+        'TEST_ENVIRONMENT_PRODUCTION_PATH' | 'TEST_ENVIRONMENT_DEPRECATED_VAR' | 'TOOL_CACHE_INVALIDATED' |
+        'FILE_READ' | 'FILE_WRITTEN' | 'FILE_DELETED' |
+        'DANGER_ZONE_TRIGGERED' | 'DANGER_ZONE_OPERATION' |
+        'AUTONOMY_DENIED' | 'AUTONOMY_PAUSED' | 'SAFETY_EVALUATION_FAILURE' |
+        'VERIFICATION_ATTEMPTED' | 'VERIFICATION_SUCCEEDED' |
+        'VERIFICATION_FAILED' | 'VERIFICATION_EXPIRED' |
+        'AGENT_AUTO_CONTINUED' | 'AGENT_STEP_RETRIED' |
+        'AGENT_AUTO_RESTARTED' | 'AGENT_RESILIENCE_LIMIT_REACHED' |
+        'PERMISSION_PROMPT_DENIED' |
+        'CLI_APPROVAL_REQUESTED' | 'CLI_APPROVAL_GRANTED' | 'CLI_APPROVAL_CONSUMED';
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   source: string;
   details: string;
@@ -48,8 +67,13 @@ export interface SecurityLogEntry extends SecurityEvent {
 
 export class SecurityMonitor {
   private static eventCount = 0;
-  private static readonly events: SecurityLogEntry[] = [];
-  private static readonly MAX_EVENTS = 1000; // Keep last 1000 events in memory
+  private static events = new EvictingQueue<SecurityLogEntry>(1000);
+  private static logListener?: (entry: SecurityLogEntry) => void;
+
+  static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
 
   /**
    * Logs a security event
@@ -61,11 +85,9 @@ export class SecurityMonitor {
       id: `SEC-${Date.now()}-${++this.eventCount}`,
     };
 
-    // Store in memory (circular buffer)
+    // Bounded FIFO eviction — EvictingQueue handles capacity
     this.events.push(logEntry);
-    if (this.events.length > this.MAX_EVENTS) {
-      this.events.shift();
-    }
+    this.logListener?.(logEntry);
 
     // In MCP servers, we cannot write to stderr/stdout as it breaks the JSON-RPC protocol
     // Security events are stored in memory and can be retrieved via API
@@ -105,21 +127,21 @@ export class SecurityMonitor {
    * Gets recent security events for analysis
    */
   static getRecentEvents(count: number = 100): SecurityLogEntry[] {
-    return this.events.slice(-count);
+    return this.events.toArray().slice(-count);
   }
 
   /**
    * Gets events by severity
    */
   static getEventsBySeverity(severity: SecurityEvent['severity']): SecurityLogEntry[] {
-    return this.events.filter(event => event.severity === severity);
+    return this.events.toArray().filter(event => event.severity === severity);
   }
 
   /**
    * Gets events by type
    */
   static getEventsByType(type: SecurityEvent['type']): SecurityLogEntry[] {
-    return this.events.filter(event => event.type === type);
+    return this.events.toArray().filter(event => event.type === type);
   }
 
   /**
@@ -140,13 +162,13 @@ export class SecurityMonitor {
 
     const eventsByType: Record<string, number> = {};
 
-    for (const event of this.events) {
+    for (const event of this.events.toArray()) {
       eventsBySeverity[event.severity]++;
       eventsByType[event.type] = (eventsByType[event.type] || 0) + 1;
     }
 
     return {
-      totalEvents: this.events.length,
+      totalEvents: this.events.size,
       eventsBySeverity,
       eventsByType,
       recentCriticalEvents: this.getEventsBySeverity('CRITICAL').slice(-10),
@@ -161,9 +183,19 @@ export class SecurityMonitor {
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
     const cutoffTimestamp = cutoffDate.toISOString();
 
-    const index = this.events.findIndex(event => event.timestamp >= cutoffTimestamp);
-    if (index > 0) {
-      this.events.splice(0, index);
-    }
+    const remaining = this.events.toArray().filter(
+      event => event.timestamp >= cutoffTimestamp
+    );
+    this.events.reset([...remaining]);
+  }
+
+  /**
+   * TESTING ONLY: Clears all events and resets counter
+   * Should only be called in test cleanup (afterEach/afterAll)
+   * to prevent test pollution from accumulated security events
+   */
+  static clearAllEventsForTesting(): void {
+    this.events.clear();
+    this.eventCount = 0;
   }
 }

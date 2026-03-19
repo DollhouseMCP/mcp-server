@@ -92,7 +92,7 @@ class CapabilityIndexTester {
   constructor() {
     this.results = [];
     this.testDir = path.join(__dirname, '../test-temp/capability-index');
-    this.resultsDir = path.join(__dirname, '../test/experiments/results');
+    this.resultsDir = path.join(__dirname, '../tests/experiments/results');
   }
 
   async setup() {
@@ -132,7 +132,9 @@ ${variation.systemPrompt}`;
         'node', '-e',
         `
         const { DollhouseMCPServer } = require('./dist');
-        const server = new DollhouseMCPServer();
+        const { DollhouseContainer } = require('./dist/di/Container');
+        const container = new DollhouseContainer();
+        const server = new DollhouseMCPServer(container);
 
         // Load test variation
         server.loadPersona('/test-personas/${variationId}.md');

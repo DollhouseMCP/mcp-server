@@ -20,6 +20,11 @@
  * - Secure pattern storage and retrieval
  * - GCM authentication tags for integrity
  *
+ * REFACTOR NOTE:
+ * Converted from static class to instance-based for DI architecture compatibility.
+ * PatternExtractor now requires PatternEncryptor dependency injected via constructor
+ * for proper lifecycle management and testability.
+ *
  * @module PatternExtractor
  */
 
@@ -70,9 +75,20 @@ export interface ExtractionResult {
  *
  * Extracts dangerous patterns from memory content and creates
  * sanitized versions suitable for display to LLMs.
+ *
+ * DI-COMPATIBLE: Instance-based service for dependency injection.
  */
 export class PatternExtractor {
-  private static patternCounter: number = 0;
+  private patternCounter: number = 0;
+
+  /**
+   * Create a new PatternExtractor instance
+   *
+   * @param encryptor - PatternEncryptor instance for encrypting extracted patterns
+   */
+  constructor(private readonly encryptor: PatternEncryptor) {
+    logger.debug('PatternExtractor initialized');
+  }
 
   /**
    * Extract patterns from content based on validation results
@@ -81,7 +97,7 @@ export class PatternExtractor {
    * @param validationResult - Validation result with detected patterns
    * @returns Extraction result with sanitized content and pattern metadata
    */
-  static extractPatterns(
+  extractPatterns(
     content: string,
     validationResult: ContentValidationResult
   ): ExtractionResult {
@@ -135,7 +151,7 @@ export class PatternExtractor {
    * The ContentValidator tells us what patterns were detected, but not where.
    * We need to search for them.
    */
-  private static findPatternMatches(
+  private findPatternMatches(
     content: string,
     validationResult: ContentValidationResult
   ): PatternMatch[] {
@@ -164,7 +180,7 @@ export class PatternExtractor {
    *
    * Uses common patterns and heuristics to locate dangerous content
    */
-  private static searchForPattern(
+  private searchForPattern(
     content: string,
     patternType: string,
     severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
@@ -228,7 +244,7 @@ export class PatternExtractor {
    *
    * Phase 2: Now encrypts patterns using AES-256-GCM
    */
-  private static createSanitizedPattern(
+  private createSanitizedPattern(
     match: PatternMatch
   ): SanitizedPattern {
     const patternId = `PATTERN_${String(++this.patternCounter).padStart(3, '0')}`;
@@ -236,8 +252,8 @@ export class PatternExtractor {
     // Phase 2: Encrypt the pattern using AES-256-GCM
     let encrypted = null;
     try {
-      if (PatternEncryptor.isEnabled()) {
-        encrypted = PatternEncryptor.encrypt(match.pattern);
+      if (this.encryptor.isEnabled()) {
+        encrypted = this.encryptor.encrypt(match.pattern);
         logger.debug('Pattern encrypted successfully', {
           patternId,
           algorithm: encrypted.algorithm,
@@ -272,7 +288,7 @@ export class PatternExtractor {
   /**
    * Create sanitized content by replacing patterns with references
    */
-  private static createSanitizedContent(
+  private createSanitizedContent(
     content: string,
     matches: PatternMatch[]
   ): string {
@@ -297,7 +313,7 @@ export class PatternExtractor {
   /**
    * Get human-readable description for a pattern type
    */
-  private static getPatternDescription(patternType: string, matchText: string): string {
+  private getPatternDescription(patternType: string, matchText: string): string {
     const descriptions: Record<string, string> = {
       'prompt-injection': 'LLM prompt injection attempt',
       'sql-injection': 'SQL injection pattern',
@@ -321,7 +337,7 @@ export class PatternExtractor {
   /**
    * Get safety instruction based on severity
    */
-  private static getSafetyInstruction(severity: string): string {
+  private getSafetyInstruction(severity: string): string {
     switch (severity) {
       case 'critical':
         return 'CRITICAL - DO NOT EXECUTE - This pattern is malicious and must never be used in production code';
@@ -339,7 +355,16 @@ export class PatternExtractor {
   /**
    * Reset the pattern counter (useful for testing)
    */
-  static resetCounter(): void {
+  resetCounter(): void {
     this.patternCounter = 0;
+  }
+
+  /**
+   * Dispose of the extractor and clean up resources
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.resetCounter();
+    logger.debug('PatternExtractor disposed');
   }
 }

@@ -2,11 +2,10 @@
  * Persistent cache for collection data to support offline/anonymous browsing
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
-import { PathValidator } from '../security/pathValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export interface CollectionItem {
   name: string;
@@ -29,8 +28,14 @@ export class CollectionCache {
   private cacheDir: string;
   private cacheFile: string;
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for collection cache
-  
-  constructor(baseDir?: string) {
+
+  // File operations service for secure file I/O
+  private readonly fileOperations: IFileOperationsService;
+
+  constructor(fileOperations: IFileOperationsService, baseDir?: string) {
+    // Initialize file operations service
+    this.fileOperations = fileOperations;
+
     // Use environment variable if set, otherwise fall back to parameter or default
     const envCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
     if (envCacheDir) {
@@ -49,7 +54,7 @@ export class CollectionCache {
    */
   private async ensureCacheDir(): Promise<void> {
     try {
-      await fs.mkdir(this.cacheDir, { recursive: true });
+      await this.fileOperations.createDirectory(this.cacheDir);
     } catch (error) {
       logger.error(`Failed to create cache directory: ${error}`);
       throw error;
@@ -73,16 +78,19 @@ export class CollectionCache {
         logger.warn('Invalid cache file path, skipping cache load');
         return null;
       }
-      
-      const data = await fs.readFile(this.cacheFile, 'utf8');
+
+      const data = await this.fileOperations.readFile(this.cacheFile, {
+        source: 'CollectionCache.loadCache',
+        maxSize: 50 * 1024 * 1024 // 50MB for collection cache
+      });
       const cache: CollectionCacheEntry = JSON.parse(data);
-      
+
       // Check if cache is expired
       if (Date.now() - cache.timestamp > this.CACHE_TTL_MS) {
         logger.debug('Collection cache expired, will refresh from GitHub');
         return null;
       }
-      
+
       logger.debug(`Loaded ${cache.items.length} items from collection cache`);
       return cache;
     } catch (error) {
@@ -99,21 +107,24 @@ export class CollectionCache {
   async saveCache(items: CollectionItem[], etag?: string): Promise<void> {
     try {
       await this.ensureCacheDir();
-      
+
       const cacheEntry: CollectionCacheEntry = {
         items,
         timestamp: Date.now(),
         etag
       };
-      
+
       const data = JSON.stringify(cacheEntry, null, 2);
-      await fs.writeFile(this.cacheFile, data, 'utf8');
-      
+      await this.fileOperations.writeFile(this.cacheFile, data, {
+        source: 'CollectionCache.saveCache',
+        maxSize: 50 * 1024 * 1024 // 50MB for collection cache
+      });
+
       logger.debug(`Saved ${items.length} items to collection cache`);
-      
+
       // SECURITY FIX: Add audit logging for cache write operations
       logger.debug('Security audit: Cache write operation completed successfully');
-      
+
       // Log operation completed successfully
       logger.debug(`Cache file operation completed with ${items.length} items`);
     } catch (error) {
@@ -178,7 +189,9 @@ export class CollectionCache {
    */
   async clearCache(): Promise<void> {
     try {
-      await fs.unlink(this.cacheFile);
+      await this.fileOperations.deleteFile(this.cacheFile, undefined, {
+        source: 'CollectionCache.clearCache'
+      });
       logger.debug('Collection cache cleared');
     } catch (error) {
       if ((error as any).code !== 'ENOENT') {

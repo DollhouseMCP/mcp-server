@@ -4,105 +4,93 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { ToolRegistry } from './tools/ToolRegistry.js';
-import { getPersonaExportImportTools } from './tools/PersonaTools.js';
-import { getElementTools } from './tools/ElementTools.js';
-import { getCollectionTools } from './tools/CollectionTools.js';
+import { ToolRegistry } from '../handlers/ToolRegistry.js';
 // import { getUserTools } from './tools/UserTools.js'; // DEPRECATED - replaced by dollhouse_config
 // import { getConfigTools } from './tools/ConfigTools.js'; // DEPRECATED - replaced by dollhouse_config
-import { getConfigToolsV2 } from './tools/ConfigToolsV2.js';
-import { getAuthTools } from './tools/AuthTools.js';
-import { getPortfolioTools } from './tools/PortfolioTools.js';
-import { getBuildInfoTools } from './tools/BuildInfoTools.js';
-import { getEnhancedIndexTools } from './tools/EnhancedIndexTools.js';
-import { IToolHandler } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
-import { ToolDiscoveryCache } from '../utils/ToolCache.js';
+import { LRUCache } from '../cache/LRUCache.js';
+import { getValidatedToolCacheTTL } from '../config/performance-constants.js';
+import { generatePrescriptiveDigest } from './PrescriptiveDigest.js';
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { ElementCRUDHandler } from '../handlers/ElementCRUDHandler.js';
 // ConfigWizardCheck import removed - auto-trigger disabled for v1.8.0
 
 export class ServerSetup {
-  private toolRegistry: ToolRegistry;
-  private toolCache: ToolDiscoveryCache;
-  // wizardCheck removed - auto-trigger disabled for v1.8.0
-  
-  constructor() {
-    this.toolRegistry = new ToolRegistry();
-    this.toolCache = new ToolDiscoveryCache();
+  private static readonly TOOL_CACHE_KEY = 'tool_discovery_list';
+  /** Issue #706: Max ms to wait for deferred setup before proceeding anyway. */
+  private static readonly DEFERRED_SETUP_TIMEOUT_MS = 10_000;
+  private toolCache: LRUCache<Tool[]>;
+  private contextTracker: ContextTracker;
+  private elementCrudHandler: ElementCRUDHandler | null = null;
+  /** Issue #706 Phase 4: Promise that resolves when deferred setup completes. */
+  private deferredSetupPromise: Promise<void> | null = null;
+
+  constructor(contextTracker: ContextTracker) {
+    this.contextTracker = contextTracker;
+    this.toolCache = new LRUCache<Tool[]>({
+      name: 'tool-discovery',
+      maxSize: 1,
+      maxMemoryMB: 5,
+      ttlMs: getValidatedToolCacheTTL(),
+    });
   }
-  
+
+  /**
+   * Issue #706 Phase 4: Set the deferred setup promise for request buffering.
+   * First request after connect holds briefly until deferred setup completes
+   * (or the timeout fires). Subsequent requests proceed immediately.
+   */
+  setDeferredSetupPromise(promise: Promise<void>): void {
+    this.deferredSetupPromise = promise;
+    // Auto-clear when resolved so subsequent requests skip the check
+    promise.then(() => { this.deferredSetupPromise = null; })
+      .catch(() => { this.deferredSetupPromise = null; });
+  }
+
+  /**
+   * Issue #706 Phase 4: Wait for deferred setup with a hard timeout.
+   * No-op if already resolved or never set.
+   */
+  private async awaitDeferredSetup(): Promise<void> {
+    if (!this.deferredSetupPromise) return;
+    const timeout = new Promise<void>(resolve =>
+      setTimeout(resolve, ServerSetup.DEFERRED_SETUP_TIMEOUT_MS)
+    );
+    await Promise.race([this.deferredSetupPromise, timeout]);
+    this.deferredSetupPromise = null;
+  }
+
   /**
    * Initialize the server with all tools and handlers
    */
-  setupServer(server: Server, instance: IToolHandler): void {
-    // wizardCheck parameter removed - auto-trigger disabled for v1.8.0
-    // Register all tools
-    this.registerTools(instance);
-    
+  setupServer(server: Server, toolRegistry: ToolRegistry, elementCrudHandler?: ElementCRUDHandler): void {
+    this.elementCrudHandler = elementCrudHandler ?? null;
+
     // Setup request handlers
-    this.setupListToolsHandler(server);
-    this.setupCallToolHandler(server);
-  }
-  
-  /**
-   * Register all tool categories and invalidate cache
-   */
-  private registerTools(instance: IToolHandler): void {
-    // Register element tools (new generic tools for all element types)
-    this.toolRegistry.registerMany(getElementTools(instance));
-    
-    // Register persona export/import tools (core functionality moved to element tools)
-    this.toolRegistry.registerMany(getPersonaExportImportTools(instance));
-    
-    // Register collection tools
-    this.toolRegistry.registerMany(getCollectionTools(instance));
-    
-    // DEPRECATED: Old user tools - replaced by dollhouse_config
-    // Comment out to remove from tool list, but keep for reference during transition
-    // this.toolRegistry.registerMany(getUserTools(instance));
-    
-    // Register auth tools
-    this.toolRegistry.registerMany(getAuthTools(instance));
-    
-    // Portfolio tools (including sync_portfolio with new safety features)
-    this.toolRegistry.registerMany(getPortfolioTools(instance));
-    
-    // DEPRECATED: Old config tools - replaced by dollhouse_config
-    // Comment out to remove from tool list, but keep for reference during transition
-    // this.toolRegistry.registerMany(getConfigTools(instance));
-    
-    // Register new unified config and sync tools
-    this.toolRegistry.registerMany(getConfigToolsV2(instance));
-    
-    // Register build info tools
-    this.toolRegistry.registerMany(getBuildInfoTools(instance));
-
-    // Register Enhanced Index tools (semantic search and relationships)
-    this.toolRegistry.registerMany(getEnhancedIndexTools(instance));
-
-    // Invalidate cache since tools have changed
-    this.toolCache.invalidateToolList();
-    logger.debug('ToolDiscoveryCache: Cache invalidated due to tool registration');
+    this.setupListToolsHandler(server, toolRegistry);
+    this.setupCallToolHandler(server, toolRegistry);
   }
   
   /**
    * Setup the ListToolsRequest handler with caching
    */
-  private setupListToolsHandler(server: Server): void {
+  private setupListToolsHandler(server: Server, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const startTime = Date.now();
       
       // Try to get cached tools first
-      let tools = this.toolCache.getToolList();
-      
+      let tools = this.toolCache.get(ServerSetup.TOOL_CACHE_KEY);
+
       if (!tools) {
         // Cache miss - fetch tools from registry
-        tools = this.toolRegistry.getAllTools();
-        
+        tools = toolRegistry.getAllTools();
+
         // Cache the results for future requests
-        this.toolCache.setToolList(tools);
-        
+        this.toolCache.set(ServerSetup.TOOL_CACHE_KEY, tools);
+
         const duration = Date.now() - startTime;
         logger.info('ToolDiscoveryCache: Cache miss - fetched and cached tools', {
           toolCount: tools.length,
@@ -125,39 +113,61 @@ export class ServerSetup {
   /**
    * Setup the CallToolRequest handler
    */
-  private setupCallToolHandler(server: Server): void {
+  private setupCallToolHandler(server: Server, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      
-      try {
-        const handler = this.toolRegistry.getHandler(name);
-        
-        if (!handler) {
+      // Issue #706 Phase 4: Hold first request(s) until deferred setup completes
+      await this.awaitDeferredSetup();
+
+      const context = this.contextTracker.createContext('llm-request', {
+        toolName: request.params.name,
+      });
+      return this.contextTracker.runAsync(context, async () => {
+        const { name, arguments: args } = request.params;
+
+        try {
+          const handler = toolRegistry.getHandler(name);
+
+          if (!handler) {
+            throw new McpError(
+              ErrorCode.MethodNotFound,
+              `Unknown tool: ${name}`
+            );
+          }
+
+          // Normalize Unicode in all string arguments to prevent security bypasses
+          const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
+
+          const response = await handler(normalizedArgs);
+
+          // Issue #492: Prescriptive digest for active element context recovery.
+          // After context compaction, the LLM loses active element instructions.
+          // This digest tells it how to recover them.
+          if (this.elementCrudHandler && name !== 'get_active_elements') {
+            try {
+              const activeElements = await this.elementCrudHandler.getActiveElementsForPolicy();
+              if (activeElements.length > 0) {
+                const digest = generatePrescriptiveDigest(activeElements);
+                if (response?.content?.[0]?.type === 'text') {
+                  response.content[0].text += '\n\n' + digest;
+                }
+              }
+            } catch {
+              // Best-effort — never fail a tool response for the digest
+            }
+          }
+
+          return response;
+        } catch (error) {
+          if (error instanceof McpError) {
+            throw error;
+          }
+
           throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${name}`
+            ErrorCode.InternalError,
+            `Error executing tool ${name}: ${error}`
           );
         }
-        
-        // Normalize Unicode in all string arguments to prevent security bypasses
-        const normalizedArgs = this.normalizeArgumentsUnicode(args, name);
-        
-        const response = await handler(normalizedArgs);
-        
-        // Wizard auto-trigger removed for v1.8.0
-        // Manual wizard still available via config tool with action: 'wizard'
-        
-        return response;
-      } catch (error) {
-        if (error instanceof McpError) {
-          throw error;
-        }
-        
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Error executing tool ${name}: ${error}`
-        );
-      }
+      });
     });
   }
   
@@ -200,26 +210,19 @@ export class ServerSetup {
   }
   
   /**
-   * Get the tool registry
-   */
-  getToolRegistry(): ToolRegistry {
-    return this.toolRegistry;
-  }
-  
-  /**
    * Get the tool discovery cache
    */
-  getToolCache(): ToolDiscoveryCache {
+  getToolCache(): LRUCache<Tool[]> {
     return this.toolCache;
   }
-  
+
   /**
    * Invalidate the tool discovery cache (useful for external tool changes)
    */
   invalidateToolCache(): void {
-    this.toolCache.invalidateToolList();
+    this.toolCache.delete(ServerSetup.TOOL_CACHE_KEY);
     logger.info('ToolDiscoveryCache: Cache manually invalidated');
-    
+
     // Log security event for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'TOOL_CACHE_INVALIDATED',
@@ -228,14 +231,21 @@ export class ServerSetup {
       details: 'Tool discovery cache manually invalidated'
     });
   }
-  
+
   /**
    * Log current cache performance metrics
    */
   logCachePerformance(): void {
-    this.toolCache.logPerformance();
+    const stats = this.toolCache.getStats();
+    logger.info('ToolDiscoveryCache: Performance metrics', {
+      hitRate: `${(stats.hitRate * 100).toFixed(1)}%`,
+      hits: stats.hitCount,
+      misses: stats.missCount,
+      cacheSize: stats.size,
+      efficiency: stats.hitCount > 0 ? 'GOOD' : 'NEEDS_WARMUP'
+    });
   }
-  
+
   /**
    * Get cache statistics for monitoring
    */

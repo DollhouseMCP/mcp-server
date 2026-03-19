@@ -9,6 +9,7 @@
  */
 
 import { ElementType } from '../../portfolio/types.js';
+import type { ElementGatekeeperPolicy } from '../../handlers/mcp-aql/GatekeeperTypes.js';
 
 // Core identity and metadata
 export interface IElement {
@@ -43,17 +44,55 @@ export interface IElement {
 export interface IElementMetadata {
   name: string;
   description: string;
+  type?: ElementType;       // Element type for backward compatibility and type safety
   author?: string;
   version?: string;
   created?: string;
   modified?: string;
   tags?: string[];
-  
+
   // References support
   dependencies?: ElementDependency[];
-  
+
   // Extensibility
   custom?: Record<string, any>;
+
+  /**
+   * v2.0 dual-field architecture: behavioral directives loaded from YAML frontmatter.
+   *
+   * During deserialization, managers extract `instructions` from the parsed YAML
+   * metadata and assign it to `element.instructions`. This field is then deleted
+   * from the metadata object to avoid duplication. Its presence in YAML frontmatter
+   * is used to detect v2 format vs v1 (body-text-only) format.
+   *
+   * @since Issue #602 — Dual-field element architecture
+   */
+  instructions?: string;
+
+  /**
+   * Gatekeeper access-control policy for this element.
+   *
+   * When the element is active, its policy participates in Layer 2
+   * (element policy resolution) of the Gatekeeper enforcement pipeline.
+   * {@link resolveElementPolicy} iterates all active elements and evaluates
+   * their `gatekeeper` field to determine whether an MCP-AQL operation
+   * should be allowed, denied, or require confirmation.
+   *
+   * Policy fields (all optional):
+   * - `allow`  — Operations auto-approved when this element is active
+   * - `confirm` — Operations requiring user confirmation
+   * - `deny`   — Operations blocked outright
+   * - `scopeRestrictions` — Restrict operations to/from specific element types
+   *
+   * Defined in YAML front matter and validated at both write time
+   * ({@link validateGatekeeperPolicy}) and read time via
+   * {@link parseElementPolicy}. Malformed policies are logged and stripped.
+   *
+   * @since Issue #524 — Extended from agents to all element types
+   * @see ElementGatekeeperPolicy
+   * @see resolveElementPolicy
+   */
+  gatekeeper?: ElementGatekeeperPolicy;
 }
 
 // Reference to external or internal resources

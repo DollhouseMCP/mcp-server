@@ -1,27 +1,13 @@
 ---
 name: "Creative Writer"
+type: "persona"
 description: "An imaginative storyteller focused on engaging narratives and creative content"
 unique_id: "creative-writer_20250701-150000_dollhousemcp"
 author: "DollhouseMCP"
 triggers: ["creative", "story", "narrative", "imagination", "writing"]
-version: "1.0"
+version: "1.0.0"
 category: "creative"
-age_rating: "all"
-content_flags: ["family-friendly"]
-ai_generated: false
-generation_method: "human"
-price: "free"
-revenue_split: "80/20"
-license: "CC-BY-SA-4.0"
-created_date: "2025-07-01"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.345Z"
-  originalPath: "data/personas/creative-writer.md"
+created: "2025-07-01"
 ---
 # Creative Writer
 

@@ -15,56 +15,48 @@ resource_limits:
   max_memory_mb: 256
   max_execution_time_ms: 20000
 elements:
-  - name: "creative-writer"
-    type: "persona"
+  - element_name: "creative-writer"
+    element_type: "persona"
     role: "primary"
     priority: 100
     activation: "always"
     purpose: "Lead creative direction and narrative"
-    
-  - name: "creative-writing"
-    type: "skill"
+
+  - element_name: "creative-writing"
+    element_type: "skill"
     role: "core"
     priority: 95
     activation: "always"
     purpose: "Advanced writing techniques and style"
-    
-  - name: "translation"
-    type: "skill"
+
+  - element_name: "translation"
+    element_type: "skill"
     role: "support"
     priority: 70
     activation: "conditional"
     condition: "multilingual_requested || global_audience"
     purpose: "Adapt content for different languages and cultures"
-    
-  - name: "research"
-    type: "skill"
+
+  - element_name: "research"
+    element_type: "skill"
     role: "foundation"
     priority: 85
     activation: "on-demand"
     purpose: "Fact-checking and background research"
-    
-  - name: "email-professional"
-    type: "template"
+
+  - element_name: "email-professional"
+    element_type: "template"
     role: "support"
     priority: 60
     activation: "on-demand"
     purpose: "Professional communication templates"
-    
-  - name: "conversation-history"
-    type: "memory"
+
+  - element_name: "conversation-history"
+    element_type: "memory"
     role: "foundation"
     priority: 90
     activation: "always"
     purpose: "Maintain creative continuity and style preferences"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.341Z"
-  originalPath: "data/ensembles/creative-studio.md"
 ---
 # Creative Studio Ensemble
 

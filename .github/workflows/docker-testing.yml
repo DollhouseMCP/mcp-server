@@ -24,8 +24,99 @@ env:
   BUILDKIT_PROGRESS: plain
 
 jobs:
+  # Self-hosted Docker build test (fast iteration for mickdarling)
+  # Runs when: mickdarling + not main branch
+  self-hosted-docker-build-test:
+    name: Docker Build & Test (linux/amd64)
+    if: |
+      github.actor == 'mickdarling' &&
+      github.ref != 'refs/heads/main' &&
+      github.base_ref != 'main'
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
+    env:
+      SELF_HOSTED_DOCKER: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64
+
+      - name: Build Docker image (builder stage)
+        shell: bash
+        run: |
+          echo "🏗️ Building Docker image (self-hosted)..."
+          docker buildx build \
+            --platform linux/amd64 \
+            --target builder \
+            --tag dollhousemcp:builder-linux-amd64 \
+            --progress=plain \
+            --load \
+            --file docker/Dockerfile \
+            .
+
+      - name: Build Docker image (production stage)
+        shell: bash
+        run: |
+          echo "🏗️ Building production Docker image (self-hosted)..."
+          docker buildx build \
+            --platform linux/amd64 \
+            --target production \
+            --tag dollhousemcp:latest-linux-amd64 \
+            --progress=plain \
+            --load \
+            --file docker/Dockerfile \
+            .
+
+      - name: Test MCP server initialization
+        shell: bash
+        run: |
+          echo "🧪 Testing MCP server initialization..."
+          MCP_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
+          docker_output=$(timeout 10 sh -c "echo '$MCP_JSON_REQUEST' | docker run -i \
+            --platform linux/amd64 \
+            --user 1001:1001 \
+            --security-opt no-new-privileges \
+            --read-only \
+            --tmpfs /tmp:noexec,nosuid,mode=1777 \
+            --tmpfs /app/tmp:noexec,nosuid,mode=1777 \
+            --memory 512m \
+            --cpus 0.5 \
+            --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
+            --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
+            --env NODE_ENV=test \
+            dollhousemcp:latest-linux-amd64 2>&1" || true)
+
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
+            echo "✅ MCP server initialization test passed"
+          else
+            echo "❌ MCP server initialization test failed"
+            echo "$docker_output"
+            exit 1
+          fi
+
+      - name: Cleanup containers
+        if: always()
+        shell: bash
+        run: docker system prune -f --volumes || true
+
+      - name: Self-hosted Docker test complete
+        shell: bash
+        run: echo "✅ Self-hosted Docker test complete"
+
+  # GitHub-hosted Docker build test (for other contributors or main branch)
   docker-build-test:
     name: Docker Build & Test (${{ matrix.platform }})
+    if: |
+      github.actor != 'mickdarling' ||
+      github.ref == 'refs/heads/main' ||
+      github.base_ref == 'main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
@@ -35,8 +126,14 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+          # ⚠️ ARM64 DISABLED FOR PRIVATE REPOSITORIES
+          # GitHub Actions does not support ARM64 runners (ubuntu-22.04-arm, ubuntu-24.04-arm)
+          # for private repositories. ARM64 runners are FREE for public repositories.
+          #
+          # ACTION REQUIRED: Uncomment the lines below when this code is merged to the
+          # PUBLIC production repository (DollhouseMCP/mcp-server).
+          # - platform: linux/arm64
+          #   runner: ubuntu-24.04-arm
 
     steps:
       - name: 🚀 Session Start - Log System Information
@@ -334,6 +431,7 @@ jobs:
             --cpus 0.5 \
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
+            --env NODE_ENV=test \
             dollhousemcp:latest-${PLATFORM_TAG}"
           
           echo "\nDocker Command: $DOCKER_CMD"
@@ -517,6 +615,7 @@ jobs:
             --cpus 0.5 \
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
+            --env NODE_ENV=test \
             dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
           
           tools_exit_code=$?
@@ -629,10 +728,73 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "All tests passed successfully"
 
+  # Self-hosted Docker Compose test (for mickdarling)
+  self-hosted-docker-compose-test:
+    name: Docker Compose Test
+    if: |
+      github.actor == 'mickdarling' &&
+      github.ref != 'refs/heads/main' &&
+      github.base_ref != 'main'
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
+    env:
+      SELF_HOSTED_DOCKER: 'true'
+      COMPOSE_PROJECT_NAME: dollhouse-${{ github.run_id }}-${{ github.run_attempt }}-selfhosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Test MINIMAL Docker Compose
+        shell: bash
+        run: |
+          echo "🧪 Testing MINIMAL Docker Compose..."
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml build minimal-test
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml run --rm minimal-test
+          echo "✅ Minimal Docker test passed!"
+
+      - name: Test Docker Compose build
+        shell: bash
+        run: |
+          echo "🐳 Testing Docker Compose build..."
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml build dollhousemcp
+
+      - name: Test Docker Compose startup
+        shell: bash
+        run: |
+          echo "🚀 Testing Docker Compose startup..."
+          docker_output=$(timeout 10 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
+          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":1'; then
+            echo "✅ Docker Compose MCP server test passed"
+          else
+            echo "❌ Docker Compose MCP server test failed"
+            echo "$docker_output"
+            exit 1
+          fi
+
+      - name: Cleanup Docker Compose
+        if: always()
+        run: |
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f
+
+      - name: Self-hosted Docker Compose test complete
+        shell: bash
+        run: echo "✅ Self-hosted Docker Compose test complete"
+
+  # GitHub-hosted Docker Compose test
   docker-compose-test:
     name: Docker Compose Test
+    if: |
+      github.actor != 'mickdarling' ||
+      github.ref == 'refs/heads/main' ||
+      github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: dollhouse-${{ github.run_id }}-${{ github.run_attempt }}-github
 
     steps:
       - name: Checkout repository
@@ -645,8 +807,8 @@ jobs:
         run: |
           echo "🧪 Testing MINIMAL Docker Compose to verify Docker works at all..."
           echo "This should just echo 'Hello' and exit successfully"
-          docker compose --file docker/docker-compose.minimal.yml build minimal-test
-          docker compose --file docker/docker-compose.minimal.yml run --rm minimal-test
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml build minimal-test
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.minimal.yml run --rm minimal-test
           echo "✅ Minimal Docker test passed!"
           
       - name: Test Docker Compose build
@@ -661,7 +823,7 @@ jobs:
           ls -la docker/ || echo "docker/ directory not found!"
           echo "Using docker-compose.yml with proper tmpfs permissions"
           # Build using the regular Dockerfile which compiles TypeScript inside Docker
-          docker compose --file docker/docker-compose.yml build dollhousemcp
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml build dollhousemcp
 
       - name: Test Docker Compose startup
         shell: bash
@@ -672,7 +834,7 @@ jobs:
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           # Use timeout since MCP server runs indefinitely
-          docker_output=$(timeout 5 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
+          docker_output=$(timeout 5 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
           exit_code=$?
           
           echo "Docker Compose run completed with exit code: $exit_code"
@@ -695,8 +857,8 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker compose --file docker/docker-compose.yml down
-          docker compose --file docker/docker-compose.yml rm -f
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f
 
       - name: Docker Compose testing complete
         shell: bash

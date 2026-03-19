@@ -64,10 +64,14 @@ export class NLPScoringManager {
   private cacheAccessOrder: string[];  // Track access order for LRU
   private config: ScoringConfig;
   private unicodeValidator: UnicodeValidator;
+  private cleanupInterval?: NodeJS.Timeout;
 
-  constructor(config?: Partial<ScoringConfig>) {
+  constructor(
+    config?: Partial<ScoringConfig>,
+    indexConfigManager: IndexConfigManager = new IndexConfigManager()
+  ) {
     // Get config from central manager
-    const indexConfig = IndexConfigManager.getInstance().getConfig();
+    const indexConfig = indexConfigManager.getConfig();
 
     this.config = {
       minTokenLength: indexConfig.nlp.minTokenLength,
@@ -83,7 +87,11 @@ export class NLPScoringManager {
     this.unicodeValidator = new UnicodeValidator();
 
     // Periodic cleanup of expired entries
-    setInterval(() => this.cleanExpiredCache(), 60000); // Every minute
+    this.cleanupInterval = setInterval(() => this.cleanExpiredCache(), 60000); // Every minute
+
+    if (typeof this.cleanupInterval.unref === 'function') {
+      this.cleanupInterval.unref();
+    }
   }
 
   /**
@@ -457,5 +465,12 @@ export class NLPScoringManager {
       size: this.cache.size,
       oldestEntry: oldest
     };
+  }
+
+  public dispose(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
+    }
   }
 }

@@ -1,17 +1,13 @@
 ---
 name: "Technical Analyst"
+type: "persona"
 description: "A systematic problem-solver focused on deep technical analysis and evidence-based solutions"
 triggers: ["technical", "analysis", "architecture", "debugging", "systematic"]
-version: "1.0"
-author: "Persona MCP Server"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.346Z"
-  originalPath: "data/personas/technical-analyst.md"
+version: "1.0.0"
+author: "DollhouseMCP"
+created: "2025-07-23"
+category: "development"
+unique_id: "technical-analyst_20250723-000000_dollhousemcp"
 ---
 # Technical Analyst
 

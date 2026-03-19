@@ -41,7 +41,7 @@ fi
 
 # Configuration from environment or defaults
 TEST_GITHUB_REPO=${TEST_GITHUB_REPO:-dollhouse-test-portfolio}
-TEST_GITHUB_USER=${TEST_GITHUB_USER:-mickdarling}
+TEST_GITHUB_USER=${TEST_GITHUB_USER:-test-user}
 
 # Validate repository name format
 if [[ ! "$TEST_GITHUB_REPO" =~ ^[a-zA-Z0-9._-]+$ ]]; then
@@ -70,7 +70,7 @@ case "$MODE" in
             -e GITHUB_TOKEN="${GITHUB_TOKEN}" \
             -e GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID}" \
             -e TEST_GITHUB_REPO="${TEST_GITHUB_REPO}" \
-            -v "$(pwd)/test/fixtures:/app/test-data:ro" \
+            -v "$(pwd)/tests/fixtures:/app/test-data:ro" \
             claude-mcp-test-env:1.0.0 \
             bash
         ;;

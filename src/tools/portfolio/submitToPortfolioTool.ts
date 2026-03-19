@@ -11,10 +11,9 @@
 import { createHash } from 'crypto';
 import { GitHubAuthManager } from '../../auth/GitHubAuthManager.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
-import { getPortfolioRepositoryName } from '../../config/portfolioConfig.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import { ContentValidator } from '../../security/contentValidator.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
+import { PortfolioManager, getElementFileExtension } from '../../portfolio/PortfolioManager.js';
 import { PortfolioIndexManager } from '../../portfolio/PortfolioIndexManager.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -24,38 +23,27 @@ import { APICache } from '../../cache/APICache.js';
 import { PortfolioElementAdapter } from './PortfolioElementAdapter.js';
 import { FileDiscoveryUtil } from '../../utils/FileDiscoveryUtil.js';
 import { ErrorHandler } from '../../utils/ErrorHandler.js';
-import { 
-  FILE_SIZE_LIMITS, 
-  RETRY_CONFIG, 
+import {
+  FILE_SIZE_LIMITS,
+  RETRY_CONFIG,
   SEARCH_CONFIG,
   PortfolioElementMetadata,
   getValidatedTimeout,
   calculateRetryDelay
 } from '../../config/portfolio-constants.js';
-import { githubRateLimiter } from '../../utils/GitHubRateLimiter.js';
+import { PortfolioElement, SubmitToPortfolioParams, SubmitToPortfolioResult } from './types.js';
+
+// Re-export types for backward compatibility
+export type { PortfolioElement, SubmitToPortfolioParams, SubmitToPortfolioResult };
+import { IRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
-import * as fs from 'fs/promises';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
+import { IFileOperationsService } from '../../services/FileOperationsService.js';
 
-export interface SubmitToPortfolioParams {
-  name: string;
-  type?: ElementType;
-}
-
-export interface PortfolioElement {
-  type: ElementType;
-  metadata: PortfolioElementMetadata;
-  content: string;
-}
-
-export interface SubmitToPortfolioResult {
-  success: boolean;
-  message: string;
-  url?: string;
-  error?: string;
-}
+// PortfolioElement, SubmitToPortfolioParams, and SubmitToPortfolioResult
+// are imported from ./types.ts and re-exported above
 
 export interface ElementDetectionMatch {
   type: ElementType;
@@ -67,38 +55,49 @@ export interface ElementDetectionResult {
   matches: ElementDetectionMatch[];
 }
 
-// Workflow step constants for consistent logging
-const WORKFLOW_STEPS = {
-  VALIDATION: 1,
-  AUTHENTICATION: 2,
-  CONTENT_DISCOVERY: 3,
-  SECURITY: 4,
-  METADATA: 5,
-  REPO_SETUP: 6,
-  SUBMISSION: 7,
-  REPORTING: 8,
-  TOTAL: 8
-} as const;
-
-// Logging configuration
-const LOGGING_CONFIG = {
-  // Set DOLLHOUSE_VERBOSE_LOGGING=true for detailed step-by-step logs
-  isVerbose: process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true',
-  // Set DOLLHOUSE_LOG_TIMING=true for timing measurements
-  shouldLogTiming: process.env.DOLLHOUSE_LOG_TIMING?.toLowerCase() === 'true' || 
-                   process.env.DOLLHOUSE_VERBOSE_LOGGING?.toLowerCase() === 'true'
-} as const;
+export interface SubmitToPortfolioToolDependencies {
+  authManager: GitHubAuthManager;
+  portfolioRepoManager: PortfolioRepoManager;
+  portfolioManager: PortfolioManager;
+  portfolioIndexManager: PortfolioIndexManager;
+  rateLimiter: IRateLimiter;
+  fileOperations: IFileOperationsService;
+  tokenManager: TokenManager;
+}
 
 export class SubmitToPortfolioTool {
   private authManager: GitHubAuthManager;
-  private portfolioManager: PortfolioRepoManager;
+  private portfolioRepoManager: PortfolioRepoManager;
+  private portfolioManager: PortfolioManager;
+  private portfolioIndexManager: PortfolioIndexManager;
+  private rateLimiter: IRateLimiter;
+  private fileOperations: IFileOperationsService;
+  private tokenManager: TokenManager;
 
-  constructor(apiCache: APICache) {
+  constructor(apiCache: APICache, dependencies: SubmitToPortfolioToolDependencies) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
     // Previously: constructor(apiCache: any)
     // Now: constructor(apiCache: APICache) with proper import
-    this.authManager = new GitHubAuthManager(apiCache);
-    this.portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
+    if (!dependencies || !dependencies.authManager) {
+      throw new Error('SubmitToPortfolioTool requires a GitHubAuthManager instance');
+    }
+    if (!dependencies.portfolioManager) {
+      throw new Error('SubmitToPortfolioTool requires a PortfolioManager instance');
+    }
+    if (!dependencies.portfolioIndexManager) {
+      throw new Error('SubmitToPortfolioTool requires a PortfolioIndexManager instance');
+    }
+    if (!dependencies.rateLimiter) {
+      throw new Error('SubmitToPortfolioTool requires an IRateLimiter instance');
+    }
+
+    this.authManager = dependencies.authManager;
+    this.portfolioRepoManager = dependencies.portfolioRepoManager;
+    this.portfolioManager = dependencies.portfolioManager;
+    this.portfolioIndexManager = dependencies.portfolioIndexManager;
+    this.rateLimiter = dependencies.rateLimiter;
+    this.fileOperations = dependencies.fileOperations;
+    this.tokenManager = dependencies.tokenManager;
   }
 
   /**
@@ -192,8 +191,7 @@ export class SubmitToPortfolioTool {
       localPath = await this.findLocalContent(safeName, elementType);
       if (!localPath) {
         // UX IMPROVEMENT: Provide helpful suggestions for finding content
-        const portfolioManager = PortfolioManager.getInstance();
-        const elementDir = portfolioManager.getElementDir(elementType);
+        const elementDir = this.portfolioManager.getElementDir(elementType);
         
         return {
           success: false,
@@ -316,7 +314,7 @@ export class SubmitToPortfolioTool {
     const safePath = pathValidation.safePath!;
 
     // Validate file size before reading
-    const stats = await fs.stat(safePath);
+    const stats = await this.fileOperations.stat(safePath);
     if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: 'RATE_LIMIT_EXCEEDED',
@@ -335,7 +333,7 @@ export class SubmitToPortfolioTool {
     }
 
     // Validate content security
-    const content = await fs.readFile(safePath, 'utf-8');
+    const content = await this.fileOperations.readFile(safePath, { source: 'SubmitToPortfolioTool.validateFileAndContent' });
     const validationResult = ContentValidator.validateAndSanitize(content);
 
     if (!validationResult.isValid && validationResult.severity === 'critical') {
@@ -492,7 +490,7 @@ export class SubmitToPortfolioTool {
    */
   private async extractElementMetadata(filePath: string): Promise<Record<string, any> | null> {
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await this.fileOperations.readFile(filePath, { source: 'SubmitToPortfolioTool.extractElementMetadata' });
       
       // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
       // Previously would have used: yaml.load(yamlContent) which is vulnerable
@@ -516,7 +514,7 @@ export class SubmitToPortfolioTool {
         logger.debug('Parsed data is not a valid metadata object', { path: filePath });
         return null;
         
-      } catch (parseError) {
+      } catch {
         // SecureYamlParser throws on invalid YAML, try alternate frontmatter pattern
         // Handle files that might have frontmatter without full document structure
         const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -568,7 +566,7 @@ export class SubmitToPortfolioTool {
   }> {
     try {
       // Check token format first (basic validation)
-      if (!TokenManager.validateTokenFormat(token)) {
+      if (!this.tokenManager.validateTokenFormat(token)) {
         SecurityMonitor.logSecurityEvent({
           type: 'TOKEN_VALIDATION_FAILURE',
           severity: 'MEDIUM',
@@ -589,8 +587,8 @@ export class SubmitToPortfolioTool {
       // Validate token with GitHub API to check expiration and permissions
       // NOTE: OAuth tokens use 'public_repo' scope, not 'repo'
       // Using centralized scope management for consistency
-      const requiredScopes = TokenManager.getRequiredScopes('collection');
-      const validationResult = await TokenManager.validateTokenScopes(token, requiredScopes);
+      const requiredScopes = this.tokenManager.getRequiredScopes('collection');
+      const validationResult = await this.tokenManager.validateTokenScopes(token, requiredScopes);
 
       if (!validationResult.isValid) {
         SecurityMonitor.logSecurityEvent({
@@ -601,7 +599,7 @@ export class SubmitToPortfolioTool {
         });
 
         // Enhanced OAuth-specific error messages
-        const tokenType = TokenManager.getTokenType(token);
+        const tokenType = this.tokenManager.getTokenType(token);
         let errorCode: CollectionErrorCode;
         let enhancedDetails: string | undefined = validationResult.error;
         
@@ -637,7 +635,7 @@ export class SubmitToPortfolioTool {
         if (timeUntilReset > 23 * oneHour) {
           isNearExpiry = true;
           logger.warn('GitHub token may be near expiration', {
-            tokenPrefix: TokenManager.getTokenPrefix(token),
+            tokenPrefix: this.tokenManager.getTokenPrefix(token),
             rateLimitResetTime: validationResult.rateLimit.resetTime,
             recommendation: 'Consider re-authenticating for long operations'
           });
@@ -651,7 +649,7 @@ export class SubmitToPortfolioTool {
         source: 'SubmitToPortfolioTool.validateTokenBeforeUsage',
         details: 'GitHub token validated successfully before usage',
         metadata: {
-          tokenType: TokenManager.getTokenType(token),
+          tokenType: this.tokenManager.getTokenType(token),
           scopes: validationResult.scopes,
           rateLimitRemaining: validationResult.rateLimit?.remaining,
           isNearExpiry
@@ -731,7 +729,9 @@ export class SubmitToPortfolioTool {
         /\.\./,                    // Path traversal
         /\/\.\./,                  // Unix path traversal
         /\\\.\./,                  // Windows path traversal
+        // eslint-disable-next-line no-control-regex -- Intentionally detecting null bytes for security
         /\u0000/,                    // NOSONAR - Null bytes detection for security
+        // eslint-disable-next-line no-control-regex -- Intentionally detecting control chars for security
         /[\u0001-\u001f\u007f-\u009f]/,    // NOSONAR - Control characters detection for security
         /[<>:"|?*]/,               // Invalid filename characters on Windows
         /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i, // Reserved Windows names
@@ -793,12 +793,12 @@ export class SubmitToPortfolioTool {
       let normalizedPath: string;
       try {
         // Remove null bytes and normalize
+        // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
         const cleanPath = filePath.replaceAll(/\u0000/g, ''); // NOSONAR - Removing null bytes for security
         normalizedPath = path.normalize(cleanPath);
         
         // Check if path is within the portfolio directory
-        const portfolioManager = PortfolioManager.getInstance();
-        const portfolioBase = portfolioManager.getBaseDir();
+      const portfolioBase = this.portfolioManager.getBaseDir();
         
         // For absolute paths, verify they're within the portfolio directory
         if (path.isAbsolute(normalizedPath)) {
@@ -938,7 +938,7 @@ export class SubmitToPortfolioTool {
   }> {
     try {
       // Get current token
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (!token) {
         return {
           canProceed: false,
@@ -964,7 +964,7 @@ export class SubmitToPortfolioTool {
       const isLongOperation = longOperations.includes(operationType);
 
       // Get token type to determine refresh capabilities
-      const tokenType = TokenManager.getTokenType(token);
+      const tokenType = this.tokenManager.getTokenType(token);
       let refreshRecommended = false;
 
       // For long operations, check token age and recommend refresh if needed
@@ -1088,21 +1088,21 @@ export class SubmitToPortfolioTool {
 
     // Provide user guidance if refresh is recommended for this long operation
     if (tokenManagement.refreshRecommended) {
-      const tokenType = TokenManager.getTokenType(token);
+      const tokenType = this.tokenManager.getTokenType(token);
       const guidance = this.formatTokenRefreshGuidance('portfolio creation', tokenType);
       logger.warn(`Token refresh recommended for portfolio creation:${guidance}`);
     }
 
-    this.portfolioManager.setToken(token);
+    this.portfolioRepoManager.setToken(token);
 
     // Check if portfolio exists and create if needed
     const username = authStatus.username || 'unknown';
-    const portfolioExists = await this.portfolioManager.checkPortfolioExists(username);
+    const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
     
     if (!portfolioExists) {
       logger.info('Creating portfolio repository...');
       // Request consent for portfolio creation
-      const repoUrl = await this.portfolioManager.createPortfolio(username, true);
+      const repoUrl = await this.portfolioRepoManager.createPortfolio(username, true);
       if (!repoUrl) {
         return {
           success: false,
@@ -1263,11 +1263,16 @@ export class SubmitToPortfolioTool {
     localPath?: string  // Local file path for collection submission
   ): Promise<SubmitToPortfolioResult> {
     // DUPLICATE DETECTION: Check if content already exists in portfolio
-    const repoFullName = `${authStatus.username}/${this.portfolioManager.getRepositoryName()}`;
-    const filePath = `${elementType}/${safeName}.md`;
+    const repoFullName = `${authStatus.username}/${this.portfolioRepoManager.getRepositoryName()}`;
+    // Issue #815: Use correct file extension per element type
+    const filePath = `${elementType}/${safeName}${getElementFileExtension(elementType)}`;
     
     // Prepare the full content that would be saved
-    const fullContent = `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
+    // Issue #852: Memories are pure YAML — don't wrap in markdown frontmatter
+    const isYamlType = getElementFileExtension(elementType) === '.yaml';
+    const fullContent = isYamlType
+      ? content  // YAML elements: use raw content (matches serialize() output)
+      : `---\n${JSON.stringify(metadata, null, 2)}\n---\n\n${content}`;
     
     const isDuplicate = await this.checkExistingContent(
       repoFullName, 
@@ -1294,7 +1299,7 @@ export class SubmitToPortfolioTool {
       };
       
       // TYPE SAFETY FIX #2: Use adapter pattern instead of complex type casting
-      // Previously: element as unknown as Parameters<typeof this.portfolioManager.saveElement>[0]
+      // Previously: element as unknown as Parameters<typeof this.portfolioRepoManager.saveElement>[0]
       // Now: Clean adapter pattern that implements IElement interface properly
       const adapter = new PortfolioElementAdapter(element);
       
@@ -1353,7 +1358,7 @@ export class SubmitToPortfolioTool {
 
     // Provide refresh guidance if recommended for collection submission
     if (collectionTokenManagement.refreshRecommended) {
-      const tokenType = TokenManager.getTokenType(token);
+      const tokenType = this.tokenManager.getTokenType(token);
       logger.info('Collection submission proceeding with aging token', {
         tokenType,
         recommendation: 'If collection submission fails, try re-authenticating with setup_github_auth'
@@ -1423,26 +1428,12 @@ export class SubmitToPortfolioTool {
       }
       const safeName = validationResult.safeName!;
 
-      // Step 2: Check authentication status
-      logger.info('🔐 Step 2/8: Checking authentication...');
+      // Step 2: Find content locally with smart type detection
+      logger.info('🔍 Step 2/8: Finding content locally...');
       const step2Start = Date.now();
-      const authResult = await this.checkAuthentication();
-      timings['authentication'] = Date.now() - step2Start;
-      logger.info(`✅ Step 2 complete (${timings['authentication']}ms)`, {
-        username: authResult.authStatus?.username,
-        hasToken: !!authResult.authStatus?.hasToken
-      });
-      if (!authResult.success) {
-        return authResult.error!;
-      }
-      const authStatus = authResult.authStatus!;
-
-      // Step 3: Find content locally with smart type detection
-      logger.info('🔍 Step 3/8: Finding content locally...');
-      const step3Start = Date.now();
       const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
-      timings['contentDiscovery'] = Date.now() - step3Start;
-      logger.info(`✅ Step 3 complete (${timings['contentDiscovery']}ms)`, {
+      timings['contentDiscovery'] = Date.now() - step2Start;
+      logger.info(`✅ Step 2 complete (${timings['contentDiscovery']}ms)`, {
         found: contentResult.success,
         elementType: contentResult.elementType,
         path: contentResult.localPath
@@ -1453,16 +1444,32 @@ export class SubmitToPortfolioTool {
       const elementType = contentResult.elementType!;
       const localPath = contentResult.localPath!;
 
-      // Step 4: Validate file and content security
-      logger.info('🔒 Step 4/8: Validating security...');
-      const step4Start = Date.now();
+      // Step 3: Validate file and content security (including size check)
+      // This happens BEFORE authentication so users get immediate feedback about file issues
+      logger.info('🔒 Step 3/8: Validating security and file size...');
+      const step3Start = Date.now();
       const securityResult = await this.validateFileAndContent(localPath);
-      timings['security'] = Date.now() - step4Start;
-      logger.info(`✅ Step 4 complete (${timings['security']}ms)`);
+      timings['security'] = Date.now() - step3Start;
+      logger.info(`✅ Step 3 complete (${timings['security']}ms)`);
       if (!securityResult.success) {
         return securityResult.error!;
       }
       const content = securityResult.content!;
+
+      // Step 4: Check authentication status
+      // This happens AFTER file validation so users don't need to auth just to learn their file is too large
+      logger.info('🔐 Step 4/8: Checking authentication...');
+      const step4Start = Date.now();
+      const authResult = await this.checkAuthentication();
+      timings['authentication'] = Date.now() - step4Start;
+      logger.info(`✅ Step 4 complete (${timings['authentication']}ms)`, {
+        username: authResult.authStatus?.username,
+        hasToken: !!authResult.authStatus?.hasToken
+      });
+      if (!authResult.success) {
+        return authResult.error!;
+      }
+      const authStatus = authResult.authStatus!;
 
       // Step 5: Prepare metadata for element
       logger.info('📝 Step 5/8: Preparing metadata...');
@@ -1528,9 +1535,9 @@ export class SubmitToPortfolioTool {
       if (isTokenError) {
         try {
           // Get current token to determine type for guidance
-          const currentToken = await TokenManager.getGitHubTokenAsync();
+          const currentToken = await this.tokenManager.getGitHubTokenAsync();
           if (currentToken) {
-            const tokenType = TokenManager.getTokenType(currentToken);
+            const tokenType = this.tokenManager.getTokenType(currentToken);
             const refreshGuidance = this.formatTokenRefreshGuidance('portfolio submission', tokenType);
             
             // Append refresh guidance to error message
@@ -1538,7 +1545,7 @@ export class SubmitToPortfolioTool {
               formattedError.message += refreshGuidance;
             }
           }
-        } catch (tokenError) {
+        } catch {
           // If we can't get token info, provide generic guidance
           formattedError.message += '\n\n🔄 **Authentication Issue**: Try running `setup_github_auth` to refresh your authentication.';
         }
@@ -1691,7 +1698,7 @@ export class SubmitToPortfolioTool {
       if (params.localPath) {
         try {
           // SECURITY: Validate file size before reading to prevent memory exhaustion
-          const stats = await fs.stat(params.localPath);
+          const stats = await this.fileOperations.stat(params.localPath);
           if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
             // DO NOT truncate user content - reject if too large
             logger.error('Element file exceeds size limit for collection submission', {
@@ -1699,7 +1706,7 @@ export class SubmitToPortfolioTool {
               fileSize: stats.size,
               maxSize: FILE_SIZE_LIMITS.MAX_FILE_SIZE
             });
-            
+
             SecurityMonitor.logSecurityEvent({
               type: 'CONTENT_INJECTION_ATTEMPT',
               severity: 'MEDIUM',
@@ -1711,13 +1718,13 @@ export class SubmitToPortfolioTool {
                 limit: FILE_SIZE_LIMITS.MAX_FILE_SIZE
               }
             });
-            
+
             // Return error message instead of truncating
             return null;
           }
-          
+
           // Read the full markdown file with frontmatter and content
-          elementContent = await fs.readFile(params.localPath, 'utf-8');
+          elementContent = await this.fileOperations.readFile(params.localPath, { source: 'SubmitToPortfolioTool.createCollectionIssue' });
           
           // SECURITY: Validate content for security issues
           // Note: We already validated this content in validateFileAndContent()
@@ -1811,7 +1818,7 @@ ${elementContent}
 
       // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
       // This prevents hitting GitHub rate limits and provides better error handling
-      const issueUrl = await githubRateLimiter.queueRequest(
+      const issueUrl = await this.rateLimiter.queueRequest(
         'create-collection-issue',
         async () => {
           const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
@@ -1885,10 +1892,6 @@ ${elementContent}
 
             const data = await response.json();
             return data.html_url;
-            
-          } catch (fetchError: any) {
-            // Re-throw to outer catch block
-            throw fetchError;
           } finally {
             clearTimeout(timeoutId);
           }
@@ -1916,7 +1919,7 @@ ${elementContent}
       // METADATA INDEX FIX: Use portfolio index for fast metadata-based lookups
       // This solves the critical issue where "Safe Roundtrip Tester" couldn't be found
       // because findLocalContent only searched filenames, not metadata names
-      const indexManager = PortfolioIndexManager.getInstance();
+      const indexManager = this.portfolioIndexManager;
       
       // UX IMPROVEMENT: Enhanced search with fuzzy matching
       const indexEntry = await indexManager.findByName(name, { 
@@ -1939,8 +1942,7 @@ ${elementContent}
       // This maintains backward compatibility and handles edge cases
       logger.debug('Index lookup failed, falling back to file discovery', { name, type });
       
-      const portfolioManager = PortfolioManager.getInstance();
-      const portfolioDir = portfolioManager.getElementDir(type);
+      const portfolioDir = this.portfolioManager.getElementDir(type);
       
       // UX IMPROVEMENT: Try multiple search strategies for better user experience
       let file = await FileDiscoveryUtil.findFile(portfolioDir, name, {
@@ -1949,6 +1951,41 @@ ${elementContent}
         cacheResults: true
       });
       
+      // Issue #815: Memory files are stored in dated subdirectories (YYYY-MM-DD/).
+      // FileDiscoveryUtil only searches flat directories, so traverse subdirs for memories.
+      if (!file && type === ElementType.MEMORY) {
+        try {
+          // Use readdir with withFileTypes to identify dated subdirectories
+          const { readdir: readdirFs } = await import('node:fs/promises');
+          const entries = await readdirFs(portfolioDir, { withFileTypes: true });
+          const subdirs = entries.filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
+          const normalizedSearch = name.toLowerCase().replaceAll(/[^a-z0-9]/g, '-').replaceAll(/-+/g, '-').replaceAll(/(^-)|(-$)/g, '');
+
+          for (const subdir of subdirs) {
+            const subdirPath = path.join(portfolioDir, subdir.name);
+            // Use FileOperationsService for file listing (respects sandboxing)
+            const subdirFiles = await this.fileOperations.listDirectory(subdirPath);
+            for (const f of subdirFiles) {
+              // Skip backup files (same filtering as PortfolioManager.listElements)
+              if (f.includes('.backup-') || f.includes('.backup.')) continue;
+              const fileExt = path.extname(f);
+              if (!['.yaml', '.yml', '.md'].includes(fileExt)) continue;
+              const base = f.slice(0, -fileExt.length).toLowerCase();
+              if (base === normalizedSearch || base === name.toLowerCase()) {
+                file = path.join(subdirPath, f);
+                logger.debug('Found memory in dated subdirectory', { name, subdir: subdir.name, file });
+                break;
+              }
+            }
+            if (file) break;
+          }
+        } catch (err) {
+          logger.debug('Memory subdirectory traversal failed', {
+            name, type, error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+
       // If not found, try normalizing the name (e.g., "J.A.R.V.I.S." -> "j-a-r-v-i-s")
       if (!file) {
         const normalizedName = name.toLowerCase()
@@ -2167,8 +2204,7 @@ ${elementContent}
       // Process all element types for suggestions
       for (const elementType of elementTypes) {
         try {
-          const portfolioManager = PortfolioManager.getInstance();
-          const elementDir = portfolioManager.getElementDir(elementType);
+          const elementDir = this.portfolioManager.getElementDir(elementType);
           
           // Get files in this directory
           const files = await FileDiscoveryUtil.findFile(elementDir, '*', {
@@ -2321,7 +2357,7 @@ ${elementContent}
           attempt
         });
         
-        const fileUrl = await this.portfolioManager.saveElement(adapter, true);
+        const fileUrl = await this.portfolioRepoManager.saveElement(adapter, true);
         
         if (fileUrl) {
           if (attempt > 1) {

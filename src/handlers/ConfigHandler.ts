@@ -6,6 +6,8 @@
 import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { getFriendlyNullValue } from '../config/wizardTemplates.js';
+import { InitializationService } from '../services/InitializationService.js';
+import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import {
   getSourcePriorityConfig,
   saveSourcePriorityConfig,
@@ -15,9 +17,36 @@ import {
   DEFAULT_SOURCE_PRIORITY,
   type SourcePriorityConfig
 } from '../config/sourcePriority.js';
-// WizardTemplateBuilder imported for future full template migration
-// import { WizardTemplateBuilder } from '../config/wizardTemplates.js';
+import {
+  validateCustomFormat,
+  type IndicatorConfig
+} from '../config/indicator-config.js';
+import {
+  AgentSkillConverter,
+  type SkillConversionOptions,
+} from '../converters/AgentSkillConverter.js';
 import * as yaml from 'js-yaml';
+
+/** Valid indicator style values */
+const VALID_INDICATOR_STYLES = ['full', 'minimal', 'compact', 'custom'] as const;
+
+/** Valid bracket style values */
+const VALID_BRACKET_STYLES = ['square', 'round', 'curly', 'angle', 'none'] as const;
+
+/** Mapping from dot-notation paths to IndicatorConfig property names */
+const INDICATOR_PATH_MAP: Record<string, keyof IndicatorConfig> = {
+  'display.indicator.enabled': 'enabled',
+  'display.indicator.style': 'style',
+  'display.indicator.customFormat': 'customFormat',
+  'display.indicator.showEmoji': 'showEmoji',
+  'display.indicator.showName': 'showName',
+  'display.indicator.showVersion': 'showVersion',
+  'display.indicator.showAuthor': 'showAuthor',
+  'display.indicator.showCategory': 'showCategory',
+  'display.indicator.separator': 'separator',
+  'display.indicator.emoji': 'emoji',
+  'display.indicator.bracketStyle': 'bracketStyle',
+};
 
 export interface ConfigOperationOptions {
   action: 'get' | 'set' | 'reset' | 'export' | 'import' | 'wizard';
@@ -28,11 +57,24 @@ export interface ConfigOperationOptions {
   data?: string;
 }
 
+export type SkillFormatConversionOptions = SkillConversionOptions;
+
 export class ConfigHandler {
-  private configManager: ConfigManager;
-  
-  constructor() {
-    this.configManager = ConfigManager.getInstance();
+  constructor(
+    private readonly configManager: ConfigManager,
+    private readonly initService: InitializationService,
+    private readonly indicatorService: PersonaIndicatorService,
+    private readonly agentSkillConverter: AgentSkillConverter = new AgentSkillConverter()
+  ) {}
+
+  /**
+   * Convert between current Agent Skill and Dollhouse Skill formats.
+   *
+   * This operation is pure/in-memory: it does not read or write files.
+   * Use `roundtrip_state` for lossless reverse conversion of supported fields.
+   */
+  async convertSkillFormat(options: SkillFormatConversionOptions) {
+    return this.agentSkillConverter.convert(options);
   }
   
   /**
@@ -45,15 +87,17 @@ export class ConfigHandler {
    * @param options.section - Optional section for filtering
    * @param options.format - Optional format for export (yaml or json)
    * @param options.data - Optional data for import operations
-   * @param indicator - Optional indicator string for persona context
    * @returns Promise resolving to content object with operation result
    * @async
    * 
    * @note The wizard action is async and will await the handleWizard method
    * @since v1.4.0 - handleWizard made async for better config fetching
    */
-  async handleConfigOperation(options: ConfigOperationOptions, indicator: string = '') {
+  async handleConfigOperation(options: ConfigOperationOptions) {
+    const indicator = this.indicatorService.getPersonaIndicator();
+    
     try {
+      await this.initService.ensureInitialized();
       await this.configManager.initialize();
       
       switch (options.action) {
@@ -169,6 +213,11 @@ export class ConfigHandler {
     // Handle source_priority settings
     if (options.setting.startsWith('source_priority') || options.setting.startsWith('source.priority')) {
       return await this.handleSourcePrioritySet(options, indicator);
+    }
+
+    // Handle display.indicator.* settings with validation and runtime update
+    if (options.setting.startsWith('display.indicator.')) {
+      return await this.handleIndicatorSet(options, indicator);
     }
 
     // Type coercion for common string-to-type conversions
@@ -590,5 +639,143 @@ To change settings, use:
         }]
       };
     }
+  }
+
+  /**
+   * Handle setting indicator configuration with validation and immediate runtime update.
+   *
+   * This method provides unified immediate+persistent behavior:
+   * 1. Validates the value against allowed options
+   * 2. Saves to persistent config file
+   * 3. Updates runtime PersonaIndicatorService for immediate effect
+   *
+   * @param options - Configuration options with setting path and value
+   * @param indicator - Current indicator prefix for output formatting
+   * @returns Promise with operation result
+   */
+  private async handleIndicatorSet(options: ConfigOperationOptions, indicator: string) {
+    const setting = options.setting!;
+    let value = options.value;
+
+    // Get the indicator property name from the path
+    const indicatorProp = INDICATOR_PATH_MAP[setting];
+    if (!indicatorProp) {
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ **Unknown Indicator Setting**\n\n` +
+                `Unknown setting: ${setting}\n\n` +
+                `Valid indicator settings:\n` +
+                Object.keys(INDICATOR_PATH_MAP).map(p => `- ${p}`).join('\n')
+        }]
+      };
+    }
+
+    // Type coercion for booleans
+    if (typeof value === 'string') {
+      const lowerValue = value.toLowerCase();
+      if (lowerValue === 'true') value = true;
+      else if (lowerValue === 'false') value = false;
+    }
+
+    // Validate based on the property type
+    const validationError = this.validateIndicatorValue(indicatorProp, value);
+    if (validationError) {
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ **Invalid Value**\n\n${validationError}`
+        }]
+      };
+    }
+
+    try {
+      // 1. Save to persistent config
+      await this.configManager.updateSetting(setting, value);
+
+      // 2. Update runtime indicator service for immediate effect
+      const currentConfig = this.indicatorService.getConfig();
+      const updatedConfig: IndicatorConfig = {
+        ...currentConfig,
+        [indicatorProp]: value
+      };
+      this.indicatorService.updateConfig(updatedConfig);
+
+      // Get the new indicator to show the effect
+      const newIndicator = this.indicatorService.getPersonaIndicator();
+
+      return {
+        content: [{
+          type: "text",
+          text: `${newIndicator}✅ **Indicator Configuration Updated**\n\n` +
+                `**${setting}** set to: ${JSON.stringify(value)}\n\n` +
+                `Changes are saved and take effect immediately.\n` +
+                `Current indicator: ${newIndicator || '(disabled)'}`
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ **Configuration Update Failed**\n\n` +
+                `Error: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  /**
+   * Validate an indicator configuration value based on its property type.
+   *
+   * @param prop - The IndicatorConfig property name
+   * @param value - The value to validate
+   * @returns Error message if invalid, undefined if valid
+   */
+  private validateIndicatorValue(prop: keyof IndicatorConfig, value: unknown): string | undefined {
+    switch (prop) {
+      case 'enabled':
+      case 'showEmoji':
+      case 'showName':
+      case 'showVersion':
+      case 'showAuthor':
+      case 'showCategory':
+        if (typeof value !== 'boolean') {
+          return `Setting '${prop}' requires a boolean value (true or false).\nReceived: ${JSON.stringify(value)}`;
+        }
+        break;
+
+      case 'style':
+        if (!VALID_INDICATOR_STYLES.includes(value as typeof VALID_INDICATOR_STYLES[number])) {
+          return `Invalid style '${value}'.\nValid styles: ${VALID_INDICATOR_STYLES.join(', ')}`;
+        }
+        break;
+
+      case 'bracketStyle':
+        if (!VALID_BRACKET_STYLES.includes(value as typeof VALID_BRACKET_STYLES[number])) {
+          return `Invalid bracket style '${value}'.\nValid styles: ${VALID_BRACKET_STYLES.join(', ')}`;
+        }
+        break;
+
+      case 'customFormat': {
+        if (typeof value !== 'string') {
+          return `Custom format must be a string.\nReceived: ${typeof value}`;
+        }
+        const formatValidation = validateCustomFormat(value);
+        if (!formatValidation.valid) {
+          return formatValidation.error;
+        }
+        break;
+      }
+
+      case 'emoji':
+      case 'separator':
+        if (typeof value !== 'string') {
+          return `Setting '${prop}' must be a string.\nReceived: ${typeof value}`;
+        }
+        break;
+    }
+
+    return undefined;
   }
 }

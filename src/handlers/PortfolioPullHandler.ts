@@ -16,8 +16,8 @@ import { PortfolioSyncComparer, SyncMode, SyncAction } from '../sync/PortfolioSy
 import { PortfolioDownloader } from '../sync/PortfolioDownloader.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
-import * as fs from 'fs/promises';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { TokenManager } from '../security/tokenManager.js';
 import * as path from 'path';
 
 export interface PullOptions {
@@ -35,6 +35,17 @@ export interface PullResult {
   }>;
 }
 
+export interface PortfolioPullHandlerDependencies {
+  portfolioRepoManager: PortfolioRepoManager;
+  githubIndexer: GitHubPortfolioIndexer;
+  portfolioManager: PortfolioManager;
+  indexManager: PortfolioIndexManager;
+  syncComparer: PortfolioSyncComparer;
+  downloader: PortfolioDownloader;
+  fileOperations: IFileOperationsService;
+  tokenManager: TokenManager;
+}
+
 export class PortfolioPullHandler {
   private portfolioRepoManager: PortfolioRepoManager;
   private githubIndexer: GitHubPortfolioIndexer;
@@ -42,14 +53,28 @@ export class PortfolioPullHandler {
   private indexManager: PortfolioIndexManager;
   private syncComparer: PortfolioSyncComparer;
   private downloader: PortfolioDownloader;
+  private readonly fileOperations: IFileOperationsService;
+  private readonly tokenManager: TokenManager;
 
-  constructor() {
-    this.portfolioRepoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-    this.githubIndexer = GitHubPortfolioIndexer.getInstance();
-    this.portfolioManager = PortfolioManager.getInstance();
-    this.indexManager = PortfolioIndexManager.getInstance();
-    this.syncComparer = new PortfolioSyncComparer();
-    this.downloader = new PortfolioDownloader();
+  constructor(dependencies: PortfolioPullHandlerDependencies) {
+    if (!dependencies.portfolioManager) {
+      throw new Error('PortfolioPullHandler requires a PortfolioManager instance');
+    }
+    if (!dependencies.githubIndexer) {
+      throw new Error('PortfolioPullHandler requires a GitHubPortfolioIndexer instance');
+    }
+    if (!dependencies.indexManager) {
+      throw new Error('PortfolioPullHandler requires a PortfolioIndexManager instance');
+    }
+
+    this.portfolioRepoManager = dependencies.portfolioRepoManager;
+    this.githubIndexer = dependencies.githubIndexer;
+    this.portfolioManager = dependencies.portfolioManager;
+    this.indexManager = dependencies.indexManager;
+    this.syncComparer = dependencies.syncComparer;
+    this.downloader = dependencies.downloader;
+    this.fileOperations = dependencies.fileOperations;
+    this.tokenManager = dependencies.tokenManager;
   }
 
   /**
@@ -58,7 +83,10 @@ export class PortfolioPullHandler {
   async executePull(options: PullOptions, personaIndicator: string): Promise<PullResult> {
     try {
       logger.info('Starting portfolio pull operation', { options });
-      
+
+      // Step 0: Ensure portfolio directory structure exists
+      await this.portfolioManager.initialize();
+
       // Step 1: Validate sync mode
       const syncMode = this.validateSyncMode(options.mode);
       
@@ -344,9 +372,9 @@ export class PortfolioPullHandler {
     username: string,
     repository: string
   ): Promise<void> {
-    // Set up the repo manager with the correct context
-    this.portfolioRepoManager.setToken(await this.getGitHubToken());
-    
+    // NOTE: Token should already be set on portfolioRepoManager (passed as dependency)
+    // Don't re-fetch token here - it breaks dependency injection and test environments
+
     // SECURITY: Log the download operation for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'PORTFOLIO_FETCH_SUCCESS',
@@ -367,9 +395,15 @@ export class PortfolioPullHandler {
     const elementDir = this.portfolioManager.getElementDir(action.type);
     const fileName = path.basename(action.path);
     const filePath = path.join(elementDir, fileName);
-    
-    await fs.writeFile(filePath, elementData.content, 'utf-8');
-    
+
+    // Ensure parent directory exists before writing (defensive check)
+    await this.fileOperations.createDirectory(elementDir);
+
+    await this.fileOperations.writeFile(filePath, elementData.content, {
+      encoding: 'utf-8',
+      source: 'PortfolioPullHandler.downloadAndSaveElement'
+    });
+
     // SECURITY: Log successful save for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_CREATED',
@@ -399,32 +433,25 @@ export class PortfolioPullHandler {
       details: `Attempting to delete: ${action.type}/${fileName}`
     });
     
-    try {
-      await fs.unlink(filePath);
-      // PERFORMANCE: Skip individual index rebuild - will batch rebuild after all operations
-      
-      // SECURITY: Log successful deletion
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_DELETED',
-        severity: 'MEDIUM',
-        source: 'PortfolioPullHandler.deleteLocalElement',
-        details: `Successfully deleted: ${action.type}/${fileName}`
-      });
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-      // File already doesn't exist, that's fine
-    }
+    await this.fileOperations.deleteFile(filePath, action.type, {
+      source: 'PortfolioPullHandler.deleteLocalElement'
+    });
+    // PERFORMANCE: Skip individual index rebuild - will batch rebuild after all operations
+
+    // SECURITY: Log successful deletion
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DELETED',
+      severity: 'MEDIUM',
+      source: 'PortfolioPullHandler.deleteLocalElement',
+      details: `Successfully deleted: ${action.type}/${fileName}`
+    });
   }
 
   /**
    * Get GitHub token from auth manager
    */
   private async getGitHubToken(): Promise<string> {
-    // This should use the same token management as the rest of the system
-    const { TokenManager } = await import('../security/tokenManager.js');
-    const token = await TokenManager.getGitHubTokenAsync();
+    const token = await this.tokenManager.getGitHubTokenAsync();
     if (!token) {
       throw new Error('GitHub authentication required. Please run setup_github_auth first.');
     }

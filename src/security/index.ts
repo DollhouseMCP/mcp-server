@@ -11,5 +11,6 @@ export * from './pathValidator.js';
 export * from './yamlValidator.js';
 export * from './fileLockManager.js';
 export * from './encryption/index.js';
+export * from './DangerZoneEnforcer.js';
 // Export security functionality when ready
 // export * from './RateLimiter.js';

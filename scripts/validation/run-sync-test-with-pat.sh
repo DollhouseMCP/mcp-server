@@ -16,7 +16,7 @@ fi
 docker run --rm -i \
   --env-file docker/test-environment.env \
   -e GITHUB_TOKEN=$PAT \
-  -e TEST_GITHUB_USER=mickdarling \
+  -e TEST_GITHUB_USER=${TEST_GITHUB_USER:-test-user} \
   -e TEST_GITHUB_REPO=dollhouse-test-portfolio \
   claude-mcp-test-env:develop \
   node /app/dist/index.js << 'ENDTEST'

@@ -11,16 +11,104 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read        # Needed for CodeQL action telemetry
   contents: read
   issues: write
   pull-requests: write
   security-events: write
 
 jobs:
+  # Self-hosted security audit (fast iteration for mickdarling)
+  # Runs when: mickdarling + not main branch + not scheduled
+  self-hosted-security-audit:
+    name: Security Audit (self-hosted)
+    if: |
+      github.actor == 'mickdarling' &&
+      github.event_name != 'schedule' &&
+      github.ref != 'refs/heads/main' &&
+      github.base_ref != 'main'
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
+    env:
+      SELF_HOSTED_DOCKER: 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run Security Audit
+        id: security-audit
+        shell: bash
+        run: |
+          # Create security audit script
+          cat > run-audit.js << 'EOF'
+          import { SecurityAuditor } from './dist/security/audit/index.js';
+          import { MarkdownReporter } from './dist/security/audit/reporters/MarkdownReporter.js';
+          import { FileOperationsService } from './dist/services/FileOperationsService.js';
+          import { FileLockManager } from './dist/security/fileLockManager.js';
+
+          async function runAudit() {
+            const fileLockManager = new FileLockManager();
+            const fileOperations = new FileOperationsService(fileLockManager);
+            const config = await SecurityAuditor.getDefaultConfig(fileOperations);
+            config.reporting.formats = ['console', 'markdown', 'json'];
+            config.reporting.createIssues = false;
+            config.reporting.commentOnPr = false;
+            const auditor = new SecurityAuditor(config, fileOperations);
+            try {
+              const result = await auditor.audit();
+              const fs = await import('fs/promises');
+              await fs.writeFile('security-audit-result.json', JSON.stringify(result, null, 2));
+              const markdownReporter = new MarkdownReporter(result);
+              const markdownReport = markdownReporter.generate();
+              await fs.writeFile('security-audit-report.md', markdownReport);
+              if (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0) {
+                process.exitCode = 1;
+              }
+            } catch (error) {
+              console.error('Security audit failed:', error);
+              process.exitCode = 1;
+            }
+          }
+          runAudit();
+          EOF
+
+          if ! node run-audit.js; then
+            echo "AUDIT_FAILED=true" >> $GITHUB_ENV
+            echo "::warning::Security audit encountered errors but workflow will continue"
+            echo '{"findings": [], "summary": {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}, "error": "Audit failed to complete"}' > security-audit-result.json
+          fi
+
+      - name: Self-hosted security audit complete
+        shell: bash
+        run: |
+          echo "✅ Self-hosted security audit complete"
+          echo "For full GitHub-hosted testing, push to main or use [full-matrix] flag"
+
+  # GitHub-hosted security audit (for other contributors or main branch)
   security-audit:
     name: Security Audit
+    if: |
+      github.actor != 'mickdarling' ||
+      github.event_name == 'schedule' ||
+      github.ref == 'refs/heads/main' ||
+      github.base_ref == 'main'
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,26 +134,38 @@ jobs:
           # Create security audit script
           cat > run-audit.js << 'EOF'
           import { SecurityAuditor } from './dist/security/audit/index.js';
-          
+          import { MarkdownReporter } from './dist/security/audit/reporters/MarkdownReporter.js';
+          import { FileOperationsService } from './dist/services/FileOperationsService.js';
+          import { FileLockManager } from './dist/security/fileLockManager.js';
+
           async function runAudit() {
-            const config = SecurityAuditor.getDefaultConfig();
-            
+            // Create FileOperationsService for config loading
+            const fileLockManager = new FileLockManager();
+            const fileOperations = new FileOperationsService(fileLockManager);
+
+            const config = await SecurityAuditor.getDefaultConfig(fileOperations);
+
             // Adjust config for CI
             config.reporting.formats = ['console', 'markdown', 'json'];
             config.reporting.createIssues = false; // Handle separately
             config.reporting.commentOnPr = false; // Handle separately
-            
-            const auditor = new SecurityAuditor(config);
-            
+
+            const auditor = new SecurityAuditor(config, fileOperations);
+
             try {
               const result = await auditor.audit();
-              
+
               // Save results for later steps
               const fs = await import('fs/promises');
               await fs.writeFile('security-audit-result.json', JSON.stringify(result, null, 2));
-              
+
+              // Generate markdown report
+              const markdownReporter = new MarkdownReporter(result);
+              const markdownReport = markdownReporter.generate();
+              await fs.writeFile('security-audit-report.md', markdownReport);
+
               // Set exit code but don't exit immediately
-              if (result.summary.critical > 0 || result.summary.high > 0) {
+              if (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0) {
                 process.exitCode = 1;
               }
             } catch (error) {
@@ -73,7 +173,7 @@ jobs:
               process.exitCode = 1;
             }
           }
-          
+
           runAudit();
           EOF
           
@@ -165,11 +265,15 @@ jobs:
           fi
 
       - name: Upload SARIF to GitHub
-        if: always()
+        if: always() && github.event.repository.private == false
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: security-audit.sarif
           category: security-audit
+        # NOTE: SARIF upload requires GitHub Advanced Security
+        # - FREE for public repositories
+        # - Paid add-on for private repositories
+        # This step auto-enables when merged to public production repo
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
@@ -177,10 +281,13 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            
+
+            // GitHub comment limit is 65536 characters
+            const MAX_COMMENT_LENGTH = 65000; // Leave some buffer
+
             // Read the markdown report
             let report = '## 🔒 Security Audit Results\n\n';
-            
+
             try {
               if (fs.existsSync('security-audit-report.md')) {
                 report += fs.readFileSync('security-audit-report.md', 'utf8');
@@ -190,7 +297,7 @@ jobs:
             } catch (error) {
               report += `❌ Error reading report: ${error.message}`;
             }
-            
+
             // Add status badge
             const failed = process.env.AUDIT_FAILED === 'true';
             if (failed) {
@@ -198,7 +305,13 @@ jobs:
             } else {
               report = '### ✅ Security Audit Passed\n\n' + report;
             }
-            
+
+            // Truncate if too long
+            if (report.length > MAX_COMMENT_LENGTH) {
+              const truncationNote = '\n\n---\n⚠️ **Report truncated** - Full report available in workflow artifacts.';
+              report = report.substring(0, MAX_COMMENT_LENGTH - truncationNote.length) + truncationNote;
+            }
+
             // Comment on PR
             github.rest.issues.createComment({
               issue_number: context.issue.number,

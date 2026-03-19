@@ -208,7 +208,7 @@ browse_collection type="personas"
 search_collection query="python" type="skills"
 ```
 
-> **📘 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
+> **📘 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/roundtrip-workflow-user-guide.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
 
 ## ✨ Key Features
 
@@ -257,18 +257,18 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 
 ### Need Help?
 
-- 📖 [Full Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+- 📖 [Full Troubleshooting Guide](docs/guides/troubleshooting.md)
 - 💬 [GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)
 - 💭 [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 
 ## 📚 Resources
 
 ### Documentation
-- [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md)
-- [Portfolio Setup Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md)
-- [Element Detection Guide](docs/guides/ELEMENT_DETECTION_GUIDE.md)
-- [PersonaTools Migration Guide](docs/PERSONATOOLS_MIGRATION_GUIDE.md)
-- [API Documentation](docs/API.md)
+- [Roundtrip Workflow Guide](docs/guides/roundtrip-workflow-user-guide.md)
+- [Portfolio Setup Guide](docs/guides/portfolio-setup-guide.md)
+- [Element Detection Guide](docs/guides/element-detection-guide.md)
+- [PersonaTools Migration Guide](docs/archive/migrations/personatools-migration-guide.md)
+- [API Documentation](docs/reference/api-reference.md)
 
 ### Community
 - [GitHub Repository](https://github.com/DollhouseMCP/mcp-server)
@@ -277,8 +277,9 @@ Your portfolio lives in `~/.dollhouse/portfolio/` with elements organized by typ
 - [Discord Community](https://discord.gg/dollhousemcp) (coming soon)
 
 ### Development
-- [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
+- [Contributing Quick Start](CONTRIBUTING.md)
+- [Contributor Reference](docs/contributing.md)
+- [Security Policy](docs/security/documentation-guide.md)
 - [Full Changelog](CHANGELOG.md)
 
 ## 📄 License

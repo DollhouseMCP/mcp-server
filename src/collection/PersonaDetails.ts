@@ -2,7 +2,7 @@
  * Get content details from collection
  */
 
-import matter from 'gray-matter';
+
 import { GitHubClient } from './GitHubClient.js';
 import { PersonaMetadata } from '../types/persona.js';
 import { ContentValidator } from '../security/contentValidator.js';

@@ -10,7 +10,6 @@
  * - Bulk operations with configuration checks
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { logger } from '../utils/logger.js';
@@ -18,14 +17,13 @@ import { ConfigManager, DollhouseConfig } from '../config/ConfigManager.js';
 import { PortfolioManager } from './PortfolioManager.js';
 import { PortfolioRepoManager } from './PortfolioRepoManager.js';
 import { GitHubPortfolioIndexer, GitHubIndexEntry } from './GitHubPortfolioIndexer.js';
-import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 import { TokenManager } from '../security/tokenManager.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ElementType } from './types.js';
-import { IElement, ElementStatus } from '../types/elements/IElement.js';
 import { PortfolioElementAdapter } from '../tools/portfolio/PortfolioElementAdapter.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export interface SyncOperation {
   operation: 'download' | 'upload' | 'compare' | 'list-remote';
@@ -91,17 +89,30 @@ export interface ElementDiff {
   };
 }
 
+export interface PortfolioSyncManagerDependencies {
+  configManager: ConfigManager;
+  portfolioManager: PortfolioManager;
+  portfolioRepoManager: PortfolioRepoManager;
+  indexer: GitHubPortfolioIndexer;
+  fileOperations: IFileOperationsService;
+  tokenManager: TokenManager;
+}
+
 export class PortfolioSyncManager {
   private configManager: ConfigManager;
   private portfolioManager: PortfolioManager;
   private repoManager: PortfolioRepoManager;
   private indexer: GitHubPortfolioIndexer;
-  
-  constructor() {
-    this.configManager = ConfigManager.getInstance();
-    this.portfolioManager = PortfolioManager.getInstance();
-    this.repoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-    this.indexer = GitHubPortfolioIndexer.getInstance();
+  private fileOperations: IFileOperationsService;
+  private tokenManager: TokenManager;
+
+  constructor(dependencies: PortfolioSyncManagerDependencies) {
+    this.configManager = dependencies.configManager;
+    this.portfolioManager = dependencies.portfolioManager;
+    this.repoManager = dependencies.portfolioRepoManager;
+    this.indexer = dependencies.indexer;
+    this.fileOperations = dependencies.fileOperations;
+    this.tokenManager = dependencies.tokenManager;
   }
   
   /**
@@ -227,7 +238,7 @@ export class PortfolioSyncManager {
   private async listRemoteElements(filterType?: ElementType): Promise<SyncResult> {
     try {
       // Get GitHub token
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (!token) {
         return {
           success: false,
@@ -304,7 +315,7 @@ export class PortfolioSyncManager {
       }
       
       // Get token and set it
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (!token) {
         return {
           success: false,
@@ -355,7 +366,7 @@ export class PortfolioSyncManager {
       let localContent: string | null = null;
       
       try {
-        localContent = await fs.readFile(localPath, 'utf-8');
+        localContent = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.downloadElement' });
         hasLocalVersion = true;
       } catch {
         // No local version exists
@@ -399,18 +410,32 @@ export class PortfolioSyncManager {
         // Show confirmation for overwrite unless force flag is set
         if (config.sync.individual.require_confirmation && !force) {
           const diff = await this.generateDiff(localContent, remoteContent);
-          
+          const conflictInfo = await this.buildConflictInfo(
+            elementName,
+            elementType,
+            localPath,
+            localContent,
+            entry
+          );
+
+          logger.warn('Sync conflict detected', {
+            element: elementName,
+            type: elementType,
+            conflict: conflictInfo
+          });
+
           return {
             success: false,
             message: `Local version exists. Please confirm download will overwrite:\n\n${diff}\n\nTo proceed, use --force flag`,
-            data: { requiresConfirmation: true }
+            data: { requiresConfirmation: true },
+            conflicts: [conflictInfo]
           };
         }
       }
       
       // Save the element
-      await fs.mkdir(path.dirname(localPath), { recursive: true });
-      await fs.writeFile(localPath, remoteContent, 'utf-8');
+      await this.fileOperations.createDirectory(path.dirname(localPath));
+      await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
       
       logger.info('Element downloaded from GitHub', {
         element: elementName,
@@ -447,7 +472,7 @@ export class PortfolioSyncManager {
       
       let content: string;
       try {
-        content = await fs.readFile(localPath, 'utf-8');
+        content = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.uploadElement' });
       } catch {
         return {
           success: false,
@@ -510,7 +535,7 @@ export class PortfolioSyncManager {
       }
       
       // Get token and validate
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (!token) {
         return {
           success: false,
@@ -598,13 +623,13 @@ export class PortfolioSyncManager {
       let localVersion: VersionInfo | null = null;
       
       try {
-        localContent = await fs.readFile(localPath, 'utf-8');
+        localContent = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.compareVersions' });
         const parsed = SecureYamlParser.parse(localContent, {
           maxYamlSize: 64 * 1024,
           validateContent: false,
           validateFields: false
         });
-        
+
         localVersion = {
           version: parsed.data?.version || '1.0.0',
           timestamp: new Date(parsed.data?.updated || parsed.data?.created || Date.now()),
@@ -618,7 +643,7 @@ export class PortfolioSyncManager {
       }
       
       // Get remote version
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (!token) {
         return {
           success: false,
@@ -803,7 +828,7 @@ export class PortfolioSyncManager {
     for (const type of types) {
       const dir = this.portfolioManager.getElementDir(type);
       try {
-        const files = await fs.readdir(dir);
+        const files = await this.fileOperations.listDirectory(dir);
         for (const file of files) {
           if (file.endsWith('.md')) {
             localElements.push({
@@ -813,7 +838,7 @@ export class PortfolioSyncManager {
             });
           }
         }
-      } catch (error) {
+      } catch {
         // Directory may not exist yet
         logger.debug(`Directory for ${type} does not exist yet`);
       }
@@ -919,6 +944,52 @@ export class PortfolioSyncManager {
     }
     
     return diff || 'No differences found';
+  }
+
+  /**
+   * Build conflict metadata for UX/logging
+   */
+  private async buildConflictInfo(
+    elementName: string,
+    elementType: ElementType,
+    localPath: string,
+    localContent: string,
+    remoteEntry: GitHubIndexEntry
+  ): Promise<ConflictInfo> {
+    const localMeta = this.extractMetadata(localContent);
+    let localModified = new Date();
+    try {
+      const stats = await this.fileOperations.stat(localPath);
+      localModified = stats.mtime;
+    } catch {
+      // Ignore - use current date fallback
+    }
+
+    const remoteModified = remoteEntry.lastModified ? new Date(remoteEntry.lastModified) : new Date();
+
+    return {
+      element: elementName,
+      type: elementType,
+      localVersion: localMeta.version ?? 'unknown',
+      remoteVersion: remoteEntry.version ?? 'unknown',
+      localModified,
+      remoteModified
+    };
+  }
+
+  private extractMetadata(content: string): { version?: string } {
+    try {
+      const parsed = SecureYamlParser.parse(content, {
+        maxYamlSize: 64 * 1024,
+        validateContent: false,
+        validateFields: false
+      });
+      return {
+        version: parsed.data?.version
+      };
+    } catch {
+      return {};
+    }
   }
   
   /**

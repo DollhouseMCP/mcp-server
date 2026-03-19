@@ -61,8 +61,6 @@ export interface SlowQuery {
 }
 
 export class PerformanceMonitor {
-  private static instance: PerformanceMonitor | null = null;
-
   private searchMetrics: SearchMetrics[] = [];
   private slowQueries: SlowQuery[] = [];
   private memorySnapshots: MemoryUsage[] = [];
@@ -78,16 +76,14 @@ export class PerformanceMonitor {
   private memoryMonitorInterval?: NodeJS.Timeout;
   private isMonitoring = false;
 
-  private constructor() {
-    this.startMemoryMonitoring();
+  private logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
+
+  addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
   }
 
-  public static getInstance(): PerformanceMonitor {
-    if (!this.instance) {
-      this.instance = new PerformanceMonitor();
-    }
-    return this.instance;
-  }
+  constructor() {}
 
   /**
    * Start performance monitoring
@@ -121,6 +117,14 @@ export class PerformanceMonitor {
   }
 
   /**
+   * Dispose monitoring state and timers.
+   */
+  dispose(): void {
+    this.stopMonitoring();
+    this.reset();
+  }
+
+  /**
    * Record search performance metrics
    */
   recordSearch(metrics: SearchMetrics): void {
@@ -136,6 +140,12 @@ export class PerformanceMonitor {
     };
 
     this.searchMetrics.push(normalizedMetrics);
+    this.logListener?.('debug', 'Record search', {
+      query: normalizedMetrics.query.substring(0, 50),
+      duration: normalizedMetrics.duration,
+      resultCount: normalizedMetrics.resultCount,
+      cacheHit: normalizedMetrics.cacheHit,
+    });
 
     // Check if it's a slow query (use normalized metrics)
     if (normalizedMetrics.duration > this.slowQueryThreshold) {
@@ -153,6 +163,15 @@ export class PerformanceMonitor {
     // Trim history if needed
     if (this.searchMetrics.length > this.maxMetricsHistory) {
       this.searchMetrics = this.searchMetrics.slice(-this.maxMetricsHistory);
+    }
+
+    // Notify listener about slow queries
+    if (normalizedMetrics.duration > this.slowQueryThreshold) {
+      this.logListener?.('warn', 'Detect slow query', {
+        query: normalizedMetrics.query.substring(0, 50),
+        duration: normalizedMetrics.duration,
+        threshold: this.slowQueryThreshold,
+      });
     }
 
     // Log significant performance events (use normalized metrics)
@@ -179,6 +198,15 @@ export class PerformanceMonitor {
     const normalizedCacheName = validationResult.normalizedContent;
 
     this.cacheMetrics.set(normalizedCacheName, stats);
+
+    // Notify listener about low cache hit rate
+    if (stats.hitRate < 0.5) {
+      this.logListener?.('warn', 'Detect low cache hit rate', {
+        cache: normalizedCacheName,
+        hitRate: stats.hitRate,
+        totalOperations: stats.totalHits + stats.totalMisses,
+      });
+    }
 
     // Log cache performance warnings (use normalized cache name)
     if (stats.hitRate < 0.5) {
@@ -414,6 +442,11 @@ export class PerformanceMonitor {
         }
       }
     }, this.memorySnapshotInterval);
+
+    // Do not keep the Node.js event loop alive solely for monitoring
+    if (typeof this.memoryMonitorInterval.unref === 'function') {
+      this.memoryMonitorInterval.unref();
+    }
   }
 
   private takeMemorySnapshot(): MemoryUsage {

@@ -18,7 +18,8 @@ env:
 jobs:
   build-artifacts:
     name: Validate Build Artifacts
-    runs-on: ubuntu-latest
+    # Use self-hosted for mickdarling (faster), GitHub-hosted for others
+    runs-on: ${{ github.actor == 'mickdarling' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 5
 
     steps:

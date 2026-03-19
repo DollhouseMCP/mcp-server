@@ -1,10 +1,171 @@
 # Changelog
 
+## [Unreleased]
+
+### 🔧 Improvements
+
+- **Fix log directory unbounded growth** (#709)
+  - **BREAKING DEFAULT**: `DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS` default reduced from 90 to **7 days**. Deployments generating high security log volume (e.g. bridge) will no longer accumulate tens of GB over 90 days. Compliance operators who require longer retention must set this env var explicitly.
+  - **Bug fix**: Restart sequence recovery — `FileLogSink` previously reset sequence counters to 0 on every restart, causing new writes to reuse base files and mix data across restart boundaries. The sink now scans the log directory on startup to resume from the highest existing sequence number.
+  - **New**: `DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY` env var (default `100`) — caps the number of rotated files per category, deleting oldest first (date ASC, then sequence ASC).
+  - **New**: `DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES` env var (default `0` = disabled) — caps the total log directory size in bytes, deleting oldest files by mtime. Emits a `stderr` warning when a security log is deleted so operators can investigate.
+  - Cleanup order: age pass → count pass → size pass.
+
+- **Revert `{name}-{type}` Filename Convention** (#514)
+  - Element filenames revert to plain `{name}.ext` — directory structure provides type context
+  - Fixes lookup failures when `metadata.name` (spaces) didn't match identifier (hyphens)
+  - `tryDirectLoad()` and `findByName()` now normalize both sides before comparison
+  - Removed `validateElementFilename()`, `enforceNamingConvention()`, and `naming-validation-config.ts`
+  - 33 bundled seed elements renamed to match new convention
+  - Added `scripts/revert-element-type-suffixes.sh` for opt-in user portfolio migration
+  - Removed `scripts/migrate-element-names.sh` (obsolete forward migration)
+
+## [2.0.0-beta.3] - 2026-02-03
+
+### 🤖 Agentic Loop Phase 2 - Autonomy & Safety
+
+This release completes Phase 2 of the Agentic Loop redesign with autonomy evaluation, safety enforcement, and improved agent state management.
+
+### ✨ Features
+
+- **AutonomyEvaluator Service** (#384)
+  - Programmatic continue/pause decisions based on risk assessment
+  - Configurable safety tiers with glob pattern matching
+  - Risk thresholds for automatic continuation vs. human review
+  - Integration with `record_execution_step` for real-time guidance
+
+- **Autonomy Directive** (#385)
+  - New `autonomyDirective` field in `record_execution_step` response
+  - Returns `continue`, `pause`, or `stop` based on risk evaluation
+  - Includes reasoning and confidence scores for LLM context
+  - Enables agents to self-regulate execution flow
+
+- **DANGER_ZONE Programmatic Enforcement** (#386)
+  - Automatic detection of high-risk operations
+  - Prevents execution of destructive actions without explicit confirmation
+  - Configurable patterns for sensitive file paths and operations
+  - Audit trail for all DANGER_ZONE evaluations
+
+- **Self-Hosted CI Runners** (#413)
+  - Docker-based self-hosted runners for faster CI
+  - Actor-based routing: maintainers use self-hosted, contributors use GitHub-hosted
+  - 3 parallel runners with 4GB memory each
+  - Jest memory optimization (maxWorkers=2 in CI)
+
+### 🔧 Improvements
+
+- **Memory Permanent Retention** (#409, #410)
+  - Memories are now permanent by default (was 30 days)
+  - Removed retention warnings for long-lived memories
+  - Explicit `retentionDays` still supported for temporary memories
+
+- **V2 Agent Auto-Conversion** (#370)
+  - V1 agents automatically convert to V2 format on execution
+  - Seamless migration path without manual updates
+  - Preserves all existing agent functionality
+
+- **String Goal Normalization** (#376)
+  - String goals properly normalize to V2 AgentGoalConfig format
+  - Parameter validation for goal templates
+  - Consistent goal handling across all agent types
+
+- **Configurable Ensemble Limits** (#369)
+  - Ensemble element limits now configurable
+  - Enhanced logging with comprehensive context
+  - Improved audit trails for ensemble operations
+
+### 🐛 Bug Fixes
+
+- **Agent State Persistence** (#385)
+  - Fixed goal state saving to wrong file (V1 vs V2)
+  - Ensures consistent step counting across executions
+  - Proper state preservation between `recordAgentStep` calls
+
+- **Ensemble Element Naming** (#367)
+  - Fixed legacy `name`/`type` to `element_name`/`element_type` migration
+  - Updated test fixtures for consistency
+  - Proper naming in create() method
+
+- **Flaky Parallel Test Fix** (#411, #412)
+  - CI-aware timing thresholds for BuildInfoService tests
+  - Local: 250ms strict threshold for development
+  - CI: 600ms lenient threshold for environment variance
+
+### 📖 Documentation
+
+- **Memory CRUDE Examples** (#397, #398, #407, #408)
+  - Added memory examples to all CRUDE tool descriptions
+  - Complex operation patterns (batch, search, filtering)
+  - Memory relationship naming conventions
+  - Tag taxonomy guidance (`category:value` format)
+
+- **CI-Aware Timing Thresholds** (#412)
+  - New section in testing-strategy.md
+  - `TIMING_DEBUG=true` environment variable for debugging
+  - Best practices for timing-sensitive tests
+
+## [2.0.0-beta.1] - 2026-01-23
+
+### 🚀 Major Release: MCP-AQL & Agentic Loop
+
+This beta release introduces MCP-AQL (Model Context Protocol - Agent Query Language) with CRUDE endpoints, a complete agentic loop implementation, and numerous architectural improvements.
+
+### Breaking Changes
+
+- **Parameter Naming**: Standardized to `element_name` and `element_type` (snake_case)
+- **MCP Interface Mode**: New `MCP_INTERFACE_MODE` environment variable controls tool exposure
+
+### ✨ Features
+
+- **Agentic Loop v2.0 - LLM-First Architecture** (Branch: feature/agentic-loop-redesign) - Complete redesign of agent execution model
+  - **LLM-First Decision-Making**: Semantic decisions (intent, actions, reasoning) now made by host LLM instead of server-side logic
+  - **Advisory Methods**: Server provides programmatic signals (security, constraints, risk, priority) as input to LLM judgment
+  - **Element-Agnostic Activation**: Agents can activate any element type (personas, skills, templates) without hardcoded type handling
+  - **Goal Templates**: Support parameterized goals for flexible agent reuse with variable substitution
+  - **New execute_agent Tool**:
+    - Accepts `name` (string) and `parameters` (object) for goal template rendering
+    - Returns `ExecuteAgentResult` with structured context for LLM processing
+    - Includes goal, activeElements, availableTools, successCriteria, and optional advisory signals
+  - **v2.0 Agent Schema**:
+    - `AgentGoalConfig` - Goal templates with parameters and success criteria
+    - `AgentActivates` - Element activation specifications
+    - `AgentToolConfig` - Tool availability hints
+    - `AgentMetadataV2` - Complete v2.0 metadata structure
+    - `ExecuteAgentResult` - Structured response format
+  - **Refactored Advisory Methods**:
+    - `validateGoalSecurity()` - Returns warnings instead of throwing errors
+    - `assessRisk()` - Exposes numeric risk score (0-100)
+    - `evaluateConstraints()` - Extracted hard constraint checking
+    - `calculatePriorityScore()` - Extracted priority scoring logic
+    - `recordDecision()` - Maintains audit trail (LLM records, not makes decisions)
+  - **Walking Skeleton Implementation**: Phases 1-5 complete (schema, agent definition, advisory methods, core implementation, tool registration)
+  - **Core Principle**: "Semantic work → Host LLM, Programmatic work → MCP Server"
+  - **Example Agent**: `hello-world-agent.md` demonstrates v2.0 schema and capabilities
+  - **No Breaking Changes**: v1.x agents continue to work; v2.0 introduces `llm_driven` framework alongside existing frameworks
+
+  **Migration Path**: v1.x agents used decision frameworks (`eisenhower`, `risk_based`) where server made decisions. v2.0 agents use `llm_driven` framework where host LLM makes all semantic decisions using advisory signals from server.
+
+- **Element Query Services** (Issue #38, PR #46) - Advanced pagination, filtering, and sorting for `list_elements`
+  - **New Parameters**:
+    - `page`, `pageSize` - Pagination controls (default: page 1, 25 items per page, max 100)
+    - `sortBy` - Sort by `name`, `created`, `modified`, `version`, or `retention`
+    - `sortOrder` - Ascending (`asc`) or descending (`desc`)
+    - `nameContains` - Filter by partial name match (case-insensitive)
+    - `tags`, `tagsAny` - Filter by tags (AND/OR logic)
+    - `author` - Filter by author (exact match, case-insensitive)
+    - `createdAfter`, `createdBefore` - Filter by creation date (ISO 8601)
+    - `status` - Filter by element status (`active`, `inactive`, `all`)
+  - **Architecture**: Clean service composition with stateless services
+    - `PaginationService` - Page boundary calculations and metadata
+    - `FilterService` - Multi-criteria filtering with Unicode normalization
+    - `SortService` - Flexible sorting with customizable field extractors
+    - `ElementQueryService` - Orchestrates filter → sort → paginate pipeline
+  - **Backward Compatible**: Legacy callers unchanged, new callers opt-in to query features
+  - **Test Coverage**: 207 new tests (96 FilterService + 41 SortService + 52 PaginationService + 18 integration)
+
 ## [1.9.27] - 2025-12-05
 
 - Version bump
-
-## [Unreleased]
 
 ## [1.9.26] - 2025-11-07
 
@@ -339,6 +500,8 @@
   - The jsdom 27.0.1 update introduced a breaking change with parse5 becoming an ES module
   - Will revisit jsdom 27.0.1 update in future release with proper ES module configuration
 
+---
+
 ## [1.9.21] - 2025-10-23
 
 **Patch Release**: Memory validation system activation and element formatting
@@ -382,12 +545,14 @@ This patch release adds proper lifecycle management:
 - Trust level updates work correctly
 - No performance impact (runs in background outside LLM context)
 
+---
+
 ## [1.9.20] - 2025-10-17
 
 **Fix Release**: MCP Registry Publishing Compatibility
 
 ### Fixed
-- MCP Registry publishing case sensitivity issue (#XXXX)
+- **MCP Registry publishing case sensitivity issue**
   - Corrected `mcpName` field in package.json to match GitHub organization capitalization
   - Changed from `io.github.dollhousemcp/mcp-server` to `io.github.DollhouseMCP/mcp-server`
   - Resolves NPM package validation errors when publishing to MCP Registry
@@ -400,136 +565,122 @@ The MCP Registry performs two case-sensitive validations:
 
 The initial implementation incorrectly used lowercase for `mcpName`, causing a validation mismatch. This patch release corrects the capitalization to match our GitHub organization name.
 
+---
+
 ## [1.9.19] - 2025-10-17
 
 **Comprehensive Release**: 90 commits including security fixes, PostHog telemetry, MCP registry support, and major cleanup
 
 ### Added
-- MCP registry publishing workflow with OIDC authentication (#1367)
+- **MCP registry publishing workflow** with OIDC authentication (#1367)
   - Automated publishing to registry.modelcontextprotocol.io
   - GitHub Actions workflow with manual dry-run mode
   - Comprehensive test suite for workflow validation (50+ tests)
   - Pinned mcp-publisher CLI to v1.3.3 for reproducibility
-- PostHog remote telemetry integration (#1357, #1361)
+
+- **PostHog remote telemetry integration** (#1357, #1361)
   - Opt-in remote analytics with DOLLHOUSE_TELEMETRY_OPTIN=true
   - Usage patterns and error tracking
   - Privacy-focused with explicit consent
-- MCP Resources support for capability index (#1360)
+
+- **MCP Resources support for capability index** (#1360)
   - Future-proof architecture (disabled by default)
   - Ready for MCP protocol evolution
-- Dual licensing model with commercial option (#1350)
+  - Provides summary and full capability index variants
+
+- **Dual licensing model** with commercial option (#1350)
   - AGPL-3.0 with platform stability commitments
   - Commercial licensing pathway
-- Minimal installation telemetry (#1359)
+
+- **Minimal installation telemetry** (#1359)
   - Operational metrics for v1.9.19
   - Installation success tracking
-- Security telemetry tracking for blocked attacks (#1313)
-- Automated release issue verification system (#1249)
-- Orphaned issues checker for systematic cleanup (#1251)
-- Personal development notes directory (#1275)
+
+- **Security telemetry** tracking for blocked attacks (#1313)
+- **Automated release issue verification** system (#1249)
+- **Orphaned issues checker** for systematic cleanup (#1251)
+- **Personal development notes directory** (#1275)
 
 ### Security
-- Phase 1: Background validation for memory security (#1316, #1320, #1322)
-- Phase 2: AES-256-GCM pattern encryption (#1323)
-- Fixed symlink path traversal vulnerability (#1290, #1306)
+- **Phase 1: Background validation for memory security** (#1316, #1320, #1322)
+  - Memory trust level system (UNTRUSTED, VALIDATED, TRUSTED, FLAGGED, QUARANTINED)
+  - Background validation service for automatic memory security checks
+  - Pattern extraction and sanitization for dangerous content
+
+- **Phase 2: AES-256-GCM pattern encryption** (#1323)
+  - Pattern encryption with PBKDF2 key derivation
+  - Pattern decryption with LLM context protection
+  - Context tracking using AsyncLocalStorage
+
+- **Fixed symlink path traversal vulnerability** (#1290, #1306)
   - Resolve symlinks before validation
   - Enhanced audit logging
   - Comprehensive path sanitization
-- Fixed command injection in verify-release-issues.js (#1249)
+
+- **Fixed command injection** in verify-release-issues.js (#1249)
   - DMCP-SEC-001: Critical vulnerability patched
   - PATH injection protection with absolute paths
-- Tightened YAML bomb detection threshold from 10:1 to 5:1 (#1305)
-- Fixed multiple security audit issues (3 MEDIUM/LOW severity)
+
+- **Tightened YAML bomb detection** threshold from 10:1 to 5:1 (#1305)
+- **Fixed multiple security audit issues** (3 MEDIUM/LOW severity)
 
 ### Fixed
-- Missing shell: bash declarations in MCP registry workflow
-- OAuth device flow zero-scopes bug (using OIDC instead)
-- Test isolation to prevent resource contention (#1288)
-- GitHub rate limiter test failures (#1285)
-- Recognition of MERGED state in release verification (#1250)
-- Resolved 26+ SonarCloud code quality issues across multiple files
-  - Import/export ordering issues
-  - Cognitive complexity reductions
-  - Security hotspot resolutions
-- Cross-platform workflow compatibility improvements
-- Namespace casing for MCP registry (DollhouseMCP)
+- **Missing shell: bash declarations** in MCP registry workflow
+- **OAuth device flow zero-scopes bug** (using OIDC instead)
+- **Session documentation** restoration (#1082)
+- **Repository cleanup** - removed ignored files from Git tracking (#1287)
+- **Flaky test management** - skip flaky GitHubRateLimiter tests (#1286)
+- **Performance test isolation** (#1288)
 
 ### Changed
-- Improved whitespace detection performance
-- Enhanced path traversal protection mechanisms
-- Skip Claude Code Review for Dependabot PRs (#1241)
-- Refactored CLAUDE.md into modular documentation (#1270)
-- Renamed docs/archive/ to docs/session-history/ (#1277)
-- Added node: prefix for built-in module imports
-- Reduced cognitive complexity in multiple modules
-
-### Dependencies
-- Updated @modelcontextprotocol/sdk from 1.18.0 to 1.20.0
-- Updated jest from 30.0.5 to 30.2.0
-- Updated @types/node from 24.4.0 to 24.7.0
-- Updated typescript from 5.9.2 to 5.9.3
-- Updated multiple dev dependencies
-- Added PostHog SDK for telemetry
-
-### Technical
-- OIDC permissions: id-token:write, contents:read
-- server.json included in NPM package
-- Docker build optimizations and multi-platform support
-- Auto-sync README files on develop push
-- Enhanced test coverage and reliability
-- Improved CI/CD pipeline stability
-
-## [1.9.18] - 2025-10-17
-
-**Feature Release**: PostHog remote telemetry (opt-in), MCP Resources support, and operational telemetry foundation
-
-### Added
-
-- **PostHog Remote Telemetry Integration** (#1357, #1361) - Opt-in remote analytics
-  - **Simple opt-in**: Set `DOLLHOUSE_TELEMETRY_OPTIN=true` to enable remote telemetry
-  - Uses shared PostHog project for community-wide insights
-  - Default PostHog project key embedded (safe to expose - write-only)
-  - Backward compatible with custom `POSTHOG_API_KEY` for enterprise deployments
-  - Multiple control levels:
-    - `DOLLHOUSE_TELEMETRY_OPTIN=true` - Enable remote telemetry
-    - `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Local only, no PostHog
-    - `DOLLHOUSE_TELEMETRY=false` - Disable all telemetry
-  - GDPR compliant - fully opt-in by design
-  - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
-  - Future incentive program planned for community contributors
-
-- **MCP Resources Support** (#1360) - Future-proof implementation of MCP Resources protocol
-  - Three resource variants exposed: summary (~3K tokens), full (~40K tokens), and stats (JSON)
-  - Capability index exposed as MCP resources for intelligent element discovery
-  - **Status**: Non-functional in Claude Code (Oct 2025) - discovery only, not read
-  - **Default**: Disabled for safety - zero overhead when not enabled
-  - Manual attachment works in Claude Desktop and VS Code
-  - Comprehensive user documentation at `docs/configuration/MCP_RESOURCES.md`
-  - Research document at `docs/development/MCP_RESOURCES_SUPPORT_RESEARCH_2025-10-16.md`
-  - Configuration options: `resources.enabled`, `resources.expose[]`, `resources.cache_ttl`
-  - Early adopter advantage - ready when MCP clients implement full resource reading
-
-- **Operational Telemetry Foundation** (#1358, #1359) - Minimal installation tracking
-  - Tracks single installation event on first run (version, OS, Node version, MCP client)
-  - Local-only logging to `~/.dollhouse/telemetry.log` by default
-  - Simple opt-out via `DOLLHOUSE_TELEMETRY=false` environment variable
-  - Privacy-first design: no PII, no behavioral data, no user content
-  - Anonymous UUID generated locally for installation identification
-  - Graceful error handling (never crashes if files can't be written)
-  - Zero performance impact when opted out
-
-### Documentation
-
-- Added comprehensive telemetry incentive strategy guide
-- Updated privacy policy with PostHog opt-in details
-- Added session notes for telemetry implementation
-- Enhanced README with telemetry opt-in section
+- **Documentation structure** - renamed docs/archive/ to docs/session-history/ (#1277)
+- **Docker environment** file documentation enhanced (#1273)
+- **Data directory** documentation added (#1274)
+- **CLAUDE.md** organization improved (#1270)
 
 ### Test Results
+- 2,374 tests passing (includes new security test suite)
+- Comprehensive security test coverage for pattern encryption and validation
+- All memory trust level functionality tested
+- Zero known flaky tests
 
-- 2546 tests passing
-- Test coverage: >96% maintained
-- All CI checks passing across all platforms
+---
+
+## [1.9.18] - 2025-10-10
+
+**Feature Release**: Memory trigger support and documentation improvements
+
+### Added
+- **Memory trigger extraction support** (#1124)
+  - Extract action verb triggers from Memory element descriptions
+  - Enables skill-like discovery for memory elements
+  - Integrated with Enhanced Index system
+
+### Fixed
+- **Memory timestamp handling** (#1206, #1207)
+  - Robust validation for memory timestamp handling
+  - Auto-repair for corrupted memory timestamps on read operations
+  - Handle string timestamps in Memory.getStats() to prevent toISOString errors
+
+- **Memory metadata preservation** (#1196, #1197)
+  - Fixed portfolio sync issues with memory metadata
+  - Ensures metadata integrity during sync operations
+
+- **Enhanced trigger validation logging** (#1139)
+  - Improved logging for Skills and Memories trigger extraction
+  - Better debugging capabilities for trigger validation
+
+### Documentation
+- **Session documentation restoration** (#1082)
+  - Restored lost session documentation files
+  - Preserves development context and decisions
+
+### Chores
+- **Type safety improvements**
+  - Added explicit type annotation to filter parameter in MemoryManager
+  - Enhanced TypeScript strictness
+
+---
 
 ## [1.9.17] - 2025-10-08
 
@@ -574,6 +725,44 @@ Test isolation and repository cleanup patch
 - Total: 2331 tests passing
 - No flaky tests remaining
 - CI/CD: All workflows passing across all platforms
+
+## [1.9.16] - 2025-10-03
+
+Platform-agnostic client documentation and SonarCloud cleanup
+
+### Added
+- **Cross-Platform Client Documentation (#1236)**:
+  - Reworked MCP client setup docs to cover Claude Desktop, Cursor, VS Code MCP Inspector, Apple Shortcuts, and API-only usage
+  - Added toolchain matrices, required configuration snippets, and daily-driver workflows
+  - Documented common environment variables and troubleshooting tips for each platform
+  - Introduced `docs/guides/mcp-client-setup.md` as the canonical reference
+
+- **Developer Workflow Guide (#1235)**:
+  - Documented the incremental issue-handling workflow used during the security cleanup
+  - Added practical examples for triaging, work-in-progress tracking, and review handoffs
+
+- **Session Documentation**:
+  - Captured detailed session notes for the Unicode security fix and SonarCloud remediation runs
+  - Logged the afternoon release checklist for v1.9.16
+
+### Fixed
+- **SonarCloud Reliability Issues (#1232-#1234)**:
+  - Resolved S7758, S7723, and related modernization findings (Array constructor usage, string method upgrades)
+  - Removed temporary SonarCloud utility scripts that were no longer needed
+  - Cleared the remaining MEDIUM severity hotspots flagged in Issue #1181
+
+- **GitHubRateLimiter Test Flake (#1239)**:
+  - Replaced `runAllTimers` with `runOnlyPendingTimers` to avoid over-advancing the internal scheduler
+  - Tests now pass consistently across all Node versions in CI
+
+### Chores
+- Added automated README synchronization on `develop` pushes so the generated docs stay fresh
+- Cleaned lingering development artifacts from the repository root
+
+### Test Results
+- 2,316 tests passing across the main suite
+- No known flaky tests after the timer fix
+- SonarCloud reliability issues reduced to zero open findings
 
 ## [1.9.15] - 2025-10-01
 

@@ -12,6 +12,9 @@ on:
 jobs:
   analyze:
     name: Analyze
+    # Skip CodeQL for private repositories - requires GitHub Advanced Security (paid add-on)
+    # Public repositories get Advanced Security for free, so this will auto-enable when merged to production
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:

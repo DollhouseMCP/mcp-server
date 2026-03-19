@@ -4,10 +4,10 @@
  * is now available through the generic element tools (list_elements, activate_element, etc.)
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import type { PersonaHandler } from '../../handlers/PersonaHandler.js';
 
-export function getPersonaExportImportTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
+export function getPersonaExportImportTools(server: PersonaHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
     // Disabled: export_persona and export_all_personas are not compatible with the current element system
     // These tools may be re-implemented once the element system is fully stabilized

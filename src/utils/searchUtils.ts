@@ -107,6 +107,7 @@ export function validateSearchQuery(query: string, maxLength: number = 1000): bo
   
   // Check for potential injection patterns (basic validation)
   const dangerousPatterns = [
+    // eslint-disable-next-line no-control-regex -- Intentionally checking for control chars for security
     /[\u0000-\u001F\u007F]/,  // NOSONAR - Control characters check for security
     /[<>]/,             // Potential HTML/XML injection
   ];

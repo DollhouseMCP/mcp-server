@@ -2,10 +2,10 @@
  * Collection-related tool definitions and handlers
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import type { CollectionHandler } from '../../handlers/CollectionHandler.js';
 
-export function getCollectionTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
+export function getCollectionTools(server: CollectionHandler): Array<{ tool: ToolDefinition; handler: any }> {
   const tools: Array<{ tool: ToolDefinition; handler: any }> = [
     {
       tool: {

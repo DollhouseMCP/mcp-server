@@ -16,11 +16,12 @@ RUN apt-get update && apt-get install -y \
 # Create app directory
 WORKDIR /app
 
-# Copy everything from current directory (develop branch)
+# Copy package files and local workspace packages
 COPY package*.json ./
 COPY tsconfig.json ./
+COPY packages/ ./packages/
 
-# Install all dependencies (including dev for testing)
+# Install all dependencies (including dev for testing, and local @dollhousemcp/safety)
 RUN npm ci
 
 # Copy source code

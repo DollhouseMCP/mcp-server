@@ -60,6 +60,55 @@ export class ApplicationError extends Error {
 }
 
 /**
+ * Error thrown when an element is not found.
+ *
+ * Used by strategies and handlers when a requested element does not exist.
+ * This error is caught by MCPAQLHandler and converted to a proper failure response.
+ *
+ * @see Issue #275 - Handlers return success=true for missing elements
+ */
+export class ElementNotFoundError extends ApplicationError {
+  public readonly elementType: string;
+  public readonly elementName: string;
+
+  constructor(elementType: string, elementName: string) {
+    super(
+      `${elementType} '${elementName}' not found`,
+      ErrorCategory.USER_ERROR,
+      'ELEMENT_NOT_FOUND',
+      { elementType, elementName }
+    );
+    this.name = 'ElementNotFoundError';
+    this.elementType = elementType;
+    this.elementName = elementName;
+  }
+}
+
+/**
+ * Error thrown when a required parameter is missing.
+ *
+ * Used by handlers when an operation requires a parameter that was not provided.
+ *
+ * @see Issue #275 - Handlers return success=true for missing elements
+ */
+export class MissingParameterError extends ApplicationError {
+  public readonly parameterName: string;
+  public readonly operation: string;
+
+  constructor(parameterName: string, operation: string) {
+    super(
+      `Missing required parameter '${parameterName}' for operation '${operation}'`,
+      ErrorCategory.USER_ERROR,
+      'MISSING_PARAMETER',
+      { parameterName, operation }
+    );
+    this.name = 'MissingParameterError';
+    this.parameterName = parameterName;
+    this.operation = operation;
+  }
+}
+
+/**
  * Utility class for consistent error handling
  */
 export class ErrorHandler {

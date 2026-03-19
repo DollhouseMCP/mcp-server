@@ -43,14 +43,6 @@ schema:
       active_topics: "array"
       completed_topics: "array"
       parked_topics: "array"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.342Z"
-  originalPath: "data/memories/conversation-history.md"
 ---
 # Conversation History Memory
 
@@ -151,3 +143,48 @@ topic_threads:
 ### 1. Session Resumption
 ```
 User returns after 2 days...
+
+Loaded context from previous session:
+- Last topic: API authentication design
+- Decision made: Use JWT with refresh tokens
+- Open question: How to handle token revocation?
+- Action items: 2 pending (implement refresh, add tests)
+
+Continuing where we left off: "About that token revocation question..."
+```
+
+### 2. Reference Tracking
+```
+Earlier in our conversation you mentioned:
+- File: src/api/auth.ts (modified 3 times this session)
+- Pattern: Repository pattern for database access
+- Concern: Performance impact of middleware chain
+
+Relevant to your current question about caching strategies.
+```
+
+### 3. Preference Application
+```
+Applying your preferences:
+- Detail level: Balanced (not too verbose)
+- Code style: TypeScript with explicit types
+- Examples: Practical, real-world focused
+- Format: Headers and bullet points preferred
+```
+
+## Privacy and Data Management
+
+### Data Retention
+- General conversation: 7 days
+- Project context: Until task completion
+- User preferences: Persistent
+- Important decisions (marked): 90 days
+
+### User Controls
+```
+Commands available:
+- "Forget [topic]" - Remove specific topic from memory
+- "What do you remember?" - Show current context summary
+- "Clear session" - Reset conversation context
+- "Mark as important" - Extend retention to 90 days
+```

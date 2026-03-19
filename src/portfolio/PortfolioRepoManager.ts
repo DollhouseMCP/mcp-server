@@ -15,6 +15,8 @@ import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { env } from '../config/env.js';
+import { getElementFileExtension } from './PortfolioManager.js';
 
 export interface PortfolioRepoOptions {
   description?: string;
@@ -25,16 +27,22 @@ export interface PortfolioRepoOptions {
 export class PortfolioRepoManager {
   private static readonly DEFAULT_PORTFOLIO_REPO_NAME = 'dollhouse-portfolio';
   private static readonly DEFAULT_DESCRIPTION = 'My DollhouseMCP element portfolio';
-  private static readonly GITHUB_API_BASE = 'https://api.github.com';
-  
+  public static readonly GITHUB_API_BASE = 'https://api.github.com';
+
   private token: string | null = null;
   private repositoryName: string;
+  private tokenManager: TokenManager;
 
-  constructor(repositoryName?: string) {
-    // Token will be retrieved when needed
+  constructor(tokenManager: TokenManager, repositoryName?: string) {
+    if (!tokenManager) {
+      throw new Error('PortfolioRepoManager requires a TokenManager instance');
+    }
+    this.tokenManager = tokenManager;
     // Support custom repository names or use default
-    this.repositoryName = repositoryName || 
-                         process.env.TEST_GITHUB_REPO || 
+    // NOTE: Using process.env directly here (not cached env.GITHUB_REPOSITORY)
+    // to allow tests to dynamically override the repository name
+    this.repositoryName = repositoryName ||
+                         process.env.GITHUB_REPOSITORY ||
                          PortfolioRepoManager.DEFAULT_PORTFOLIO_REPO_NAME;
   }
 
@@ -60,14 +68,14 @@ export class PortfolioRepoManager {
    */
   private async getTokenAndValidate(): Promise<string> {
     if (!this.token) {
-      this.token = await TokenManager.getGitHubTokenAsync();
+      this.token = await this.tokenManager.getGitHubTokenAsync();
       if (!this.token) {
         throw new Error('GitHub authentication required. Please use setup_github_auth first.');
       }
-      
+
       // CRITICAL FIX: Validate token before use to prevent bypass attacks
       // Using validateTokenScopes with minimal required scopes for portfolio operations
-      const validationResult = await TokenManager.validateTokenScopes(this.token, {
+      const validationResult = await this.tokenManager.validateTokenScopes(this.token, {
         required: ['public_repo'] // Minimum scope needed for portfolio operations
       });
       
@@ -139,7 +147,7 @@ export class PortfolioRepoManager {
         } catch (jsonError) {
           // JSON parsing failed for error response - continue with empty data
           // This can happen if GitHub returns malformed JSON or content-type mismatch
-          if (process.env.DEBUG) {
+          if (env.ENABLE_DEBUG) {
             console.debug('Failed to parse JSON error response:', jsonError);
           }
         }
@@ -196,9 +204,13 @@ export class PortfolioRepoManager {
   async checkPortfolioExists(username: string): Promise<boolean> {
     // MEDIUM FIX: Normalize username to prevent Unicode attacks
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
+
+    // Construct repository path (repositoryName is always just the repo name)
+    const repoPath = `${normalizedUsername}/${this.repositoryName}`;
+
     try {
       const repo = await this.githubRequest(
-        `/repos/${normalizedUsername}/${this.repositoryName}`
+        `/repos/${repoPath}`
       );
       return repo !== null;
     } catch (error) {
@@ -239,10 +251,13 @@ export class PortfolioRepoManager {
     });
 
     // Check if portfolio already exists
+    // Construct repository path (repositoryName is always just the repo name)
+    const repoPath = `${normalizedUsername}/${this.repositoryName}`;
+
     const existingRepo = await this.githubRequest(
-      `/repos/${normalizedUsername}/${this.repositoryName}`
+      `/repos/${repoPath}`
     );
-    
+
     if (existingRepo && existingRepo.html_url) {
       logger.info(`Portfolio already exists for ${normalizedUsername}`);
       return existingRepo.html_url;
@@ -273,7 +288,7 @@ export class PortfolioRepoManager {
         // Re-check for the existing repository and return its URL
         try {
           const existingRepo = await this.githubRequest(
-            `/repos/${normalizedUsername}/${this.repositoryName}`
+            `/repos/${repoPath}`
           );
           if (existingRepo && existingRepo.html_url) {
             return existingRepo.html_url;
@@ -329,8 +344,9 @@ export class PortfolioRepoManager {
 
     // Generate file path based on element type
     // FIX: Don't add 's' - element.type is already plural (e.g., 'personas', 'skills')
+    // Issue #815: Use correct file extension per element type (memories are .yaml, not .md)
     const fileName = PortfolioRepoManager.generateFileName(element.metadata.name);
-    const filePath = `${element.type}/${fileName}.md`;
+    const filePath = `${element.type}/${fileName}${getElementFileExtension(element.type)}`;
 
     // Prepare content (could be markdown with frontmatter)
     const content = this.formatElementContent(element);
@@ -342,11 +358,14 @@ export class PortfolioRepoManager {
 
     // Save to GitHub
     try {
+      // Construct repository path (repositoryName is always just the repo name)
+      const repoPath = `${username}/${this.repositoryName}`;
+
       // First, check if file exists to determine if this is create or update
       let existingFile = null;
       try {
         existingFile = await this.githubRequest(
-          `/repos/${username}/${this.repositoryName}/contents/${filePath}`
+          `/repos/${repoPath}/contents/${filePath}`
         );
       } catch (checkError: any) {
         // IMPORTANT: Authentication and rate limit errors must be re-thrown!
@@ -379,11 +398,11 @@ export class PortfolioRepoManager {
             elementName: element.metadata.name,
             filePath
           });
-          
+
           // Return the existing file URL instead of creating duplicate commit
-          const existingUrl = existingFile.html_url || 
-            `https://github.com/${username}/${this.repositoryName}/blob/main/${filePath}`;
-          
+          const existingUrl = existingFile.html_url ||
+            `https://github.com/${repoPath}/blob/main/${filePath}`;
+
           return existingUrl;
         }
       }
@@ -403,9 +422,9 @@ export class PortfolioRepoManager {
       if (existingFile && existingFile.sha) {
         requestBody.sha = existingFile.sha;
       }
-      
+
       const result = await this.githubRequest(
-        `/repos/${username}/${this.repositoryName}/contents/${filePath}`,
+        `/repos/${repoPath}/contents/${filePath}`,
         'PUT',
         requestBody
       );
@@ -434,7 +453,9 @@ export class PortfolioRepoManager {
       }
       // Path 3: Generate URL from response data
       else if (result.content?.path) {
-        commitUrl = `https://github.com/${username}/${this.repositoryName}/blob/main/${result.content.path}`;
+        // Construct repository path (repositoryName is always just the repo name)
+        const repoPath = `${username}/${this.repositoryName}`;
+        commitUrl = `https://github.com/${repoPath}/blob/main/${result.content.path}`;
       }
       // Path 4: Fallback to repository URL (guaranteed to be set)
       else {
@@ -444,7 +465,9 @@ export class PortfolioRepoManager {
           hasCommit: !!result.commit,
           hasContent: !!result.content
         });
-        commitUrl = `https://github.com/${username}/${this.repositoryName}/tree/main/${element.type}`;
+        // Construct repository path (repositoryName is always just the repo name)
+        const repoPath = `${username}/${this.repositoryName}`;
+        commitUrl = `https://github.com/${repoPath}/tree/main/${element.type}`;
       }
 
       logger.debug('Successfully saved element to GitHub portfolio', {
@@ -557,8 +580,11 @@ These elements can be imported into your DollhouseMCP installation.
 *Generated by DollhouseMCP*
 `;
 
+    // Construct repository path (repositoryName is always just the repo name)
+    const repoPath = `${username}/${this.repositoryName}`;
+
     await this.githubRequest(
-      `/repos/${username}/${this.repositoryName}/contents/README.md`,
+      `/repos/${repoPath}/contents/README.md`,
       'PUT',
       {
         message: 'Initialize portfolio structure',
@@ -568,10 +594,10 @@ These elements can be imported into your DollhouseMCP installation.
 
     // Create directory placeholders
     const directories = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
-    
+
     for (const dir of directories) {
       await this.githubRequest(
-        `/repos/${username}/${this.repositoryName}/contents/${dir}/.gitkeep`,
+        `/repos/${repoPath}/contents/${dir}/.gitkeep`,
         'PUT',
         {
           message: `Create ${dir} directory`,

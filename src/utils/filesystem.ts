@@ -5,6 +5,19 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ADJECTIVES, ANIMALS } from '../config/constants.js';
+import { logger } from './logger.js';
+import { IFileOperationsService, FileOperationsService } from '../services/FileOperationsService.js';
+import { FileLockManager } from '../security/fileLockManager.js';
+
+// Singleton file operations service for utility functions
+let fileOperationsService: IFileOperationsService | null = null;
+
+function getFileOperationsService(): IFileOperationsService {
+  if (!fileOperationsService) {
+    fileOperationsService = new FileOperationsService(new FileLockManager());
+  }
+  return fileOperationsService;
+}
 
 /**
  * Generate an anonymous ID for users without identity
@@ -26,6 +39,10 @@ export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
   const timeStr = now.toTimeString().slice(0, 8).replaceAll(':', '');
+  // Issue #848: Add milliseconds + random suffix for sub-second uniqueness.
+  // Critical for copy-on-write, swarm operations, and rapid programmatic creation.
+  const msStr = now.getMilliseconds().toString().padStart(3, '0');
+  const rand = Math.random().toString(36).substring(2, 6);
   // SECURITY FIX: Prevent ReDoS by using a single-pass approach
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
@@ -38,8 +55,8 @@ export function generateUniqueId(personaName: string, author?: string): string {
     .replaceAll(/(^-+)|(-+$)/g, '') // Only trim leading/trailing hyphens
     .replaceAll(/-{2,}/g, '-'); // Collapse multiple hyphens
   const whoMadeIt = author || generateAnonymousId();
-  
-  return `${sanitizedName}_${dateStr}-${timeStr}_${whoMadeIt}`;
+
+  return `${sanitizedName}_${dateStr}-${timeStr}${msStr}-${rand}_${whoMadeIt}`;
 }
 
 /**
@@ -77,10 +94,12 @@ export function slugify(text: string): string {
  * Ensure a directory exists, create if it doesn't
  */
 export async function ensureDirectory(dirPath: string): Promise<void> {
-  try {
-    await fs.access(dirPath);
-  } catch {
-    await fs.mkdir(dirPath, { recursive: true });
+  const fileOps = getFileOperationsService();
+  const exists = await fileOps.exists(dirPath);
+
+  if (!exists) {
+    logger.debug(`Creating directory: ${dirPath}`);
+    await fileOps.createDirectory(dirPath);
   }
 }
 
@@ -88,19 +107,16 @@ export async function ensureDirectory(dirPath: string): Promise<void> {
  * Check if a file exists
  */
 export async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  const fileOps = getFileOperationsService();
+  return fileOps.exists(filePath);
 }
 
 /**
  * Get file size in bytes
  */
 export async function getFileSize(filePath: string): Promise<number> {
-  const stats = await fs.stat(filePath);
+  const fileOps = getFileOperationsService();
+  const stats = await fileOps.stat(filePath);
   return stats.size;
 }
 

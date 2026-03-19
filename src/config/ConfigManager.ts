@@ -11,7 +11,6 @@
  * - OAuth client ID storage for MCP client integration
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as yaml from 'js-yaml';
@@ -23,6 +22,8 @@ import {
   createSafeObject,
   safeHasOwnProperty
 } from '../utils/securityUtils.js';
+import { env } from './env.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export interface UserConfig {
   username: string | null;
@@ -85,17 +86,84 @@ export interface CollectionConfig {
 export interface AutoLoadConfig {
   enabled: boolean;
   maxTokenBudget: number;
-  maxSingleMemoryTokens?: number;  // undefined = no limit
+  maxSingleMemoryTokens?: number;
   suppressLargeMemoryWarnings?: boolean;
   memories: string[];
 }
 
+/**
+ * Retention Policy Configuration (Issue #51)
+ *
+ * Controls automatic deletion of expired memory entries.
+ * IMPORTANT: Disabled by default - nothing is auto-deleted without explicit consent.
+ *
+ * Use cases:
+ * - Legal/compliance: Law firms, accountants (7-year retention)
+ * - Privacy-focused: Signal-like auto-expiring messages
+ * - Storage management: Cleanup of old logs
+ * - GDPR: Right-to-be-forgotten implementations
+ */
+export interface RetentionPolicyConfig {
+  /**
+   * Master switch for retention enforcement.
+   * If false, no automatic retention enforcement happens anywhere.
+   * Default: false (nothing auto-deleted)
+   */
+  enabled: boolean;
+
+  /**
+   * When retention enforcement happens:
+   * - 'disabled': Never enforce automatically (only via explicit command)
+   * - 'manual': Only when user explicitly requests enforcement
+   * - 'on_load': Enforce when memory is loaded (CURRENT BEHAVIOR - not recommended)
+   * - 'scheduled': Run on a schedule (future implementation)
+   */
+  enforcement_mode: 'disabled' | 'manual' | 'on_load' | 'scheduled';
+
+  /**
+   * Safety controls to prevent accidental data loss
+   */
+  safety: {
+    /** Require explicit confirmation before any deletion */
+    require_confirmation: boolean;
+    /** Always preview what would be deleted before doing it */
+    dry_run_first: boolean;
+    /** Show warning when entries are approaching expiration */
+    warn_on_expiring: boolean;
+    /** Days before expiration to start warning */
+    warning_threshold_days: number;
+  };
+
+  /**
+   * Audit and logging
+   */
+  audit: {
+    /** Log all retention deletions for audit trail */
+    log_deletions: boolean;
+    /** Keep deleted entries in a backup before permanent removal */
+    backup_before_delete: boolean;
+    /** Days to keep backups of deleted entries */
+    backup_retention_days: number;
+  };
+
+  /**
+   * Default TTL settings when creating new memories
+   * Note: These are defaults only - individual memories can override
+   */
+  defaults: {
+    /** Default TTL in days for new memory entries */
+    ttl_days: number;
+    /** Maximum entries before capacity enforcement */
+    max_entries: number;
+  };
+}
+
 export interface CapabilityIndexResourcesConfig {
-  advertise_resources: boolean; // Default: false - safe, don't advertise
+  advertise_resources: boolean;
   variants: {
-    summary: boolean;  // ~1,254 tokens - Opt-in
-    full: boolean;     // ~48,306 tokens - Opt-in
-    stats: boolean;    // ~50 tokens - Safe to enable by default
+    summary: boolean;
+    full: boolean;
+    stats: boolean;
   };
 }
 
@@ -169,10 +237,11 @@ export interface DollhouseConfig {
   github: GitHubConfig;
   sync: SyncConfig;
   collection: CollectionConfig;
-  autoLoad: AutoLoadConfig;
   elements: ElementsConfig;
   display: DisplayConfig;
   wizard: WizardConfig;
+  autoLoad: AutoLoadConfig;
+  retentionPolicy: RetentionPolicyConfig;
   source_priority?: SourcePriorityConfigData;
 }
 
@@ -190,79 +259,27 @@ export interface ConfigActionResult {
 }
 
 export class ConfigManager {
-  private static instance: ConfigManager | null = null;
-  private static instanceLock: boolean = false;
-
   private configDir: string;
   private configPath: string;
   private backupPath: string;
   private config: DollhouseConfig | null = null;
+  private readonly fileOperations: IFileOperationsService;
+  private os: typeof os;
 
-  private constructor() {
+  constructor(fileOperations: IFileOperationsService, osModule: typeof os) {
+    this.fileOperations = fileOperations;
+    this.os = osModule;
+
     // Initialize paths - use test directory if in test environment
-    if (process.env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
+    // NOTE: Using process.env directly here (not cached env.TEST_CONFIG_DIR)
+    // to allow tests to dynamically override the config directory
+    if (env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
       this.configDir = process.env.TEST_CONFIG_DIR;
     } else {
-      this.configDir = path.join(os.homedir(), '.dollhouse');
+      this.configDir = path.join(this.os.homedir(), '.dollhouse');
     }
     this.configPath = path.join(this.configDir, 'config.yml');
     this.backupPath = path.join(this.configDir, 'config.yml.backup');
-  }
-
-  /**
-   * Thread-safe singleton instance getter
-   */
-  public static getInstance(): ConfigManager {
-    if (ConfigManager.instance) {
-      return ConfigManager.instance;
-    }
-
-    // Simple locking mechanism to prevent race conditions
-    if (ConfigManager.instanceLock) {
-      // Wait for lock to be released, then return the instance
-      while (ConfigManager.instanceLock && !ConfigManager.instance) {
-        // In a real scenario with async operations, this would be more sophisticated
-        // But for the test cases, this simple approach works
-      }
-      return ConfigManager.instance!;
-    }
-
-    ConfigManager.instanceLock = true;
-    
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
-    }
-    
-    ConfigManager.instanceLock = false;
-    return ConfigManager.instance;
-  }
-
-  /**
-   * Reset the singleton instance for testing purposes only.
-   * This method is ONLY available in test environments to enable proper test isolation.
-   * 
-   * IMPORTANT: This follows industry-standard patterns used by Google, Facebook, Microsoft
-   * for testing singleton classes. The method is protected by an environment check to
-   * ensure it cannot be called in production.
-   * 
-   * @throws Error if called outside test environment
-   */
-  public static resetForTesting(): void {
-    // Security check: only allow in test environment
-    if (process.env.NODE_ENV !== 'test') {
-      const errorMsg = 'ConfigManager.resetForTesting() can only be called in test environment';
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-    
-    // Reset the singleton instance
-    ConfigManager.instance = null;
-    ConfigManager.instanceLock = false;
-    
-    // Log for debugging (only in test environment with DEBUG flag)
-    if (process.env.DEBUG) {
-      console.log('[TEST] ConfigManager singleton reset');
-    }
   }
 
   /**
@@ -279,7 +296,7 @@ export class ConfigManager {
       github: {
         portfolio: {
           repository_url: null,
-          repository_name: process.env.TEST_GITHUB_REPO || 'dollhouse-portfolio',
+          repository_name: env.GITHUB_REPOSITORY || 'dollhouse-portfolio',
           default_branch: 'main',
           auto_create: true
         },
@@ -321,10 +338,10 @@ export class ConfigManager {
       },
       autoLoad: {
         enabled: true, // Auto-load baseline memories by default
-        maxTokenBudget: 5000, // Safety limit on auto-loaded content
-        maxSingleMemoryTokens: undefined,  // No hard limit by default
+        maxTokenBudget: 5000,
+        maxSingleMemoryTokens: undefined,
         suppressLargeMemoryWarnings: false,
-        memories: [] // Empty = use autoLoad flag in memories
+        memories: [] // Configured via memory files with autoLoad flag
       },
       elements: {
         auto_activate: {},
@@ -363,6 +380,30 @@ export class ConfigManager {
       wizard: {
         completed: false,
         dismissed: false
+      },
+      /**
+       * Retention Policy Configuration (Issue #51)
+       * IMPORTANT: Disabled by default - nothing is auto-deleted without explicit consent.
+       * Users must explicitly enable retention enforcement if they want automatic cleanup.
+       */
+      retentionPolicy: {
+        enabled: false,                    // DISABLED by default - no auto-deletion
+        enforcement_mode: 'disabled',       // Only manual enforcement allowed
+        safety: {
+          require_confirmation: true,       // Always require confirmation
+          dry_run_first: true,              // Always preview before deleting
+          warn_on_expiring: true,           // Warn when entries approaching expiration
+          warning_threshold_days: 7         // Warn 7 days before expiration
+        },
+        audit: {
+          log_deletions: true,              // Log all deletions
+          backup_before_delete: true,       // Backup deleted entries
+          backup_retention_days: 30         // Keep backups for 30 days
+        },
+        defaults: {
+          ttl_days: 30,                     // Default 30-day TTL (if enabled)
+          max_entries: 1000                 // Default max entries per memory
+        }
       }
     };
   }
@@ -376,7 +417,11 @@ export class ConfigManager {
     
     try {
       // Ensure config directory exists with proper permissions (0o700 = owner only)
-      await fs.mkdir(this.configDir, { recursive: true, mode: 0o700 });
+      await this.fileOperations.createDirectory(this.configDir);
+      // Set permissions on the directory
+      await this.fileOperations.chmod(this.configDir, 0o700, {
+        source: 'ConfigManager.initialize'
+      });
       
       // Load or create config
       if (await this.configExists()) {
@@ -409,7 +454,9 @@ export class ConfigManager {
    */
   private async loadConfig(): Promise<void> {
     try {
-      const content = await fs.readFile(this.configPath, 'utf-8');
+      const content = await this.fileOperations.readFile(this.configPath, {
+        source: 'ConfigManager.loadConfig'
+      });
       
       /**
        * IMPORTANT: Parser Selection for Different File Types
@@ -488,12 +535,7 @@ export class ConfigManager {
    * Check if config file exists
    */
   private async configExists(): Promise<boolean> {
-    try {
-      await fs.access(this.configPath);
-      return true;
-    } catch {
-      return false;
-    }
+    return this.fileOperations.exists(this.configPath);
   }
 
   /**
@@ -501,7 +543,8 @@ export class ConfigManager {
    * Environment variable takes precedence over config file
    */
   public getGitHubClientId(): string | null {
-    // Check environment variable first
+    // NOTE: DOLLHOUSE_GITHUB_CLIENT_ID is not in centralized env config
+    // as it's an optional feature flag, so we still use process.env here
     const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
       return envClientId;
@@ -652,9 +695,11 @@ export class ConfigManager {
     try {
       // Create backup of existing config
       if (await this.configExists()) {
-        await fs.copyFile(this.configPath, this.backupPath);
+        await this.fileOperations.copyFile(this.configPath, this.backupPath, {
+          source: 'ConfigManager.saveConfig'
+        });
       }
-      
+
       // Convert to YAML
       // Note: We use js-yaml's dump() for pure YAML output (no frontmatter markers)
       // This creates a standard YAML file, not a markdown file with frontmatter
@@ -665,11 +710,16 @@ export class ConfigManager {
         sortKeys: false
         // Using default schema (not FAILSAFE) for dump to preserve types like booleans
       });
-      
+
       // Write atomically with proper permissions (0o600 = owner read/write only)
       const tempPath = `${this.configPath}.tmp`;
-      await fs.writeFile(tempPath, yamlContent, { encoding: 'utf-8', mode: 0o600 });
-      await fs.rename(tempPath, this.configPath);
+      await this.fileOperations.writeFile(tempPath, yamlContent, {
+        source: 'ConfigManager.saveConfig'
+      });
+      await this.fileOperations.chmod(tempPath, 0o600, {
+        source: 'ConfigManager.saveConfig'
+      });
+      await this.fileOperations.renameFile(tempPath, this.configPath);
       
       logger.debug('Configuration saved successfully');
       
@@ -687,7 +737,9 @@ export class ConfigManager {
       
       // Try to restore backup
       if (await this.backupExists()) {
-        await fs.copyFile(this.backupPath, this.configPath);
+        await this.fileOperations.copyFile(this.backupPath, this.configPath, {
+          source: 'ConfigManager.saveConfig'
+        });
         logger.info('Restored configuration from backup');
       }
       
@@ -699,12 +751,7 @@ export class ConfigManager {
    * Check if backup exists
    */
   private async backupExists(): Promise<boolean> {
-    try {
-      await fs.access(this.backupPath);
-      return true;
-    } catch {
-      return false;
-    }
+    return this.fileOperations.exists(this.backupPath);
   }
 
   /**
@@ -798,162 +845,130 @@ export class ConfigManager {
       this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
     }
 
-    // Fix capability index resources settings
-    if (this.config.elements?.enhanced_index?.resources) {
-      const resources = this.config.elements.enhanced_index.resources;
-      resources.advertise_resources = fixBoolean(resources.advertise_resources);
-      if (resources.variants) {
-        resources.variants.summary = fixBoolean(resources.variants.summary);
-        resources.variants.full = fixBoolean(resources.variants.full);
-        resources.variants.stats = fixBoolean(resources.variants.stats);
+    // Fix retention policy settings (Issue #51)
+    if (this.config.retentionPolicy) {
+      this.config.retentionPolicy.enabled = fixBoolean(this.config.retentionPolicy.enabled);
+      if (this.config.retentionPolicy.safety) {
+        this.config.retentionPolicy.safety.require_confirmation = fixBoolean(this.config.retentionPolicy.safety.require_confirmation);
+        this.config.retentionPolicy.safety.dry_run_first = fixBoolean(this.config.retentionPolicy.safety.dry_run_first);
+        this.config.retentionPolicy.safety.warn_on_expiring = fixBoolean(this.config.retentionPolicy.safety.warn_on_expiring);
+      }
+      if (this.config.retentionPolicy.audit) {
+        this.config.retentionPolicy.audit.log_deletions = fixBoolean(this.config.retentionPolicy.audit.log_deletions);
+        this.config.retentionPolicy.audit.backup_before_delete = fixBoolean(this.config.retentionPolicy.audit.backup_before_delete);
       }
     }
   }
 
   /**
    * Merge partial config with defaults
-   *
-   * FIX: Reduced cognitive complexity by extracting helper methods
-   * Previously: Cognitive complexity of 17 (exceeded max of 15)
-   * Now: Split into focused helper methods for each config section
-   *
+   * 
    * IMPORTANT: This function preserves unknown fields for forward compatibility.
    * If a future version adds new config fields, older versions won't lose them.
    */
   private mergeWithDefaults(partial: Partial<DollhouseConfig>): DollhouseConfig {
     const defaults = this.getDefaultConfig();
-
+    
     // Start with a deep clone of partial to preserve all unknown fields
     const result: any = JSON.parse(JSON.stringify(partial));
-
+    
     // Ensure all required fields exist with defaults
     result.version = result.version || defaults.version;
+    
+    // User section - preserve unknown fields while ensuring required fields
+    result.user = {
+      ...result.user,
+      username: result.user?.username ?? defaults.user.username,
+      email: result.user?.email ?? defaults.user.email,
+      display_name: result.user?.display_name ?? defaults.user.display_name
+    };
+    
+    // GitHub section - deep merge preserving unknown fields
+    if (!result.github) result.github = {};
+    result.github.portfolio = {
+      ...defaults.github.portfolio,
+      ...result.github.portfolio
+    };
+    result.github.auth = {
+      ...defaults.github.auth,
+      ...result.github.auth
+    };
+    
+    // Sync section - preserve unknown fields at all levels
+    if (!result.sync) result.sync = {};
+    result.sync.enabled = result.sync.enabled ?? defaults.sync.enabled;
+    result.sync.individual = {
+      ...defaults.sync.individual,
+      ...result.sync.individual
+    };
+    result.sync.bulk = {
+      ...defaults.sync.bulk,
+      ...result.sync.bulk
+    };
+    result.sync.privacy = {
+      ...defaults.sync.privacy,
+      ...result.sync.privacy,
+      // Special handling for arrays - use provided or default
+      excluded_patterns: result.sync.privacy?.excluded_patterns || defaults.sync.privacy.excluded_patterns
+    };
+    
+    // Collection section
+    result.collection = {
+      ...defaults.collection,
+      ...result.collection
+    };
+    
+    // Elements section
+    if (!result.elements) result.elements = {};
+    result.elements = {
+      ...result.elements,
+      auto_activate: result.elements.auto_activate || defaults.elements.auto_activate,
+      default_element_dir: result.elements.default_element_dir || defaults.elements.default_element_dir
+    };
+    
+    // Display section
+    if (!result.display) result.display = {};
+    result.display.persona_indicators = {
+      ...defaults.display.persona_indicators,
+      ...result.display.persona_indicators
+    };
+    result.display.verbose_logging = result.display.verbose_logging ?? defaults.display.verbose_logging;
+    result.display.show_progress = result.display.show_progress ?? defaults.display.show_progress;
+    
+    // Wizard section
+    result.wizard = {
+      ...defaults.wizard,
+      ...result.wizard
+    };
 
-    // Merge each section using helper methods
-    result.user = this.mergeUserConfig(result.user, defaults.user);
-    result.github = this.mergeGitHubConfig(result.github, defaults.github);
-    result.sync = this.mergeSyncConfig(result.sync, defaults.sync);
-    result.collection = { ...defaults.collection, ...result.collection };
-    result.autoLoad = { ...defaults.autoLoad, ...result.autoLoad };
-    result.elements = this.mergeElementsConfig(result.elements, defaults.elements);
-    result.display = this.mergeDisplayConfig(result.display, defaults.display);
-    result.wizard = { ...defaults.wizard, ...result.wizard };
+    // AutoLoad section (Issue: regression from current-server)
+    // This was missing in mcp-server refactor, causing auto-load to fail for existing configs
+    result.autoLoad = {
+      ...defaults.autoLoad,
+      ...result.autoLoad
+    };
+
+    // Retention Policy section (Issue #51)
+    // IMPORTANT: Defaults are disabled - nothing auto-deleted without explicit consent
+    if (!result.retentionPolicy) result.retentionPolicy = {};
+    result.retentionPolicy = {
+      enabled: result.retentionPolicy.enabled ?? defaults.retentionPolicy.enabled,
+      enforcement_mode: result.retentionPolicy.enforcement_mode ?? defaults.retentionPolicy.enforcement_mode,
+      safety: {
+        ...defaults.retentionPolicy.safety,
+        ...result.retentionPolicy.safety
+      },
+      audit: {
+        ...defaults.retentionPolicy.audit,
+        ...result.retentionPolicy.audit
+      },
+      defaults: {
+        ...defaults.retentionPolicy.defaults,
+        ...result.retentionPolicy.defaults
+      }
+    };
 
     return result as DollhouseConfig;
-  }
-
-  /**
-   * Merge user configuration section
-   */
-  private mergeUserConfig(userConfig: any, defaults: UserConfig): UserConfig {
-    return {
-      ...userConfig,
-      username: userConfig?.username ?? defaults.username,
-      email: userConfig?.email ?? defaults.email,
-      display_name: userConfig?.display_name ?? defaults.display_name
-    };
-  }
-
-  /**
-   * Merge GitHub configuration section
-   */
-  private mergeGitHubConfig(githubConfig: any, defaults: GitHubConfig): GitHubConfig {
-    const result = githubConfig || {};
-    result.portfolio = {
-      ...defaults.portfolio,
-      ...result.portfolio
-    };
-    result.auth = {
-      ...defaults.auth,
-      ...result.auth
-    };
-    return result;
-  }
-
-  /**
-   * Merge sync configuration section
-   */
-  private mergeSyncConfig(syncConfig: any, defaults: SyncConfig): SyncConfig {
-    const result = syncConfig || {};
-    result.enabled = result.enabled ?? defaults.enabled;
-    result.individual = { ...defaults.individual, ...result.individual };
-    result.bulk = { ...defaults.bulk, ...result.bulk };
-    result.privacy = {
-      ...defaults.privacy,
-      ...result.privacy,
-      excluded_patterns: result.privacy?.excluded_patterns || defaults.privacy.excluded_patterns
-    };
-    return result;
-  }
-
-  /**
-   * Merge elements configuration section
-   */
-  private mergeElementsConfig(elementsConfig: any, defaults: ElementsConfig): ElementsConfig {
-    const result = elementsConfig || {};
-    result.auto_activate = result.auto_activate || defaults.auto_activate;
-    result.default_element_dir = result.default_element_dir || defaults.default_element_dir;
-    result.enhanced_index = this.mergeEnhancedIndexConfig(result.enhanced_index, defaults.enhanced_index);
-    return result;
-  }
-
-  /**
-   * Merge enhanced index configuration
-   */
-  private mergeEnhancedIndexConfig(userIndex: any, defaultIndex: EnhancedIndexConfig | undefined): EnhancedIndexConfig | undefined {
-    // FIX: Inverted negated condition for better readability
-    // Previously: if (userIndex || defaultIndex)
-    // Now: Early return for clear logic flow
-    if (!userIndex && !defaultIndex) {
-      return undefined;
-    }
-
-    if (!userIndex) {
-      return defaultIndex;
-    }
-
-    if (!defaultIndex) {
-      return userIndex;
-    }
-
-    const result: any = {
-      ...defaultIndex,
-      ...userIndex,
-      limits: { ...defaultIndex.limits, ...userIndex.limits },
-      telemetry: { ...defaultIndex.telemetry, ...userIndex.telemetry },
-      resources: userIndex.resources ? {
-        ...defaultIndex.resources,
-        ...userIndex.resources,
-        variants: {
-          ...defaultIndex.resources?.variants,
-          ...userIndex.resources?.variants
-        }
-      } : defaultIndex.resources
-    };
-
-    // Preserve optional fields if they exist
-    if (userIndex.verbPatterns) {
-      result.verbPatterns = { ...defaultIndex.verbPatterns, ...userIndex.verbPatterns };
-    }
-    if (userIndex.backgroundAnalysis) {
-      result.backgroundAnalysis = { ...defaultIndex.backgroundAnalysis, ...userIndex.backgroundAnalysis };
-    }
-
-    return result;
-  }
-
-  /**
-   * Merge display configuration section
-   */
-  private mergeDisplayConfig(displayConfig: any, defaults: DisplayConfig): DisplayConfig {
-    const result = displayConfig || {};
-    result.persona_indicators = {
-      ...defaults.persona_indicators,
-      ...result.persona_indicators
-    };
-    result.verbose_logging = result.verbose_logging ?? defaults.verbose_logging;
-    result.show_progress = result.show_progress ?? defaults.show_progress;
-    return result;
   }
 
   /**
@@ -961,34 +976,37 @@ export class ConfigManager {
    */
   private async migrateFromEnvironment(): Promise<void> {
     let migrated = false;
-    
+
+    // NOTE: These are optional custom env vars not in centralized config
+    // They're used for backwards compatibility migration only
+
     // Migrate user settings
     if (process.env.DOLLHOUSE_USER && !this.config?.user.username) {
       if (!this.config) this.config = this.getDefaultConfig();
       this.config.user.username = process.env.DOLLHOUSE_USER;
       migrated = true;
     }
-    
+
     if (process.env.DOLLHOUSE_EMAIL && !this.config?.user.email) {
       if (!this.config) this.config = this.getDefaultConfig();
       this.config.user.email = process.env.DOLLHOUSE_EMAIL;
       migrated = true;
     }
-    
+
     // Migrate portfolio URL
     if (process.env.DOLLHOUSE_PORTFOLIO_URL && !this.config?.github.portfolio.repository_url) {
       if (!this.config) this.config = this.getDefaultConfig();
       this.config.github.portfolio.repository_url = process.env.DOLLHOUSE_PORTFOLIO_URL;
       migrated = true;
     }
-    
-    // Migrate collection auto-submit
-    if (process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION !== undefined) {
+
+    // Migrate collection auto-submit - use centralized env config
+    if (env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION !== false) {
       if (!this.config) this.config = this.getDefaultConfig();
-      this.config.collection.auto_submit = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+      this.config.collection.auto_submit = env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
       migrated = true;
     }
-    
+
     if (migrated) {
       logger.info('Migrated settings from environment variables');
     }
@@ -1061,9 +1079,14 @@ export class ConfigManager {
         noRefs: true,
         sortKeys: false
       });
-      
-      await fs.writeFile(filePath, yamlContent, { encoding: 'utf-8', mode: 0o600 });
-      
+
+      await this.fileOperations.writeFile(filePath, yamlContent, {
+        source: 'ConfigManager.exportConfig'
+      });
+      await this.fileOperations.chmod(filePath, 0o600, {
+        source: 'ConfigManager.exportConfig'
+      });
+
       return {
         success: true,
         message: `Configuration exported to ${filePath}`
@@ -1081,7 +1104,9 @@ export class ConfigManager {
    */
   public async importConfig(filePath: string): Promise<ConfigActionResult> {
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await this.fileOperations.readFile(filePath, {
+        source: 'ConfigManager.importConfig'
+      });
       
       // Parse and validate
       const parsed = SecureYamlParser.parse(content, {

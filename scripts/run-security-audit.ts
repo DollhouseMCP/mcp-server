@@ -19,9 +19,10 @@
  */
 
 import { SecurityAuditor } from '../src/security/audit/SecurityAuditor.js';
-import { ConsoleReporter } from '../src/security/audit/reporters/ConsoleReporter.js';
 import { MarkdownReporter } from '../src/security/audit/reporters/MarkdownReporter.js';
 import { JsonReporter } from '../src/security/audit/reporters/JsonReporter.js';
+import { FileOperationsService } from '../src/services/FileOperationsService.js';
+import { FileLockManager } from '../src/security/fileLockManager.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -38,14 +39,18 @@ async function runSecurityAudit() {
   const outputMarkdown = args.includes('--markdown') || !outputJson;
   const verbose = args.includes('--verbose');
 
+  // Create FileOperationsService for config loading
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+
   // Get default config and customize
-  const config = SecurityAuditor.getDefaultConfig();
+  const config = await SecurityAuditor.getDefaultConfig(fileOperations);
   
   // Customize configuration
   config.scanners.code.exclude = [
-    'node_modules/**',
-    'dist/**',
-    'coverage/**',
+    '**/node_modules/**',
+    '**/dist/**',
+    '**/coverage/**',
     '.git/**',
     '**/*.test.ts',
     '**/*.spec.ts',
@@ -67,7 +72,7 @@ async function runSecurityAudit() {
         ? suppression.file
         : path.join(projectRoot, suppression.file)
     }));
-  } catch (error) {
+  } catch (_error) {
     // Suppressions file doesn't exist or is invalid - that's OK
   }
 
@@ -95,10 +100,11 @@ async function runSecurityAudit() {
   } else if (failOnHigh) {
     config.reporting.failOnSeverity = 'high';
   } else {
-    config.reporting.failOnSeverity = 'none';
+    // Use 'info' as default (lowest severity) - script handles exit code manually
+    config.reporting.failOnSeverity = 'info';
   }
 
-  const auditor = new SecurityAuditor(config);
+  const auditor = new SecurityAuditor(config, fileOperations);
   
   try {
     // Run audit
@@ -133,12 +139,12 @@ async function runSecurityAudit() {
 
     if (outputJson) {
       const jsonReporter = new JsonReporter(result);
-      const jsonReport = jsonReporter.generate();
-      
+      const jsonReport = JSON.stringify(jsonReporter.generate(), null, 2);
+
       // Save timestamped report
       const jsonPath = path.join(reportsDir, `security-audit-${timestamp}.json`);
       await fs.writeFile(jsonPath, jsonReport);
-      
+
       // Also save as latest
       const latestJsonPath = path.join(projectRoot, 'security-audit-report.json');
       await fs.writeFile(latestJsonPath, jsonReport);

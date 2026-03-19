@@ -7,7 +7,7 @@ echo ""
 # Run Docker with simple test commands
 docker run --rm -i \
   --env-file docker/test-environment.env \
-  -e TEST_GITHUB_USER=mickdarling \
+  -e TEST_GITHUB_USER=${TEST_GITHUB_USER:-test-user} \
   -e TEST_GITHUB_REPO=dollhouse-test-portfolio \
   -e DOLLHOUSE_GITHUB_CLIENT_ID=Ov23li9gyNZP6m9aJ2EP \
   claude-mcp-test-env:develop \

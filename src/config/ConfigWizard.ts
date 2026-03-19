@@ -17,12 +17,6 @@ import { getPortfolioRepositoryName } from './portfolioConfig.js';
 
 const WIZARD_VERSION = '1.0.0';
 
-interface WizardChoice {
-  value: string;
-  label: string;
-  isDefault?: boolean;
-}
-
 export class ConfigWizard {
   private configManager: ConfigManager;
   private rl: readline.Interface | null;

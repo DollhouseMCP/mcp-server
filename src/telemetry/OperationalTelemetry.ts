@@ -15,13 +15,14 @@
  * - Network data, file paths, or system details beyond OS type
  *
  * Telemetry control:
+ * - DOLLHOUSE_TELEMETRY=true  - Enables local telemetry (default: OFF)
  * - DOLLHOUSE_TELEMETRY=false - Disables all telemetry (local and remote)
  * - DOLLHOUSE_TELEMETRY_OPTIN=true - Enables remote telemetry with default PostHog project
  * - DOLLHOUSE_TELEMETRY_NO_REMOTE=true - Local telemetry only, no PostHog
  * - POSTHOG_API_KEY - Custom PostHog project key (overrides default)
  * - Delete telemetry files: rm ~/.dollhouse/.telemetry-id ~/.dollhouse/telemetry.log
  *
- * Data storage:
+ * Data storage (only when enabled):
  * - Local: ~/.dollhouse/.telemetry-id (UUID) and ~/.dollhouse/telemetry.log (events)
  * - Remote (opt-in): PostHog analytics when DOLLHOUSE_TELEMETRY_OPTIN=true or POSTHOG_API_KEY is set
  *
@@ -30,9 +31,9 @@
  * - Debug-only logging: no user-facing telemetry noise
  * - Check opt-out early: no file operations if disabled
  * - Remote telemetry is opt-in: requires DOLLHOUSE_TELEMETRY_OPTIN=true or explicit POSTHOG_API_KEY
+ * - Local telemetry is opt-in: requires DOLLHOUSE_TELEMETRY=true
  */
 
-import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
@@ -43,6 +44,7 @@ import type { InstallationEvent, TelemetryConfig, AutoLoadMetrics } from './type
 import { detectMCPClient } from './clientDetector.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 // PostHog Project API Key (safe to expose publicly - write-only)
 // Used for opt-in telemetry when DOLLHOUSE_TELEMETRY_OPTIN=true
@@ -50,30 +52,41 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 const DEFAULT_POSTHOG_PROJECT_KEY = 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
 export class OperationalTelemetry {
-  private static installId: string | null = null;
-  private static initialized = false;
-  private static posthog: PostHog | null = null;
+  private installId: string | null = null;
+  private initialized = false;
+  private posthog: PostHog | null = null;
+  private logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
+
+  addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
+
+  constructor(private fileOperations: IFileOperationsService) {}
 
   /**
    * Check if telemetry is enabled
-   * Respects DOLLHOUSE_TELEMETRY environment variable (default: true)
-   * @returns true if telemetry is enabled, false if opted out
+   * Respects DOLLHOUSE_TELEMETRY environment variable (default: false/opt-in)
+   * @returns true if telemetry is enabled, false otherwise
    */
-  public static isEnabled(): boolean {
+  public isEnabled(): boolean {
     const envValue = process.env.DOLLHOUSE_TELEMETRY;
 
-    // If explicitly set to false, 0, or 'false', disable
-    if (envValue === 'false' || envValue === '0' || envValue === 'FALSE') {
+    if (!envValue) {
       return false;
     }
 
-    // If explicitly set to true, 1, or 'true', enable
-    if (envValue === 'true' || envValue === '1' || envValue === 'TRUE') {
+    const normalized = envValue.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') {
       return true;
     }
 
-    // Default: enabled (opt-out model)
-    return true;
+    if (normalized === 'false' || normalized === '0') {
+      return false;
+    }
+
+    // Unrecognized values are treated as disabled in opt-in model
+    return false;
   }
 
   /**
@@ -89,7 +102,7 @@ export class OperationalTelemetry {
    *
    * Respects DOLLHOUSE_TELEMETRY_NO_REMOTE=true to disable all remote telemetry
    */
-  private static initPostHog(): void {
+  private initPostHog(): void {
     try {
       // Skip if PostHog already initialized
       if (this.posthog) {
@@ -142,8 +155,11 @@ export class OperationalTelemetry {
    * Get telemetry configuration paths
    * @returns Configuration with paths to telemetry files
    */
-  private static getConfig(): TelemetryConfig {
-    const dollhouseDir = path.join(os.homedir(), '.dollhouse');
+  private getConfig(): TelemetryConfig {
+    // Allow overriding home directory via DOLLHOUSE_HOME_DIR (for testing)
+    // This follows the pattern used by DOLLHOUSE_PORTFOLIO_DIR and DOLLHOUSE_CACHE_DIR
+    const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
+    const dollhouseDir = path.join(homeDir, '.dollhouse');
     return {
       enabled: this.isEnabled(),
       installIdPath: path.join(dollhouseDir, '.telemetry-id'),
@@ -156,7 +172,7 @@ export class OperationalTelemetry {
    * UUID is persistent across server restarts but unique per installation
    * @returns Installation UUID or null if telemetry disabled or error
    */
-  private static async ensureUUID(): Promise<string | null> {
+  private async ensureUUID(): Promise<string | null> {
     try {
       const config = this.getConfig();
 
@@ -167,7 +183,9 @@ export class OperationalTelemetry {
 
       // Check if UUID file exists
       try {
-        const existingId = await fs.readFile(config.installIdPath, 'utf-8');
+        const existingId = await this.fileOperations.readFile(config.installIdPath, {
+          source: 'OperationalTelemetry.ensureUUID'
+        });
 
         // FIX: DMCP-SEC-004 - Normalize Unicode in file content to prevent attacks
         const normalizedResult = UnicodeValidator.normalize(existingId);
@@ -205,10 +223,12 @@ export class OperationalTelemetry {
       this.installId = uuidv4();
 
       // Ensure directory exists
-      await fs.mkdir(path.dirname(config.installIdPath), { recursive: true });
+      await this.fileOperations.createDirectory(path.dirname(config.installIdPath));
 
       // Write UUID to file
-      await fs.writeFile(config.installIdPath, this.installId, 'utf-8');
+      await this.fileOperations.writeFile(config.installIdPath, this.installId, {
+        source: 'OperationalTelemetry.ensureUUID'
+      });
 
       logger.debug(`Telemetry: Generated new installation ID: ${this.installId.substring(0, 8)}...`);
       return this.installId;
@@ -224,13 +244,15 @@ export class OperationalTelemetry {
    * Looks for existing installation event with current UUID and version
    * @returns true if this is the first run (no matching install event found)
    */
-  private static async isFirstRun(): Promise<boolean> {
+  private async isFirstRun(): Promise<boolean> {
     try {
       const config = this.getConfig();
 
       // Check if telemetry log exists
       try {
-        const logContent = await fs.readFile(config.logPath, 'utf-8');
+        const logContent = await this.fileOperations.readFile(config.logPath, {
+          source: 'OperationalTelemetry.isFirstRun'
+        });
 
         // FIX: DMCP-SEC-004 - Normalize Unicode in log content before processing
         const normalizedResult = UnicodeValidator.normalize(logContent);
@@ -278,7 +300,7 @@ export class OperationalTelemetry {
    * Uses dedicated clientDetector module for consistency
    * @returns Client identifier string
    */
-  private static getMCPClient(): string {
+  private getMCPClient(): string {
     return detectMCPClient();
   }
 
@@ -287,7 +309,7 @@ export class OperationalTelemetry {
    * Appends JSON line to log file (JSONL format)
    * Also sends to PostHog if configured
    */
-  private static async recordInstallation(): Promise<void> {
+  private async recordInstallation(): Promise<void> {
     try {
       if (!this.installId) {
         logger.debug('Telemetry: Cannot record installation - no installation ID');
@@ -308,15 +330,22 @@ export class OperationalTelemetry {
       };
 
       // Ensure directory exists
-      await fs.mkdir(path.dirname(config.logPath), { recursive: true });
+      await this.fileOperations.createDirectory(path.dirname(config.logPath));
 
       // Append event as JSON line (JSONL format) to local log
       const logLine = JSON.stringify(event) + '\n';
-      await fs.appendFile(config.logPath, logLine, 'utf-8');
+      await this.fileOperations.appendFile(config.logPath, logLine, {
+        source: 'OperationalTelemetry.recordInstallation'
+      });
 
       logger.debug(
         `Telemetry: Recorded installation event - version=${event.version}, os=${event.os}, client=${event.mcp_client}`
       );
+      this.logListener?.('info', 'Record installation', {
+        version: event.version,
+        os: event.os,
+        mcp_client: event.mcp_client,
+      });
 
       // Send to PostHog if enabled and remote telemetry not disabled
       if (this.posthog && process.env.DOLLHOUSE_TELEMETRY_NO_REMOTE !== 'true') {
@@ -355,16 +384,18 @@ export class OperationalTelemetry {
    * Internal method for appending events to telemetry.log
    * @param event - Event object to write
    */
-  private static async writeEvent(event: InstallationEvent): Promise<void> {
+  private async writeEvent(event: InstallationEvent): Promise<void> {
     try {
       const config = this.getConfig();
 
       // Ensure directory exists
-      await fs.mkdir(path.dirname(config.logPath), { recursive: true });
+      await this.fileOperations.createDirectory(path.dirname(config.logPath));
 
       // Append event as JSON line (JSONL format)
       const logLine = JSON.stringify(event) + '\n';
-      await fs.appendFile(config.logPath, logLine, 'utf-8');
+      await this.fileOperations.appendFile(config.logPath, logLine, {
+        source: 'OperationalTelemetry.writeEvent'
+      });
     } catch (error) {
       // Fail gracefully - log but don't throw
       logger.debug(`Telemetry: Failed to write event: ${error instanceof Error ? error.message : String(error)}`);
@@ -378,7 +409,7 @@ export class OperationalTelemetry {
    * Safe to call multiple times - will only initialize once
    * Always fails gracefully - errors are logged but never thrown
    */
-  public static async initialize(): Promise<void> {
+  public async initialize(): Promise<void> {
     try {
       // Only initialize once
       if (this.initialized) {
@@ -428,7 +459,7 @@ export class OperationalTelemetry {
    * Record auto-load metrics to telemetry log
    * @param metrics Auto-load performance metrics
    */
-  public static async recordAutoLoadMetrics(metrics: AutoLoadMetrics): Promise<void> {
+  public async recordAutoLoadMetrics(metrics: AutoLoadMetrics): Promise<void> {
     try {
       if (!this.isEnabled()) {
         return;
@@ -443,10 +474,10 @@ export class OperationalTelemetry {
         installId: this.installId
       };
 
-      await fs.appendFile(
+      await this.fileOperations.appendFile(
         config.logPath,
         JSON.stringify(logEntry) + '\n',
-        'utf-8'
+        { source: 'OperationalTelemetry.recordAutoLoadMetrics' }
       );
 
       // Send to PostHog if configured
@@ -459,6 +490,7 @@ export class OperationalTelemetry {
       }
 
       logger.debug('[Telemetry] Recorded auto-load metrics:', metrics);
+      this.logListener?.('debug', 'Record auto-load metrics', metrics as unknown as Record<string, unknown>);
     } catch (error) {
       // Fail gracefully
       logger.debug(`[Telemetry] Failed to record auto-load metrics: ${error}`);
@@ -470,7 +502,7 @@ export class OperationalTelemetry {
    * Flushes any pending PostHog events and cleans up resources
    * Safe to call even if not initialized
    */
-  public static async shutdown(): Promise<void> {
+  public async shutdown(): Promise<void> {
     try {
       if (this.posthog) {
         logger.debug('Telemetry: Shutting down PostHog client');

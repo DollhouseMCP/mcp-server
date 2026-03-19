@@ -47,14 +47,34 @@ export class GitHubAuthManager {
    * allowing users to authenticate with an 8-character code.
    */
   private static readonly DEFAULT_CLIENT_ID = 'Ov23li9gyNZP6m9aJ2EP';
+
+  // GitHub OAuth endpoints
+  private readonly DEVICE_CODE_URL = 'https://github.com/login/device/code';
+  private readonly TOKEN_URL = 'https://github.com/login/oauth/access_token';
+  private readonly USER_URL = 'https://api.github.com/user';
   
+  // Polling configuration
+  private readonly DEFAULT_POLL_INTERVAL = 5000; // 5 seconds
+  private readonly MAX_POLL_ATTEMPTS = 180; // 15 minutes total
+  
+  private readonly configManager: ConfigManager;
+  private apiCache: APICache;
+  private activePolling: AbortController | null = null;
+  private tokenManager: TokenManager;
+
+  constructor(apiCache: APICache, configManager: ConfigManager, tokenManager: TokenManager) {
+    this.apiCache = apiCache;
+    this.configManager = configManager;
+    this.tokenManager = tokenManager;
+  }
+
   /**
    * Get the CLIENT_ID from environment variable, ConfigManager, or default
    * Priority: Environment variable > ConfigManager > Default Client ID
    * 
    * @returns The OAuth Client ID to use for authentication
    */
-  public static async getClientId(): Promise<string | null> {
+  private async getClientId(): Promise<string | null> {
     // Check environment variable first (for backward compatibility)
     const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
@@ -64,9 +84,8 @@ export class GitHubAuthManager {
 
     // Check ConfigManager for stored configuration
     try {
-      const configManager = ConfigManager.getInstance();
-      await configManager.initialize();
-      const configClientId = configManager.getGitHubClientId();
+      await this.configManager.initialize();
+      const configClientId = this.configManager.getGitHubClientId();
       if (configClientId) {
         logger.debug('Using OAuth Client ID from config');
         return configClientId;
@@ -80,15 +99,13 @@ export class GitHubAuthManager {
     logger.debug('Using default DollhouseMCP OAuth Client ID');
     return GitHubAuthManager.DEFAULT_CLIENT_ID;
   }
-  
-  // GitHub OAuth endpoints
-  private static readonly DEVICE_CODE_URL = 'https://github.com/login/device/code';
-  private static readonly TOKEN_URL = 'https://github.com/login/oauth/access_token';
-  private static readonly USER_URL = 'https://api.github.com/user';
-  
-  // Polling configuration
-  private static readonly DEFAULT_POLL_INTERVAL = 5000; // 5 seconds
-  private static readonly MAX_POLL_ATTEMPTS = 180; // 15 minutes total
+
+  /**
+   * Expose resolved client ID for external helpers while preserving internal logic.
+   */
+  public async resolveClientId(): Promise<string | null> {
+    return this.getClientId();
+  }
 
   /**
    * OAuth error codes that require immediate propagation per RFC 6749/8628.
@@ -112,13 +129,6 @@ export class GitHubAuthManager {
     'expired_token',
     'access_denied'
   ] as const;
-
-  private apiCache: APICache;
-  private activePolling: AbortController | null = null;
-  
-  constructor(apiCache: APICache) {
-    this.apiCache = apiCache;
-  }
 
   /**
    * Determines if an OAuth error is terminal and should propagate immediately.
@@ -212,7 +222,7 @@ export class GitHubAuthManager {
    * Check current authentication status
    */
   async getAuthStatus(): Promise<AuthStatus> {
-    const token = await TokenManager.getGitHubTokenAsync();
+    const token = await this.tokenManager.getGitHubTokenAsync();
     
     if (!token) {
       return {
@@ -245,7 +255,7 @@ export class GitHubAuthManager {
    * Initiate the device flow authentication process
    */
   async initiateDeviceFlow(): Promise<DeviceCodeResponse> {
-    const clientId = await GitHubAuthManager.getClientId();
+    const clientId = await this.getClientId();
     // getClientId() always returns a value (env, config, or default)
     
     // Log the OAuth flow step for debugging
@@ -255,10 +265,10 @@ export class GitHubAuthManager {
       throw new Error('OAUTH_NO_CLIENT_ID: No OAuth client ID configured. Set DOLLHOUSE_GITHUB_CLIENT_ID environment variable.');
     }
     
-    logger.debug('OAUTH_STEP_2: Initiating device flow', { url: GitHubAuthManager.DEVICE_CODE_URL });
+    logger.debug('OAUTH_STEP_2: Initiating device flow', { url: this.DEVICE_CODE_URL });
     
     try {
-      const response = await this.fetchWithRetry(GitHubAuthManager.DEVICE_CODE_URL, {
+      const response = await this.fetchWithRetry(this.DEVICE_CODE_URL, {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
@@ -303,7 +313,7 @@ export class GitHubAuthManager {
           if (errorData.error_description) {
             throw new Error(`OAUTH_API_ERROR: ${errorData.error_description}`);
           }
-        } catch (parseError) {
+        } catch {
           // If we can't parse the error, provide HTTP status specific error
           if (response.status === 401) {
             throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
@@ -409,7 +419,7 @@ export class GitHubAuthManager {
    * @see https://datatracker.ietf.org/doc/html/rfc8628 - OAuth 2.0 Device Authorization Grant
    * @see https://datatracker.ietf.org/doc/html/rfc6749 - OAuth 2.0 Authorization Framework
    */
-  async pollForToken(deviceCode: string, interval: number = GitHubAuthManager.DEFAULT_POLL_INTERVAL): Promise<TokenResponse> {
+  async pollForToken(deviceCode: string, interval: number = this.DEFAULT_POLL_INTERVAL): Promise<TokenResponse> {
     // Create new abort controller for this polling session
     this.activePolling = new AbortController();
     const signal = this.activePolling.signal;
@@ -417,7 +427,7 @@ export class GitHubAuthManager {
     let attempts = 0;
     
     try {
-      while (attempts < GitHubAuthManager.MAX_POLL_ATTEMPTS) {
+      while (attempts < this.MAX_POLL_ATTEMPTS) {
         // Check if polling was aborted
         if (signal.aborted) {
           throw new Error('Authentication polling was cancelled');
@@ -426,14 +436,14 @@ export class GitHubAuthManager {
         attempts++;
         
         try {
-        const response = await fetch(GitHubAuthManager.TOKEN_URL, {
+        const response = await fetch(this.TOKEN_URL, {
           method: 'POST',
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            client_id: await GitHubAuthManager.getClientId() || '',
+            client_id: await this.getClientId() || '',
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })
@@ -553,7 +563,7 @@ export class GitHubAuthManager {
       metadata: {
         username: userInfo.login,
         scopes: tokenResponse.scope.split(' '),
-        tokenType: TokenManager.getTokenType(tokenResponse.access_token)
+        tokenType: this.tokenManager.getTokenType(tokenResponse.access_token)
       }
     });
     
@@ -571,16 +581,16 @@ export class GitHubAuthManager {
   async clearAuthentication(): Promise<void> {
     try {
       // Get the token before clearing it
-      const token = await TokenManager.getGitHubTokenAsync();
-      
+      const token = await this.tokenManager.getGitHubTokenAsync();
+
       if (token) {
         // Attempt to revoke the token on GitHub
         // Note: GitHub OAuth tokens don't have a revocation endpoint for device flow tokens
         // But we'll clear the cache and remove from storage
-        
+
         // Clear cached user info
         this.apiCache.clear();
-        
+
         // Log security event for audit trail
         SecurityMonitor.logSecurityEvent({
           type: 'TOKEN_CACHE_CLEARED',
@@ -589,13 +599,13 @@ export class GitHubAuthManager {
           details: 'GitHub authentication cleared by user request',
           metadata: {
             hadToken: true,
-            tokenPrefix: TokenManager.getTokenPrefix(token)
+            tokenPrefix: this.tokenManager.getTokenPrefix(token)
           }
         });
       }
-      
+
       // Remove from secure storage
-      await TokenManager.removeStoredToken();
+      await this.tokenManager.removeStoredToken();
       
       logger.info('GitHub authentication cleared successfully');
     } catch (error) {
@@ -609,7 +619,7 @@ export class GitHubAuthManager {
    */
   private async storeToken(token: string): Promise<void> {
     try {
-      await TokenManager.storeGitHubToken(token);
+      await this.tokenManager.storeGitHubToken(token);
       logger.info('GitHub token stored securely. You are now authenticated!');
     } catch (error) {
       ErrorHandler.logError('GitHubAuthManager.storeToken', error);
@@ -624,12 +634,12 @@ export class GitHubAuthManager {
    */
   private async fetchUserInfo(token: string): Promise<any> {
     // Check cache first
-    const cached = this.apiCache.get(GitHubAuthManager.USER_URL);
+    const cached = this.apiCache.get(this.USER_URL);
     if (cached) {
       return cached;
     }
     
-    const response = await this.fetchWithRetry(GitHubAuthManager.USER_URL, {
+    const response = await this.fetchWithRetry(this.USER_URL, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.github.v3+json'
@@ -694,7 +704,7 @@ export class GitHubAuthManager {
     });
     
     // Cache the result
-    this.apiCache.set(GitHubAuthManager.USER_URL, data);
+    this.apiCache.set(this.USER_URL, data);
     
     return data;
   }
@@ -734,20 +744,26 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
    */
   private async waitWithAbort(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(resolve, ms);
+      const cleanup = () => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = undefined;
+        }
+        signal.removeEventListener('abort', abortHandler);
+      };
+
+      let timeoutHandle: NodeJS.Timeout | undefined = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, ms);
       
       // Listen for abort signal
       const abortHandler = () => {
-        clearTimeout(timeout);
+        cleanup();
         reject(new Error('Wait aborted'));
       };
       
       signal.addEventListener('abort', abortHandler, { once: true });
-      
-      // Clean up after timeout
-      setTimeout(() => {
-        signal.removeEventListener('abort', abortHandler);
-      }, ms);
     });
   }
   

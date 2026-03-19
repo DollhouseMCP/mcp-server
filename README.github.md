@@ -10,7 +10,7 @@
 [![Core Build & Test](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml)
 [![Build Artifacts](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/DollhouseMCP/mcp-server/actions/workflows/build-artifacts.yml)
 [![Test Coverage](https://img.shields.io/badge/Coverage-1858%2B%20Tests-green)](https://github.com/DollhouseMCP/mcp-server/tree/develop/test/__tests__)
-[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/SECURITY.md)
+[![Enterprise-Grade Security](https://img.shields.io/badge/Security-Enterprise%20Grade-purple)](https://github.com/DollhouseMCP/mcp-server/blob/develop/../docs/security/documentation-guide.md)
 
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=DollhouseMCP_mcp-server&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=DollhouseMCP_mcp-server)
@@ -531,7 +531,7 @@ browse_collection type="personas"
 search_collection query="python" type="skills"
 ```
 
-> **📘 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/ROUNDTRIP_WORKFLOW_USER_GUIDE.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
+> **📘 New User?** Follow our [Roundtrip Workflow Guide](docs/guides/roundtrip-workflow-user-guide.md) for a complete walkthrough of discovering, customizing, and sharing AI elements with the community.
 
 ## ✨ Key Features
 
@@ -598,7 +598,7 @@ Use the comprehensive set of MCP tools to manage your portfolio:
 - `upload_to_portfolio` - Share elements with the community
 - `download_from_portfolio` - Get elements from GitHub
 
-For detailed portfolio documentation, see the [Portfolio Guide](docs/guides/PORTFOLIO_SETUP_GUIDE.md).
+For detailed portfolio documentation, see the [Portfolio Guide](docs/guides/portfolio-setup-guide.md).
 
 ## 🔒 Security
 
@@ -630,7 +630,7 @@ If you discover a security vulnerability, please:
 3. Include steps to reproduce if possible
 4. Allow up to 48 hours for initial response
 
-For more details, see our [Security Policy](SECURITY.md).
+For more details, see our [Security Policy](docs/security/documentation-guide.md).
 
 ## 🛠️ Development
 
@@ -678,7 +678,7 @@ src/
 └── elements/         # Element system
 ```
 
-For detailed development guides, see [Development Documentation](docs/development/).
+For detailed development guides, see [Development Documentation](docs/developer-guide/).
 
 ## 🏭 Architecture
 
@@ -716,7 +716,116 @@ DollhouseMCP follows a modular, extensible architecture built on the Model Conte
 4. **Storage** → Portfolio manager
 5. **Response** → Client
 
-For detailed architecture documentation, see [Architecture Guide](docs/ARCHITECTURE.md).
+For detailed architecture documentation, see [Architecture Guide](docs/architecture/overview.md).
+
+## 🔌 MCP-AQL Interface
+
+DollhouseMCP uses **MCP-AQL** (Model Context Protocol - Agent Query Language) to expose its tools efficiently. Instead of 42 individual tools consuming ~29,600 tokens, MCP-AQL consolidates operations into semantic endpoints.
+
+### Endpoint Modes
+
+| Mode | Endpoints | Tokens | Reduction |
+|------|-----------|--------|-----------|
+| **CRUDE** (Recommended) | 5 | ~4,314 | 85% fewer tokens |
+| **Single** | 1 | ~1,100 | 96% fewer tokens |
+
+**We recommend CRUDE mode** for most deployments. The five semantic endpoints (Create, Read, Update, Delete, Execute) provide:
+
+- **Host-level permission control** — MCP hosts like Claude Code can set different approval policies per endpoint (e.g., auto-approve `mcp_aql_read`, require confirmation for `mcp_aql_delete`). This lets you grant LLMs appropriate access levels based on operation risk.
+- **Clear operation categorization** — Operations are grouped by their side effects (read-only, additive, destructive)
+- **Better error messages** — Semantic endpoint mismatches provide actionable guidance
+- **85% token reduction** — Only ~4,300 tokens vs ~29,600 for discrete tools
+
+Use Single mode only when working with severely constrained context windows where every token matters.
+
+### Configuration
+
+DollhouseMCP uses two environment variables to control the interface:
+
+#### Level 1: Interface Mode (`MCP_INTERFACE_MODE`)
+
+Chooses which tool interface style to expose:
+
+| Value | Description | Token Cost |
+|-------|-------------|------------|
+| `mcpaql` | MCP-AQL consolidated interface (default) | See Level 2 |
+| `discrete` | ~40 individual tools (legacy) | ~29,600 tokens |
+
+#### Level 2: Endpoint Mode (`MCP_AQL_ENDPOINT_MODE`)
+
+**Only applies when `MCP_INTERFACE_MODE=mcpaql` (the default)**
+
+| Value | Description | Token Cost |
+|-------|-------------|------------|
+| `crude` | 5 CRUDE endpoints (default, recommended) | ~4,300 tokens |
+| `single` | 1 unified endpoint | ~1,100 tokens |
+
+#### Examples
+
+```bash
+# Default: MCP-AQL with CRUDE endpoints (recommended)
+# No environment variables needed - this is the default
+
+# Minimal tokens: MCP-AQL with single endpoint
+MCP_AQL_ENDPOINT_MODE=single
+
+# Legacy: Discrete individual tools
+MCP_INTERFACE_MODE=discrete
+```
+
+#### Claude Desktop Configuration
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/path/to/node_modules/@dollhousemcp/mcp-server/dist/index.js"],
+      "env": {
+        "MCP_AQL_ENDPOINT_MODE": "crude"
+      }
+    }
+  }
+}
+```
+
+> **⚠️ Migration Note:** Earlier documentation incorrectly showed `MCP_INTERFACE_MODE=crude`. If you have this in your config, change it to `MCP_AQL_ENDPOINT_MODE=crude`. The `MCP_INTERFACE_MODE` variable only accepts `mcpaql` or `discrete`.
+
+### CRUDE Endpoints
+
+| Endpoint | Purpose | Example Operations |
+|----------|---------|-------------------|
+| `mcp_aql_create` | Add new data | `create_element`, `activate_element`, `import_element` |
+| `mcp_aql_read` | Query data | `list_elements`, `get_element`, `search`, `introspect` |
+| `mcp_aql_update` | Modify data | `edit_element` |
+| `mcp_aql_delete` | Remove data | `delete_element`, `clear` |
+| `mcp_aql_execute` | Runtime operations | `execute_agent`, `complete_execution` |
+
+### Usage Example
+
+```javascript
+// List all personas
+{ operation: "list_elements", element_type: "persona" }
+
+// Create a new skill
+{
+  operation: "create_element",
+  element_type: "skill",
+  params: {
+    element_name: "CodeReviewer",
+    description: "Reviews code for quality"
+  }
+}
+
+// Discover available operations
+{ operation: "introspect", params: { query: "operations" } }
+```
+
+### Documentation
+
+For complete MCP-AQL documentation including all operations, introspection, and debugging:
+
+→ **[MCP-AQL Architecture Documentation](docs/architecture/mcp-aql/README.md)**
 
 ## 🎯 Troubleshooting
 
@@ -844,12 +953,12 @@ For detailed guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Documentation
 
-- **[Quick Start Guide](docs/QUICK_START.md)** - Get up and running quickly
-- **[Portfolio Setup](docs/guides/PORTFOLIO_SETUP_GUIDE.md)** - Configure your portfolio
-- **[Element Development](docs/ELEMENT_DEVELOPER_GUIDE.md)** - Create custom elements
-- **[API Reference](docs/API_REFERENCE.md)** - Complete tool documentation
-- **[Architecture Guide](docs/ARCHITECTURE.md)** - System design details
-- **[Security Documentation](docs/SECURITY.md)** - Security measures and best practices
+- **[Quick Start Guide](docs/guides/getting-started.md)** - Get up and running quickly
+- **[Portfolio Setup](docs/guides/portfolio-setup-guide.md)** - Configure your portfolio
+- **[Element Development](docs/developer-guide/element-development.md)** - Create custom elements
+- **[API Reference](docs/reference/api-reference.md)** - Complete tool documentation
+- **[Architecture Guide](docs/architecture/overview.md)** - System design details
+- **[Security Documentation](docs/security/documentation-guide.md)** - Security measures and best practices
 
 ### Repositories
 
@@ -1154,10 +1263,11 @@ The initial implementation incorrectly used lowercase for `mcpName`, causing a v
   - Uses shared PostHog project for community-wide insights
   - Default PostHog project key embedded (safe to expose - write-only)
   - Backward compatible with custom `POSTHOG_API_KEY` for enterprise deployments
-  - Multiple control levels:
-    - `DOLLHOUSE_TELEMETRY_OPTIN=true` - Enable remote telemetry
-    - `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` - Local only, no PostHog
-    - `DOLLHOUSE_TELEMETRY=false` - Disable all telemetry
+  - Remote telemetry piggybacks on the new opt‑in controls (details in the next bullet):
+    - First enable local telemetry with `DOLLHOUSE_TELEMETRY=true`
+    - Then opt into remote analytics with `DOLLHOUSE_TELEMETRY_OPTIN=true`
+    - Use `DOLLHOUSE_TELEMETRY_NO_REMOTE=true` to force local-only even when telemetry is enabled
+    - Set `DOLLHOUSE_TELEMETRY=false` (or leave it unset) to disable everything
   - GDPR compliant - fully opt-in by design
   - See [docs/privacy/OPERATIONAL_TELEMETRY.md](docs/privacy/OPERATIONAL_TELEMETRY.md) for complete privacy policy
   - Future incentive program planned for community contributors
@@ -1174,9 +1284,9 @@ The initial implementation incorrectly used lowercase for `mcpName`, causing a v
   - Early adopter advantage - ready when MCP clients implement full resource reading
 
 - **Operational Telemetry Foundation** (#1358, #1359) - Minimal installation tracking
-  - Tracks single installation event on first run (version, OS, Node version, MCP client)
-  - Local-only logging to `~/.dollhouse/telemetry.log` by default
-  - Simple opt-out via `DOLLHOUSE_TELEMETRY=false` environment variable
+  - Tracks single installation event on first run (version, OS, Node version, MCP client) **after you opt in**
+  - Local-only logging to `~/.dollhouse/telemetry.log` when `DOLLHOUSE_TELEMETRY=true`
+  - Simple opt-in/out via `DOLLHOUSE_TELEMETRY=true|false` environment variable
   - Privacy-first design: no PII, no behavioral data, no user content
   - Anonymous UUID generated locally for installation identification
   - Graceful error handling (never crashes if files can't be written)
@@ -1734,7 +1844,7 @@ For the complete license text, see [LICENSE](LICENSE).
 
 If you have questions about the license or what you can do with DollhouseMCP:
 
-- **Documentation**: [License FAQ](docs/LICENSE_FAQ.md)
+- **Documentation**: [License FAQ](../LICENSE)
 - **GitHub Issue**: Open an issue with the `license` label
 - **Discussions**: Ask in [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
 

@@ -111,7 +111,7 @@ echo ""
 docker run --rm -it \
   --env-file docker/test-environment.env \
   $GITHUB_AUTH \
-  -e TEST_GITHUB_USER=mickdarling \
+  -e TEST_GITHUB_USER=${TEST_GITHUB_USER:-test-user} \
   -e TEST_GITHUB_REPO=dollhouse-test-portfolio \
   claude-mcp-test-env:develop \
   sh -c "node /app/dist/index.js < <(node -e '$(cat /tmp/docker-test.js)')"

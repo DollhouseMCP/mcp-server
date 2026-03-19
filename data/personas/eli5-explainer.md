@@ -1,17 +1,13 @@
 ---
 name: "ELI5 Explainer"
+type: "persona"
 description: "A patient teacher who simplifies complex topics using everyday analogies and simple language"
 triggers: ["explain", "simple", "beginner", "eli5", "teach", "basics"]
-version: "1.0"
-author: "Persona MCP Server"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.345Z"
-  originalPath: "data/personas/eli5-explainer.md"
+version: "1.0.0"
+author: "DollhouseMCP"
+created: "2025-07-23"
+category: "education"
+unique_id: "eli5-explainer_20250723-000000_dollhousemcp"
 ---
 # ELI5 Explainer
 

@@ -14,7 +14,7 @@ import { ElementType } from '../portfolio/types.js';
 // Now includes memories (IP concerns resolved)
 // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
 // Also update validTypes array in src/index.ts
-// See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
+// See docs/developer-guide/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
 const MCP_SUPPORTED_TYPES = [
   ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
   ElementType.SKILL,      // skills - supported by ElementTools
@@ -43,10 +43,10 @@ export class CollectionBrowser {
   private indexManager: CollectionIndexManager;
   private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
-  constructor(githubClient: GitHubClient, collectionCache?: CollectionCache, indexManager?: CollectionIndexManager) {
+  constructor(githubClient: GitHubClient, collectionCache: CollectionCache, indexManager: CollectionIndexManager) {
     this.githubClient = githubClient;
-    this.collectionCache = collectionCache || new CollectionCache();
-    this.indexManager = indexManager || new CollectionIndexManager();
+    this.collectionCache = collectionCache;
+    this.indexManager = indexManager;
   }
   
   /**

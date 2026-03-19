@@ -10,11 +10,55 @@ import { logger } from './logger.js';
 
 export type InstallationType = 'npm' | 'git' | 'unknown';
 
+// Filesystem operations interface for dependency injection
+export interface IFileSystem {
+  realpathSync(path: string): string;
+  existsSync(path: string): boolean;
+  statSync(path: string): { isDirectory(): boolean };
+}
+
+// Default filesystem implementation
+const defaultFs: IFileSystem = {
+  realpathSync: fs.realpathSync,
+  existsSync: fs.existsSync,
+  statSync: fs.statSync
+};
+
 export class InstallationDetector {
   private static cachedType: InstallationType | null = null;
-  
+  private static fsOverride: IFileSystem | null = null;
+  private static importMetaUrlOverride: string | null = null;
+
   // Maximum directory levels to search upward for .git directory
   private static readonly MAX_SEARCH_DEPTH = 10;
+
+  /**
+   * Set filesystem operations for testing (DI)
+   */
+  static setFileSystem(fs: IFileSystem | null): void {
+    this.fsOverride = fs;
+  }
+
+  /**
+   * Set import.meta.url for testing
+   */
+  static setImportMetaUrl(url: string | null): void {
+    this.importMetaUrlOverride = url;
+  }
+
+  /**
+   * Get the current filesystem implementation
+   */
+  private static getFs(): IFileSystem {
+    return this.fsOverride || defaultFs;
+  }
+
+  /**
+   * Get the current import.meta.url
+   */
+  private static getImportMetaUrl(): string {
+    return this.importMetaUrlOverride || import.meta.url;
+  }
   
   /**
    * Detect the installation type (npm global, git clone, or unknown)
@@ -24,21 +68,23 @@ export class InstallationDetector {
     if (this.cachedType !== null) {
       return this.cachedType;
     }
-    
+
+    const fileSystem = this.getFs();
+
     try {
       // Get the directory where this file is located
-      const currentFileUrl = import.meta.url;
+      const currentFileUrl = this.getImportMetaUrl();
       const currentFilePath = fileURLToPath(currentFileUrl);
       let currentDir = path.dirname(currentFilePath);
-      
+
       // Resolve symlinks to get the real path
       try {
-        currentDir = fs.realpathSync(currentDir);
-      } catch (error) {
+        currentDir = fileSystem.realpathSync(currentDir);
+      } catch {
         // If realpath fails, continue with original path
         logger.debug('[InstallationDetector] Could not resolve real path, using original');
       }
-      
+
       // Check if we're in a node_modules directory (npm installation)
       // Use path separator to ensure we match the exact package name
       // Normalize the path to handle both Windows and Unix separators
@@ -49,22 +95,22 @@ export class InstallationDetector {
         this.cachedType = 'npm';
         return 'npm';
       }
-      
+
       // Check for .git directory (git installation)
       // Search up from current directory
       let searchDir = currentDir;
       for (let i = 0; i < this.MAX_SEARCH_DEPTH; i++) {
         const gitDir = path.join(searchDir, '.git');
         try {
-          if (fs.existsSync(gitDir) && fs.statSync(gitDir).isDirectory()) {
+          if (fileSystem.existsSync(gitDir) && fileSystem.statSync(gitDir).isDirectory()) {
             logger.debug('[InstallationDetector] Detected git installation');
             this.cachedType = 'git';
             return 'git';
           }
-        } catch (error) {
+        } catch {
           // Ignore errors and continue searching
         }
-        
+
         const parentDir = path.dirname(searchDir);
         if (parentDir === searchDir) {
           // Reached root directory
@@ -72,7 +118,7 @@ export class InstallationDetector {
         }
         searchDir = parentDir;
       }
-      
+
       logger.warn('[InstallationDetector] Could not determine installation type');
       this.cachedType = 'unknown';
       return 'unknown';
@@ -90,18 +136,20 @@ export class InstallationDetector {
     if (this.getInstallationType() !== 'npm') {
       return null;
     }
-    
+
+    const fileSystem = this.getFs();
+
     try {
-      const currentFileUrl = import.meta.url;
+      const currentFileUrl = this.getImportMetaUrl();
       const currentFilePath = fileURLToPath(currentFileUrl);
       let currentDir = path.dirname(currentFilePath);
-      
+
       // Find the root of the npm package
       // Normalize paths to handle Windows and Unix separators
       const npmPackagePattern = path.normalize('node_modules/@dollhousemcp/mcp-server');
       while (path.normalize(currentDir).includes(npmPackagePattern)) {
         const packageJsonPath = path.join(currentDir, 'package.json');
-        if (fs.existsSync(packageJsonPath)) {
+        if (fileSystem.existsSync(packageJsonPath)) {
           return currentDir;
         }
         const parentDir = path.dirname(currentDir);
@@ -111,7 +159,7 @@ export class InstallationDetector {
     } catch (error) {
       logger.error('[InstallationDetector] Error finding npm global path:', error);
     }
-    
+
     return null;
   }
   
@@ -122,19 +170,21 @@ export class InstallationDetector {
     if (this.getInstallationType() !== 'git') {
       return null;
     }
-    
+
+    const fileSystem = this.getFs();
+
     try {
-      const currentFileUrl = import.meta.url;
+      const currentFileUrl = this.getImportMetaUrl();
       const currentFilePath = fileURLToPath(currentFileUrl);
       let currentDir = path.dirname(currentFilePath);
-      
+
       // Search up for .git directory
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < this.MAX_SEARCH_DEPTH; i++) {
         const gitDir = path.join(currentDir, '.git');
-        if (fs.existsSync(gitDir) && fs.statSync(gitDir).isDirectory()) {
+        if (fileSystem.existsSync(gitDir) && fileSystem.statSync(gitDir).isDirectory()) {
           return currentDir;
         }
-        
+
         const parentDir = path.dirname(currentDir);
         if (parentDir === currentDir) break;
         currentDir = parentDir;
@@ -142,7 +192,7 @@ export class InstallationDetector {
     } catch (error) {
       logger.error('[InstallationDetector] Error finding git repository path:', error);
     }
-    
+
     return null;
   }
   
@@ -153,18 +203,20 @@ export class InstallationDetector {
     const type = this.getInstallationType();
     
     switch (type) {
-      case 'npm':
+      case 'npm': {
         const npmPath = this.getNpmGlobalPath();
-        return npmPath 
+        return npmPath
           ? `npm global installation at ${npmPath}`
           : 'npm global installation';
-          
-      case 'git':
+      }
+
+      case 'git': {
         const gitPath = this.getGitRepositoryPath();
         return gitPath
           ? `git installation at ${gitPath}`
           : 'git installation';
-          
+      }
+
       default:
         return 'unknown installation type';
     }
@@ -175,5 +227,7 @@ export class InstallationDetector {
    */
   static clearCache(): void {
     this.cachedType = null;
+    this.fsOverride = null;
+    this.importMetaUrlOverride = null;
   }
 }

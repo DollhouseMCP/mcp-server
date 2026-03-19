@@ -1,0 +1,86 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2026-03-19",
+  "suppressions": [
+    {
+      "rule": "DMCP-SEC-005",
+      "file": "src/web/public/app.js",
+      "reason": "Client-side browser JavaScript. SecureYamlParser is a Node.js module unavailable in browser context. safeParseYaml() wrapper uses CORE_SCHEMA (safe, no custom types) with 512KB size limit. Data served from localhost or trusted GitHub collection API."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web/public/app.js",
+      "reason": "Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Input is served from the DollhouseMCP server which normalizes before serving."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/elements/memories/types.ts",
+      "reason": "Type definitions only - no security operations to log"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/elements/ensembles/context-examples.ts",
+      "reason": "Example code and documentation only - no security operations"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/elements/base/ElementValidation.ts",
+      "reason": "Validation utilities only - logging happens in callers"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/di/Container.ts",
+      "reason": "Dependency injection wiring only - logging happens in services"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/element-crud/helpers.ts",
+      "reason": "Helper utilities only - logging happens in calling handlers"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/cache/LRUCache.ts",
+      "reason": "Caching infrastructure only - logging happens in services using cache"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/element-crud/validateElement.ts",
+      "reason": "Delegates to element managers - logging happens in managers"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/element-crud/createElement.ts",
+      "reason": "Delegates to element managers - logging happens in managers"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/PersonaHandler.ts",
+      "reason": "Delegates to PersonaManager - logging happens in PersonaManager"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/ElementCRUDHandler.ts",
+      "reason": "Delegates to element managers - logging happens in managers"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/DisplayConfigHandler.ts",
+      "reason": "Delegates to IndicatorService - logging happens in IndicatorService.updateConfig()"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/PortfolioHandler.ts",
+      "reason": "Delegates to PortfolioManager/GitHubAuthManager - logging happens in services"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/GitHubAuthHandler.ts",
+      "reason": "Delegates to GitHubAuthManager - logging happens in GitHubAuthManager"
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/handlers/CollectionHandler.ts",
+      "reason": "Delegates to specialized services - logging happens in CollectionBrowser/ElementInstaller"
+    }
+  ]
+}

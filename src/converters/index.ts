@@ -12,6 +12,7 @@
 // Core converters
 export { DollhouseToAnthropicConverter } from './DollhouseToAnthropicConverter.js';
 export { AnthropicToDollhouseConverter } from './AnthropicToDollhouseConverter.js';
+export { AgentSkillConverter, AGENT_SKILL_MAPPING_VERSION } from './AgentSkillConverter.js';
 
 // Utilities
 export { SchemaMapper } from './SchemaMapper.js';
@@ -34,3 +35,15 @@ export type {
 export type {
     AnthropicSkillDirectory
 } from './AnthropicToDollhouseConverter.js';
+
+export type {
+    AgentSkillStructure,
+    DollhouseSkillArtifact,
+    SkillRoundTripState,
+    SkillConversionOptions,
+    SkillConversionResult,
+    ConversionReport,
+    ConversionWarning,
+    ConversionDirection,
+    SkillPathMode
+} from './AgentSkillConverter.js';

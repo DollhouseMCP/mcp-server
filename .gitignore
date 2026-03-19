@@ -13,12 +13,15 @@ build/
 src/generated/
 
 # Environment files
-.env
+# DO commit: .env (shared defaults, NO secrets)
+# DO commit: .env.example (documentation template)
+# DO NOT commit: .env.local, .env*.local (contain secrets)
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
-test/e2e/.env.test.local
+.env*.local
+tests/e2e/.env.test.local
 
 # Docker environment files (user-specific configs)
 # The .example files should be committed as templates
@@ -45,8 +48,8 @@ Thumbs.db
 
 # Test coverage
 coverage/
-test/coverage/
-test/coverage-integration/
+tests/coverage/
+tests/coverage-integration/
 *.lcov
 
 # Test results
@@ -56,7 +59,7 @@ test-results/
 .test-tmp/
 
 # Performance test temp directories 
-test/temp/*/
+tests/temp/*/
 
 # Logs
 logs/
@@ -71,6 +74,7 @@ pids/
 # Temporary files
 tmp/
 temp/
+.npm-cache/
 
 # QA test results and metrics (generated during testing)
 docs/QA/qa-*-test-results-*.json
@@ -91,8 +95,11 @@ jest.config.js
 # Windows installer (keep the shell script, ignore PowerShell for now)
 install.ps1
 
-# Security audit reports (keep private)
+# Security audit reports (generated, keep private)
 .security-audit/
+security-audit-report.md
+security-audit-report.json
+security-audit-result.json
 
 # QA test output files (generated, not source code)
 docs/QA/*-test-results-*.json
@@ -114,6 +121,7 @@ temp_sonar.json
 mark-*.sh
 hotspots.json
 
-# PostHog configuration (may contain sensitive keys)
-posthog.config.js
-.env.production
+# Self-hosted runner secrets
+.github/runners/.env
+*.mcpb
+.mcpb-staging/

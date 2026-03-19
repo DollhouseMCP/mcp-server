@@ -6,7 +6,8 @@
  * settings for different scenarios.
  */
 
-import { GoalPriority, GoalStatus, EisenhowerQuadrant } from './types.js';
+import { GoalPriority, EisenhowerQuadrant } from './types.js';
+import { EISENHOWER_THRESHOLDS } from './constants.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export interface GoalTemplate {
@@ -260,12 +261,14 @@ export function applyGoalTemplate(
 }
 
 /**
- * Calculate Eisenhower quadrant from importance and urgency
+ * Calculate Eisenhower quadrant from importance and urgency.
+ * Uses the threshold from EISENHOWER_THRESHOLDS.HIGH_PRIORITY to classify goals.
  */
-function calculateEisenhowerQuadrant(importance: number, urgency: number): EisenhowerQuadrant {
-  if (importance >= 7 && urgency >= 7) return 'do_first';
-  if (importance >= 7 && urgency < 7) return 'schedule';
-  if (importance < 7 && urgency >= 7) return 'delegate';
+export function calculateEisenhowerQuadrant(importance: number, urgency: number): EisenhowerQuadrant {
+  const threshold = EISENHOWER_THRESHOLDS.HIGH_PRIORITY;
+  if (importance >= threshold && urgency >= threshold) return 'do_first';
+  if (importance >= threshold && urgency < threshold) return 'schedule';
+  if (importance < threshold && urgency >= threshold) return 'delegate';
   return 'eliminate';
 }
 

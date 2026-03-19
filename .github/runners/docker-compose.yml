@@ -1,0 +1,152 @@
+# Self-hosted GitHub Actions Runner for DollhouseMCP
+#
+# Usage:
+#   1. Generate a runner token from GitHub:
+#      Settings > Actions > Runners > New self-hosted runner
+#      Or use: gh api -X POST repos/DollhouseMCP/mcp-server-v2-refactor/actions/runners/registration-token --jq '.token'
+#
+#   2. Create .env file with:
+#      GITHUB_TOKEN=<your-runner-token>
+#      RUNNER_NAME=dollhouse-mac-runner
+#
+#   3. Start the runner:
+#      docker-compose up -d
+#
+#   4. Check status:
+#      docker-compose logs -f
+#
+# The runner will automatically pick up jobs labeled 'self-hosted'
+
+services:
+  # Runner 1 - Primary runner
+  github-runner-1:
+    image: myoung34/github-runner:latest
+    container_name: dollhouse-github-runner-1
+    restart: unless-stopped
+    # Resource limits - 4GB per runner (with Jest maxWorkers=2, this is sufficient)
+    mem_limit: 4g
+    memswap_limit: 4g
+    environment:
+      # Repository to register with
+      REPO_URL: https://github.com/DollhouseMCP/mcp-server-v2-refactor
+      # Use ACCESS_TOKEN (PAT) instead of RUNNER_TOKEN for persistent runners
+      # PAT needs 'repo' scope for private repos
+      ACCESS_TOKEN: ${GITHUB_TOKEN}
+      # Runner name (shows up in GitHub UI)
+      RUNNER_NAME: ${RUNNER_NAME:-dollhouse-runner}-1
+      # Runner labels for job targeting
+      # Note: Container is Linux, but we include macOS label for host identification
+      # Workflows should use [self-hosted, Linux] for matching
+      LABELS: self-hosted,Linux,macOS,ARM64,docker
+      # Flag for tests to detect self-hosted Docker environment
+      # Used to skip tests that don't work with Docker root user (e.g., permission tests)
+      SELF_HOSTED_DOCKER: 'true'
+      # Runner group (default)
+      RUNNER_GROUP: Default
+      # Ephemeral mode - runner deletes itself after one job (more secure)
+      # Set to 'false' for persistent runner
+      EPHEMERAL: 'false'
+      # Work directory inside container
+      RUNNER_WORKDIR: /tmp/runner/work
+      # Node.js memory allocation - 3GB heap (container limit is 4GB)
+      NODE_OPTIONS: '--max-old-space-size=3072'
+    volumes:
+      # Docker socket for Docker-in-Docker capabilities
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent work directory
+      - runner-work:/tmp/runner/work
+      # Cache directories for faster builds
+      - runner-npm-cache:/root/.npm
+      - runner-node-modules:/tmp/runner/work/_tool
+    security_opt:
+      - label:disable
+    networks:
+      - runner-network
+
+  # Runner 2 - Parallel runner
+  github-runner-2:
+    image: myoung34/github-runner:latest
+    container_name: dollhouse-github-runner-2
+    restart: unless-stopped
+    mem_limit: 4g
+    memswap_limit: 4g
+    environment:
+      REPO_URL: https://github.com/DollhouseMCP/mcp-server-v2-refactor
+      ACCESS_TOKEN: ${GITHUB_TOKEN}
+      RUNNER_NAME: ${RUNNER_NAME:-dollhouse-runner}-2
+      LABELS: self-hosted,Linux,macOS,ARM64,docker
+      SELF_HOSTED_DOCKER: 'true'
+      RUNNER_GROUP: Default
+      EPHEMERAL: 'false'
+      RUNNER_WORKDIR: /tmp/runner/work
+      NODE_OPTIONS: '--max-old-space-size=3072'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work-2:/tmp/runner/work
+      - runner-npm-cache:/root/.npm
+      - runner-node-modules:/tmp/runner/work/_tool
+    security_opt:
+      - label:disable
+    networks:
+      - runner-network
+
+  # Runner 3 - Parallel runner
+  github-runner-3:
+    image: myoung34/github-runner:latest
+    container_name: dollhouse-github-runner-3
+    restart: unless-stopped
+    mem_limit: 4g
+    memswap_limit: 4g
+    environment:
+      REPO_URL: https://github.com/DollhouseMCP/mcp-server-v2-refactor
+      ACCESS_TOKEN: ${GITHUB_TOKEN}
+      RUNNER_NAME: ${RUNNER_NAME:-dollhouse-runner}-3
+      LABELS: self-hosted,Linux,macOS,ARM64,docker
+      SELF_HOSTED_DOCKER: 'true'
+      RUNNER_GROUP: Default
+      EPHEMERAL: 'false'
+      RUNNER_WORKDIR: /tmp/runner/work
+      NODE_OPTIONS: '--max-old-space-size=3072'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work-3:/tmp/runner/work
+      - runner-npm-cache:/root/.npm
+      - runner-node-modules:/tmp/runner/work/_tool
+    security_opt:
+      - label:disable
+    networks:
+      - runner-network
+
+  # Optional: Linux runner for cross-platform testing
+  github-runner-linux:
+    image: myoung34/github-runner:latest
+    container_name: dollhouse-github-runner-linux
+    profiles:
+      - linux  # Only starts with: docker-compose --profile linux up -d
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/DollhouseMCP/mcp-server-v2-refactor
+      ACCESS_TOKEN: ${GITHUB_TOKEN}
+      RUNNER_NAME: ${RUNNER_NAME:-dollhouse-mac-runner}-linux
+      LABELS: self-hosted,Linux,X64,docker
+      RUNNER_GROUP: Default
+      EPHEMERAL: 'false'
+      RUNNER_WORKDIR: /tmp/runner/work
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work-linux:/tmp/runner/work
+      - runner-npm-cache:/root/.npm
+    networks:
+      - runner-network
+
+volumes:
+  runner-work:
+  runner-work-2:
+  runner-work-3:
+  runner-work-linux:
+  runner-npm-cache:
+  runner-node-modules:
+
+networks:
+  runner-network:
+    driver: bridge

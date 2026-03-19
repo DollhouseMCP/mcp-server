@@ -20,20 +20,14 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndex, ElementDefinition } from './EnhancedIndexManager.js';
+import { EnhancedIndex, ElementDefinition } from './types/IndexTypes.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { parseElementId } from '../utils/elementId.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
 import {
-  BaseRelationship,
-  ParsedRelationship,
-  createRelationship,
-  parseRelationship,
-  isParsedRelationship,
-  deduplicateRelationships,
-  filterRelationshipsByStrength,
-  RelationshipTypes
+  BaseRelationship
 } from './types/RelationshipTypes.js';
 
 // Use BaseRelationship instead of importing Relationship from EnhancedIndexManager
@@ -129,8 +123,14 @@ export interface ElementPath {
   totalStrength: number;
 }
 
+export interface RelationshipManagerOptions {
+  config?: RelationshipConfig;
+  indexConfigManager: IndexConfigManager;
+  verbTriggerManager: VerbTriggerManager;
+  nlpScoring: NLPScoringManager;
+}
+
 export class RelationshipManager {
-  private static instance: RelationshipManager | null = null;
   private _nlpScoring: NLPScoringManager;
   private verbTriggers: VerbTriggerManager;
   private config: RelationshipConfig;
@@ -160,7 +160,13 @@ export class RelationshipManager {
     { type: 'has_example', pattern: /see\s+(\w+[-\w]*)\s+for\s+example/gi, confidence: 0.7 }
   ];
 
-  private constructor(config: RelationshipConfig = {}) {
+  constructor(options: RelationshipManagerOptions) {
+    const {
+      config = {},
+      verbTriggerManager,
+      nlpScoring,
+    } = options;
+
     this.config = {
       minConfidence: config.minConfidence || 0.5,
       maxRelationshipsPerElement: config.maxRelationshipsPerElement || 20,
@@ -168,17 +174,10 @@ export class RelationshipManager {
       customPatterns: config.customPatterns || []
     };
 
-    this._nlpScoring = new NLPScoringManager();
-    this.verbTriggers = VerbTriggerManager.getInstance();
+    this._nlpScoring = nlpScoring;
+    this.verbTriggers = verbTriggerManager;
 
     logger.debug('RelationshipManager initialized', { config: this.config });
-  }
-
-  public static getInstance(config?: RelationshipConfig): RelationshipManager {
-    if (!this.instance) {
-      this.instance = new RelationshipManager(config);
-    }
-    return this.instance;
   }
 
   /**

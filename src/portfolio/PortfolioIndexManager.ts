@@ -15,7 +15,6 @@
  * - Error handling and logging
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
@@ -26,6 +25,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { IndexConfigManager } from './config/IndexConfig.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export interface IndexEntry {
   filePath: string;
@@ -41,6 +41,11 @@ export interface IndexEntry {
     category?: string;
     created?: string;
     updated?: string;
+    /** Agent V2 `activates` field — maps element types to element names.
+     *  Uses Record<string, string[]> intentionally (not AgentActivates) to
+     *  avoid coupling the index layer to agent-specific types and to support
+     *  future element types without index changes. */
+    activates?: Record<string, string[]>;
   };
   lastModified: Date;
   filename: string; // Base filename without extension
@@ -81,12 +86,11 @@ export interface SearchResult {
 }
 
 export class PortfolioIndexManager {
-  private static instance: PortfolioIndexManager | null = null;
-  private static instanceLock = false;
-
   private index: PortfolioIndex | null = null;
   private lastBuilt: Date | null = null;
-  private readonly TTL_MS = IndexConfigManager.getInstance().getConfig().index.ttlMinutes * 60 * 1000;
+  private readonly TTL_MS: number;
+  private readonly portfolioManager: PortfolioManager;
+  private readonly fileOperations: IFileOperationsService;
   private isBuilding = false;
   private buildPromise: Promise<void> | null = null;
 
@@ -94,8 +98,15 @@ export class PortfolioIndexManager {
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY_MS = 100;
 
-  private constructor() {
+  public constructor(
+    private readonly indexConfigManager: IndexConfigManager,
+    portfolioManager: PortfolioManager,
+    fileOperations: IFileOperationsService
+  ) {
     logger.debug('PortfolioIndexManager created');
+    this.TTL_MS = this.indexConfigManager.getConfig().index.ttlMinutes * 60 * 1000;
+    this.portfolioManager = portfolioManager;
+    this.fileOperations = fileOperations;
   }
 
   /**
@@ -141,22 +152,6 @@ export class PortfolioIndexManager {
       }
     }
     return null;
-  }
-
-  public static getInstance(): PortfolioIndexManager {
-    if (!this.instance) {
-      if (this.instanceLock) {
-        throw new Error('PortfolioIndexManager instance is being created by another thread');
-      }
-      
-      try {
-        this.instanceLock = true;
-        this.instance = new PortfolioIndexManager();
-      } finally {
-        this.instanceLock = false;
-      }
-    }
-    return this.instance;
   }
 
   /**
@@ -307,7 +302,7 @@ export class PortfolioIndexManager {
     
     // 6. Search by description
     if (options.includeDescriptions !== false) {
-      for (const [_, entry] of index.byName) {
+      for (const [, entry] of index.byName) {
         if (entry.metadata.description && 
             this.matchesQuery(entry.metadata.description.toLowerCase(), queryTokens)) {
           addResult(entry, 'description', 1.5);
@@ -412,8 +407,8 @@ export class PortfolioIndexManager {
     logger.info('Building portfolio index...');
     
     try {
-      const portfolioManager = PortfolioManager.getInstance();
-      
+      const portfolioManager = this.portfolioManager;
+
       // Initialize empty index
       const newIndex: PortfolioIndex = {
         byName: new Map(),
@@ -438,9 +433,8 @@ export class PortfolioIndexManager {
           const elementDir = portfolioManager.getElementDir(elementType);
 
           // Check if directory exists
-          try {
-            await fs.access(elementDir);
-          } catch {
+          const dirExists = await this.fileOperations.exists(elementDir);
+          if (!dirExists) {
             logger.debug(`Element directory doesn't exist: ${elementDir}`);
             continue;
           }
@@ -448,12 +442,26 @@ export class PortfolioIndexManager {
           // FIX #1188: Special handling for memories - scan .yaml files in date folders
           if (elementType === ElementType.MEMORY) {
             // Memories are stored in date folders (YYYY-MM-DD) as .yaml files
-            const entries = await fs.readdir(elementDir, { withFileTypes: true });
+            const entryNames = await this.fileOperations.listDirectory(elementDir);
 
-            // First process any root .yaml files (legacy/backup)
-            const rootYamlFiles = entries
-              .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
-              .map(entry => entry.name);
+            // Separate directories from files
+            const directories: string[] = [];
+            const rootYamlFiles: string[] = [];
+
+            for (const entryName of entryNames) {
+              const entryPath = path.join(elementDir, entryName);
+              try {
+                const entryStat = await this.fileOperations.stat(entryPath);
+                if (entryStat.isDirectory()) {
+                  directories.push(entryName);
+                } else if (entryName.endsWith('.yaml')) {
+                  rootYamlFiles.push(entryName);
+                }
+              } catch {
+                // Skip entries we can't stat
+                continue;
+              }
+            }
 
             for (const file of rootYamlFiles) {
               try {
@@ -477,18 +485,30 @@ export class PortfolioIndexManager {
             }
 
             // Then process date folders
-            const dateFolders = entries
-              .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
-              .map(entry => entry.name);
+            const dateFolders = directories.filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name));
 
             for (const dateFolder of dateFolders) {
               const folderPath = path.join(elementDir, dateFolder);
-              const folderEntries = await fs.readdir(folderPath, { withFileTypes: true });
+              const folderEntryNames = await this.fileOperations.listDirectory(folderPath);
 
-              // Process direct YAML files in date folder
-              const yamlFiles = folderEntries
-                .filter(entry => !entry.isDirectory() && entry.name.endsWith('.yaml'))
-                .map(entry => entry.name);
+              // Separate directories from files in date folder
+              const subDirs: string[] = [];
+              const yamlFiles: string[] = [];
+
+              for (const folderEntryName of folderEntryNames) {
+                const folderEntryPath = path.join(folderPath, folderEntryName);
+                try {
+                  const folderEntryStat = await this.fileOperations.stat(folderEntryPath);
+                  if (folderEntryStat.isDirectory()) {
+                    subDirs.push(folderEntryName);
+                  } else if (folderEntryName.endsWith('.yaml')) {
+                    yamlFiles.push(folderEntryName);
+                  }
+                } catch {
+                  // Skip entries we can't stat
+                  continue;
+                }
+              }
 
               for (const file of yamlFiles) {
                 try {
@@ -514,13 +534,9 @@ export class PortfolioIndexManager {
 
               // FIX #1188: Process subdirectories for sharded memories
               // Large memories are stored as shards in named subdirectories
-              const subDirs = folderEntries
-                .filter(entry => entry.isDirectory())
-                .map(entry => entry.name);
-
               for (const subDir of subDirs) {
                 const subDirPath = path.join(folderPath, subDir);
-                const shardFiles = await fs.readdir(subDirPath);
+                const shardFiles = await this.fileOperations.listDirectory(subDirPath);
                 const shardYamlFiles = shardFiles.filter(file => file.endsWith('.yaml'));
 
                 // For sharded memories, look for metadata.yaml or the main file
@@ -573,7 +589,7 @@ export class PortfolioIndexManager {
             }
           } else {
             // Standard handling for other element types (.md files in root)
-            const files = await fs.readdir(elementDir);
+            const files = await this.fileOperations.listDirectory(elementDir);
             const mdFiles = files.filter(file => file.endsWith('.md'));
             totalFiles += mdFiles.length;
 
@@ -635,10 +651,10 @@ export class PortfolioIndexManager {
   private async createIndexEntry(filePath: string, elementType: ElementType): Promise<IndexEntry | null> {
     try {
       // Get file stats
-      const stats = await fs.stat(filePath);
-      
+      const stats = await this.fileOperations.stat(filePath);
+
       // Read file content
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await this.fileOperations.readFile(filePath, { source: 'PortfolioIndexManager.createIndexEntry' });
 
       // Parse frontmatter securely
       // SECURITY NOTE: Portfolio files are locally trusted content that users
@@ -666,9 +682,13 @@ export class PortfolioIndexManager {
         triggers: Array.isArray(parsed.data.triggers) ? parsed.data.triggers : [],
         category: parsed.data.category,
         created: parsed.data.created || parsed.data.created_date,
-        updated: parsed.data.updated || parsed.data.updated_date
+        updated: parsed.data.updated || parsed.data.updated_date,
+        // Issue #749: Carry agent `activates` through to index builder for relationship extraction
+        ...(parsed.data.activates && typeof parsed.data.activates === 'object'
+          ? { activates: parsed.data.activates as Record<string, string[]> }
+          : {})
       };
-      
+
       const entry: IndexEntry = {
         filePath,
         elementType,
@@ -695,10 +715,10 @@ export class PortfolioIndexManager {
   private async createMemoryIndexEntry(filePath: string, elementType: ElementType): Promise<IndexEntry | null> {
     try {
       // Get file stats
-      const stats = await fs.stat(filePath);
+      const stats = await this.fileOperations.stat(filePath);
 
       // Read file content
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await this.fileOperations.readFile(filePath, { source: 'PortfolioIndexManager.createMemoryIndexEntry' });
 
       // FIX #1196: Parse pure YAML using yaml.load()
       // Memory files are pure YAML without frontmatter markers, so we can't use SecureYamlParser
@@ -872,4 +892,16 @@ export class PortfolioIndexManager {
   private matchesQuery(text: string, queryTokens: string[]): boolean {
     return queryTokens.some(token => text.includes(token));
   }
+
+  /**
+   * Dispose internal state to release resources (used during shutdown/tests).
+   */
+  public dispose(): void {
+    this.index = null;
+    this.lastBuilt = null;
+    this.isBuilding = false;
+    this.buildPromise = null;
+  }
+
+
 }

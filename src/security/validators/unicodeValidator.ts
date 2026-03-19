@@ -11,7 +11,6 @@
  * Security: SEC-001 - Unicode attack prevention
  */
 
-import { SecurityError } from '../errors.js';
 import { SecurityMonitor } from '../securityMonitor.js';
 
 export interface UnicodeValidationResult {
@@ -48,6 +47,7 @@ export class UnicodeValidator {
    * U+007F-U+009F: Delete and C1 control codes
    * U+FFFE-U+FFFF: Non-characters that should never appear in valid text
    */
+  // eslint-disable-next-line no-control-regex -- Intentionally matching control chars for security sanitization
   private static readonly NON_PRINTABLE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uFFFE\uFFFF]/g; // NOSONAR - Intentionally matching control characters for security sanitization
   
   /**
@@ -88,6 +88,7 @@ export class UnicodeValidator {
    * Detects suspicious mixing of different Unicode scripts
    */
   private static readonly SCRIPT_PATTERNS = {
+    // eslint-disable-next-line no-control-regex -- Intentionally includes control chars for comprehensive Latin script detection
     LATIN: /[\u0000-\u007F\u00A0-\u00FF\u0100-\u017F\u0180-\u024F]/, // NOSONAR - Intentionally includes control characters for comprehensive Latin script detection
     // Use alternation to avoid SonarCloud thinking \u052F\u2DE0 is a combined character
     CYRILLIC: /(?:[\u0400-\u04FF]|[\u0500-\u052F]|[\u2DE0-\u2DFF]|[\uA640-\uA69F])/,
@@ -122,7 +123,7 @@ export class UnicodeValidator {
         SecurityMonitor.logSecurityEvent({
           type: 'UNICODE_DIRECTION_OVERRIDE',
           severity: 'HIGH',
-          source: 'unicode_validation',
+          source: 'UnicodeValidator',
           details: 'Direction override characters removed from content'
         });
       }
@@ -155,7 +156,7 @@ export class UnicodeValidator {
         SecurityMonitor.logSecurityEvent({
           type: 'UNICODE_MIXED_SCRIPT',
           severity: 'HIGH',
-          source: 'unicode_validation',
+          source: 'UnicodeValidator',
           details: `Mixed scripts detected: ${mixedScriptResult.scripts.join(', ')}`
         });
       }
@@ -173,7 +174,7 @@ export class UnicodeValidator {
           SecurityMonitor.logSecurityEvent({
             type: 'UNICODE_VALIDATION_ERROR',
             severity: 'LOW',
-            source: 'unicode_validation',
+            source: 'UnicodeValidator',
             details: 'Confusable characters normalized in legitimate multilingual content'
           });
         }
@@ -190,7 +191,7 @@ export class UnicodeValidator {
       SecurityMonitor.logSecurityEvent({
         type: 'UNICODE_VALIDATION_ERROR',
         severity: 'HIGH',
-        source: 'unicode_validation',
+        source: 'UnicodeValidator',
         details: `Unicode validation failed: ${error instanceof Error ? error.message : String(error)}`
       });
 

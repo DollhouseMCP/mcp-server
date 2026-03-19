@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/app/dollhousemcp/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",
+        "MCP_INTERFACE_MODE": "mcpaql",
+        "MCP_AQL_ENDPOINT_MODE": "single",
+        "NODE_ENV": "test",
+        "LOG_LEVEL": "info"
+      }
+    }
+  },
+  "defaultMcpServer": "dollhousemcp",
+  "_comment": "Single unified mcp_aql endpoint only. Minimal token footprint mode - one tool handles all operations via operation parameter routing. Issue #235"
+}

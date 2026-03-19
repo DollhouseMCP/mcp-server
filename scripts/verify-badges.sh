@@ -5,9 +5,9 @@ echo "================================"
 
 # Check if badges display correctly
 echo -e "\n📋 Badge URLs to verify:"
-echo "1. Windows: https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main"
-echo "2. macOS: https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main"
-echo "3. Linux: https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main"
+echo "1. Windows: https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main"
+echo "2. macOS: https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main"
+echo "3. Linux: https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main"
 
 # Extract badge URLs from README
 echo -e "\n🔗 Extracting badge links from README..."
@@ -36,8 +36,8 @@ fi
 
 echo -e "\n🎨 Theme Testing URLs:"
 echo "Test badges in different GitHub themes:"
-echo "Light theme: https://github.com/mickdarling/DollhouseMCP/tree/feature/platform-specific-badges?theme=light"
-echo "Dark theme: https://github.com/mickdarling/DollhouseMCP/tree/feature/platform-specific-badges?theme=dark"
+echo "Light theme: https://github.com/DollhouseMCP/mcp-server/tree/feature/platform-specific-badges?theme=light"
+echo "Dark theme: https://github.com/DollhouseMCP/mcp-server/tree/feature/platform-specific-badges?theme=dark"
 
 echo -e "\n♿ Accessibility Testing:"
 echo "Badge ALT texts added:"
@@ -50,7 +50,7 @@ echo -e "\n✅ Main Branch Query Verification:"
 echo "Testing if branch:main query parameter filters correctly..."
 if command -v curl &> /dev/null; then
     # Test if the URL with query parameter is valid
-    response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "https://github.com/mickdarling/DollhouseMCP/actions/workflows/core-build-test.yml?query=branch:main")
+    response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "https://github.com/DollhouseMCP/mcp-server/actions/workflows/core-build-test.yml?query=branch:main")
     if [ "$response" = "200" ]; then
         echo "✓ Query parameter URL is valid (HTTP $response)"
     else

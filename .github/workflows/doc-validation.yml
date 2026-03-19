@@ -1,0 +1,83 @@
+name: Documentation Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "src/**/*.ts"
+      - "src/handlers/**"
+      - "src/elements/**"
+      - "src/services/**"
+      - "src/di/Container.ts"
+      - "src/config/**"
+      - "src/security/**"
+
+jobs:
+  doc-validation:
+    # Only run for mickdarling (self-hosted runner with Claude Code access)
+    # Skip Dependabot PRs
+    if: github.actor == 'mickdarling' && github.actor != 'dependabot[bot]'
+
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      pull-requests: write  # Needed for use_sticky_comment (post/update PR comments)
+      issues: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Documentation Validation
+        uses: anthropics/claude-code-action@de8e0b9c42c6cb58e904c857f164aa072244c1ac # beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}  # Use workflow token directly, skip OIDC (no id-token:write needed)
+          use_sticky_comment: true
+
+          direct_prompt: |
+            You are a documentation validation agent. Your job is to check whether code changes in this PR would invalidate any claims made in the user-facing documentation.
+
+            ## Documents to validate against
+
+            Read these 3 documentation files:
+            1. `docs/guides/public-beta-onboarding.md` — New user onboarding guide
+            2. `docs/guides/v2-migration-guide.md` — v1.x to v2.0 migration guide
+            3. `docs/guides/llm-quick-reference.md` — LLM operation reference
+
+            ## What to check
+
+            For each code change in this PR, determine if it would make any of these docs incorrect:
+
+            1. **Operation names**: If an operation was renamed, added, or removed in `OperationRouter.ts`, check all 3 docs for stale references.
+            2. **Endpoint routing**: If an operation moved between CRUDE endpoints, check the LLM reference and migration guide.
+            3. **Parameter changes**: If parameter names, types, or required status changed in `OperationSchema.ts`, check the LLM reference.
+            4. **Permission levels**: If gatekeeper policies changed in `OperationPolicies.ts`, check the migration guide and LLM reference.
+            5. **Element types**: If element types were added or removed, check the onboarding guide glossary and element listings.
+            6. **Bundled elements**: If files were added/removed in `data/`, check the onboarding guide element tables.
+            7. **Environment variables**: If env vars changed in `src/config/env.ts`, check the migration guide env var table.
+            8. **Agent schema**: If agent metadata fields changed in `AgentManager.ts`, check the migration guide agent section.
+            9. **New features**: If a significant new capability was added, note that the onboarding guide may need updating.
+
+            ## Output format
+
+            If documentation is still accurate:
+            ```
+            ✅ Documentation Validation: No updates needed
+            All 3 user-facing guides remain accurate after this PR's changes.
+            ```
+
+            If documentation needs updating:
+            ```
+            ⚠️ Documentation Validation: Updates recommended
+
+            ### [filename.md]
+            - **Line X**: [specific claim that is now incorrect]
+              - **Code change**: [what changed and where]
+              - **Suggested fix**: [what the doc should say instead]
+            ```
+
+            Be specific. Only flag real inaccuracies — don't flag things that are still correct.
+            Do NOT modify any files. Only report findings.

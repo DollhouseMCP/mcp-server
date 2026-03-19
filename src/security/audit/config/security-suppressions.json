@@ -39,6 +39,51 @@
       "rule": "DMCP-SEC-006",
       "file": "**/scripts/lib/gh-command.js",
       "reason": "CLI utility - SecurityMonitor not available in standalone scripts. Security ensured via input validation and secure command execution patterns (DMCP-SEC-001, DMCP-SEC-002)"
+    },
+    {
+      "rule": "OWASP-A03-002",
+      "file": "**/packages/safety/src/DisplayService.ts",
+      "reason": "Intentional execSync for cross-platform OS dialogs. All user input is properly escaped using escapeShellArg (Unix) or Base64 encoding (PowerShell)"
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/packages/safety/src/DisplayService.ts",
+      "reason": "DisplayService receives sanitized input from TieredSafetyService. Unicode normalization happens at validation boundaries, not in display layer"
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/packages/safety/src/TieredSafetyService.ts",
+      "reason": "TieredSafetyService validates operation safety levels, not user input. Input validation with Unicode normalization is handled by upstream validators"
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/utils/EvictingQueue.ts",
+      "reason": "Generic data structure - does not process user input. All callers (Agent, SecurityTelemetry, SecurityMonitor, Logger) sanitize input before pushing to the queue"
+    }
+    {
+      "rule": "DMCP-SEC-005",
+      "file": "**/src/web/public/app.js",
+      "reason": "Client-side browser JavaScript. SecureYamlParser is a Node.js module unavailable in browser context. safeParseYaml() wrapper uses CORE_SCHEMA (safe, no custom types) with 512KB size limit. Data served from localhost or trusted GitHub collection API."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/web/public/app.js",
+      "reason": "Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Input served from DollhouseMCP server which normalizes before serving."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/web/server.ts",
+      "reason": "NFC normalization added to req.path in SPA fallback handler. Scanner may flag file-level despite fix at line 180."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/web/routes.ts",
+      "reason": "NFC normalization via normalizeInput() added to all req.params. Scanner may flag file-level despite fix."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/converters/AgentSkillConverter.ts",
+      "reason": "NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. Scanner may flag file-level despite fix."
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

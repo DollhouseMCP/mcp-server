@@ -1,0 +1,79 @@
+# CI Simulation Dockerfile
+# Purpose: Create constrained container environments matching GitHub Actions runner specs
+# for local performance calibration and CI prediction
+
+# Base image matching GitHub Actions ubuntu-latest Node 20 environment
+FROM node:20-slim AS ci-base
+
+# Install minimal dependencies matching GitHub Actions environment
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy package files and local workspace packages
+COPY package*.json ./
+COPY tsconfig.json ./
+COPY packages/ ./packages/
+
+# Install dependencies (matching CI environment, includes local @dollhousemcp/safety)
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+COPY data/personas/ ./data/personas/
+COPY scripts/ ./scripts/
+COPY tests/ ./tests/
+
+# Build the application
+RUN npm run build
+
+# ============================================================================
+# CI SIMULATION STAGE: ubuntu-latest (2 CPU, 7GB RAM)
+# ============================================================================
+FROM ci-base AS ci-ubuntu-simulation
+
+# Set environment variables to match GitHub Actions
+ENV CI=true \
+    GITHUB_ACTIONS=true \
+    NODE_ENV=test \
+    NODE_OPTIONS="--max-old-space-size=7168" \
+    DOLLHOUSE_CALIBRATION_MODE=ci-simulation \
+    DOLLHOUSE_SIMULATION_PLATFORM=ubuntu-latest
+
+# Resource constraints are applied via docker run/compose:
+# --cpus="2.0" --memory="7g"
+
+# Default command runs calibration benchmarks
+CMD ["npx", "tsx", "tests/calibration/run-docker.ts"]
+
+# ============================================================================
+# UNCONSTRAINED STAGE: Full local resources for baseline comparison
+# ============================================================================
+FROM ci-base AS unconstrained
+
+ENV DOLLHOUSE_CALIBRATION_MODE=local \
+    NODE_ENV=test
+
+# No resource constraints - uses full host capabilities
+
+CMD ["npx", "tsx", "tests/calibration/run-local.ts"]
+
+# ============================================================================
+# CALIBRATION COMPARISON STAGE: Runs both and compares
+# ============================================================================
+FROM ci-base AS calibration-runner
+
+# Install additional tools for comparison and reporting
+RUN npm install -g json
+
+ENV DOLLHOUSE_CALIBRATION_MODE=comparison \
+    NODE_ENV=test
+
+# This stage expects to be run with scripts that coordinate
+# multiple containers and compare results
+CMD ["npx", "tsx", "tests/calibration/compare-results.ts"]

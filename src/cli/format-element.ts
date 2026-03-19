@@ -23,6 +23,8 @@ import { ElementFormatter, FormatterResult } from '../utils/ElementFormatter.js'
 import { ElementType } from '../portfolio/types.js';
 import { PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { FileOperationsService } from '../services/FileOperationsService.js';
+import { FileLockManager } from '../security/fileLockManager.js';
 
 const program = new Command();
 
@@ -66,12 +68,14 @@ function logCliOperation(files: string[], options: any): void {
  * Create formatter with options
  */
 function createFormatter(options: any): ElementFormatter {
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
   return new ElementFormatter({
     backup: options.backup,
     inPlace: options.inPlace,
     validate: options.validate,
     outputDir: options.outputDir
-  });
+  }, fileOperations);
 }
 
 /**
@@ -99,7 +103,9 @@ async function processFormatOperation(
  */
 async function formatAllElements(formatter: ElementFormatter): Promise<FormatterResult[]> {
   console.log(chalk.blue('Formatting all portfolio elements...'));
-  const portfolioManager = PortfolioManager.getInstance();
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+  const portfolioManager = new PortfolioManager(fileOperations);
   const results: FormatterResult[] = [];
 
   for (const elementType of Object.values(ElementType)) {
@@ -128,7 +134,9 @@ async function formatElementType(
   }
 
   console.log(chalk.blue(`Formatting all ${elementType} elements...`));
-  const portfolioManager = PortfolioManager.getInstance();
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+  const portfolioManager = new PortfolioManager(fileOperations);
   const elementDir = portfolioManager.getElementDir(elementType);
   const parentDir = path.dirname(elementDir);
   return formatter.formatElementType(elementType, parentDir);

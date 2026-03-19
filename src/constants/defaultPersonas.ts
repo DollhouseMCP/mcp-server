@@ -6,7 +6,7 @@ export const DEFAULT_PERSONAS = [
   'creative-writer.md',
   'debug-detective.md',
   'eli5-explainer.md',
-  'excel-expert.md',
+  'security-analyst.md',
   'technical-analyst.md'
 ] as const;
 

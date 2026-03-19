@@ -3,7 +3,7 @@
  * Handles both AI evaluation and user feedback to drive continuous improvement.
  */
 
-import { IElement, ElementRatings, UserFeedback, FeedbackContext } from './IElement.js';
+import { IElement, UserFeedback, FeedbackContext } from './IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 
 // Main rating manager interface

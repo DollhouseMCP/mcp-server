@@ -39,7 +39,24 @@ export interface GitHubRateStatus extends RateLimitStatus {
   rateLimitInfo?: GitHubRateLimitInfo;
 }
 
-export class GitHubRateLimiter {
+/**
+ * Interface for rate limiting GitHub API requests
+ * Used for dependency injection
+ */
+export interface IRateLimiter {
+  queueRequest<T>(
+    operation: string,
+    apiCall: () => Promise<T>,
+    priority?: 'high' | 'normal' | 'low'
+  ): Promise<T>;
+  getStatus(): GitHubRateStatus;
+  clearQueue(): void;
+  reset(): void;
+  cleanup(): void;
+  dispose(): void;
+}
+
+export class GitHubRateLimiter implements IRateLimiter {
   private rateLimiter!: RateLimiter;
   private requestQueue: GitHubApiRequest[] = [];
   private processing = false;
@@ -47,11 +64,14 @@ export class GitHubRateLimiter {
   private isAuthenticated = false;
   private initialized = false;
   private initializationPromise?: Promise<void>;
+  private tokenManager: TokenManager;
 
-  constructor() {
+  constructor(tokenManager: TokenManager) {
     // FIX (SonarCloud S7059): Removed async operations from constructor
     // Previously: Called async updateLimitsForAuthStatus() directly
     // Now: Using lazy initialization pattern - async work deferred to first use
+
+    this.tokenManager = tokenManager;
 
     // Initialize with conservative defaults synchronously
     this.rateLimiter = new RateLimiter({
@@ -100,7 +120,7 @@ export class GitHubRateLimiter {
    */
   private async updateLimitsForAuthStatus(): Promise<void> {
     try {
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       const newIsAuthenticated = !!token;
       
       // Only recreate rate limiter if auth status changed
@@ -138,6 +158,8 @@ export class GitHubRateLimiter {
         windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
         minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
       });
+      // Re-throw to allow retry mechanism in ensureInitialized()
+      throw error;
     }
   }
 
@@ -159,6 +181,11 @@ export class GitHubRateLimiter {
         logger.warn('Periodic auth status check failed', { error });
       });
     }, 5 * 60 * 1000);
+
+    // Prevent the interval from keeping the event loop alive
+    if (typeof this.statusCheckInterval.unref === 'function') {
+      this.statusCheckInterval.unref();
+    }
   }
 
   /**
@@ -462,7 +489,15 @@ export class GitHubRateLimiter {
     this.processing = false;
     logger.info('GitHub rate limiter reset');
   }
-}
 
-// Singleton instance for global use
-export const githubRateLimiter = new GitHubRateLimiter();
+  /**
+   * Dispose of background timers and queued requests.
+   */
+  dispose(): void {
+    if (this.statusCheckInterval) {
+      clearInterval(this.statusCheckInterval);
+      this.statusCheckInterval = undefined;
+    }
+    this.clearQueue();
+  }
+}

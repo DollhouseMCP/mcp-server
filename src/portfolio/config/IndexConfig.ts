@@ -14,6 +14,7 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { deepMerge } from '../../utils/deepMerge.js';
 
 export interface IndexConfiguration {
   // Index Management
@@ -81,7 +82,6 @@ export interface IndexConfiguration {
 }
 
 export class IndexConfigManager {
-  private static instance: IndexConfigManager | null = null;
   private config: IndexConfiguration;
   private configPath: string;
   private defaultConfig: IndexConfiguration = {
@@ -138,20 +138,13 @@ export class IndexConfigManager {
     }
   };
 
-  private constructor() {
+  constructor() {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.configPath = path.join(portfolioPath, '.config', 'index-config.json');
     this.config = { ...this.defaultConfig };
     // FIX: Race condition - loadConfig is async but called sync in constructor
     // Now using synchronous loading in constructor
     this.loadConfigSync();
-  }
-
-  public static getInstance(): IndexConfigManager {
-    if (!this.instance) {
-      this.instance = new IndexConfigManager();
-    }
-    return this.instance;
   }
 
   /**
@@ -170,7 +163,7 @@ export class IndexConfigManager {
 
       // Deep merge with defaults to handle missing fields
       // FIX: Loaded config should override defaults
-      this.config = this.deepMerge(this.defaultConfig, loadedConfig);
+      this.config = deepMerge<IndexConfiguration>(this.defaultConfig, loadedConfig);
 
       logger.info('Index configuration loaded', { path: this.configPath });
     } catch (error) {
@@ -228,7 +221,7 @@ export class IndexConfigManager {
     // Validate the updates before applying
     this.validateConfig(updates);
 
-    this.config = this.deepMerge(this.config, updates);
+    this.config = deepMerge<IndexConfiguration>(this.config, updates);
     await this.saveConfig();
 
     logger.info('Index configuration updated', { updates });
@@ -437,33 +430,6 @@ export class IndexConfigManager {
     await this.saveConfig();
 
     logger.info('Index configuration reset to defaults');
-  }
-
-  /**
-   * Deep merge objects
-   */
-  private deepMerge(target: any, source: any): any {
-    const output = { ...target };
-
-    if (this.isObject(target) && this.isObject(source)) {
-      Object.keys(source).forEach(key => {
-        if (this.isObject(source[key])) {
-          if (!(key in target)) {
-            Object.assign(output, { [key]: source[key] });
-          } else {
-            output[key] = this.deepMerge(target[key], source[key]);
-          }
-        } else {
-          Object.assign(output, { [key]: source[key] });
-        }
-      });
-    }
-
-    return output;
-  }
-
-  private isObject(item: any): boolean {
-    return item && typeof item === 'object' && !Array.isArray(item);
   }
 
   /**

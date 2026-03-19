@@ -120,9 +120,7 @@ export class FeedbackProcessor implements IFeedbackProcessor {
       logger.warn(`Feedback truncated from ${normalizedFeedback.length} to ${this.MAX_FEEDBACK_LENGTH} characters`);
       normalizedFeedback = normalizedFeedback.substring(0, this.MAX_FEEDBACK_LENGTH);
     }
-    
-    const feedbackLower = normalizedFeedback.toLowerCase();
-    
+
     // Analyze sentiment
     const sentiment = await this.analyzeSentiment(normalizedFeedback);
     
@@ -164,7 +162,7 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     };
     
     // Check each sentiment category
-    for (const [category, config] of Object.entries(this.sentimentPatterns)) {
+    for (const [, config] of Object.entries(this.sentimentPatterns)) {
       for (const pattern of config.patterns) {
         if (normalized.includes(pattern)) {
           scores[config.sentiment] += this.getPatternWeight(pattern, normalized);
@@ -247,8 +245,8 @@ export class FeedbackProcessor implements IFeedbackProcessor {
     
     // Infer from sentiment patterns
     let bestMatch = { rating: null as number | null, weight: 0 };
-    
-    for (const [category, config] of Object.entries(this.sentimentPatterns)) {
+
+    for (const [, config] of Object.entries(this.sentimentPatterns)) {
       for (const pattern of config.patterns) {
         if (normalized.includes(pattern)) {
           const weight = this.getPatternWeight(pattern, normalized);

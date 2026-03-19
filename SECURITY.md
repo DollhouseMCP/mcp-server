@@ -1,173 +1,76 @@
 # Security Policy
 
-## Our Commitment to Security
-
-DollhouseMCP takes the security of our software and our users seriously. We've built security into every layer of our architecture, from input validation to secure update mechanisms. This document outlines our security policies, how to report vulnerabilities, and what you can expect from us.
+This project treats security as a core requirement. The goal of this document is to explain how to report vulnerabilities, what level of response you can expect, and which companion documents contain the deeper technical details.
 
 ## Reporting Security Vulnerabilities
 
-### 🚨 How to Report
+Please use a private channel so we can triage issues without exposing users:
 
-If you discover a security vulnerability in DollhouseMCP, please help us address it responsibly:
+- Open a [GitHub private security advisory](https://github.com/DollhouseMCP/mcp-server/security/advisories/new). This is the preferred path.
+- If you cannot use GitHub advisories, send a direct message to the maintainer. (A dedicated security@ inbox is not yet available.)
 
-1. **DO NOT** create a public GitHub issue
-2. **DO NOT** disclose the vulnerability publicly until we've had time to address it
-3. **DO** use one of these secure channels:
-   - Open a [Private Security Advisory](https://github.com/DollhouseMCP/mcp-server/security/advisories/new) on GitHub
-   - Email us at: security@dollhousemcp.com (coming soon)
+When you file a report, include:
 
-### What to Include
-
-Please provide as much information as possible:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if you have one)
-- Your contact information (for follow-up)
+- A clear description of the vulnerability and its impact
+- Exact reproduction steps or proof-of-concept code
+- Affected versions (if you know them)
+- Any workaround or fix ideas you have
+- Contact information so we can follow up
 
 ## Response Expectations
 
-**Important**: DollhouseMCP is an open-source project maintained by a single developer in their spare time.
+DollhouseMCP is maintained by one person. There is no formal SLA and no team on call. Realistic expectations:
 
-### What This Means
-- **No guaranteed response times** - I will respond when I'm able to
-- **No obligation to fix issues** - I will make best efforts to address security issues, but cannot guarantee fixes
-- **No SLA or support commitments** - This is free software provided as-is
-- **Response times vary** - Depending on my availability, work schedule, and other life commitments
+- Critical issues are reviewed as soon as the maintainer becomes aware of them.
+- Lower-severity issues are handled when time allows.
+- Fixes are shipped on a best-effort basis. Pull requests that include tests are always welcome.
+- Communication may be delayed; please be patient and avoid public disclosure until we agree the fix is ready.
 
-### Realistic Expectations
-- **Critical security issues**: I'll try to look at these as soon as I become aware of them
-- **Other issues**: Will be addressed when time permits
-- **Patches and fixes**: Provided on a best-effort basis with no guaranteed timeline
-- **Communication**: I'll try to acknowledge reports when I can, but please be patient
-
-This is a personal project I maintain because I believe in it, not a commercial product with support obligations.
-
-### Want to Help?
-If you'd like to contribute to improving DollhouseMCP's security response:
-- **Submit PRs**: Security fixes with tests are always welcome
-- **Volunteer Time**: If you have security expertise and want to help review/fix issues, please reach out
-- **Sponsor Development**: Donations help me allocate more time to the project
-- **Join as Maintainer**: I'm open to bringing on trusted contributors to help with security responses
-
-Contact me if you're interested in helping make DollhouseMCP more secure and sustainable.
+If you want to help improve incident response, consider contributing patches, reviewing fixes, or sponsoring development time.
 
 ## Supported Versions
 
-We provide security updates for the following versions:
+Security fixes target actively maintained releases. At the moment, the three most recent minor versions receive fixes for critical issues; older versions are considered end-of-life. See the release notes for up-to-date support signals.
 
-| Version | Support Status | Security Updates |
-|---------|---------------|------------------|
-| 1.9.x | ✅ Current | All security updates |
-| 1.8.x | ⚠️ Maintenance | Critical security only |
-| 1.7.x | ⚠️ Limited | Critical security only |
-| < 1.7.0 | ❌ End of Life | No updates |
+## Current Defenses
 
-## Security Measures
+The MCP server does not ship an auto-update mechanism. Users update through npm or their preferred package manager.
 
-### What We Do to Keep You Safe
+Security protections focus on the running server and the content it processes:
 
-#### 🛡️ Defense in Depth
-We implement multiple layers of security:
-- **Input Validation**: All user inputs are validated and sanitized
-- **Output Encoding**: Protection against XSS and injection attacks
-- **Path Traversal Prevention**: File system access is strictly controlled
-- **Rate Limiting**: API and operation limits prevent abuse
-- **Secure Dependencies**: Regular updates and vulnerability scanning
+- **Input and content validation**: All inbound payloads pass through strict schema checks, Unicode normalization, and size limits.
+- **Secret handling**: Access tokens stay in memory only, logs redact sensitive fields, and file writes use atomic operations with rollback.
+- **Sandboxed file access**: File operations run through transaction helpers that enforce allowed paths and clean up on failure.
+- **Rate limiting and abuse detection**: Shared utilities (for example `SecureDownloader` and the generic rate limiter) throttle downloads and flag suspicious activity.
+- **Security testing**: Dedicated Jest suites (`npm run security:rapid`, `npm run security:all`) exercise command-injection, path-traversal, YAML parsing, and other high-risk paths before we ship.
 
-#### 🔐 Data Protection
-- **No Credential Storage**: Tokens and secrets are never persisted
-- **Automatic Redaction**: Sensitive data is scrubbed from all logs
-- **Minimal Data Collection**: We only collect what's necessary
-- **Local-First Architecture**: Your data stays on your machine
+For the deeper implementation details and operational checklists, refer to the `docs/security/` directory:
 
-#### 🚫 Content Security
-We actively prevent malicious content:
-- **Pattern Detection**: Known attack vectors are blocked
-- **Secret Scanning**: Prevents accidental credential exposure
-- **YAML Injection Protection**: Safe parsing with strict schemas
-- **Command Injection Prevention**: No direct shell execution
-- **URL Validation**: Prevents SSRF and malicious redirects
+- `docs/security/measures.md` — defensive controls and how they are implemented
+- `docs/security/architecture.md` — threat model and component-level view
+- `docs/security/testing.md` and `docs/security/testing-quick-start.md` — how to run and extend the security test suites
+- `docs/security/security-checklist.md` — hardening steps for maintainers before a release
 
-#### 🔄 Secure Updates
-- **Signature Verification**: Updates are cryptographically signed
-- **Integrity Checks**: File hashes verify authenticity
-- **Rollback Protection**: Safe recovery from failed updates
-- **Version Validation**: Prevents downgrade attacks
+## Reporting Scope
 
-## Scope
+In-scope findings include remote code execution, injection flaws, authentication/authorization bypasses, data leaks, privilege escalation, and denial-of-service attacks caused by our code. Issues that require physical access, target third-party dependencies, or lack a reproducible proof-of-concept are typically out of scope unless you can show a direct exploit path.
 
-### In Scope
-The following are considered valid security issues:
-- Remote code execution
-- Injection vulnerabilities (SQL, NoSQL, Command, LDAP, etc.)
-- Cross-site scripting (XSS)
-- Cross-site request forgery (CSRF)
-- Authentication/authorization bypasses
-- Information disclosure
-- Denial of service vulnerabilities
-- Path traversal/Local file inclusion
-- Unsafe deserialization
-- Security misconfigurations
+## Disclosure Process
 
-### Out of Scope
-The following are generally not considered security issues:
-- Attacks requiring physical access to a user's device
-- Social engineering attacks
-- Denial of service from external dependencies
-- Issues in third-party services we integrate with
-- Theoretical vulnerabilities without proof of concept
-- Scanner reports without demonstration of impact
+Once a report arrives:
 
-## Recognition
+1. We acknowledge it when we can reproduce the issue or need more detail.
+2. The maintainer investigates, prioritizes a fix, or clarifies why it is out of scope.
+3. When a fix is ready, we publish a release and (if appropriate) a GitHub security advisory.
+4. After users have time to update, we coordinate public disclosure with the reporter.
 
-We appreciate the security research community's efforts in helping keep DollhouseMCP safe. Security researchers who report valid vulnerabilities will be:
+Because this is a volunteer effort, timelines vary. If you require a faster turnaround, you are encouraged to submit a tested pull request.
 
-- Acknowledged in our release notes (unless you prefer to remain anonymous)
-- Listed in our Security Hall of Fame
-- Eligible for our bug bounty program (coming soon)
+## Contact & Follow-Up
 
-## Security Hardening Recommendations
+- Vulnerability reports: GitHub private advisories (preferred)
+- Questions about the policy: open a GitHub Discussion thread
+- General bugs: file a normal GitHub issue
 
-For maximum security, we recommend:
-
-1. **Keep Updated**: Always use the latest version
-2. **Review Elements**: Audit community elements before activation
-3. **Limit Permissions**: Run with minimum necessary privileges
-4. **Monitor Activity**: Review logs for suspicious behavior
-5. **Report Issues**: Help us by reporting suspicious content
-
-## Disclosure Policy
-
-As a solo-maintained project, the disclosure process is straightforward:
-
-1. **Report Receipt**: I'll acknowledge when I see it (no guaranteed timeline)
-2. **Assessment**: I'll evaluate the issue when I have time
-3. **Fix Development**: If I agree it's a security issue and have time, I'll work on a fix
-4. **Release**: When a fix is ready, I'll release it with appropriate notes
-5. **Public Disclosure**: Security advisories will be published when appropriate
-
-**Please note**:
-- I appreciate responsible disclosure and will do my best to coordinate with reporters
-- However, I cannot guarantee specific timelines or commit to embargo periods
-- If you need a fix urgently, you're welcome to submit a pull request
-
-## Contact
-
-- **Security Issues**: Use GitHub Security Advisories or security@dollhousemcp.com (coming soon)
-- **General Questions**: [GitHub Discussions](https://github.com/DollhouseMCP/mcp-server/discussions)
-- **Bug Reports**: [GitHub Issues](https://github.com/DollhouseMCP/mcp-server/issues)
-
-## Learn More
-
-For technical details about our security architecture and implementations:
-- [Security Measures](docs/security/SECURITY_MEASURES.md)
-- [Security Architecture](docs/security/SECURITY_ARCHITECTURE.md)
-- [Security Testing Guide](docs/security/SECURITY_TESTING.md)
-
----
-
-*Last Updated: September 19, 2025*
-*Version: 1.0*
-
-Thank you for helping keep DollhouseMCP secure! 🔐
+*Last reviewed: October 2025*  
+The security docs and tests evolve alongside the codebase. When in doubt, check `docs/security/` for the most current procedures.

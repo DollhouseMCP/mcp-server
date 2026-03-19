@@ -279,4 +279,11 @@ export class CollectionSeeder {
   static getSeedItem(path: string): CollectionItem | undefined {
     return this.getSeedData().find(item => item.path === path);
   }
+
+  /**
+   * Clear the cached seed data (mainly for testing)
+   */
+  static clearCache(): void {
+    this.cachedSeedData = null;
+  }
 }
