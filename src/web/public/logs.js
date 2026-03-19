@@ -37,6 +37,7 @@
   let filterLevel = '';
   let filterSource = '';
   let filterMessage = '';
+  let filterCorrelationId = '';
 
   // ── DOM references ─────────────────────────────────────────────────────
   let viewport, scrollSpacer, jumpBtn, statusDot, statusText, entryCountEl;
@@ -123,6 +124,12 @@
           <button class="log-action-btn" id="log-copy-selected-btn" style="display:none">Copy Selected (<span id="log-select-count">0</span>)</button>
           <button class="log-action-btn" id="log-deselect-btn" style="display:none">Deselect All</button>
           <span class="log-entry-count" id="log-entry-count">0 entries</span>
+        </div>
+        <div class="log-trace-banner" id="log-trace-banner" style="display:none">
+          <span class="log-trace-banner-icon">&#x1f517;</span>
+          <span>Tracing request: <code id="log-trace-id"></code></span>
+          <span id="log-trace-count"></span>
+          <button class="log-trace-clear" id="log-trace-clear">&#x2715; Clear trace</button>
         </div>
         <div class="log-viewport" id="log-viewport">
           <div class="log-scroll-spacer" id="log-scroll-spacer"></div>
@@ -212,6 +219,25 @@
     levelSelect.addEventListener('change', () => { filterLevel = levelSelect.value; applyFilters(); });
     sourceInput.addEventListener('input', () => { filterSource = sourceInput.value; applyFiltersDebounced(); });
     searchInput.addEventListener('input', () => { filterMessage = searchInput.value; applyFiltersDebounced(); });
+    document.getElementById('log-trace-clear').addEventListener('click', clearTraceFilter);
+  }
+
+  function setTraceFilter(correlationId) {
+    filterCorrelationId = correlationId;
+    const banner = document.getElementById('log-trace-banner');
+    const traceIdEl = document.getElementById('log-trace-id');
+    const traceCountEl = document.getElementById('log-trace-count');
+    traceIdEl.textContent = correlationId;
+    banner.style.display = '';
+    applyFilters();
+    const count = getVisibleCount();
+    traceCountEl.textContent = '(' + count + ' entries)';
+  }
+
+  function clearTraceFilter() {
+    filterCorrelationId = '';
+    document.getElementById('log-trace-banner').style.display = 'none';
+    applyFilters();
   }
 
   // ── SSE connection ───────────────────────────────────────────────────────
@@ -274,6 +300,7 @@
   const LEVEL_PRIORITY = { debug: 0, info: 1, warn: 2, error: 3 };
 
   function matchesFilters(entry) {
+    if (filterCorrelationId && entry.correlationId !== filterCorrelationId) return false;
     if (filterCategory && entry.category !== filterCategory) return false;
     if (filterLevel && (LEVEL_PRIORITY[entry.level] || 0) < (LEVEL_PRIORITY[filterLevel] || 0)) return false;
     if (filterSource && !entry.source.toLowerCase().includes(filterSource.toLowerCase())) return false;
@@ -282,7 +309,7 @@
   }
 
   function applyFilters() {
-    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage;
+    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId;
     if (!hasFilter) {
       filteredIndices = null;
     } else {
@@ -362,10 +389,14 @@
     const src = escapeHtml(entry.source || '').slice(0, 30);
     const msg = escapeHtml(entry.message || '').slice(0, 300);
     const checkbox = '<span class="log-checkbox' + (isSelected ? ' checked' : '') + '"></span>';
+    const corrBadge = entry.correlationId
+      ? '<span class="log-corr-badge" title="Click to trace this request" data-correlation-id="' + escapeHtml(entry.correlationId) + '">' + escapeHtml(entry.correlationId.slice(-8)) + '</span>'
+      : '<span class="log-corr-badge empty"></span>';
     return checkbox +
       '<span class="log-time">' + time + '</span>' +
       '<span class="log-level ' + entry.level + '">' + entry.level + '</span>' +
       '<span class="log-category">' + entry.category + '</span>' +
+      corrBadge +
       '<span class="log-source">' + src + '</span>' +
       '<span class="log-message">' + msg + '</span>';
   }
@@ -389,7 +420,9 @@
     html += detailField('Message', escapeHtml(entry.message || ''));
 
     if (entry.correlationId) {
-      html += detailField('Correlation ID', escapeHtml(entry.correlationId));
+      html += detailField('Correlation ID',
+        '<a href="#" class="log-trace-link" data-correlation-id="' + escapeHtml(entry.correlationId) + '">' +
+        '&#x1f517; ' + escapeHtml(entry.correlationId) + '</a>');
     }
 
     if (entry.data && Object.keys(entry.data).length > 0) {
@@ -412,6 +445,19 @@
 
     body.innerHTML = html;
     detailModal.hidden = false;
+
+    // Bind trace link click in modal
+    const traceLink = body.querySelector('.log-trace-link');
+    if (traceLink) {
+      traceLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        const corrId = traceLink.dataset.correlationId;
+        if (corrId) {
+          closeDetailModal();
+          setTraceFilter(corrId);
+        }
+      });
+    }
   }
 
   function closeDetailModal() {
@@ -443,6 +489,21 @@
     const entryId = row.dataset.entryId;
     const visIdx = parseInt(row.dataset.visibleIndex, 10);
     if (!entryId) return;
+
+    // Click on correlation badge = filter by correlationId
+    const clickedTrace = e.target.closest('.log-corr-badge');
+    if (clickedTrace) {
+      e.stopPropagation();
+      const corrId = clickedTrace.dataset.correlationId;
+      if (corrId) {
+        if (filterCorrelationId === corrId) {
+          clearTraceFilter();
+        } else {
+          setTraceFilter(corrId);
+        }
+      }
+      return;
+    }
 
     // Click on checkbox area = toggle select
     const clickedCheckbox = e.target.closest('.log-checkbox');

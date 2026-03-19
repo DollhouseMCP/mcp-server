@@ -247,6 +247,73 @@
 .log-entry.level-error .log-message { color: #ef4444; }
 .log-entry.level-warn .log-message { color: #f59e0b; }
 
+/* ── Correlation ID badge (per-row) ───────────────────────────── */
+.log-corr-badge {
+  flex-shrink: 0;
+  width: 60px;
+  text-align: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--signal, #6366f1) 12%, transparent);
+  color: var(--signal, #6366f1);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.log-corr-badge:hover:not(.empty) {
+  background: color-mix(in srgb, var(--signal, #6366f1) 25%, transparent);
+}
+.log-corr-badge.empty {
+  background: none;
+  cursor: default;
+}
+
+/* ── Trace banner ────────────────────────────────────────────── */
+.log-trace-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--signal) 10%, var(--surface-0));
+  border-bottom: 1px solid color-mix(in srgb, var(--signal) 30%, transparent);
+  font-size: 12px;
+  color: var(--ink-700);
+}
+.log-trace-banner-icon { font-size: 13px; }
+.log-trace-banner code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  background: color-mix(in srgb, var(--signal) 15%, transparent);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.log-trace-clear {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--ink-500);
+}
+.log-trace-clear:hover {
+  background: var(--surface-1);
+  color: var(--ink-900);
+}
+
+/* ── Trace link in detail modal ──────────────────────────────── */
+.log-trace-link {
+  color: var(--signal);
+  text-decoration: none;
+  cursor: pointer;
+}
+.log-trace-link:hover {
+  text-decoration: underline;
+}
+
 /* ── Detail modal card ────────────────────────────────────────── */
 .log-detail-modal {
   position: fixed;
