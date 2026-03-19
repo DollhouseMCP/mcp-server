@@ -82,28 +82,23 @@ function getPerformanceThreshold(baseMs: number): number {
  * @param baseMB - Base memory threshold in MB for Node 22.x+ on Linux/macOS
  * @returns Adjusted threshold in MB based on platform and Node version
  */
-function getMemoryThreshold(baseMB: number): number {
-  // Node version detection - Node 20.x has more aggressive memory retention
-  const nodeMajor = Number.parseInt(process.version.split('.')[0].substring(1));
-  const isNode20 = nodeMajor < 22;
-
-  // Platform-specific memory thresholds
-  switch (process.platform) {
-    case 'win32':
-      // Windows always defers GC longer
-      return 300;
-    case 'darwin':
-      // macOS Node 20.x behaves like Windows (deferred GC)
-      // macOS Node 22.x+ behaves like Linux (efficient GC)
-      return isNode20 ? 300 : baseMB;
-    case 'linux':
-      // Linux Node 22.x+ has efficient GC
-      // Linux Node 20.x needs slightly higher threshold
-      return isNode20 ? baseMB * 2 : baseMB;
-    default:
-      // Unknown platforms get conservative threshold
-      return 300;
-  }
+/**
+ * Compute a relative memory growth threshold based on baseline heap size.
+ *
+ * Uses a multiplier of the baseline heap rather than a fixed MB value,
+ * so the test catches real leaks (unbounded growth) regardless of the
+ * runner's hardware, V8 version, or GC timing characteristics.
+ *
+ * A genuine memory leak in 100k iterations would show 10x+ growth.
+ * Normal GC variance across platforms stays well under 3x.
+ *
+ * @param baselineHeapMB - heap size before the test loop (MB)
+ * @param maxGrowthMultiplier - maximum acceptable growth as a multiple of baseline (default: 3x)
+ * @returns threshold in MB
+ */
+function getRelativeMemoryThreshold(baselineHeapMB: number, maxGrowthMultiplier = 3): number {
+  // Floor of 50MB ensures very small baselines don't create impossibly tight thresholds
+  return Math.max(baselineHeapMB * maxGrowthMultiplier, 50);
 }
 
 describe('InputValidator Performance Tests', () => {
@@ -499,20 +494,21 @@ describe('InputValidator Performance Tests', () => {
       const heapGrowth = (memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024;
       const throughput = iterations / duration;
 
+      const baselineHeapMB = memBefore.heapUsed / 1024 / 1024;
+      const memoryThreshold = getRelativeMemoryThreshold(baselineHeapMB);
+
       console.log(`\n📊 Memory Usage Metrics (100k validations):`);
       console.log(`   Duration: ${duration.toFixed(2)}ms`);
       console.log(`   Throughput: ${throughput.toFixed(2)} validations/ms`);
-      console.log(`   Heap before: ${(memBefore.heapUsed / 1024 / 1024).toFixed(2)} MB`);
+      console.log(`   Heap before: ${baselineHeapMB.toFixed(2)} MB`);
       console.log(`   Heap after: ${(memAfter.heapUsed / 1024 / 1024).toFixed(2)} MB`);
       console.log(`   Heap growth: ${heapGrowth.toFixed(2)} MB`);
+      console.log(`   Threshold: ${memoryThreshold.toFixed(2)} MB (3x baseline or 50MB floor)`);
+      console.log(`   Platform: ${process.platform}, Node: ${process.version}`);
 
-      // Memory growth should be minimal for 100k operations
-      // Pre-compiled regexes should prevent excessive memory allocation
-      //
-      // Thresholds are set to detect genuine memory leaks (which would show 500MB+)
-      // while accommodating platform-specific and Node version-specific V8 GC timing differences.
-      // See getMemoryThreshold() for detailed platform/version behavior explanation.
-      const memoryThreshold = getMemoryThreshold(50);
+      // Relative threshold: heap growth must stay under 3x baseline.
+      // A genuine leak in 100k iterations would show 10x+ growth.
+      // Normal GC variance stays well under 3x regardless of platform.
       expect(Math.abs(heapGrowth)).toBeLessThan(memoryThreshold);
     });
 
@@ -535,12 +531,13 @@ describe('InputValidator Performance Tests', () => {
 
       const heapGrowth = (memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024;
 
+      const baselineHeapMB = memBefore.heapUsed / 1024 / 1024;
+      const memoryThreshold = getRelativeMemoryThreshold(baselineHeapMB);
+
       console.log(`\n📊 Sanitization Memory Metrics:`);
       console.log(`   Heap growth: ${heapGrowth.toFixed(2)} MB`);
+      console.log(`   Threshold: ${memoryThreshold.toFixed(2)} MB (3x baseline or 50MB floor)`);
 
-      // Platform and Node version-specific memory threshold
-      // See getMemoryThreshold() for detailed platform/version behavior explanation
-      const memoryThreshold = getMemoryThreshold(50);
       expect(Math.abs(heapGrowth)).toBeLessThan(memoryThreshold);
     });
 
@@ -574,8 +571,8 @@ describe('InputValidator Performance Tests', () => {
       console.log(`   Memory per path: ${(heapGrowth * 1024 / results.length).toFixed(2)} KB`);
 
       // Growth should be linear with input, not exponential
-      // Issue #506: Use getMemoryThreshold() for platform-aware scaling
-      expect(heapGrowth).toBeLessThan(getMemoryThreshold(50));
+      const baselineHeapMB = memBefore.heapUsed / 1024 / 1024;
+      expect(heapGrowth).toBeLessThan(getRelativeMemoryThreshold(baselineHeapMB));
     });
   });
 
