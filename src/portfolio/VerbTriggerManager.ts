@@ -13,8 +13,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { EnhancedIndexManager, EnhancedIndex, ActionDefinition } from './EnhancedIndexManager.js';
-import { ElementDefinition } from './EnhancedIndexManager.js';
+import { EnhancedIndex, ElementDefinition, ActionDefinition } from './types/IndexTypes.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
@@ -93,13 +92,10 @@ export interface ElementMatch {
 }
 
 export class VerbTriggerManager {
-  private static instance: VerbTriggerManager | null = null;
-  private indexManager: EnhancedIndexManager | null = null;
   private verbCache: Map<string, ElementMatch[]> = new Map();
   private config: VerbTriggerConfig;
 
-  private constructor(config: VerbTriggerConfig = {}) {
-    // Don't initialize indexManager here to avoid circular dependency
+  constructor(config: VerbTriggerConfig = {}) {
     this.config = {
       confidenceThreshold: config.confidenceThreshold || 0.5,
       includeSynonyms: config.includeSynonyms !== false,
@@ -108,20 +104,6 @@ export class VerbTriggerManager {
     };
 
     logger.debug('VerbTriggerManager initialized', { config: this.config });
-  }
-
-  private getIndexManager(): EnhancedIndexManager {
-    if (!this.indexManager) {
-      this.indexManager = EnhancedIndexManager.getInstance();
-    }
-    return this.indexManager;
-  }
-
-  public static getInstance(config?: VerbTriggerConfig): VerbTriggerManager {
-    if (!this.instance) {
-      this.instance = new VerbTriggerManager(config);
-    }
-    return this.instance;
   }
 
   /**
@@ -385,7 +367,7 @@ export class VerbTriggerManager {
 
     // 5. Infer from element names (e.g., "debug-detective" -> "debug")
     for (const [type, typeElements] of Object.entries(index.elements)) {
-      for (const [name, element] of Object.entries(typeElements)) {
+      for (const [name] of Object.entries(typeElements)) {
         const elementNameLower = name.toLowerCase();
         if (elementNameLower.includes(verb) ||
             elementNameLower.includes(this.getBaseVerb(verb) || verb)) {
@@ -475,7 +457,7 @@ export class VerbTriggerManager {
    * Get synonyms for a verb
    */
   private getSynonyms(verb: string): string[] {
-    for (const [category, verbs] of Object.entries(VERB_TAXONOMY)) {
+    for (const [, verbs] of Object.entries(VERB_TAXONOMY)) {
       if (verbs.includes(verb)) {
         return verbs;
       }
@@ -640,7 +622,7 @@ export class VerbTriggerManager {
     }
 
     // Name-based suggestions
-    for (const [category, verbs] of Object.entries(VERB_TAXONOMY)) {
+    for (const [, verbs] of Object.entries(VERB_TAXONOMY)) {
       for (const verb of verbs) {
         if (name.includes(verb) && !suggestions.includes(verb)) {
           suggestions.push(verb);

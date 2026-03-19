@@ -2,7 +2,6 @@
  * Smart cache for collection index with conditional fetching and performance optimization
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { CollectionIndex, CachedIndex } from '../types/collection.js';
 import { logger } from '../utils/logger.js';
@@ -10,6 +9,7 @@ import { GitHubClient } from '../collection/GitHubClient.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { LRUCache, CacheFactory } from './LRUCache.js';
 import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export class CollectionIndexCache {
   private cache: CachedIndex | null = null;
@@ -21,19 +21,28 @@ export class CollectionIndexCache {
   private performanceMonitor: PerformanceMonitor;
   private memoryCache: LRUCache<any>;
   private fetchPromise: Promise<CollectionIndex> | null = null; // Prevent concurrent fetches
-  
-  constructor(githubClient: GitHubClient, baseDir: string = process.cwd()) {
+
+  // File operations service for secure file I/O
+  private readonly fileOperations: IFileOperationsService;
+
+  constructor(
+    githubClient: GitHubClient,
+    baseDir: string,
+    performanceMonitor: PerformanceMonitor,
+    fileOperations: IFileOperationsService
+  ) {
     this.githubClient = githubClient;
     this.cacheDir = path.join(baseDir, '.dollhousemcp', 'cache');
     this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
-    this.performanceMonitor = PerformanceMonitor.getInstance();
-    
+    this.performanceMonitor = performanceMonitor;
+    this.fileOperations = fileOperations;
+
     // Initialize memory cache for frequently accessed data
     this.memoryCache = CacheFactory.createAPICache({
       maxSize: 50,
       maxMemoryMB: 10,
       ttlMs: 5 * 60 * 1000, // 5 minutes
-      onEviction: (key, value) => {
+      onEviction: (key, _value) => {
         logger.debug('Collection memory cache eviction', { key });
       }
     });
@@ -210,15 +219,17 @@ export class CollectionIndexCache {
   private async saveToDisk(cache: CachedIndex): Promise<void> {
     try {
       await this.ensureCacheDir();
-      
+
       const cacheData = {
         ...cache,
         fetchedAt: cache.fetchedAt.toISOString() // Serialize date
       };
-      
+
       const data = JSON.stringify(cacheData, null, 2);
-      await fs.writeFile(this.cacheFile, data, 'utf8');
-      
+      await this.fileOperations.writeFile(this.cacheFile, data, {
+        source: 'CollectionIndexCache.saveToDisk'
+      });
+
       logger.debug('Collection index cache saved to disk');
     } catch (error) {
       logger.debug('Failed to save collection index cache:', error);
@@ -241,10 +252,12 @@ export class CollectionIndexCache {
         });
         return null;
       }
-      
-      const data = await fs.readFile(this.cacheFile, 'utf8');
+
+      const data = await this.fileOperations.readFile(this.cacheFile, {
+        source: 'CollectionIndexCache.loadFromDisk'
+      });
       const cacheData = JSON.parse(data);
-      
+
       return {
         ...cacheData,
         fetchedAt: new Date(cacheData.fetchedAt) // Deserialize date
@@ -262,7 +275,7 @@ export class CollectionIndexCache {
    */
   private async ensureCacheDir(): Promise<void> {
     try {
-      await fs.mkdir(this.cacheDir, { recursive: true });
+      await this.fileOperations.createDirectory(this.cacheDir);
     } catch (error) {
       logger.error('Failed to create cache directory:', error);
       throw error;
@@ -274,22 +287,24 @@ export class CollectionIndexCache {
    */
   async clearCache(): Promise<void> {
     const startTime = Date.now();
-    
+
     this.cache = null;
     this.memoryCache.clear();
-    
+
     // Cancel any ongoing fetch
     this.fetchPromise = null;
-    
+
     try {
-      await fs.unlink(this.cacheFile);
+      await this.fileOperations.deleteFile(this.cacheFile, undefined, {
+        source: 'CollectionIndexCache.clearCache'
+      });
       logger.debug('Collection index cache cleared from disk');
     } catch (error) {
       if ((error as any).code !== 'ENOENT') {
         logger.debug('Failed to clear collection index cache:', error);
       }
     }
-    
+
     logger.debug('Collection cache cleared', {
       duration: Date.now() - startTime,
       memoryFreed: this.memoryCache.getMemoryUsageMB()
@@ -330,6 +345,15 @@ export class CollectionIndexCache {
         averageAccessTime: this.calculateAverageAccessTime()
       }
     };
+  }
+
+  /**
+   * Clear in-memory cache state without touching disk.
+   */
+  clear(): void {
+    this.cache = null;
+    this.memoryCache.clear();
+    this.fetchPromise = null;
   }
   
   // =====================================================

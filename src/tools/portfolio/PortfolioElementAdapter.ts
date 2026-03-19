@@ -9,22 +9,22 @@
  * 4. PERFORMANCE: Helper methods for efficient string normalization
  */
 
-import { 
-  IElement, 
-  IElementMetadata, 
-  ElementValidationResult, 
+import {
+  IElement,
+  IElementMetadata,
+  ElementValidationResult,
   ElementStatus,
   ValidationError,
   ValidationWarning
 } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
-import { PortfolioElement } from './submitToPortfolioTool.js';
+import { PortfolioElement } from './types.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import * as yaml from 'js-yaml';
-import matter from 'gray-matter';
 import { ContentValidator } from '../../security/contentValidator.js';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 
 /**
  * Adapter class that wraps a simple PortfolioElement and implements IElement
@@ -133,10 +133,10 @@ export class PortfolioElementAdapter implements IElement {
    * Serialize the element to markdown with YAML frontmatter
    * FIX: Changed from JSON to markdown format for GitHub portfolio compatibility
    * SECURITY FIX #544: Parse and validate existing frontmatter instead of returning as-is
-   * SECURITY FIX #543: Use gray-matter for robust frontmatter detection
+   * SECURITY FIX #543: Use SecureYamlParser for robust frontmatter detection
    */
   serialize(): string {
-    // SECURITY FIX #543: Use gray-matter for robust frontmatter detection
+    // SECURITY FIX #543: Use SecureYamlParser for robust frontmatter detection
     // This handles different line endings, whitespace variations, and malformed YAML
     let contentToProcess = this.portfolioElement.content;
     let existingMetadata: Record<string, any> = {};
@@ -144,12 +144,12 @@ export class PortfolioElementAdapter implements IElement {
     
     // Try to parse existing frontmatter if present
     try {
-      // gray-matter handles all edge cases:
+      // SecureYamlParser handles all edge cases:
       // - Different line endings (\n, \r\n)
       // - Whitespace variations
       // - Malformed YAML (returns empty data object)
       // - Missing closing delimiter
-      const parsed = matter(contentToProcess);
+      const parsed = SecureYamlParser.safeMatter(contentToProcess);
       
       if (parsed.data && Object.keys(parsed.data).length > 0) {
         // SECURITY FIX #544: Validate existing frontmatter instead of bypassing
@@ -183,7 +183,7 @@ export class PortfolioElementAdapter implements IElement {
         }
       }
     } catch (error) {
-      // If gray-matter fails to parse, treat as content without frontmatter
+      // If SecureYamlParser fails to parse, treat as content without frontmatter
       logger.warn('Failed to parse potential frontmatter, treating as plain content', {
         error: error instanceof Error ? error.message : String(error)
       });
@@ -247,7 +247,7 @@ export class PortfolioElementAdapter implements IElement {
   /**
    * Deserialize from string (not implemented for adapter)
    */
-  deserialize(data: string): void {
+  deserialize(_data: string): void {
     throw new Error('Deserialization not supported for PortfolioElementAdapter');
   }
 

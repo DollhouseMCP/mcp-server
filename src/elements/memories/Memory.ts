@@ -21,14 +21,17 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { MetadataService } from '../../services/MetadataService.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
+import { MemoryType } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
 import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
+import { LRUCache } from '../../cache/LRUCache.js';
 
 /**
  * Maximum length for individual trigger words used in Enhanced Index
@@ -37,10 +40,11 @@ import { JSDOM } from 'jsdom';
 const MAX_TRIGGER_LENGTH = 50;
 
 /**
- * Validation pattern for trigger words - allows alphanumeric characters, hyphens, and underscores
+ * Validation pattern for trigger words
+ * Allows alphanumeric, hyphens, underscores, @ (mentions/emails), . (domains)
  * @constant {RegExp}
  */
-const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_]+$/;
+const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_@.]+$/;
 
 // Initialize DOMPurify with JSDOM
 const window = new JSDOM('').window;
@@ -71,7 +75,8 @@ function sanitizeMemoryContent(content: string, maxLength: number): string {
   
   // Remove only control characters and null bytes
   return cleaned
-    .replaceAll(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR - Intentionally removing control chars except \t \n \r for sanitization
+    // eslint-disable-next-line no-control-regex -- Intentionally removing control chars except \t \n \r for sanitization
+    .replaceAll(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR
     .substring(0, maxLength)
     .trim();
 }
@@ -93,6 +98,8 @@ export interface MemoryMetadata extends IElementMetadata {
   // Auto-load configuration (Issue #1430)
   autoLoad?: boolean;
   priority?: number;
+  // Memory type classification for folder organization
+  memoryType?: MemoryType;
 }
 
 export interface MemoryEntry {
@@ -160,8 +167,62 @@ export interface MemorySearchOptions {
  * - Preserve "pinned" memories regardless of age
  */
 export class Memory extends BaseElement implements IElement {
-  // Memory-specific properties
-  private entries: Map<string, MemoryEntry> = new Map();
+  // instructions inherited from BaseElement (v2.0 dual-field architecture)
+  // content: overridden below with a custom getter that returns formatted entries
+
+  private static memoryManagerResolver?: () => { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void>; } | undefined;
+
+  /**
+   * Static resolver for RetentionPolicyService (Issue #51)
+   * Used to check if retention enforcement should happen on load
+   */
+  private static retentionPolicyResolver?: () => { shouldEnforceOnLoad(): boolean; isEnabled(): boolean; } | undefined;
+
+  public static configureMemoryManagerResolver(resolver: () => { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void>; } | undefined): void {
+    this.memoryManagerResolver = resolver;
+  }
+
+  /**
+   * Configure the RetentionPolicyService resolver (Issue #51)
+   * Called during DI container setup
+   */
+  public static configureRetentionPolicyResolver(resolver: () => { shouldEnforceOnLoad(): boolean; isEnabled(): boolean; } | undefined): void {
+    this.retentionPolicyResolver = resolver;
+  }
+
+  /**
+   * Reset all static resolvers (for test cleanup)
+   * Call this in afterEach hooks to prevent test isolation issues
+   * where a stale resolver references disposed services
+   */
+  public static resetResolvers(): void {
+    this.memoryManagerResolver = undefined;
+    this.retentionPolicyResolver = undefined;
+  }
+
+  /**
+   * Get the RetentionPolicyService instance
+   * Returns undefined if not configured (allows graceful fallback)
+   */
+  private static getRetentionPolicyService() {
+    if (!this.retentionPolicyResolver) {
+      return undefined;
+    }
+    return this.retentionPolicyResolver();
+  }
+
+  private static getMemoryManager() {
+    if (!this.memoryManagerResolver) {
+      throw new Error('Memory manager resolver not configured');
+    }
+    const manager = this.memoryManagerResolver();
+    if (!manager) {
+      throw new Error('Memory manager resolver returned undefined');
+    }
+    return manager;
+  }
+  // Memory-specific properties (with size limits to prevent memory leaks)
+  private entries: LRUCache<MemoryEntry>;
   private storageBackend: StorageBackend;
   private retentionDays: number;
   private privacyLevel: PrivacyLevel;
@@ -171,13 +232,17 @@ export class Memory extends BaseElement implements IElement {
   // Search index for performance (Issue #984)
   private searchIndex: MemorySearchIndex;
 
-  // Sanitization cache to avoid redundant processing
-  private sanitizationCache: Map<string, string> = new Map();
+  // Sanitization cache to avoid redundant processing (with size limits)
+  private sanitizationCache: LRUCache<string>;
 
   // FIX #1320: Store file path for persistence
   private filePath?: string;
+
+  // Cache configuration constants
+  private static readonly MAX_SANITIZATION_CACHE_SIZE = 500;
+  private static readonly MAX_SANITIZATION_CACHE_MEMORY_MB = 5;
   
-  constructor(metadata: Partial<MemoryMetadata> = {}) {
+  constructor(metadata: Partial<MemoryMetadata> = {}, metadataService: MetadataService) {
     // SECURITY FIX: Sanitize all inputs during construction
     const sanitizedMetadata = {
       ...metadata,
@@ -188,29 +253,61 @@ export class Memory extends BaseElement implements IElement {
         sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) :
         undefined,
       // FIX #1124: Preserve triggers for Enhanced Index
+      // SECURITY: Validate BEFORE sanitization to reject invalid characters
+      // This prevents 'bad!trigger' from becoming 'badtrigger' and passing
       triggers: Array.isArray(metadata.triggers) ?
         metadata.triggers
-          .map(t => sanitizeInput(t, MAX_TRIGGER_LENGTH))
-          .filter(t => t && TRIGGER_VALIDATION_REGEX.test(t)) : // Only allow valid trigger patterns
+          .map(t => String(t).trim())
+          .filter(t => t && TRIGGER_VALIDATION_REGEX.test(t)) // Validate format FIRST
+          .map(t => sanitizeInput(t, MAX_TRIGGER_LENGTH)) // Then sanitize for length
+          .filter(t => t) : // Remove any that became empty after sanitization
         []
     };
 
-    super(ElementType.MEMORY, sanitizedMetadata);
-    
+    super(ElementType.MEMORY, sanitizedMetadata, metadataService);
+
     // Initialize memory-specific properties with defaults
     this.storageBackend = metadata.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND;
     this.retentionDays = metadata.retentionDays || MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
     // Validate privacy level - default to private if invalid
-    this.privacyLevel = (metadata.privacyLevel && MEMORY_CONSTANTS.PRIVACY_LEVELS.includes(metadata.privacyLevel)) 
-      ? metadata.privacyLevel 
+    this.privacyLevel = (metadata.privacyLevel && MEMORY_CONSTANTS.PRIVACY_LEVELS.includes(metadata.privacyLevel))
+      ? metadata.privacyLevel
       : MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL;
     this.searchable = metadata.searchable !== false;
     this.maxEntries = Math.min(
       metadata.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
       MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
-    
-    // Set up extensions
+
+    // Initialize LRU caches with size limits to prevent memory leaks
+    this.entries = new LRUCache<MemoryEntry>({
+      name: 'memory-entries',
+      maxSize: this.maxEntries,
+      maxMemoryMB: 25, // Max 25MB for memory entries
+    });
+
+    this.sanitizationCache = new LRUCache<string>({
+      name: 'memory-sanitization',
+      maxSize: Memory.MAX_SANITIZATION_CACHE_SIZE,
+      maxMemoryMB: Memory.MAX_SANITIZATION_CACHE_MEMORY_MB,
+    });
+
+    // FIX #1430: Update metadata to include all MemoryMetadata fields
+    // This ensures they are preserved when serializeElement() is called
+    // Per Todd's suggestion: store all runtime properties in metadata, not extensions
+    this.metadata = {
+      ...this.metadata,
+      storageBackend: this.storageBackend,
+      retentionDays: this.retentionDays,
+      privacyLevel: this.privacyLevel,
+      searchable: this.searchable,
+      maxEntries: this.maxEntries,
+      autoLoad: metadata.autoLoad,
+      priority: metadata.priority,
+      encryptionEnabled: metadata.encryptionEnabled || false
+    } as MemoryMetadata;
+
+    // Set up extensions for backward compatibility
     this.extensions = {
       storageBackend: this.storageBackend,
       retentionDays: this.retentionDays,
@@ -238,7 +335,15 @@ export class Memory extends BaseElement implements IElement {
       details: `Memory created: ${this.metadata.name} with ${this.storageBackend} backend`
     });
   }
-  
+
+  /**
+   * Helper method to get the current number of entries
+   * Compatible with LRUCache
+   */
+  private get entriesSize(): number {
+    return this.entries.getStats().size;
+  }
+
   /**
    * Add a new memory entry
    * SECURITY: Sanitizes input and enforces size limits
@@ -256,6 +361,10 @@ export class Memory extends BaseElement implements IElement {
   ): Promise<MemoryEntry> {
     // SECURITY: Sanitize source parameter before use
     const sanitizedSource = sanitizeInput(source, 50);
+
+    if (this.entriesSize >= this.maxEntries) {
+      await this.enforceRetentionPolicy();
+    }
 
     // FIX #1315: Sanitize content but don't validate for threats (non-blocking)
     // Just normalize Unicode and apply DOMPurify
@@ -295,7 +404,7 @@ export class Memory extends BaseElement implements IElement {
     this.searchIndex.addEntry(entry);
 
     // Check if we should build/rebuild the index
-    if (!this.searchIndex.isIndexed && this.entries.size >= 100) {
+    if (!this.searchIndex.isIndexed && this.entriesSize >= 100) {
       // Build index asynchronously to avoid blocking, with retry logic
       this.buildSearchIndexWithRetry().catch(error => {
         // Final failure after retries - search will fall back to linear scan
@@ -320,12 +429,12 @@ export class Memory extends BaseElement implements IElement {
    * This is called AFTER adding an entry to ensure we never exceed maxEntries
    */
   private enforceCapacitySync(): void {
-    if (this.entries.size <= this.maxEntries) {
+    if (this.entriesSize <= this.maxEntries) {
       return; // Within capacity
     }
 
     // Over capacity - remove oldest entries until we're at the limit
-    const entriesToRemove = this.entries.size - this.maxEntries;
+    const entriesToRemove = this.entriesSize - this.maxEntries;
     const sortedEntries = Array.from(this.entries.values())
       .sort((a, b) => {
         const aTime = this.ensureDateObject(a.timestamp).getTime();
@@ -488,8 +597,8 @@ export class Memory extends BaseElement implements IElement {
    * Returns entries as a readable string for display
    * FIX #1269: Sandboxes untrusted content to prevent prompt injection
    */
-  get content(): string {
-    if (this.entries.size === 0) {
+  override get content(): string {
+    if (this.entriesSize === 0) {
       return 'No content stored';
     }
 
@@ -557,9 +666,9 @@ export class Memory extends BaseElement implements IElement {
   public async enforceRetentionPolicy(): Promise<number> {
     const now = new Date();
     let deletedCount = 0;
-    
+
     // Remove expired entries
-    for (const [id, entry] of this.entries) {
+    for (const [id, entry] of this.entries.entries()) {
       if (entry.expiresAt && entry.expiresAt < now) {
         this.entries.delete(id);
         deletedCount++;
@@ -567,7 +676,7 @@ export class Memory extends BaseElement implements IElement {
     }
     
     // If still at or over capacity, remove oldest entries to make room for one more
-    if (this.entries.size >= this.maxEntries) {
+    if (this.entriesSize >= this.maxEntries) {
       const sortedEntries = Array.from(this.entries.entries())
         .sort((a, b) => {
           // FIX #1069: Ensure timestamps are Date objects for sorting
@@ -577,7 +686,7 @@ export class Memory extends BaseElement implements IElement {
         });
       
       // Remove one extra to make room for new entry
-      const toDelete = Math.max(1, this.entries.size - this.maxEntries + 1);
+      const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
       for (let i = 0; i < toDelete && i < sortedEntries.length; i++) {
         this.entries.delete(sortedEntries[i][0]);
         deletedCount++;
@@ -606,7 +715,7 @@ export class Memory extends BaseElement implements IElement {
       throw new Error('Memory clear requires confirmation');
     }
     
-    const count = this.entries.size;
+    const count = this.entriesSize;
     this.entries.clear();
     this._isDirty = true;
     
@@ -622,7 +731,7 @@ export class Memory extends BaseElement implements IElement {
    * Helper function to ensure a value is a valid Date object
    * FIX #1069: Validates and converts timestamps to Date objects
    */
-  private ensureDateObject(value: any): Date {
+  private ensureDateObject(value: unknown): Date {
     // Handle null/undefined
     if (value == null) {
       throw new Error(`Date value is null or undefined`);
@@ -636,8 +745,8 @@ export class Memory extends BaseElement implements IElement {
       return value;
     }
 
-    // Try to convert to Date
-    const date = new Date(value);
+    // Try to convert to Date (value must be string, number, or Date-compatible)
+    const date = new Date(value as string | number | Date);
     if (Number.isNaN(date.getTime())) {
       throw new Error(`Invalid date value: ${value}`);
     }
@@ -694,7 +803,7 @@ export class Memory extends BaseElement implements IElement {
     }
     
     return {
-      totalEntries: this.entries.size,
+      totalEntries: this.entriesSize,
       totalSize,
       oldestEntry,
       newestEntry,
@@ -768,7 +877,7 @@ export class Memory extends BaseElement implements IElement {
    * FIX #1315: Reads trust level from metadata instead of re-validating
    * Returns true if entry was loaded, false if quarantined
    */
-  private processDeserializedEntry(entry: any): boolean {
+  private processDeserializedEntry(entry: unknown): boolean {
     if (!this.isValidEntry(entry)) {
       return false;
     }
@@ -848,13 +957,36 @@ export class Memory extends BaseElement implements IElement {
           memoryName: this.metadata.name,
           totalEntries: parsed.entries?.length || 0,
           quarantined: quarantinedCount,
-          loaded: this.entries.size
+          loaded: this.entriesSize
         });
       }
 
-      // Enforce retention policy after loading
-      this.enforceRetentionPolicy();
-      
+      // Issue #51: Check if retention enforcement should happen on load
+      // IMPORTANT: Retention enforcement is now opt-in, not automatic
+      // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
+      try {
+        const retentionService = Memory.getRetentionPolicyService();
+        if (retentionService?.shouldEnforceOnLoad()) {
+          // User has explicitly enabled on-load enforcement
+          this.enforceRetentionPolicy();
+          logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
+            enforcementMode: 'on_load'
+          });
+        } else if (retentionService?.isEnabled()) {
+          // Retention is enabled but not set to on_load mode - log for visibility
+          logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
+            note: 'Use explicit enforcement command to cleanup expired entries'
+          });
+        }
+        // If retentionService is not configured or disabled, no enforcement happens
+        // This is the safe default - nothing is deleted without explicit consent
+      } catch {
+        // Silently ignore retention policy errors during deserialization
+        // This can happen in test environments where ConfigManager is not initialized,
+        // or when a stale resolver references a disposed service instance
+        // It's safe to skip retention enforcement in these cases - the default is no deletion
+      }
+
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_DESERIALIZE_FAILED,
@@ -920,13 +1052,14 @@ export class Memory extends BaseElement implements IElement {
     // e.g., if requesting 'private', can see 'public' and 'private' but not 'sensitive'
     return entryIndex <= requestedIndex;
   }
-  
-  private isValidEntry(entry: any): boolean {
-    return entry &&
-      typeof entry.id === 'string' &&
-      typeof entry.content === 'string' &&
-      entry.timestamp &&
-      (!entry.tags || Array.isArray(entry.tags));
+
+  private isValidEntry(entry: unknown): entry is MemoryEntry {
+    return typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as any).id === 'string' &&
+      typeof (entry as any).content === 'string' &&
+      (entry as any).timestamp !== undefined &&
+      (!(entry as any).tags || Array.isArray((entry as any).tags));
   }
 
   /**
@@ -978,7 +1111,7 @@ export class Memory extends BaseElement implements IElement {
         lastError = error instanceof Error ? error : new Error(String(error));
         logger.warn(`Search index build attempt ${attempt} failed`, {
           error: lastError.message,
-          entriesCount: this.entries.size
+          entriesCount: this.entriesSize
         });
 
         if (attempt < retries) {
@@ -1015,6 +1148,29 @@ export class Memory extends BaseElement implements IElement {
    */
   public getAllEntries(): MemoryEntry[] {
     return Array.from(this.entries.values());
+  }
+
+  /**
+   * Get the entries map directly
+   * Used by RetentionPolicyService for retention enforcement (Issue #51)
+   *
+   * @returns Map of entry ID to memory entry
+   */
+  public getEntries(): Map<string, MemoryEntry> {
+    // Return a new Map to prevent external modification of internal state
+    return new Map(this.entries.entries());
+  }
+
+  /**
+   * Remove a specific entry by ID
+   * FIX #51: Public API for retention policy to remove expired entries
+   * Replaces the need for `(memory as any).entries.delete()` hacks
+   *
+   * @param entryId - The ID of the entry to remove
+   * @returns true if entry was removed, false if not found
+   */
+  public removeEntry(entryId: string): boolean {
+    return this.entries.delete(entryId);
   }
 
   /**
@@ -1063,9 +1219,7 @@ export class Memory extends BaseElement implements IElement {
    * @throws {Error} If memory has not been loaded from file and no path is set
    */
   public async save(): Promise<void> {
-    // Dynamically import MemoryManager to avoid circular dependency
-    const { MemoryManager } = await import('./MemoryManager.js');
-    const manager = new MemoryManager();
+    const manager = Memory.getMemoryManager();
     await manager.save(this, this.filePath);
   }
 
@@ -1083,9 +1237,7 @@ export class Memory extends BaseElement implements IElement {
     trustLevel: TrustLevel,
     options?: { limit?: number }
   ): Promise<Memory[]> {
-    // Dynamically import MemoryManager to avoid circular dependency
-    const { MemoryManager } = await import('./MemoryManager.js');
-    const manager = new MemoryManager();
+    const manager = Memory.getMemoryManager();
 
     // Load all memories and filter by trust level
     const allMemories = await manager.list();
@@ -1130,9 +1282,7 @@ export class Memory extends BaseElement implements IElement {
     tags?: string[];
     maxAge?: number;
   }): Promise<Memory[]> {
-    // Dynamically import MemoryManager to avoid circular dependency
-    const { MemoryManager } = await import('./MemoryManager.js');
-    const manager = new MemoryManager();
+    const manager = Memory.getMemoryManager();
 
     // Load all memories
     const allMemories = await manager.list();

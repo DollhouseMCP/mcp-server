@@ -475,6 +475,9 @@ export class DOSProtection {
     this.resetInterval ??= setInterval(() => {
       this.operationCounts.clear();
     }, RATE_LIMIT_RESET_MS);
+    if (this.resetInterval && typeof this.resetInterval.unref === 'function') {
+      this.resetInterval.unref();
+    }
 
     const count = this.operationCounts.get(operation) || 0;
     if (count >= maxPerMinute) {

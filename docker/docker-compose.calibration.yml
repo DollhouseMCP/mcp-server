@@ -1,0 +1,161 @@
+# Docker Compose configuration for Performance Calibration System
+# Simulates GitHub Actions CI environments locally for performance prediction
+
+services:
+  # ============================================================================
+  # LOCAL BASELINE: Unconstrained environment (full local resources)
+  # ============================================================================
+  calibration-local:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ci-simulation
+      target: unconstrained
+    image: dollhousemcp:calibration-local
+    container_name: dollhousemcp-calibration-local
+
+    environment:
+      - NODE_ENV=test
+      - DOLLHOUSE_CALIBRATION_MODE=local
+      - DOLLHOUSE_RESULTS_DIR=/app/calibration-results
+
+    volumes:
+      # Mount calibration results directory
+      - ../calibration-results:/app/calibration-results:rw
+      # Mount source for hot reload during development
+      - ../src:/app/src:ro
+      - ../tests:/app/tests:ro
+
+    # No resource constraints - uses full host resources
+    # This establishes the baseline performance
+
+    profiles: ["local", "comparison"]
+
+  # ============================================================================
+  # CI SIMULATION: ubuntu-latest (2-core CPU, 7GB RAM, 14GB SSD)
+  # ============================================================================
+  calibration-ci-ubuntu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ci-simulation
+      target: ci-ubuntu-simulation
+    image: dollhousemcp:calibration-ci-ubuntu
+    container_name: dollhousemcp-calibration-ci-ubuntu
+
+    environment:
+      - NODE_ENV=test
+      - CI=true
+      - GITHUB_ACTIONS=true
+      - DOLLHOUSE_CALIBRATION_MODE=ci-simulation
+      - DOLLHOUSE_SIMULATION_PLATFORM=ubuntu-latest
+      - DOLLHOUSE_RESULTS_DIR=/app/calibration-results
+      - NODE_OPTIONS=--max-old-space-size=7168
+
+    volumes:
+      - ../calibration-results:/app/calibration-results:rw
+      - ../src:/app/src:ro
+      - ../tests:/app/tests:ro
+
+    # GitHub Actions ubuntu-latest resource constraints
+    cpus: '2.0'
+    mem_limit: 7g
+    memswap_limit: 7g  # Prevent swap usage
+
+    # Disk I/O throttling (approximate - GitHub uses SSDs)
+    # blkio_config:
+    #   weight: 500  # Medium priority
+
+    # Additional constraints for accuracy
+    pids_limit: 4096  # Limit process count
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+
+    profiles: ["ci", "comparison"]
+
+  # ============================================================================
+  # CI SIMULATION: macOS-latest (3-core CPU, 14GB RAM, 14GB SSD)
+  # ============================================================================
+  # NOTE: Cannot truly simulate macOS in Docker (licensing restrictions)
+  # This approximates macOS resource constraints but runs Linux
+  calibration-ci-macos-approximation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ci-simulation
+      target: ci-ubuntu-simulation
+    image: dollhousemcp:calibration-ci-macos
+    container_name: dollhousemcp-calibration-ci-macos
+
+    environment:
+      - NODE_ENV=test
+      - CI=true
+      - GITHUB_ACTIONS=true
+      - DOLLHOUSE_CALIBRATION_MODE=ci-simulation
+      - DOLLHOUSE_SIMULATION_PLATFORM=macos-latest-approximation
+      - DOLLHOUSE_RESULTS_DIR=/app/calibration-results
+      - NODE_OPTIONS=--max-old-space-size=14336
+
+    volumes:
+      - ../calibration-results:/app/calibration-results:rw
+      - ../src:/app/src:ro
+      - ../tests:/app/tests:ro
+
+    # GitHub Actions macos-latest resource constraints
+    cpus: '3.0'
+    mem_limit: 14g
+    memswap_limit: 14g
+
+    pids_limit: 4096
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+
+    profiles: ["ci-macos", "comparison-all"]
+
+  # ============================================================================
+  # CI SIMULATION: windows-latest (2-core CPU, 7GB RAM, 14GB SSD)
+  # ============================================================================
+  # NOTE: Cannot simulate Windows in Linux Docker
+  # This approximates Windows resource constraints but runs Linux
+  calibration-ci-windows-approximation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ci-simulation
+      target: ci-ubuntu-simulation
+    image: dollhousemcp:calibration-ci-windows
+    container_name: dollhousemcp-calibration-ci-windows
+
+    environment:
+      - NODE_ENV=test
+      - CI=true
+      - GITHUB_ACTIONS=true
+      - DOLLHOUSE_CALIBRATION_MODE=ci-simulation
+      - DOLLHOUSE_SIMULATION_PLATFORM=windows-latest-approximation
+      - DOLLHOUSE_RESULTS_DIR=/app/calibration-results
+      - NODE_OPTIONS=--max-old-space-size=7168
+
+    volumes:
+      - ../calibration-results:/app/calibration-results:rw
+      - ../src:/app/src:ro
+      - ../tests:/app/tests:ro
+
+    # GitHub Actions windows-latest resource constraints
+    cpus: '2.0'
+    mem_limit: 7g
+    memswap_limit: 7g
+
+    pids_limit: 4096
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+
+    profiles: ["ci-windows", "comparison-all"]
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  calibration-results:
+    driver: local

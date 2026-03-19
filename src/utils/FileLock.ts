@@ -5,7 +5,6 @@
  */
 
 import * as fs from 'fs/promises';
-import * as path from 'path';
 import { logger } from './logger.js';
 
 export interface LockOptions {
@@ -18,10 +17,23 @@ export class FileLock {
   private lockPath: string;
   private acquired: boolean = false;
   private lockId: string;
+  private pendingTimeouts = new Set<NodeJS.Timeout>();
+  private disposed = false;
 
   constructor(filePath: string) {
     this.lockPath = `${filePath}.lock`;
     this.lockId = `${process.pid}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Dispose the file lock and clear any pending timers.
+   */
+  public dispose(): void {
+    this.disposed = true;
+    for (const timeoutId of this.pendingTimeouts) {
+      clearTimeout(timeoutId);
+    }
+    this.pendingTimeouts.clear();
   }
 
   /**
@@ -79,7 +91,11 @@ export class FileLock {
               await this.sleep(retryInterval);
             }
           } catch (readError) {
-            // Can't read lock file, wait and retry
+            // Can't read lock file - could be permissions issue or concurrent deletion
+            logger.debug('Failed to read lock file, retrying', {
+              lock: this.lockPath,
+              error: readError instanceof Error ? readError.message : String(readError)
+            });
             await this.sleep(retryInterval);
           }
         } else {
@@ -156,7 +172,12 @@ export class FileLock {
     try {
       await fs.access(this.lockPath);
       return true;
-    } catch {
+    } catch (error) {
+      // Lock file doesn't exist or not accessible
+      logger.debug('Lock file not accessible', {
+        lock: this.lockPath,
+        code: (error as NodeJS.ErrnoException).code
+      });
       return false;
     }
   }
@@ -183,6 +204,15 @@ export class FileLock {
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    if (this.disposed) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      const timeoutId = setTimeout(() => {
+        this.pendingTimeouts.delete(timeoutId);
+        resolve();
+      }, ms);
+      this.pendingTimeouts.add(timeoutId);
+    });
   }
 }

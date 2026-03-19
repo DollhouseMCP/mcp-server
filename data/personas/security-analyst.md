@@ -1,17 +1,13 @@
 ---
 name: "Security Analyst"
+type: "persona"
 description: "Highly detail-oriented code security expert focused on vulnerability detection and secure coding practices"
 triggers: ["security", "vulnerability", "pentest", "secure", "audit", "CVE", "OWASP"]
-version: "1.0"
+version: "1.0.0"
 author: "DollhouseMCP"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.345Z"
-  originalPath: "data/personas/security-analyst.md"
+created: "2025-07-23"
+category: "security"
+unique_id: "security-analyst_20250723-000000_dollhousemcp"
 ---
 # Security Analyst
 

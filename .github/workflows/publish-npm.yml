@@ -51,6 +51,7 @@ jobs:
           cache: 'npm'
 
       - name: Upgrade npm to 11.x for OIDC support
+        shell: bash
         run: |
           echo "Current npm version: $(npm --version)"
           npm install -g npm@11
@@ -76,6 +77,7 @@ jobs:
           echo "Publishing version: $VERSION"
 
       - name: Debug OIDC Environment
+        shell: bash
         run: |
           echo "=== OIDC Environment Check ==="
           echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT SET}"

@@ -14,6 +14,11 @@
  * - Audits all decryption attempts
  * - Uses ContextTracker to detect execution context
  *
+ * REFACTOR NOTE:
+ * Converted from static class to instance-based for DI architecture compatibility.
+ * PatternDecryptor now requires PatternEncryptor and ContextTracker dependencies
+ * to be injected via constructor for proper DI lifecycle management.
+ *
  * @module PatternDecryptor
  */
 
@@ -54,15 +59,15 @@ export interface DecryptionAttempt {
  * Maintains a record of all decryption attempts for security monitoring
  */
 class DecryptionAuditLog {
-  private static attempts: DecryptionAttempt[] = [];
-  private static readonly MAX_LOG_SIZE = 1000;
+  private attempts: DecryptionAttempt[] = [];
+  private readonly MAX_LOG_SIZE = 1000;
 
   /**
    * Log a decryption attempt
    *
    * @param attempt - Decryption attempt metadata
    */
-  static log(attempt: DecryptionAttempt): void {
+  log(attempt: DecryptionAttempt): void {
     this.attempts.push(attempt);
 
     // Trim log if it exceeds max size
@@ -93,7 +98,7 @@ class DecryptionAuditLog {
    *
    * @returns Array of decryption attempts
    */
-  static getAttempts(): DecryptionAttempt[] {
+  getAttempts(): DecryptionAttempt[] {
     return [...this.attempts];
   }
 
@@ -103,14 +108,14 @@ class DecryptionAuditLog {
    * @param limit - Maximum number of attempts to return
    * @returns Array of recent attempts
    */
-  static getRecentAttempts(limit: number = 100): DecryptionAttempt[] {
+  getRecentAttempts(limit: number = 100): DecryptionAttempt[] {
     return this.attempts.slice(-limit);
   }
 
   /**
    * Clear the audit log (useful for testing)
    */
-  static clear(): void {
+  clear(): void {
     this.attempts = [];
     logger.debug('Decryption audit log cleared');
   }
@@ -121,8 +126,25 @@ class DecryptionAuditLog {
  *
  * Provides controlled access to decrypt encrypted patterns with
  * LLM context protection and audit logging.
+ *
+ * DI-COMPATIBLE: Instance-based service for dependency injection.
  */
 export class PatternDecryptor {
+  private readonly auditLog: DecryptionAuditLog;
+
+  /**
+   * Create a new PatternDecryptor instance
+   *
+   * @param encryptor - PatternEncryptor instance for decryption operations
+   * @param contextTracker - ContextTracker instance for LLM context detection
+   */
+  constructor(
+    private readonly encryptor: PatternEncryptor,
+    private readonly contextTracker: ContextTracker
+  ) {
+    this.auditLog = new DecryptionAuditLog();
+  }
+
   /**
    * Decrypt a sanitized pattern with security checks
    *
@@ -136,12 +158,12 @@ export class PatternDecryptor {
    * @returns Decrypted pattern text
    * @throws Error if decryption is not allowed or fails
    */
-  static decryptPattern(pattern: SanitizedPattern): string {
-    const context = ContextTracker.getContext();
+  decryptPattern(pattern: SanitizedPattern): string {
+    const context = this.contextTracker.getContext();
     const patternRef = pattern.ref;
 
     // Security check: Prevent decryption in LLM context
-    if (ContextTracker.isLLMContext()) {
+    if (this.contextTracker.isLLMContext()) {
       const attempt: DecryptionAttempt = {
         patternRef,
         success: false,
@@ -151,7 +173,7 @@ export class PatternDecryptor {
         denialReason: 'Decryption not allowed in LLM request context',
       };
 
-      DecryptionAuditLog.log(attempt);
+      this.auditLog.log(attempt);
 
       throw new Error(
         'Pattern decryption blocked: Cannot decrypt patterns in LLM request context'
@@ -169,7 +191,7 @@ export class PatternDecryptor {
         denialReason: 'Pattern not encrypted or missing required fields',
       };
 
-      DecryptionAuditLog.log(attempt);
+      this.auditLog.log(attempt);
 
       throw new Error(
         'Pattern decryption failed: Pattern is not encrypted or missing required fields'
@@ -186,7 +208,7 @@ export class PatternDecryptor {
       };
 
       // Decrypt using PatternEncryptor
-      const decrypted = PatternEncryptor.decrypt(encryptedPattern);
+      const decrypted = this.encryptor.decrypt(encryptedPattern);
 
       // Log successful decryption
       const attempt: DecryptionAttempt = {
@@ -197,7 +219,7 @@ export class PatternDecryptor {
         requestId: context?.requestId,
       };
 
-      DecryptionAuditLog.log(attempt);
+      this.auditLog.log(attempt);
 
       return decrypted;
     } catch (error) {
@@ -211,7 +233,7 @@ export class PatternDecryptor {
         error: error instanceof Error ? error.message : 'Unknown error',
       };
 
-      DecryptionAuditLog.log(attempt);
+      this.auditLog.log(attempt);
 
       throw error;
     }
@@ -223,17 +245,26 @@ export class PatternDecryptor {
    * @param limit - Maximum number of attempts to return
    * @returns Array of recent decryption attempts
    */
-  static getAuditLog(limit?: number): DecryptionAttempt[] {
+  getAuditLog(limit?: number): DecryptionAttempt[] {
     if (limit !== undefined) {
-      return DecryptionAuditLog.getRecentAttempts(limit);
+      return this.auditLog.getRecentAttempts(limit);
     }
-    return DecryptionAuditLog.getAttempts();
+    return this.auditLog.getAttempts();
   }
 
   /**
    * Clear the audit log (useful for testing)
    */
-  static clearAuditLog(): void {
-    DecryptionAuditLog.clear();
+  clearAuditLog(): void {
+    this.auditLog.clear();
+  }
+
+  /**
+   * Dispose of the decryptor and clean up resources
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.auditLog.clear();
+    logger.debug('PatternDecryptor disposed');
   }
 }

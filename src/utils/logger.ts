@@ -1,26 +1,27 @@
 /**
  * MCP-safe logger that avoids writing to stdout/stderr during protocol communication
- * 
+ *
  * In MCP servers, stdout and stderr are reserved for JSON-RPC protocol messages.
  * Any non-protocol output will cause "Unexpected token" errors in the MCP client.
- * 
+ *
  * This logger:
  * - Writes to stderr ONLY during server initialization (before MCP connection)
  * - Stores all logs in memory during runtime
  * - Provides methods to retrieve logs via MCP tools if needed
  */
 
-interface LogEntry {
-  timestamp: Date;
-  level: 'debug' | 'info' | 'warn' | 'error';
-  message: string;
-  data?: any;
-}
+import { ILogger, LogEntry } from '../types/ILogger.js';
+import { EvictingQueue } from './EvictingQueue.js';
 
-class MCPLogger {
-  private logs: LogEntry[] = [];
-  private maxLogs = 1000;
+class MCPLogger implements ILogger {
+  private logs = new EvictingQueue<LogEntry>(1000);
   private isMCPConnected = false;
+  private logListener?: (entry: LogEntry) => void;
+
+  addLogListener(fn: (entry: LogEntry) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
   
   // Performance: Maximum depth for object sanitization
   private static readonly MAX_DEPTH = 10;
@@ -266,12 +267,10 @@ class MCPLogger {
       data: sanitizedData
     };
     
-    // Store in memory
+    // Bounded FIFO eviction — EvictingQueue handles capacity
     this.logs.push(entry);
-    if (this.logs.length > this.maxLogs) {
-      this.logs.shift();
-    }
-    
+    this.logListener?.(entry);
+
     // Only write to console during initialization
     if (!this.isMCPConnected) {
       // Check NODE_ENV inside the method to ensure it's evaluated at runtime
@@ -318,9 +317,9 @@ class MCPLogger {
    * Get recent logs (for MCP tools to retrieve)
    */
   public getLogs(count = 100, level?: LogEntry['level']): LogEntry[] {
-    let filtered = this.logs;
+    let filtered: readonly LogEntry[] = this.logs.toArray();
     if (level) {
-      filtered = this.logs.filter(log => log.level === level);
+      filtered = filtered.filter(log => log.level === level);
     }
     return filtered.slice(-count);
   }
@@ -329,9 +328,12 @@ class MCPLogger {
    * Clear logs
    */
   public clearLogs(): void {
-    this.logs = [];
+    this.logs.clear();
   }
 }
 
-// Singleton instance
+// Export class for testing/extension
+export { MCPLogger };
+
+// Singleton instance for convenience
 export const logger = new MCPLogger();

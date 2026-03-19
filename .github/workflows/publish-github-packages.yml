@@ -113,6 +113,7 @@ jobs:
           echo "⏭️ Skipping publication - version already exists on GitHub Packages"
           echo "This is expected if the tag was re-pushed or if multiple commits reference the same tag"
 
+
       - name: Restore original package.json
         if: always()
         shell: bash
@@ -123,9 +124,5 @@ jobs:
         if: success()
         shell: bash
         run: |
-          if [ "${{ steps.check_version.outputs.already_published }}" == "true" ]; then
-            echo "✅ Workflow completed successfully (publication skipped - version already exists)"
-          else
-            echo "✅ Successfully published to GitHub Packages!"
-            echo "📦 Package will appear in the repository's Packages section"
-          fi
+          echo "✅ Successfully published to GitHub Packages!"
+          echo "📦 Package will appear in the repository's Packages section"

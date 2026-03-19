@@ -32,8 +32,6 @@ parameters:
     description: "Stylistic elements to include"
     default: ["dialogue", "description"]
     enum: ["dialogue", "description", "action", "introspection", "humor", "metaphor", "symbolism"]
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

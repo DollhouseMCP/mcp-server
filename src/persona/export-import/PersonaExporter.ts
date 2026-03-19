@@ -3,9 +3,8 @@
  */
 
 import { Persona } from '../../types/persona.js';
-import { logger } from '../../utils/logger.js';
 import { isDefaultPersona } from '../../constants/defaultPersonas.js';
-import { MAX_PERSONA_SIZE, MAX_BUNDLE_SIZE, MAX_PERSONAS_PER_BUNDLE } from '../../constants/limits.js';
+import { MAX_PERSONA_SIZE } from '../../constants/limits.js';
 
 export interface ExportedPersona {
   metadata: any;
@@ -23,10 +22,18 @@ export interface ExportBundle {
   personas: ExportedPersona[];
 }
 
+type CurrentUserProvider = () => string | null;
+
 export class PersonaExporter {
-  constructor(
-    private currentUser: string | null
-  ) {}
+  private readonly getCurrentUser: CurrentUserProvider;
+
+  constructor(currentUser: string | null | CurrentUserProvider) {
+    if (typeof currentUser === 'function') {
+      this.getCurrentUser = currentUser as CurrentUserProvider;
+    } else {
+      this.getCurrentUser = () => currentUser;
+    }
+  }
 
   /**
    * Export a single persona to JSON format
@@ -43,7 +50,7 @@ export class PersonaExporter {
       content: persona.content,
       filename: persona.filename,
       exportedAt: new Date().toISOString(),
-      exportedBy: this.currentUser || undefined
+      exportedBy: this.getCurrentUser() || undefined
     };
   }
 
@@ -58,7 +65,7 @@ export class PersonaExporter {
     return {
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      exportedBy: this.currentUser || undefined,
+      exportedBy: this.getCurrentUser() || undefined,
       personaCount: filteredPersonas.length,
       personas: filteredPersonas.map(p => this.exportPersona(p))
     };

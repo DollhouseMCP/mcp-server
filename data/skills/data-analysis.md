@@ -33,8 +33,6 @@ parameters:
     description: "How to handle missing values"
     default: "interpolate"
     enum: ["ignore", "interpolate", "drop", "flag"]
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

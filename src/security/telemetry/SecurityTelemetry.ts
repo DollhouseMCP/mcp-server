@@ -5,9 +5,14 @@
  * providing insights into threat patterns and system defense effectiveness.
  *
  * Issue #1269: Enhanced telemetry for memory injection protection
+ *
+ * REFACTOR NOTE:
+ * Converted from static class to instance-based for DI architecture compatibility.
+ * Security Telemetry is now a singleton service managed by the DI container.
  */
 
 import { SecurityEvent } from '../securityMonitor.js';
+import { EvictingQueue } from '../../utils/EvictingQueue.js';
 
 export interface AttackVector {
   type: string;
@@ -39,17 +44,35 @@ export interface AttackTelemetryEntry {
   metadata?: Record<string, any>;
 }
 
+/**
+ * Security Telemetry Service
+ *
+ * DI-COMPATIBLE: Instance-based service for dependency injection.
+ * Tracks security events, attack patterns, and generates metrics.
+ */
 export class SecurityTelemetry {
-  private static attackHistory: AttackTelemetryEntry[] = [];
-  private static readonly MAX_HISTORY = 10000; // Keep last 10k attack attempts
-  private static readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
-  private static readonly attackVectorMap: Map<string, AttackVector> = new Map();
+  private attackHistory = new EvictingQueue<AttackTelemetryEntry>(10000);
+  private readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
+  private readonly attackVectorMap: Map<string, AttackVector> = new Map();
+  private logListener?: (entry: AttackTelemetryEntry) => void;
+
+  addLogListener(fn: (entry: AttackTelemetryEntry) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
+
+  /**
+   * Create a new SecurityTelemetry instance
+   */
+  constructor() {
+    // Instance initialization
+  }
 
   /**
    * Records a blocked attack attempt
    * FIX (PR #1313 review): Use UTC timestamps for consistency across timezones
    */
-  static recordBlockedAttack(
+  recordBlockedAttack(
     attackType: string,
     pattern: string,
     severity: SecurityEvent['severity'],
@@ -66,11 +89,9 @@ export class SecurityTelemetry {
       metadata
     };
 
-    // Add to history with circular buffer
+    // Bounded FIFO eviction — EvictingQueue handles capacity
     this.attackHistory.push(entry);
-    if (this.attackHistory.length > this.MAX_HISTORY) {
-      this.attackHistory.shift();
-    }
+    this.logListener?.(entry);
 
     // Update attack vector map
     const vectorKey = `${attackType}:${pattern}`;
@@ -96,12 +117,12 @@ export class SecurityTelemetry {
   /**
    * Get aggregated security metrics
    */
-  static getMetrics(): SecurityMetrics {
+  getMetrics(): SecurityMetrics {
     const now = new Date();
     const windowStart = new Date(now.getTime() - this.METRIC_WINDOW_HOURS * 60 * 60 * 1000);
 
     // Filter to recent attacks
-    const recentAttacks = this.attackHistory.filter(
+    const recentAttacks = this.attackHistory.toArray().filter(
       attack => new Date(attack.timestamp) >= windowStart
     );
 
@@ -164,10 +185,10 @@ export class SecurityTelemetry {
   /**
    * Get attack patterns by type
    */
-  static getAttackPatternsByType(attackType: string): string[] {
+  getAttackPatternsByType(attackType: string): string[] {
     const patterns = new Set<string>();
 
-    for (const attack of this.attackHistory) {
+    for (const attack of this.attackHistory.toArray()) {
       if (attack.attackType === attackType) {
         patterns.add(attack.pattern);
       }
@@ -179,7 +200,7 @@ export class SecurityTelemetry {
   /**
    * Get attack timeline for visualization
    */
-  static getAttackTimeline(hours: number = 24): { hour: string; count: number; severity: Record<string, number> }[] {
+  getAttackTimeline(hours: number = 24): { hour: string; count: number; severity: Record<string, number> }[] {
     const now = new Date();
     const timeline: { hour: string; count: number; severity: Record<string, number> }[] = [];
 
@@ -187,7 +208,7 @@ export class SecurityTelemetry {
       const hourStart = new Date(now.getTime() - (i + 1) * 60 * 60 * 1000);
       const hourEnd = new Date(now.getTime() - i * 60 * 60 * 1000);
 
-      const hourAttacks = this.attackHistory.filter(attack => {
+      const hourAttacks = this.attackHistory.toArray().filter(attack => {
         const attackTime = new Date(attack.timestamp);
         // For the most recent hour (i=0), include attacks up to and including "now"
         return i === 0
@@ -219,7 +240,7 @@ export class SecurityTelemetry {
   /**
    * Get summary report for security audits
    */
-  static generateReport(): string {
+  generateReport(): string {
     const metrics = this.getMetrics();
 
     const report = `
@@ -252,10 +273,10 @@ ${metrics.attacksPerHour.map((count, i) =>
   /**
    * Clear old telemetry data
    */
-  static clearOldData(daysToKeep: number = 30): void {
+  clearOldData(daysToKeep: number = 30): void {
     if (daysToKeep === 0) {
       // Clear all data immediately
-      this.attackHistory = [];
+      this.attackHistory.clear();
       this.attackVectorMap.clear();
       return;
     }
@@ -264,13 +285,10 @@ ${metrics.attacksPerHour.map((count, i) =>
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
     const cutoffTimestamp = cutoffDate.toISOString();
 
-    const index = this.attackHistory.findIndex(
+    const remaining = this.attackHistory.toArray().filter(
       attack => attack.timestamp >= cutoffTimestamp
     );
-
-    if (index > 0) {
-      this.attackHistory.splice(0, index);
-    }
+    this.attackHistory.reset([...remaining]);
 
     // Clean up old vectors that haven't been seen recently
     for (const [key, vector] of this.attackVectorMap.entries()) {
@@ -283,15 +301,24 @@ ${metrics.attacksPerHour.map((count, i) =>
   /**
    * Export telemetry data for external analysis
    */
-  static exportData(): {
+  exportData(): {
     history: AttackTelemetryEntry[];
     vectors: AttackVector[];
     metrics: SecurityMetrics;
   } {
     return {
-      history: [...this.attackHistory],
+      history: this.attackHistory.toJSON(),
       vectors: Array.from(this.attackVectorMap.values()),
       metrics: this.getMetrics()
     };
+  }
+
+  /**
+   * Dispose of the telemetry service and clean up resources
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.attackHistory.clear();
+    this.attackVectorMap.clear();
   }
 }

@@ -164,7 +164,7 @@ export class SecurityRules {
         description: 'API endpoint without rate limiting',
         severity: 'medium',
         category: 'custom',
-        check: (content, context) => {
+        check: (content, _context) => {
           const findings: SecurityFinding[] = [];
           // Check for MCP tool handlers without rate limiting
           const toolPattern = /name:\s*["']([^"']+)["'].*handle:/gs;
@@ -191,7 +191,7 @@ export class SecurityRules {
         description: 'User input processed without Unicode normalization',
         severity: 'medium',
         category: 'custom',
-        check: (content, context) => {
+        check: (content, _context) => {
           const findings: SecurityFinding[] = [];
           // Check for user input processing without Unicode validation
           const inputPattern = /(?:req\.|request\.|params|query|body|content)/;
@@ -228,13 +228,45 @@ export class SecurityRules {
         description: 'Security-relevant operation without logging',
         severity: 'low',
         category: 'custom',
-        check: (content, context) => {
+        check: (content, _context) => {
           const findings: SecurityFinding[] = [];
-          // Check for security operations without logging
-          const securityOps = /(?:authenticate|authorize|validate|sanitize|encrypt|decrypt)/i;
+
+          // FIX: Only flag files with actual executable code
+          // Skip files that are pure type definitions (interfaces, types only)
+          const hasExecutableCode =
+            /(?:^|\n)\s*(?:export\s+)?(?:function|class|const\s+\w+\s*=\s*(?:async\s+)?\(|async\s+function)/m.test(content) ||
+            /(?:^|\n)\s*(?:public|private|protected|async)\s+\w+\s*\(/m.test(content);
+
+          if (!hasExecutableCode) {
+            return findings; // Skip pure type definition files
+          }
+
+          // Remove comments and strings to avoid false positives on keywords in documentation
+          // FIX: Preserve ${...} expressions in template literals to avoid false negatives
+          // When scanning for security calls like authenticate(`user-${id}`), we must preserve
+          // both the function call (authenticate) and the expression inside ${} (id).
+          // Otherwise we get false negatives where security-sensitive calls are missed.
+          const codeOnly = content
+            .replace(/\/\/.*$/gm, '') // Remove single-line comments
+            .replace(/\/\*[\s\S]*?\*\//g, '') // Remove multi-line comments
+            .replace(/'(?:[^'\\]|\\.)*'/g, '') // Remove single-quoted strings
+            .replace(/"(?:[^"\\]|\\.)*"/g, '') // Remove double-quoted strings
+            // For template literals: remove string content but preserve ${...} expressions
+            .replace(/`([^`]*)`/g, (_match, inner: string) => {
+              // Extract ${...} expressions and keep their content
+              const expressions = inner.match(/\$\{([^}]+)\}/g);
+              if (expressions) {
+                return expressions.map((e: string) => e.replace(/\$\{([^}]+)\}/, '$1')).join(' ');
+              }
+              return ''; // No expressions, remove the whole template literal
+            });
+
+          // Check for actual security operation function CALLS (not just keywords in text)
+          // Match: authenticate(...), validate(...), etc. - not just the words
+          const securityOpCalls = /\b(?:authenticate|authorize|validate|sanitize|encrypt|decrypt)\s*\(/i;
           const hasLogging = /SecurityMonitor\.log|logSecurityEvent/i.test(content);
-          
-          if (securityOps.test(content) && !hasLogging) {
+
+          if (securityOpCalls.test(codeOnly) && !hasLogging) {
             findings.push({
               ruleId: 'DMCP-SEC-006',
               severity: 'low' as const,
@@ -243,7 +275,7 @@ export class SecurityRules {
               confidence: 'medium' as const
             });
           }
-          
+
           return findings;
         },
         remediation: 'Log all security-relevant operations for audit trail',

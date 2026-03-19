@@ -5,7 +5,6 @@
  * Each suppression should be well-documented with a clear reason.
  */
 
-import * as path from 'path';
 import { logger } from '../../../utils/logger.js';
 
 export interface Suppression {
@@ -58,6 +57,11 @@ export const suppressions: Suppression[] = [
     file: 'src/update/UpdateManager.ts',
     reason: 'False positive - "Update Failed" is a UI message, not SQL. The codebase does not use SQL.'
   },
+  {
+    rule: 'CWE-89-001',
+    file: 'src/elements/memories/MemoryManager.ts',
+    reason: 'FALSE POSITIVE: Line 1024 is a logger.error() call formatting an error message with string concatenation. This is not a SQL query - the codebase does not use SQL. The string concatenation builds a user-facing error message for deletion failures. PR #7'
+  },
   
   // ========================================
   // Test File Suppressions
@@ -79,17 +83,17 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'test/**/*',
+    file: 'tests/**/*',
     reason: 'Test utilities and E2E tests do not process untrusted user input'
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'test/**/*',
+    file: 'tests/**/*',
     reason: 'Audit logging not required for test utilities and E2E tests'
   },
   {
     rule: 'OWASP-A03-003',
-    file: 'test/e2e/cleanup-test-data.ts',
+    file: 'tests/e2e/cleanup-test-data.ts',
     reason: 'False positive - console.log message string literal, not a path operation'
   },
   {
@@ -99,12 +103,17 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'OWASP-A01-001',
-    file: 'test/__fixtures__/**/*',
+    file: 'tests/fixtures/**/*',
     reason: 'Test fixtures contain intentional mock credentials clearly marked as FAKE/TEST/NOT_REAL'
   },
   {
+    rule: 'OWASP-A01-001',
+    file: 'tests/security/framework/RapidSecurityTesting.ts',
+    reason: 'FALSE POSITIVE: Line 202 contains an intentional fake token (ghp_1234567890...) for security testing. Clearly marked with NOSONAR comment. Used to verify tokens are not exposed in error messages. PR #1'
+  },
+  {
     rule: '*',
-    file: 'test/__fixtures__/testCredentials.ts',
+    file: 'tests/fixtures/testCredentials.ts',
     reason: 'Centralized test credentials file with intentionally fake values for testing'
   },
   {
@@ -172,6 +181,75 @@ export const suppressions: Suppression[] = [
     reason: 'INTENTIONAL: Format transformer, not security boundary. Uses yaml.load with CORE_SCHEMA to prevent deserialization attacks. Cannot use SecureYamlParser (processes extracted YAML strings). Preserves content fidelity - no modification. Output validated when loaded via SkillManager.load() which applies SecureYamlParser. PR #1400'
   },
   {
+    rule: 'DMCP-SEC-005',
+    file: 'src/security/audit/scanners/ConfigurationScanner.ts',
+    reason: 'INTENTIONAL: Security scanner for pure YAML configuration files (not Markdown with frontmatter). Uses yaml.load with FAILSAFE_SCHEMA which prevents code execution and arbitrary object instantiation. SecureYamlParser is designed for element files (Markdown with YAML frontmatter), not raw config files. PR #1'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/services/SerializationService.ts',
+    reason: 'FALSE POSITIVE: Uses safe YAML schema (FAILSAFE_SCHEMA or JSON_SCHEMA) selected by getYamlSchema(). SecureYamlParser is designed for Markdown files with frontmatter, not pure YAML parsing. Lines 307 and 812 use safe schemas that prevent code execution.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/handlers/mcp-aql/MCPAQLHandler.ts',
+    reason: 'INTENTIONAL: Import operation parses pure YAML data from export packages (not Markdown with frontmatter). Uses yaml.load with JSON_SCHEMA which prevents code execution and is appropriate for structured element data. SecureYamlParser cannot be used as it expects Markdown frontmatter format. PR #193'
+  },
+
+  // ========================================
+  // Service Layer False Positives (Refactor PR)
+  // ========================================
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/SerializationService.ts',
+    reason: 'FALSE POSITIVE: SerializationService handles data serialization/deserialization. Unicode normalization is applied at the validation layer (ValidationService.validateAndSanitizeInput calls UnicodeValidator.normalize) before data reaches serialization.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/FileOperationsService.ts',
+    reason: 'FALSE POSITIVE: FileOperationsService handles file I/O operations. Paths are validated by PathValidator. Content validation including Unicode normalization happens at the element manager layer before file operations.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/ElementValidator.ts',
+    reason: 'FALSE POSITIVE: Interface/type definition file only. Concrete implementations use ValidationService which performs Unicode normalization via UnicodeValidator.normalize().'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/GenericElementValidator.ts',
+    reason: 'FALSE POSITIVE: Calls InputNormalizer.normalize() at the validation boundary (line 64) which recursively normalizes all strings via UnicodeValidator.normalize(). This is the centralized normalization point for all element validators.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/PersonaElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. Custom fields additionally normalized by ValidationService.validateAndSanitizeInput().'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/MemoryElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. Custom fields additionally normalized by ValidationService.validateAndSanitizeInput().'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/TemplateElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. Custom fields additionally normalized by ValidationService.validateAndSanitizeInput().'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/EnsembleElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. Custom fields additionally normalized by ValidationService.validateAndSanitizeInput().'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/SkillElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. validateMetadata() receives pre-normalized element.metadata from Skill constructor (UnicodeValidator.normalize + sanitizeInput). PR #457'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/validation/AgentElementValidator.ts',
+    reason: 'FALSE POSITIVE: Extends GenericElementValidator which normalizes all input via InputNormalizer.normalize() at the boundary. Agent-specific fields (goal, systemPrompt, activates, tools, autonomy) additionally normalized by ValidationService.validateContent(). PR #134'
+  },
+  {
     rule: 'DMCP-SEC-004',
     file: 'src/converters/DollhouseToAnthropicConverter.ts',
     reason: 'INTENTIONAL: Format transformer, not security boundary. Preserves content fidelity without Unicode normalization. Input skills already validated (from DollhouseMCP system). One-to-one mechanical transformation - no content modification. Security boundary is SkillManager.load(), not converters. PR #1400'
@@ -201,7 +279,7 @@ export const suppressions: Suppression[] = [
     file: 'src/server/resources/CapabilityIndexResource.ts',
     reason: 'FALSE POSITIVE: File path is constructed from os.homedir() (system-provided) with hardcoded path segments. No user input flows through this code. The capability-index.yaml file is system-generated by EnhancedIndexManager, not user-provided.'
   },
-
+  
   // ========================================
   // Clear-text Logging False Positives
   // ========================================
@@ -227,6 +305,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-001',
     file: 'src/persona/PersonaLoader.ts',
     reason: 'PersonaLoader validates personas through SecureYamlParser and ContentValidator'
+  },
+  {
+    rule: 'DMCP-SEC-001',
+    file: 'src/persona/PersonaManager.ts',
+    reason: 'FALSE POSITIVE: PersonaManager validates all loaded personas using PersonaValidator.validatePersona() immediately after loading at line 325. Invalid personas are rejected and removed from cache. PR #1'
   },
   
   // ========================================
@@ -289,6 +372,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/services/retention/types.ts',
+    reason: 'Type definition file for retention policy interfaces - contains only TypeScript interfaces and type definitions, no runtime code or user input processing. Actual Unicode normalization is implemented in RetentionPolicyService and MemoryRetentionStrategy. PR #52'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/elements/memories/utils.ts',
     reason: 'Memory utilities - all external input is normalized via UnicodeValidator in the functions themselves'
   },
@@ -340,7 +428,42 @@ export const suppressions: Suppression[] = [
   {
     rule: 'DMCP-SEC-004',
     file: 'src/server/ServerSetup.ts',
-    reason: 'This is where Unicode normalization is implemented for all tool inputs'
+    reason: 'CENTRALIZED UNICODE NORMALIZATION: This is where Unicode normalization is implemented for ALL tool inputs. ServerSetup.normalizeArgumentsUnicode() (lines 113-146) recursively normalizes all string arguments before they reach any handler. This is the correct architectural pattern (single entry point). PR #1'
+  },
+
+  // ========================================
+  // Centralized Unicode Normalization - PR #1
+  // ========================================
+  // All handlers receive pre-normalized input from ServerSetup.ts
+  // ServerSetup.setupCallToolHandler() calls normalizeArgumentsUnicode()
+  // on line 89 BEFORE dispatching to any handler. This recursively
+  // normalizes all strings in the arguments object.
+  // See src/server/ServerSetup.ts lines 113-146 for implementation.
+  // ========================================
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'test-archive/**/*',
+    reason: 'CENTRALIZED NORMALIZATION: Test archive files are archived experiments, not production code. All production user input is normalized in ServerSetup.ts before reaching handlers. PR #1'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/handlers/*.ts',
+    reason: 'CENTRALIZED NORMALIZATION: All handlers receive pre-normalized input from ServerSetup.normalizeArgumentsUnicode() (lines 89, 113-146). Unicode normalization happens at the entry point before handlers are invoked. PR #1'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/handlers/**/*.ts',
+    reason: 'CENTRALIZED NORMALIZATION: All handler strategies and modules receive pre-normalized input from ServerSetup.normalizeArgumentsUnicode(). Input is sanitized at the MCP request layer. PR #1'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/elements/**/*.ts',
+    reason: 'CENTRALIZED NORMALIZATION: Element managers receive pre-normalized input from handlers, which receive pre-normalized input from ServerSetup. Defense in depth with centralized entry point normalization. PR #1'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/di/Container.ts',
+    reason: 'FALSE POSITIVE: DI Container only wires dependencies, does not process user input. All user input is normalized in ServerSetup before reaching any injected service. PR #1'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -597,6 +720,11 @@ export const suppressions: Suppression[] = [
     reason: 'Main entry point delegates security operations to specialized modules'
   },
   {
+    rule: 'DMCP-SEC-004',
+    file: 'src/utils/EvictingQueue.ts',
+    reason: 'Generic data structure — does not process user input. All callers (Agent, SecurityTelemetry, SecurityMonitor, Logger) sanitize input before pushing to the queue'
+  },
+  {
     rule: 'DMCP-SEC-006',
     file: 'src/utils/*.ts',
     reason: 'Utility functions are not security operations requiring audit'
@@ -641,13 +769,61 @@ export const suppressions: Suppression[] = [
     file: 'src/handlers/ConfigHandler.ts',
     reason: 'Config handler operations are configuration management, not security operations. ConfigManager handles its own logging.'
   },
-  
+
+  // ========================================
+  // Query Services - Issue #38 (PR #46)
+  // ========================================
+  // Query services receive pre-normalized input via two layers:
+  // 1. ServerSetup.normalizeArgumentsUnicode() normalizes all MCP tool arguments
+  // 2. FilterService uses normalizeSearchTerm() which calls UnicodeValidator.normalize()
+  // See src/utils/searchUtils.ts lines 17-30 for secondary normalization
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/types.ts',
+    reason: 'Type definition file containing only TypeScript interfaces - no runtime code or user input processing. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/index.ts',
+    reason: 'Re-export module - no user input processing, only TypeScript re-exports. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/PaginationService.ts',
+    reason: 'PaginationService processes numeric parameters (page, pageSize) - no string input requiring Unicode normalization. Input pre-validated at MCP request layer. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/FilterService.ts',
+    reason: 'DUAL PROTECTION: (1) Input pre-normalized by ServerSetup.normalizeArgumentsUnicode() at MCP layer, (2) FilterService uses normalizeSearchTerm() which calls UnicodeValidator.normalize(). See searchUtils.ts:17-30. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/ElementQueryService.ts',
+    reason: 'Orchestrator service - delegates to FilterService which performs Unicode normalization via normalizeSearchTerm(). Input pre-normalized at MCP layer. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/SortService.ts',
+    reason: 'SortService validates sortBy against enum whitelist (SortableField) - no arbitrary string input. sortOrder is enum-validated. No Unicode normalization needed. PR #46'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/services/query/*.ts',
+    reason: 'Query services receive pre-normalized input from MCP layer and use normalizeSearchTerm() for additional protection. PR #46'
+  },
+
   // ========================================
   // Coverage Report Files
   // ========================================
   {
     rule: '*',
     file: 'test/coverage/**/*',
+    reason: 'Coverage report files are auto-generated and not part of the application code'
+  },
+  {
+    rule: '*',
+    file: 'tests/coverage/**/*',
     reason: 'Coverage report files are auto-generated and not part of the application code'
   },
   {
@@ -715,12 +891,12 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'OWASP-A03-002',
-    file: 'test/experiments/capability-index-comprehensive-test.js',
+    file: 'tests/experiments/capability-index-comprehensive-test.js',
     reason: 'Test file using spawn with hardcoded array arguments - no user input'
   },
   {
     rule: 'OWASP-A03-002',
-    file: '**/test/experiments/capability-index-comprehensive-test.js',
+    file: '**/tests/experiments/capability-index-comprehensive-test.js',
     reason: 'Test file using spawn with hardcoded array arguments - no user input'
   },
   {
@@ -735,12 +911,12 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'CWE-22-001',
-    file: 'test/experiments/capability-index-docker-test.js',
+    file: 'tests/experiments/capability-index-docker-test.js',
     reason: 'Test file using hardcoded test paths - no user input'
   },
   {
     rule: 'CWE-22-001',
-    file: '**/test/experiments/capability-index-docker-test.js',
+    file: '**/tests/experiments/capability-index-docker-test.js',
     reason: 'Test file using hardcoded test paths - no user input'
   },
   {
@@ -757,12 +933,12 @@ export const suppressions: Suppression[] = [
   // Additional suppressions for remaining issues
   {
     rule: 'OWASP-A03-002',
-    file: 'test/experiments/capability-index-docker-test.js',
+    file: 'tests/experiments/capability-index-docker-test.js',
     reason: 'Test file using spawn with hardcoded array arguments at line 279 - no user input'
   },
   {
     rule: 'OWASP-A03-002',
-    file: '**/test/experiments/capability-index-docker-test.js',
+    file: '**/tests/experiments/capability-index-docker-test.js',
     reason: 'Test file using spawn with hardcoded array arguments at line 279 - no user input'
   },
   {
@@ -774,6 +950,138 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-001',
     file: '**/scripts/test-capability-index.js',
     reason: 'Test script loading test personas with hardcoded paths - not production code'
+  },
+
+  // ========================================
+  // packages/safety Suppressions
+  // ========================================
+  {
+    rule: 'OWASP-A03-002',
+    file: 'packages/safety/src/DisplayService.ts',
+    reason: 'Intentional execSync for cross-platform OS dialogs. All user input is properly escaped using escapeShellArg (Unix) or Base64 encoding (PowerShell)'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/packages/safety/src/DisplayService.ts',
+    reason: 'Intentional execSync for cross-platform OS dialogs. All user input is properly escaped using escapeShellArg (Unix) or Base64 encoding (PowerShell)'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'packages/safety/src/DisplayService.ts',
+    reason: 'DisplayService receives sanitized input from TieredSafetyService. Unicode normalization happens at validation boundaries, not in display layer'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/packages/safety/src/DisplayService.ts',
+    reason: 'DisplayService receives sanitized input from TieredSafetyService. Unicode normalization happens at validation boundaries, not in display layer'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'packages/safety/src/TieredSafetyService.ts',
+    reason: 'TieredSafetyService validates operation safety levels, not user input. Input validation with Unicode normalization is handled by upstream validators'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: '**/packages/safety/src/TieredSafetyService.ts',
+    reason: 'TieredSafetyService validates operation safety levels, not user input. Input validation with Unicode normalization is handled by upstream validators'
+  },
+
+  // ========================================
+  // Docker Token Measurement Script - PR #292
+  // ========================================
+  {
+    rule: 'OWASP-A03-002',
+    file: 'scripts/measure-docker-tokens.ts',
+    reason: 'Command injection mitigated: interfaceMode and endpointMode are validated against VALID_INTERFACE_MODES and VALID_ENDPOINT_MODES allowlists before use in spawn(). TypeScript types also constrain parameters at compile time. PR #292'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: '**/scripts/measure-docker-tokens.ts',
+    reason: 'Command injection mitigated: interfaceMode and endpointMode are validated against VALID_INTERFACE_MODES and VALID_ENDPOINT_MODES allowlists before use in spawn(). TypeScript types also constrain parameters at compile time. PR #292'
+  },
+
+  // ========================================
+  // Unified Logging System — PR #471
+  // ========================================
+  // Sinks receive pre-constructed UnifiedLogEntry objects from LogManager.
+  // Data enters the pipeline through LogHooks which creates entries from
+  // internal system events. MCPLogger sanitizes via sanitizeMessage() and
+  // sanitizeData() before emitting. Other sources (SecurityMonitor,
+  // PerformanceMonitor, etc.) emit internal system data, not user input.
+  // The SSE viewer HTML-escapes all dynamic content via escHtml()/
+  // document.createTextNode().
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/logging/types.ts',
+    reason: 'Pure type definitions and interfaces — no data processing or user input handling. PR #471'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/logging/sinks/MemoryLogSink.ts',
+    reason: 'Receives pre-constructed UnifiedLogEntry objects from LogManager. Query parameters are used as read-only substring filters, not written to output. PR #471'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/logging/sinks/FileLogSink.ts',
+    reason: 'Receives pre-formatted entries via ILogFormatter. File paths built from hardcoded category names + dates. MCPLogger sanitizes upstream via sanitizeMessage/sanitizeData; other sources emit internal system data. PR #471'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/logging/sinks/SSELogSink.ts',
+    reason: 'JSON-serializes pre-constructed UnifiedLogEntry objects over SSE. No HTML rendering; the viewer (viewerHtml.ts) handles HTML escaping via document.createTextNode. PR #471'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/logging/viewer/viewerHtml.ts',
+    reason: 'All dynamic content (timestamp, category, source, message, correlationId) is HTML-escaped via escHtml() using document.createTextNode before DOM insertion. PR #471'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/storage/types.ts',
+    reason: 'FALSE POSITIVE: Type-only interface declarations (StorageItemMetadata, ElementIndexEntry, ManifestDiffResult). No executable input-processing code; Unicode normalization is enforced in concrete storage parsers/layers.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/storage/IStorageBackend.ts',
+    reason: 'FALSE POSITIVE: Interface contract only for backend abstraction. No runtime user-input handling in this file; normalization is enforced by implementing storage layers and validators.'
+  },
+
+  // ========================================
+  // VerificationNotifier False Positives — Issue #537
+  // ========================================
+  {
+    rule: 'OWASP-A03-002',
+    file: 'src/services/VerificationNotifier.ts',
+    reason: 'FALSE POSITIVE: Lines 117, 132, 145 use spawn() with array arguments (no shell invocation). zenity/kdialog/xmessage are display-only tools that render text in GUI dialogs without interpreting content as code. agentName (from MCP params) and code (cryptographic alphanumeric) flow into display text only. See Issue #537 evidence trace.'
+  },
+
+  // ========================================
+  // Web UI Client-Side False Positives — RC1 Security Audit
+  // ========================================
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/web/public/app.js',
+    reason: 'Client-side browser JavaScript. SecureYamlParser is a Node.js module unavailable in browser context. safeParseYaml() wrapper uses CORE_SCHEMA (safe, no custom types) with 512KB size limit. Data served from localhost or trusted GitHub collection API.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/app.js',
+    reason: 'Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Input served from DollhouseMCP server which normalizes before serving.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/server.ts',
+    reason: 'NFC normalization added to req.path in SPA fallback handler (line 180). File-level scanner flags despite per-input fix.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes.ts',
+    reason: 'NFC normalization via normalizeInput() applied to all req.params. File-level scanner flags despite per-input fix.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/converters/AgentSkillConverter.ts',
+    reason: 'NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. File-level scanner flags despite per-input fix.'
   }
 ];
 
@@ -887,7 +1195,7 @@ function getRelativePath(absolutePath: string): string {
   }
   
   // Define common project source directories
-  const projectDirs = ['src/', '__tests__/', 'scripts/', 'docs/', 'test/', 'tests/', 'lib/'];
+  const projectDirs = ['src/', '__tests__/', 'scripts/', 'docs/', 'tests/', 'test-archive/', 'lib/'];
   
   // Find the position of common project directories in the path
   let bestMatch = { index: -1, dir: '', relativePath: '' };

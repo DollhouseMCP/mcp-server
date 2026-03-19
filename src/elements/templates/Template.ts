@@ -19,11 +19,14 @@ import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { ContentValidator } from '../../security/contentValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import * as path from 'path';
+import { MetadataService } from '../../services/MetadataService.js';
 
 // Extend IElementMetadata with template-specific fields
 export interface TemplateMetadata extends IElementMetadata {
+  type?: ElementType.TEMPLATE;             // Template type constraint for type safety
   category?: string;              // Template category (documents, emails, code, etc.)
   output_format?: string;         // Output format (markdown, html, json, yaml, etc.)
   variables?: TemplateVariable[]; // Variable definitions
@@ -59,10 +62,24 @@ export interface TemplateExample {
   output?: string;
 }
 
+/** Parsed result of a section-format template (issue #705). */
+export interface TemplateSections {
+  /** True when the content contains at least one bare section tag. */
+  isSectionMode: boolean;
+  /** Content of the <template> block — the only section that receives variable substitution. */
+  templateSection: string;
+  /** Raw content of the <style> block — passed through without variable substitution. */
+  styleSection: string;
+  /** Raw content of the <script> block — passed through without variable substitution. */
+  scriptSection: string;
+}
+
 export class Template extends BaseElement implements IElement {
   public declare metadata: TemplateMetadata;
-  public content: string;
+  // instructions and content inherited from BaseElement (v2.0 dual-field architecture)
   private compiledTemplate?: CompiledTemplate;
+  // Issue #705: Cache parsed sections to avoid re-running regex on every render/validate
+  private parsedSections?: TemplateSections;
   
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
@@ -71,7 +88,7 @@ export class Template extends BaseElement implements IElement {
   private readonly MAX_INCLUDE_DEPTH = 5;          // Prevent infinite include loops
   private readonly MAX_STRING_LENGTH = 10000;      // Max length for string variables
 
-  constructor(metadata: Partial<TemplateMetadata>, content: string = '') {
+  constructor(metadata: Partial<TemplateMetadata>, content: string = '', metadataService: MetadataService) {
     // SECURITY FIX #3 & #6: Validate and sanitize ALL metadata fields
     // Unicode normalization prevents homograph attacks
     // Input sanitization prevents XSS and injection attacks
@@ -82,8 +99,8 @@ export class Template extends BaseElement implements IElement {
       category: metadata.category ? sanitizeInput(UnicodeValidator.normalize(metadata.category).normalizedContent, 50) : undefined,
       output_format: metadata.output_format ? sanitizeInput(metadata.output_format, 20) : undefined
     };
-    
-    super(ElementType.TEMPLATE, sanitizedMetadata);
+
+    super(ElementType.TEMPLATE, sanitizedMetadata, metadataService);
     
     // SECURITY FIX #4: Enforce template size limit
     if (content.length > this.MAX_TEMPLATE_SIZE) {
@@ -97,8 +114,13 @@ export class Template extends BaseElement implements IElement {
     }
     
     // SECURITY FIX #3: Sanitize template content
-    // Note: We preserve the template syntax but normalize Unicode
-    this.content = UnicodeValidator.normalize(content).normalizedContent;
+    // ContentValidator with contentContext: 'template' allows code patterns (eval, exec, etc.)
+    // while still catching prompt injection, credentials, and path traversal.
+    const contentValidation = ContentValidator.validateAndSanitize(content, {
+      maxLength: this.MAX_TEMPLATE_SIZE,
+      contentContext: 'template',
+    });
+    this.content = contentValidation.sanitizedContent || UnicodeValidator.normalize(content).normalizedContent;
     
     // Ensure template-specific metadata
     this.metadata = {
@@ -170,18 +192,81 @@ export class Template extends BaseElement implements IElement {
    * SECURITY FIX #1: Safe template compilation without eval() or Function()
    * Uses regex-based token replacement instead of dynamic code execution
    */
+  /**
+   * Parse section-mode content into named sections.
+   *
+   * Section mode is active when the content contains any <template>, <style>, or
+   * <script> block. In section mode only the <template> section is processed by the
+   * variable substitution engine; <style> and <script> are raw passthrough so that
+   * CSS/JS `}}` characters never trigger unmatched-token errors.
+   *
+   * @see Issue #705 — structured section support for page templates
+   */
+  static parseSections(content: string): TemplateSections {
+    // Matches bare section tags: <template>, <style>, <script> (no attributes).
+    // Tags with attributes (e.g. <template id="x">) are treated as plain HTML,
+    // not section markers — this is intentional for forward compatibility.
+    const pattern = /<(template|style|script)>([\s\S]*?)<\/\1>/gi;
+    const sections: Record<string, string> = {};
+    let found = false;
+    let match;
+
+    while ((match = pattern.exec(content)) !== null) {
+      found = true;
+      sections[match[1].toLowerCase()] = match[2];
+    }
+
+    // Issue #705 forward-compat: warn when a bare <template> tag appears inside
+    // the <template> section — nested section markers aren't supported yet and
+    // the lazy regex would silently produce incorrect results.
+    const templateSection = sections['template'] ?? '';
+    if (found && templateSection && /<template>/i.test(templateSection)) {
+      logger.warn(
+        'Template section contains a nested bare <template> tag. ' +
+        'Nested section markers are not supported — only the outermost ' +
+        '<template>...</template> block is rendered. ' +
+        'Use <template id="..."> (with an attribute) for inner HTML template elements.'
+      );
+    }
+
+    return {
+      isSectionMode: found,
+      templateSection,
+      styleSection: sections['style'] ?? '',
+      scriptSection: sections['script'] ?? '',
+    };
+  }
+
+  /**
+   * Return the parsed sections for this template's content.
+   * Result is cached per-instance and cleared whenever content changes.
+   * Used by TemplateRenderer to serve section-specific render results.
+   */
+  getSections(): TemplateSections {
+    if (!this.parsedSections) {
+      this.parsedSections = Template.parseSections(this.content);
+    }
+    return this.parsedSections;
+  }
+
   private compile(): CompiledTemplate {
     if (this.compiledTemplate) {
       return this.compiledTemplate;
     }
+
+    // Issue #705: In section mode, only compile the <template> section.
+    // Tokens in <style> and <script> are never substituted.
+    // getSections() returns the cached result — no repeated regex execution.
+    const { isSectionMode, templateSection } = this.getSections();
+    const compileContent = isSectionMode ? templateSection : this.content;
 
     // Extract all variable tokens from the template
     // FIX: Use \w shorthand instead of [a-zA-Z0-9_] (SonarCloud S6353)
     const variablePattern = /\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g;
     const tokens: TemplateToken[] = [];
     let match;
-    
-    while ((match = variablePattern.exec(this.content)) !== null) {
+
+    while ((match = variablePattern.exec(compileContent)) !== null) {
       tokens.push({
         token: match[0],
         variable: match[1],
@@ -190,7 +275,7 @@ export class Template extends BaseElement implements IElement {
     }
 
     this.compiledTemplate = {
-      content: this.content,
+      content: compileContent,
       tokens,
       variables: this.metadata.variables || []
     };
@@ -316,7 +401,7 @@ export class Template extends BaseElement implements IElement {
    */
   private async sanitizeVariableValue(value: any, varDef: TemplateVariable): Promise<any> {
     switch (varDef.type) {
-      case 'string':
+      case 'string': {
         // SECURITY FIX #6: Unicode normalization
         const normalized = UnicodeValidator.normalize(String(value));
         let stringValue = sanitizeInput(normalized.normalizedContent, this.MAX_STRING_LENGTH);
@@ -366,25 +451,28 @@ export class Template extends BaseElement implements IElement {
         }
         
         return stringValue;
-        
-      case 'number':
+      }
+
+      case 'number': {
         const num = Number(value);
         if (Number.isNaN(num)) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a number`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_NUMBER);
         }
         return num;
-        
+      }
+
       case 'boolean':
         return Boolean(value);
-        
-      case 'date':
+
+      case 'date': {
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be a valid date`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_DATE);
         }
         return date;
-        
-      case 'array':
+      }
+
+      case 'array': {
         if (!Array.isArray(value)) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be an array`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_ARRAY);
         }
@@ -402,10 +490,11 @@ export class Template extends BaseElement implements IElement {
           value = value.slice(0, MAX_ARRAY_SIZE);
         }
         // Sanitize string elements in arrays
-        return value.map((item: any) => 
+        return value.map((item: any) =>
           typeof item === 'string' ? sanitizeInput(item, 1000) : item
         );
-        
+      }
+
       case 'object':
         if (typeof value !== 'object' || value === null) {
           throw ErrorHandler.createError(`Variable '${varDef.name}' must be an object`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_OBJECT);
@@ -647,9 +736,14 @@ export class Template extends BaseElement implements IElement {
       });
     }
     
-    // Check for unmatched tokens
-    const openTokens = (this.content.match(/\{\{/g) || []).length;
-    const closeTokens = (this.content.match(/\}\}/g) || []).length;
+    // Check for unmatched tokens.
+    // Issue #705: In section mode, only count tokens within the <template> section —
+    // <style> and <script> sections are raw passthrough where }} is intentional.
+    // getSections() returns the cached result — no repeated regex execution.
+    const { isSectionMode, templateSection } = this.getSections();
+    const tokenCheckContent = isSectionMode ? templateSection : this.content;
+    const openTokens = (tokenCheckContent.match(/\{\{/g) || []).length;
+    const closeTokens = (tokenCheckContent.match(/\}\}/g) || []).length;
     if (openTokens !== closeTokens) {
       result.errors.push({
         field: 'content',
@@ -793,9 +887,10 @@ export class Template extends BaseElement implements IElement {
       if (parsed.id) this.id = parsed.id;
       if (parsed.version) this.version = parsed.version;
       
-      // Clear compiled template cache
+      // Clear compiled template and section caches (content changed)
       this.compiledTemplate = undefined;
-      
+      this.parsedSections = undefined;
+
       this._isDirty = true;
       logger.debug(`Deserialized template: ${this.metadata.name}`);
       
@@ -856,9 +951,10 @@ export class Template extends BaseElement implements IElement {
   public override async deactivate(): Promise<void> {
     logger.info(`Deactivating template: ${this.metadata.name} (${this.id})`);
     
-    // Clear compiled template cache
+    // Clear compiled template and section caches
     this.compiledTemplate = undefined;
-    
+    this.parsedSections = undefined;
+
     await super.deactivate?.();
   }
 }

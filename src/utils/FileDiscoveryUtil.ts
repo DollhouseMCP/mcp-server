@@ -12,11 +12,21 @@
  * logic to a reusable utility class for better performance and maintainability.
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { logger } from './logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
+import { IFileOperationsService, FileOperationsService } from '../services/FileOperationsService.js';
+import { FileLockManager } from '../security/fileLockManager.js';
+
+// Singleton file operations service for static methods
+let fileOperationsService: IFileOperationsService | null = null;
+
+function getFileOperationsService(): IFileOperationsService {
+  if (!fileOperationsService) {
+    fileOperationsService = new FileOperationsService(new FileLockManager());
+  }
+  return fileOperationsService;
+}
 
 export interface FileSearchOptions {
   extensions?: string[];
@@ -72,7 +82,8 @@ export class FileDiscoveryUtil {
     
     try {
       // Single readdir operation for efficiency
-      const files = await fs.readdir(directory);
+      const fileOps = getFileOperationsService();
+      const files = await fileOps.listDirectory(directory);
       
       // Build search patterns
       const searchPatterns = this.buildSearchPatterns(safeName, extensions);

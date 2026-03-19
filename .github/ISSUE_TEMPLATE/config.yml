@@ -2,12 +2,15 @@
 # This helps maintain consistent issue quality and structure
 blank_issues_enabled: false
 contact_links:
-  - name: "\ud83d\udcac Community Discussions"
+  - name: "🧪 Beta Feedback Discussion"
+    url: https://github.com/DollhouseMCP/mcp-server/discussions/categories/beta-feedback
+    about: Share general impressions, ask questions, or discuss ideas about pre-release versions
+  - name: "💬 Community Discussions"
     url: https://github.com/DollhouseMCP/mcp-server/discussions
     about: Ask questions and discuss ideas with the community
-  - name: "\ud83d\udcd6 Documentation"
+  - name: "📖 Documentation"
     url: https://github.com/DollhouseMCP/mcp-server/tree/main/docs
     about: Check our documentation for setup and usage guides
-  - name: "\ud83c\udfa8 Persona Marketplace"
+  - name: "🎨 Persona Marketplace"
     url: https://github.com/DollhouseMCP/personas
     about: Browse and submit personas to our community marketplace

@@ -65,7 +65,7 @@ export class RateLimiter {
     if (this.minDelay > 0 && this.lastRequest > 0) {
       const timeSinceLastRequest = now - this.lastRequest;
       if (timeSinceLastRequest < this.minDelay) {
-        const retryAfterMs = this.minDelay - timeSinceLastRequest;
+        const retryAfterMs = Math.max(1, this.minDelay - timeSinceLastRequest);
         return {
           allowed: false,
           retryAfterMs,
@@ -79,13 +79,15 @@ export class RateLimiter {
     if (this.tokens < 1) {
       // Calculate when the next token will be available
       const tokensNeeded = 1 - this.tokens;
-      const msUntilNextToken = tokensNeeded / this.refillRate;
-      
+      const rawMs = tokensNeeded / this.refillRate;
+      // Clamp to safe bounds: at least 1ms, at most 1 hour, and always finite
+      const retryAfterMs = Math.max(1, Math.min(3_600_000, Number.isFinite(rawMs) ? Math.ceil(rawMs) : 60_000));
+
       return {
         allowed: false,
-        retryAfterMs: Math.ceil(msUntilNextToken),
+        retryAfterMs,
         remainingTokens: 0,
-        resetTime: new Date(now + msUntilNextToken)
+        resetTime: new Date(now + retryAfterMs)
       };
     }
 
@@ -203,5 +205,22 @@ export class RateLimiterFactory {
       windowMs: 60 * 60 * 1000, // 1 hour
       minDelayMs: 60 * 1000 // 1 minute between requests
     });
+  }
+
+  /**
+   * Rate limiter for permission_prompt evaluations (Issue #625 Phase 4).
+   * 100 requests per 60-second window — high throughput for rapid tool calls.
+   */
+  static createPermissionPromptLimiter(maxRequests = 100, windowMs = 60_000): RateLimiter {
+    return new RateLimiter({ maxRequests, windowMs });
+  }
+
+  /**
+   * Rate limiter for CLI approval record creation (Issue #625 Phase 4).
+   * Default 20 requests per 60-second window — prevents approval request flooding.
+   * Configurable via parameters (MCPAQLHandler reads from env vars).
+   */
+  static createCliApprovalLimiter(maxRequests = 20, windowMs = 60_000): RateLimiter {
+    return new RateLimiter({ maxRequests, windowMs });
   }
 }

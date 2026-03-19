@@ -29,10 +29,3 @@ export const DEPENDENCY_REQUIREMENTS = {
 // Anonymous ID generation
 export const ADJECTIVES = ['clever', 'swift', 'bright', 'bold', 'wise', 'calm', 'keen', 'witty', 'sharp', 'cool'];
 export const ANIMALS = ['fox', 'owl', 'cat', 'wolf', 'bear', 'hawk', 'deer', 'lion', 'eagle', 'tiger'];
-
-// Valid persona categories
-// @deprecated Categories have been removed in favor of a flat directory structure.
-// This constant is kept for backward compatibility warnings only.
-// New code should not rely on category validation.
-// This will be removed in a future version.
-export const VALID_CATEGORIES = ['creative', 'professional', 'educational', 'gaming', 'personal'];

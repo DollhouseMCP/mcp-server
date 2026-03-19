@@ -34,7 +34,7 @@ class SimpleMCPTest {
       // Create a simple transport with minimal options
       const transport = new StdioClientTransport({
         command: "node",
-        args: ["-e", "const { DollhouseMCPServer } = require('./dist/index.js'); new DollhouseMCPServer().run();"],
+        args: ["-e", "const { DollhouseMCPServer } = require('./dist/index.js'); const { DollhouseContainer } = require('./dist/di/Container.js'); const container = new DollhouseContainer(); new DollhouseMCPServer(container).run();"],
         cwd: process.cwd()
       });
 

@@ -2,7 +2,7 @@
  * User identity-related tool definitions and handlers
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
 import { IToolHandler } from '../types.js';
 
 export function getUserTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {

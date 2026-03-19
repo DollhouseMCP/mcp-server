@@ -1,241 +1,112 @@
 ---
 name: "Project Brief"
-description: "Comprehensive project overview template for planning and communication"
+description: "Comprehensive project overview template for planning and stakeholder communication"
 type: "template"
-version: "1.0.0"
+version: "2.0.0"
 author: "DollhouseMCP"
 created: "2025-07-23"
 category: "business"
 tags: ["project", "planning", "brief", "documentation", "management"]
 variables:
-  project_name:
-    type: "string"
-    description: "Name of the project"
-    required: true
-  project_code:
-    type: "string"
-    description: "Project code or ID"
-    required: false
-  start_date:
-    type: "string"
-    description: "Project start date"
-    required: true
-  end_date:
-    type: "string"
-    description: "Project end date"
-    required: true
-  project_manager:
-    type: "string"
-    description: "Project manager name"
-    required: true
-  budget:
-    type: "string"
-    description: "Project budget"
-    required: false
-    default: "TBD"
-outputFormats: ["markdown", "html", "pdf", "docx"]
-includes: []
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.349Z"
-  originalPath: "data/templates/project-brief.md"
+  - { name: "project_name", type: "string", required: true, description: "Name of the project" }
+  - { name: "project_code", type: "string", required: false, description: "Project code or ID" }
+  - { name: "start_date", type: "string", required: true, description: "Project start date" }
+  - { name: "end_date", type: "string", required: true, description: "Project end date" }
+  - { name: "project_manager", type: "string", required: true, description: "Project manager name" }
+  - { name: "status", type: "string", required: false, description: "Current project status", default: "Planning" }
+  - { name: "budget", type: "string", required: false, description: "Project budget", default: "TBD" }
+  - { name: "executive_summary", type: "string", required: false, description: "Concise overview of purpose and expected outcomes" }
+  - { name: "background", type: "string", required: false, description: "Context and reasons for initiating the project" }
+  - { name: "objectives", type: "string", required: false, description: "Project objectives with success criteria" }
+  - { name: "in_scope", type: "string", required: false, description: "What is included in this project (bullet list)" }
+  - { name: "out_of_scope", type: "string", required: false, description: "What is explicitly excluded (bullet list)" }
+  - { name: "stakeholders", type: "string", required: false, description: "Pre-formatted table rows: | Name | Role | Influence | Contact |" }
+  - { name: "team_members", type: "string", required: false, description: "Pre-formatted table rows: | Name | Role | Responsibilities | Allocation |" }
+  - { name: "milestones", type: "string", required: false, description: "Pre-formatted table rows: | Milestone | Description | Target Date | Dependencies |" }
+  - { name: "risks", type: "string", required: false, description: "Pre-formatted table rows: | Risk | Probability | Impact | Mitigation | Owner |" }
+  - { name: "kpis", type: "string", required: false, description: "Key performance indicators with targets" }
+  - { name: "deliverables", type: "string", required: false, description: "Project deliverables with due dates and acceptance criteria" }
+  - { name: "communication_plan", type: "string", required: false, description: "Pre-formatted table rows: | Type | Frequency | Audience | Purpose |" }
+  - { name: "sponsor", type: "string", required: false, description: "Project sponsor name" }
 ---
 # Project Brief: {{project_name}}
 
-{{#if project_code}}**Project Code:** {{project_code}}{{/if}}  
-**Date Created:** {{creation_date}}  
-**Last Updated:** {{last_updated}}  
+**Project Code:** {{project_code}}
 **Status:** {{status}}
+**Project Manager:** {{project_manager}}
 
 ## Executive Summary
-{{#if executive_summary}}
+
 {{executive_summary}}
-{{else}}
-[Provide a concise overview of the project, its purpose, and expected outcomes in 2-3 paragraphs]
-{{/if}}
 
 ## Project Overview
 
 ### Background
-{{#if background}}
 {{background}}
-{{else}}
-[Describe the context and reasons for initiating this project]
-{{/if}}
 
 ### Objectives
-{{#if objectives}}
-{{#each objectives}}
-1. {{description}} {{#if success_criteria}}
-   - Success Criteria: {{success_criteria}}{{/if}}
-{{/each}}
-{{else}}
-1. [Primary objective]
-   - Success Criteria: [How we measure success]
-2. [Secondary objective]
-   - Success Criteria: [How we measure success]
-{{/if}}
+{{objectives}}
 
 ### Scope
 
 #### In Scope
-{{#if in_scope}}
-{{#each in_scope}}
-- {{item}}
-{{/each}}
-{{else}}
-- [What is included in this project]
-- [Key deliverable 1]
-- [Key deliverable 2]
-{{/if}}
+{{in_scope}}
 
 #### Out of Scope
-{{#if out_scope}}
-{{#each out_scope}}
-- {{item}}
-{{/each}}
-{{else}}
-- [What is explicitly not included]
-- [Future phase consideration]
-{{/if}}
+{{out_of_scope}}
 
 ## Stakeholders
 
 ### Key Stakeholders
-| Name | Role | Interest/Influence | Contact |
-|------|------|-------------------|---------|
-{{#if stakeholders}}
-{{#each stakeholders}}
-| {{name}} | {{role}} | {{influence_level}} | {{contact}} |
-{{/each}}
-{{else}}
-| [Name] | [Role] | High/Medium/Low | [Email] |
-{{/if}}
+| Name | Role | Influence | Contact |
+|------|------|-----------|---------|
+{{stakeholders}}
 
 ### Project Team
 | Name | Role | Responsibilities | Allocation |
 |------|------|-----------------|------------|
-{{#if team_members}}
-{{#each team_members}}
-| {{name}} | {{role}} | {{responsibilities}} | {{allocation}}% |
-{{/each}}
-{{else}}
-| {{project_manager}} | Project Manager | Overall delivery | 100% |
-| [Name] | [Role] | [Key responsibilities] | [%] |
-{{/if}}
+{{team_members}}
 
 ## Timeline & Milestones
 
-### Project Timeline
-- **Start Date:** {{start_date}}
-- **End Date:** {{end_date}}
-- **Duration:** {{duration}}
+**Start Date:** {{start_date}}
+**End Date:** {{end_date}}
 
 ### Key Milestones
 | Milestone | Description | Target Date | Dependencies |
 |-----------|-------------|-------------|--------------|
-{{#if milestones}}
-{{#each milestones}}
-| {{name}} | {{description}} | {{date}} | {{dependencies}} |
-{{/each}}
-{{else}}
-| Project Kickoff | Initial team meeting | {{start_date}} | None |
-| [Milestone 1] | [Description] | [Date] | [Dependencies] |
-| Project Completion | Final delivery | {{end_date}} | All prior milestones |
-{{/if}}
+{{milestones}}
 
 ## Budget & Resources
 
-### Budget Overview
-- **Total Budget:** {{budget}}
-- **Contingency:** {{#if contingency}}{{contingency}}{{else}}10%{{/if}}
-
-{{#if budget_breakdown}}
-### Budget Breakdown
-| Category | Amount | % of Total | Notes |
-|----------|--------|------------|-------|
-{{#each budget_breakdown}}
-| {{category}} | {{amount}} | {{percentage}}% | {{notes}} |
-{{/each}}
-{{/if}}
-
-### Required Resources
-{{#if resources}}
-{{#each resources}}
-- **{{type}}:** {{description}} {{#if quantity}}({{quantity}}){{/if}}
-{{/each}}
-{{else}}
-- **Human Resources:** [Team members, contractors]
-- **Technical Resources:** [Software, hardware, tools]
-- **Physical Resources:** [Office space, equipment]
-{{/if}}
+**Total Budget:** {{budget}}
 
 ## Risks & Mitigation
 
-### Risk Assessment
-| Risk | Probability | Impact | Mitigation Strategy | Owner |
-|------|-------------|--------|-------------------|-------|
-{{#if risks}}
-{{#each risks}}
-| {{description}} | {{probability}} | {{impact}} | {{mitigation}} | {{owner}} |
-{{/each}}
-{{else}}
-| [Risk description] | High/Medium/Low | High/Medium/Low | [Mitigation plan] | [Name] |
-{{/if}}
+| Risk | Probability | Impact | Mitigation | Owner |
+|------|-------------|--------|------------|-------|
+{{risks}}
 
 ## Success Criteria
 
-### Key Performance Indicators (KPIs)
-{{#if kpis}}
-{{#each kpis}}
-1. **{{metric}}**: {{target}} {{#if measurement_method}}({{measurement_method}}){{/if}}
-{{/each}}
-{{else}}
-1. **[KPI 1]**: [Target value] ([How measured])
-2. **[KPI 2]**: [Target value] ([How measured])
-{{/if}}
+### Key Performance Indicators
+{{kpis}}
 
 ### Deliverables
-{{#if deliverables}}
-{{#each deliverables}}
-- **{{name}}**: {{description}}
-  - Due: {{due_date}}
-  - Acceptance Criteria: {{acceptance_criteria}}
-{{/each}}
-{{else}}
-- **[Deliverable 1]**: [Description]
-  - Due: [Date]
-  - Acceptance Criteria: [What constitutes completion]
-{{/if}}
+{{deliverables}}
 
 ## Communication Plan
 
-### Communication Schedule
 | Type | Frequency | Audience | Purpose |
 |------|-----------|----------|---------|
-{{#if communication_plan}}
-{{#each communication_plan}}
-| {{type}} | {{frequency}} | {{audience}} | {{purpose}} |
-{{/each}}
-{{else}}
-| Status Updates | Weekly | All stakeholders | Progress tracking |
-| Steering Committee | Monthly | Key stakeholders | Decision making |
-| Team Meetings | Daily/Weekly | Project team | Coordination |
-{{/if}}
+{{communication_plan}}
 
 ## Approval
 
-### Sign-off
 | Role | Name | Signature | Date |
 |------|------|-----------|------|
-| Project Sponsor | {{#if sponsor}}{{sponsor}}{{else}}[Name]{{/if}} | __________ | _____ |
+| Project Sponsor | {{sponsor}} | __________ | _____ |
 | Project Manager | {{project_manager}} | __________ | _____ |
-| {{#if additional_approvers}}{{#each additional_approvers}}{{role}} | {{name}} | __________ | _____ |
-{{/each}}{{/if}}
 
 ---
 *This document is a living document and will be updated as the project progresses.*

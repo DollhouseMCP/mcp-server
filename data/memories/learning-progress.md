@@ -44,8 +44,6 @@ schema:
       in_progress: "array"
       planned: "array"
       prerequisites: "object"
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

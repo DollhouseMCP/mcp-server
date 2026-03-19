@@ -5,16 +5,17 @@
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
-import { TokenManager, TokenScopes } from '../security/tokenManager.js';
-import { logger } from '../utils/logger.js';
+import { TokenManager } from '../security/tokenManager.js';
 
 export class GitHubClient {
   private apiCache: APICache;
   private rateLimitTracker: Map<string, number[]>;
-  
-  constructor(apiCache: APICache, rateLimitTracker: Map<string, number[]>) {
+  private tokenManager: TokenManager;
+
+  constructor(apiCache: APICache, rateLimitTracker: Map<string, number[]>, tokenManager: TokenManager) {
     this.apiCache = apiCache;
     this.rateLimitTracker = rateLimitTracker;
+    this.tokenManager = tokenManager;
   }
   
   /**
@@ -39,6 +40,15 @@ export class GitHubClient {
    * Fetch data from GitHub API with caching and rate limiting
    */
   async fetchFromGitHub(url: string, requireAuth: boolean = false): Promise<any> {
+    let timeoutId: NodeJS.Timeout | null = null;
+    const controller = new AbortController();
+
+    // Validate URL is a GitHub API or content endpoint to prevent SSRF
+    const parsedUrl = new URL(url);
+    if (!['api.github.com', 'raw.githubusercontent.com'].includes(parsedUrl.hostname)) {
+      throw new Error(`GitHubClient: Refusing to fetch non-GitHub URL: ${parsedUrl.hostname}`);
+    }
+
     try {
       // Check rate limit
       this.checkRateLimit('github_api');
@@ -60,7 +70,7 @@ export class GitHubClient {
       // The OAuth flow (setup_github_auth) stores tokens in secure OS keychain/credential store
       // which requires async access. The sync method only checks environment variables,
       // missing tokens stored by the OAuth authentication flow.
-      const token = await TokenManager.getGitHubTokenAsync();
+      const token = await this.tokenManager.getGitHubTokenAsync();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       } else if (requireAuth) {
@@ -68,15 +78,12 @@ export class GitHubClient {
       }
       
       // Create fetch with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
       const response = await fetch(url, {
         headers,
         signal: controller.signal
       });
-      
-      clearTimeout(timeoutId);
       
       if (!response.ok) {
         if (response.status === 403) {
@@ -104,8 +111,10 @@ export class GitHubClient {
     } catch (error) {
       // Use TokenManager for safe error handling
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const safeMessage = TokenManager.createSafeErrorMessage(errorMessage);
+      const safeMessage = this.tokenManager.createSafeErrorMessage(errorMessage);
       
+      // codeql[js/clear-text-logging] — URL is a GitHub API endpoint (api.github.com/raw.githubusercontent.com),
+      // validated at method entry. Auth tokens are in headers, not the URL.
       const errorDetails: any = {
         originalMessage: safeMessage,
         url
@@ -132,6 +141,11 @@ export class GitHubClient {
       (mcpError as any).cause = error;
       
       throw mcpError;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
     }
   }
 
@@ -141,9 +155,9 @@ export class GitHubClient {
   async validateCollectionPermissions(): Promise<void> {
     // NOTE: Using 'marketplace' scope for backward compatibility with TokenManager.
     // This is an internal implementation detail that doesn't affect functionality. (PR #280)
-    const validation = await TokenManager.ensureTokenPermissions('marketplace');
+    const validation = await this.tokenManager.ensureTokenPermissions('marketplace');
     if (!validation.isValid) {
-      const safeMessage = TokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');
+      const safeMessage = this.tokenManager.createSafeErrorMessage(validation.error || 'Unknown validation error');
       throw new Error(`GitHub token validation failed: ${safeMessage}`);
     }
   }

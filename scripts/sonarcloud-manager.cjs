@@ -173,7 +173,7 @@ function identifyFalsePositives(issues) {
     // Common false positive patterns
     if (
       // Test files with expected patterns
-      (file.includes('test/') && issue.rule === 'typescript:S1854') || // Dead stores in tests
+      ((file.includes('tests/') || file.includes('test/')) && issue.rule === 'typescript:S1854') || // Dead stores in tests
       (file.includes('suppressions.ts') && issue.type === 'CODE_SMELL') || // Suppression configs
       (file.includes('.spec.') && issue.rule === 'typescript:S2699') || // No assertions (may be integration tests)
       (file.includes('mock') && issue.severity === 'MINOR') || // Mock files
@@ -181,7 +181,7 @@ function identifyFalsePositives(issues) {
 
       // Known false positives from our codebase
       (issue.message && issue.message.includes('cognitive complexity') && issue.severity === 'MINOR') ||
-      (issue.rule === 'typescript:S6481' && file.includes('test/')) || // Prefer for...of in tests is fine
+      (issue.rule === 'typescript:S6481' && (file.includes('tests/') || file.includes('test/'))) || // Prefer for...of in tests is fine
 
       // Example tokens and documentation
       (issue.type === 'VULNERABILITY' && issue.message && issue.message.includes('example'))

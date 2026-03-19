@@ -1,5 +1,4 @@
-import { spawn, SpawnOptions } from 'child_process';
-import path from 'path';
+import * as child_process from 'child_process';
 import { RegexValidator } from './regexValidator.js';
 
 const ALLOWED_COMMANDS: Record<string, string[]> = {
@@ -32,10 +31,10 @@ export class CommandValidator {
     return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_.\/]+$/, { maxLength: 1000 });
   }
 
-  static async secureExec(command: string, args: string[], options?: SpawnOptions): Promise<string> {
+  static async secureExec(command: string, args: string[], options?: child_process.SpawnOptions): Promise<string> {
     this.sanitizeCommand(command, args);
     
-    const safeOptions: SpawnOptions = {
+    const safeOptions: child_process.SpawnOptions = {
       ...options,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -47,7 +46,7 @@ export class CommandValidator {
     };
     
     return new Promise((resolve, reject) => {
-      const proc = spawn(command, args, safeOptions);
+      const proc = child_process.spawn(command, args, safeOptions);
       
       let stdout = '';
       let stderr = '';

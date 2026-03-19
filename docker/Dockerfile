@@ -13,11 +13,12 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files and local workspace packages
 COPY package*.json ./
 COPY tsconfig.json ./
+COPY packages/ ./packages/
 
-# Install dependencies
+# Install dependencies (includes local @dollhousemcp/safety package)
 RUN npm ci
 
 # Copy source code
@@ -63,6 +64,8 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/data/personas ./data/personas
+# Copy built workspace packages (required for local file: dependencies)
+COPY --from=builder /app/packages ./packages
 
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets

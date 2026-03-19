@@ -1,32 +1,28 @@
-/**
- * Type definitions for persona-related structures
- */
+import { IElement, IElementMetadata } from './elements/IElement.js';
 
-export interface PersonaMetadata {
+export interface PersonaMetadata extends IElementMetadata {
   name: string;
   description: string;
   unique_id?: string;
-  author?: string;
+  filename?: string;  // Tracks the actual filename on disk for reliable retrieval after reload
   triggers?: string[];
   version?: string;
+  author?: string;
   category?: string;
-  age_rating?: 'all' | '13+' | '18+';
-  content_flags?: string[];
-  ai_generated?: boolean;
-  generation_method?: 'human' | 'ChatGPT' | 'Claude' | 'hybrid';
+  age_rating?: string;
   price?: string;
-  revenue_split?: string;
+  ai_generated?: boolean;
+  generation_method?: string;
   license?: string;
   created_date?: string;
+  content_flags?: string[];
+  revenue_split?: string;
 }
 
-export interface Persona {
+export interface Persona extends IElement {
   metadata: PersonaMetadata;
-  content: string;
+  instructions: string;  // Behavioral directives (command voice)
+  content: string;       // Reference material (informational)
   filename: string;
   unique_id: string;
 }
-
-export type AgeRating = 'all' | '13+' | '18+';
-export type GenerationMethod = 'human' | 'ChatGPT' | 'Claude' | 'hybrid';
-export type PersonaCategory = 'creative' | 'professional' | 'educational' | 'gaming' | 'personal';

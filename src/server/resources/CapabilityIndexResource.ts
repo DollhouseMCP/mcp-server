@@ -4,7 +4,19 @@
  * Exposes the capability index as an MCP resource for injection into LLM context.
  * Provides both summary (action_triggers only) and full index variants.
  *
- * ⚠️ CURRENT STATUS: NON-FUNCTIONAL IN CLAUDE CODE (October 2025)
+ * ⚠️ MERGE STATUS: PORTED BUT NOT INTEGRATED (October 2025)
+ *
+ * This file was ported from main branch (v1.9.18-v1.9.24) but is NOT currently
+ * integrated into the refactored DI architecture. Integration is planned for a
+ * future phase once the Enhanced Index system is fully operational.
+ *
+ * CURRENT STATE:
+ * - ✅ File ported and preserved for future use
+ * - ❌ NOT registered in DI Container
+ * - ❌ NOT registered with MCP server
+ * - ❌ NOT accessible to users
+ *
+ * ⚠️ ORIGINAL STATUS: NON-FUNCTIONAL IN CLAUDE CODE (October 2025)
  *
  * This is a FUTURE-PROOF implementation. MCP Resources are currently:
  * - ✅ Fully implemented and MCP specification compliant
@@ -30,16 +42,23 @@
  *
  * For user documentation, see:
  * docs/configuration/MCP_RESOURCES.md
+ *
+ * FUTURE INTEGRATION TASKS:
+ * - [ ] Register in DI Container (src/di/Container.ts)
+ * - [ ] Add configuration option for enabling resources
+ * - [ ] Register resource handlers with MCP server when enabled
+ * - [ ] Add unit tests for resource generation
+ * - [ ] Add integration tests for MCP resource protocol
  */
 
 // FIX: Added node: prefix to built-in Node.js imports
 // Previously: import fs from 'fs/promises'; etc.
 // Now: import fs from 'node:fs/promises'; for Node.js convention
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import os from 'node:os';
 import { logger } from '../../utils/logger.js';
+import { IFileOperationsService } from '../../services/FileOperationsService.js';
 
 /**
  * Metadata about the capability index
@@ -132,13 +151,17 @@ export class CapabilityIndexResource {
   private cachedIndex: CapabilityIndex | null = null;
   private cacheTimestamp: number = 0;
   private readonly CACHE_TTL = 60000; // 60 seconds
+  private readonly fileOperations: IFileOperationsService;
 
-  constructor() {
-    // Default path to capability index
+  constructor(fileOperations: IFileOperationsService) {
+    this.fileOperations = fileOperations;
+
+    // Respect environment variable if set (for testing), otherwise use default
+    const portfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR
+      || path.join(os.homedir(), '.dollhouse', 'portfolio');
+
     this.capabilityIndexPath = path.join(
-      os.homedir(),
-      '.dollhouse',
-      'portfolio',
+      portfolioDir,
       'capability-index.yaml'
     );
   }
@@ -160,10 +183,15 @@ export class CapabilityIndexResource {
 
     try {
       // Check if file exists
-      await fs.access(this.capabilityIndexPath);
+      const fileExists = await this.fileOperations.exists(this.capabilityIndexPath);
+      if (!fileExists) {
+        throw new Error(`Capability index not found at ${this.capabilityIndexPath}`);
+      }
 
       // Read and parse YAML with safe schema to prevent code execution
-      const content = await fs.readFile(this.capabilityIndexPath, 'utf-8');
+      const content = await this.fileOperations.readFile(this.capabilityIndexPath, {
+        source: 'CapabilityIndexResource.loadCapabilityIndex'
+      });
       const parsed = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA }) as CapabilityIndex;
 
       // Cache the result

@@ -34,8 +34,6 @@ parameters:
     type: "boolean"
     description: "Adapt content for target culture"
     default: false
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

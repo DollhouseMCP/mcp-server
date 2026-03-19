@@ -1,75 +1,55 @@
 #!/usr/bin/env node
 
+// Load environment variables from .env files BEFORE anything else
+// This ensures .env.local and .env are loaded for all modules
+import './config/env.js';
+
+import * as path from 'path';
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ErrorHandler } from "./utils/ErrorHandler.js";
+import { logger } from "./utils/logger.js";
+import { DollhouseContainer } from "./di/Container.js";
+import { ElementType } from "./portfolio/PortfolioManager.js";
+import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
+import type { IndicatorConfig } from "./config/indicator-config.js";
+import type { IToolHandler } from "./server/index.js";
+import type { ToolRegistry } from "./handlers/ToolRegistry.js";
+import type { PersonaHandler } from "./handlers/PersonaHandler.js";
+import type { ElementCRUDHandler } from "./handlers/ElementCRUDHandler.js";
+import type { CollectionHandler } from "./handlers/CollectionHandler.js";
+import type { PortfolioHandler } from "./handlers/PortfolioHandler.js";
+import type { GitHubAuthHandler } from "./handlers/GitHubAuthHandler.js";
+import type { DisplayConfigHandler } from "./handlers/DisplayConfigHandler.js";
+import type { IdentityHandler } from "./handlers/IdentityHandler.js";
+import type { ConfigHandler } from "./handlers/ConfigHandler.js";
+import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
+import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
+import { ConfigManager } from "./config/ConfigManager.js";
+import { FileOperationsService } from "./services/FileOperationsService.js";
+import { FileLockManager } from "./security/fileLockManager.js";
+import * as os from "os";
+import type { EnsembleElement } from "./elements/ensembles/types.js";
+
 // Defensive error handling for npx/CLI execution
 process.on('uncaughtException', (error) => {
+  logger.error('Unhandled exception detected', {
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined
+  });
   console.error('[DollhouseMCP] Server startup failed');
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled promise rejection detected', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    promise
+  });
   console.error('[DollhouseMCP] Server startup failed');
   process.exit(1);
 });
-
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import * as fs from "fs/promises";
-import * as path from "path";
-import { loadIndicatorConfig, formatIndicator, validateCustomFormat, type IndicatorConfig } from './config/indicator-config.js';
-import { SecureYamlParser } from './security/secureYamlParser.js';
-import { SecurityError } from './errors/SecurityError.js';
-import { SecureErrorHandler } from './security/errorHandler.js';
-import { ErrorHandler, ErrorCategory } from './utils/ErrorHandler.js';
-
-// Import modularized components
-import { Persona, PersonaMetadata } from './types/persona.js';
-import { APICache, CollectionCache } from './cache/index.js';
-import { validateFilename, sanitizeInput, validateContentSize, validateUsername, MCPInputValidator } from './security/InputValidator.js';
-import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './security/constants.js';
-import { ContentValidator } from './security/contentValidator.js';
-import { PathValidator } from './security/pathValidator.js';
-import { FileLockManager } from './security/fileLockManager.js';
-import { generateAnonymousId, generateUniqueId, slugify } from './utils/filesystem.js';
-import { GitHubClient, CollectionBrowser, CollectionIndexManager, CollectionSearch, PersonaDetails, PersonaSubmitter, ElementInstaller } from './collection/index.js';
-import { ServerSetup, IToolHandler } from './server/index.js';
-import { GitHubAuthManager, type DeviceCodeResponse } from './auth/GitHubAuthManager.js';
-import { logger } from './utils/logger.js';
-import { OperationalTelemetry } from './telemetry/index.js';
-import { PersonaExporter, PersonaImporter } from './persona/export-import/index.js';
-import { isDefaultPersona } from './constants/defaultPersonas.js';
-import { PortfolioManager, ElementType } from './portfolio/PortfolioManager.js';
-import { MigrationManager } from './portfolio/MigrationManager.js';
-import { EnhancedIndexHandler } from './handlers/EnhancedIndexHandler.js';
-import { SkillManager } from './elements/skills/index.js';
-import { Skill } from './elements/skills/Skill.js';
-import { TemplateManager } from './elements/templates/TemplateManager.js';
-import { TemplateRenderer } from './utils/TemplateRenderer.js';
-import { Template } from './elements/templates/Template.js';
-import { AgentManager } from './elements/agents/AgentManager.js';
-import { Agent } from './elements/agents/Agent.js';
-import { MemoryManager } from './elements/memories/MemoryManager.js';
-import { Memory } from './elements/memories/Memory.js';
-import { generateMemoryId } from './elements/memories/utils.js';
-import { ConfigManager } from './config/ConfigManager.js';
-import { CapabilityIndexResource } from './server/resources/CapabilityIndexResource.js';
-import { ElementFormatter } from './utils/ElementFormatter.js';
-import { backgroundValidator } from './security/validation/BackgroundValidator.js';
-// ConfigWizard imports removed - not included in hotfix
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
-import { homedir } from 'os';
-
-
-
-// Detect execution environment
-const EXECUTION_ENV = {
-  isNpx: process.env.npm_execpath?.includes('npx') || false,
-  isCli: process.argv[1]?.endsWith('/dollhousemcp') || false,
-  isDirect: !process.env.npm_execpath,
-  cwd: process.cwd(),
-  scriptPath: process.argv[1],
-};
 
 // Only log execution environment in debug mode
 if (process.env.DOLLHOUSE_DEBUG) {
@@ -79,69 +59,58 @@ if (process.env.DOLLHOUSE_DEBUG) {
 export class DollhouseMCPServer implements IToolHandler {
   private server: Server;
   public personasDir: string | null;
-  private personas: Map<string, Persona> = new Map();
-  private activePersona: string | null = null;
   private currentUser: string | null = null;
   private isInitialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
-  private apiCache: APICache = new APICache();
-  private collectionCache: CollectionCache = new CollectionCache();
-  private rateLimitTracker = new Map<string, number[]>();
-  private indicatorConfig: IndicatorConfig;
-  private githubClient: GitHubClient;
-  private githubAuthManager: GitHubAuthManager;
-  private collectionIndexManager: CollectionIndexManager;
-  private collectionBrowser: CollectionBrowser;
-  private collectionSearch: CollectionSearch;
-  private personaDetails: PersonaDetails;
-  private elementInstaller: ElementInstaller;
-  private personaSubmitter: PersonaSubmitter;
-  private serverSetup: ServerSetup;
-  private personaExporter: PersonaExporter;
-  private personaImporter?: PersonaImporter;
-  private portfolioManager: PortfolioManager;
-  private migrationManager: MigrationManager;
-  private enhancedIndexHandler: EnhancedIndexHandler;
-  private skillManager: SkillManager;
-  private templateManager: TemplateManager;
-  private templateRenderer: TemplateRenderer;
-  private agentManager: AgentManager;
-  private memoryManager: MemoryManager;
-  private capabilityIndexResource?: CapabilityIndexResource;
-  // FIX: Added readonly modifier for immutable reference
-  // Previously: Missing readonly modifier
-  // Now: Marked as readonly since configManager is never reassigned
-  private readonly configManager: ConfigManager;
-  // ConfigWizardCheck removed - not included in hotfix
+  private container: DollhouseContainer;
+  private toolRegistry?: ToolRegistry;
+  private enhancedIndexHandler?: EnhancedIndexHandler;
+  private personaHandler?: PersonaHandler;
+  private elementCRUDHandler?: ElementCRUDHandler;
+  private collectionHandler?: CollectionHandler;
+  private portfolioHandler?: PortfolioHandler;
+  private githubAuthHandler?: GitHubAuthHandler;
+  private displayConfigHandler?: DisplayConfigHandler;
+  private identityHandler?: IdentityHandler;
+  private configHandler?: ConfigHandler;
+  private syncHandler?: SyncHandler;
+  private resourceHandler?: import('./handlers/ResourceHandler.js').ResourceHandler;
 
-  constructor() {
-    // Initialize ConfigManager to check resource settings
-    this.configManager = ConfigManager.getInstance();
-
-    // Build capabilities object conditionally
-    // Note: Config may not be fully initialized yet, so we check synchronously
-    // If config is not initialized, defaults (advertise_resources: false) apply
+  /**
+   * Create a new DollhouseMCPServer instance
+   *
+   * @param container DollhouseContainer instance for dependency injection.
+   *                  Use `new DollhouseContainer()` for production or
+   *                  `createIntegrationContainer().container` for tests.
+   */
+  constructor(container: DollhouseContainer) {
+    // Build capabilities object conditionally based on configuration
+    // Resources are disabled by default (advertise_resources: false)
     const capabilities: any = {
       tools: {},
     };
 
-    // CONDITIONAL: Only advertise resources capability if explicitly enabled
-    // Default is false (safe, future-proof implementation)
-    // FIX: Properly handle exception in catch block
-    // Previously: Empty catch block with comment only
-    // Now: Log the error for debugging purposes
+    // Check if resources should be advertised
+    // This is a future-proof implementation - resources are opt-in
     try {
-      const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
+      // Initialize ConfigManager to check resource settings
+      // Note: Config may not be fully initialized yet, so we check synchronously
+      // If config is not initialized, defaults (advertise_resources: false) apply
+      const fileLockManager = new FileLockManager();
+      const fileOperations = new FileOperationsService(fileLockManager);
+      const configManager = new ConfigManager(fileOperations, os);
+      const resourcesConfig = configManager.getSetting<any>('elements.enhanced_index.resources');
+
       if (resourcesConfig?.advertise_resources === true) {
         capabilities.resources = {};
-        logger.info('MCP Resources capability advertised (enabled via config)');
+        logger.info('[DollhouseMCP] MCP Resources capability advertised (enabled via config)');
       } else {
-        logger.info('MCP Resources capability NOT advertised (disabled by default - future-proof implementation)');
+        logger.info('[DollhouseMCP] MCP Resources capability NOT advertised (disabled by default)');
       }
     } catch (error) {
       // Config not initialized yet - use safe default (no resources)
       const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.debug(`Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
+      logger.debug(`[DollhouseMCP] Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
     }
 
     this.server = new Server(
@@ -154,93 +123,14 @@ export class DollhouseMCPServer implements IToolHandler {
       }
     );
 
-    // ConfigWizardCheck initialization removed - not included in hotfix
-    
-    // Initialize portfolio system
-    this.portfolioManager = PortfolioManager.getInstance();
-    this.migrationManager = new MigrationManager(this.portfolioManager);
-    this.enhancedIndexHandler = new EnhancedIndexHandler(this.getPersonaIndicator());
-    
-    // CRITICAL FIX: Don't access directories until after migration runs
-    // Previously: this.personasDir was set here, creating directories before migration could fix them
-    // Now: We delay directory access until initializePortfolio() completes
-    // Using null to make the uninitialized state explicit (per PR review feedback)
-    this.personasDir = null; // Will be properly initialized in completeInitialization()
-    
-    // Initialize element managers
-    this.skillManager = new SkillManager();
-    this.templateManager = new TemplateManager();
-    this.templateRenderer = new TemplateRenderer(this.templateManager);
-    this.agentManager = new AgentManager(this.portfolioManager.getBaseDir());
-    this.memoryManager = new MemoryManager();
-    
-    // Log resolved path for debugging
-    logger.info(`Personas directory resolved to: ${this.personasDir}`);
-    
-    // PathValidator will be initialized after migration completes
-    
-    // Load user identity from environment variables
+    this.personasDir = null;
     this.currentUser = process.env.DOLLHOUSE_USER || null;
-    
-    // Load indicator configuration
-    this.indicatorConfig = loadIndicatorConfig();
-    
-    // Initialize persona manager
-    
-    // Initialize collection modules
-    this.githubClient = new GitHubClient(this.apiCache, this.rateLimitTracker);
-    this.githubAuthManager = new GitHubAuthManager(this.apiCache);
-    this.collectionIndexManager = new CollectionIndexManager();
-    this.collectionBrowser = new CollectionBrowser(this.githubClient, this.collectionCache, this.collectionIndexManager);
-    this.collectionSearch = new CollectionSearch(this.githubClient, this.collectionCache);
-    this.personaDetails = new PersonaDetails(this.githubClient);
-    this.elementInstaller = new ElementInstaller(this.githubClient);
-    this.personaSubmitter = new PersonaSubmitter();
-    
-    // Update manager will be initialized after migration completes to avoid jsdom crash
-    
-    // Initialize export/import/share modules
-    this.personaExporter = new PersonaExporter(this.currentUser);
-    // PersonaImporter will be initialized after migration completes
-    
-    // Initialize server setup
-    this.serverSetup = new ServerSetup();
-    this.serverSetup.setupServer(this.server, this);
-    
-    // FIX #610: Portfolio initialization moved to run() method to prevent race condition
-    // Previously: this.initializePortfolio().then() ran async in constructor
-    // Now: Initialization happens synchronously in run() before MCP connection
+    this.container = container;
   }
   
   private async initializePortfolio(): Promise<void> {
-    // Check if migration is needed
-    const needsMigration = await this.migrationManager.needsMigration();
-    
-    if (needsMigration) {
-      logger.info('Legacy personas detected. Starting migration...');
-      
-      const result = await this.migrationManager.migrate({ backup: true });
-      
-      if (result.success) {
-        logger.info(`Successfully migrated ${result.migratedCount} personas`);
-        if (result.backedUp && result.backupPath) {
-          logger.info(`Backup created at: ${result.backupPath}`);
-        }
-      } else {
-        logger.error('Migration completed with errors:');
-        result.errors.forEach(err => logger.error(`  - ${err}`));
-      }
-    }
-    
-    // Ensure portfolio structure exists
-    const portfolioExists = await this.portfolioManager.exists();
-    if (!portfolioExists) {
-      logger.info('Creating portfolio directory structure...');
-      await this.portfolioManager.initialize();
-    }
-    
-    // Initialize collection cache for anonymous access
-    await this.initializeCollectionCache();
+    await this.container.preparePortfolio();
+    this.personasDir = this.container.getPersonasDir();
   }
   
   /**
@@ -249,24 +139,45 @@ export class DollhouseMCPServer implements IToolHandler {
    * Now called synchronously from run() to prevent race condition
    */
   private async completeInitialization(): Promise<void> {
-    // NOW safe to access directories after migration
-    this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-    
-    // Log resolved path for debugging
-    logger.info(`Personas directory resolved to: ${this.personasDir}`);
-    
-    // Initialize PathValidator with the personas directory
-    PathValidator.initialize(this.personasDir);
-    
-    // Initialize update manager with safe directory
-    
-    // Initialize import module that depends on personasDir
-    this.personaImporter = new PersonaImporter(this.personasDir, this.currentUser);
-    
-    this.loadPersonas();
-    
-    // Mark initialization as complete
+    // Create handlers with server instance - all state managed by services
+    const handlers = await this.container.createHandlers(this.server);
+
+    this.personaHandler = handlers.personaHandler;
+    this.elementCRUDHandler = handlers.elementCrudHandler;
+    this.collectionHandler = handlers.collectionHandler;
+    this.portfolioHandler = handlers.portfolioHandler;
+    this.githubAuthHandler = handlers.githubAuthHandler;
+    this.displayConfigHandler = handlers.displayConfigHandler;
+    this.identityHandler = handlers.identityHandler;
+    this.configHandler = handlers.configHandler;
+    this.syncHandler = handlers.syncHandler;
+    this.toolRegistry = handlers.toolRegistry;
+    this.enhancedIndexHandler = handlers.enhancedIndexHandler;
+
+    // Initialize and register resource handlers
+    // Resources are disabled by default and require explicit configuration
+    await this.initializeResourceHandlers();
+
     this.isInitialized = true;
+  }
+
+  /**
+   * Initialize MCP Resources handlers if enabled in configuration
+   * This is separate from other handlers because it requires dynamic import
+   * and conditional registration based on configuration
+   */
+  private async initializeResourceHandlers(): Promise<void> {
+    try {
+      const { ResourceHandler } = await import('./handlers/ResourceHandler.js');
+      const configManager = this.container.resolve<ConfigManager>('ConfigManager');
+
+      this.resourceHandler = new ResourceHandler(configManager);
+      await this.resourceHandler.initialize(this.server);
+    } catch (error) {
+      // Resources are optional - don't fail server startup if they can't be initialized
+      logger.warn('[DollhouseMCP] Failed to initialize resource handlers, continuing without resources');
+      logger.debug(`Resource initialization error: ${error}`);
+    }
   }
   
   /**
@@ -299,632 +210,34 @@ export class DollhouseMCPServer implements IToolHandler {
     await this.initializationPromise;
   }
   
-  /**
-   * Initialize collection cache with seed data for anonymous browsing
-   */
-  private async initializeCollectionCache(): Promise<void> {
-    try {
-      const isCacheValid = await this.collectionCache.isCacheValid();
-      if (!isCacheValid) {
-        logger.info('Initializing collection cache with seed data...');
-        const { CollectionSeeder } = await import('./collection/CollectionSeeder.js');
-        const seedData = CollectionSeeder.getSeedData();
-        await this.collectionCache.saveCache(seedData);
-        logger.info(`Collection cache initialized with ${seedData.length} items`);
-      } else {
-        const stats = await this.collectionCache.getCacheStats();
-        logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
-      }
-    } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.initializeCollectionCache', error);
-      // Don't throw - cache failures shouldn't prevent server startup
-    }
-  }
-
-  /**
-   * Setup MCP resource handlers (CONDITIONAL)
-   *
-   * IMPORTANT: Resources are DISABLED by default (advertise_resources: false)
-   * This is a future-proof implementation for when MCP clients fully support resources.
-   *
-   * Current status (October 2025):
-   * - Claude Code: Discovery only, never reads
-   * - Claude Desktop/VS Code: Manual attachment only
-   *
-   * Only register handlers if explicitly enabled in config.
-   */
-  private async setupResourceHandlers(): Promise<void> {
-    try {
-      const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
-
-      if (!resourcesConfig?.advertise_resources) {
-        logger.info('MCP Resources disabled (future-proof implementation, opt-in required)');
-        return;
-      }
-
-      // Import schemas from MCP SDK
-      const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
-
-      // Initialize resource handler
-      this.capabilityIndexResource = new CapabilityIndexResource();
-
-      // Determine which variants are enabled
-      const enabledVariants: string[] = [];
-      if (resourcesConfig.variants?.summary) enabledVariants.push('summary');
-      if (resourcesConfig.variants?.full) enabledVariants.push('full');
-      if (resourcesConfig.variants?.stats) enabledVariants.push('stats');
-
-      logger.info(`MCP Resources enabled: capability-index (variants: ${enabledVariants.join(', ') || 'none'})`);
-
-      // Register ListResourcesRequest handler
-      this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-        if (!this.capabilityIndexResource) {
-          throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
-        }
-        const result = await this.capabilityIndexResource.listResources();
-        return result as any; // Type assertion needed for MCP SDK compatibility
-      });
-
-      // Register ReadResourceRequest handler
-      this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-        if (!this.capabilityIndexResource) {
-          throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
-        }
-        const result = await this.capabilityIndexResource.readResource(request.params.uri);
-        return result as any; // Type assertion needed for MCP SDK compatibility
-      });
-
-      logger.debug('MCP resource handlers registered successfully');
-    } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.setupResourceHandlers', error);
-      // Don't throw - resource setup failures shouldn't prevent server startup
-      logger.warn('Failed to setup MCP resource handlers, continuing without resources');
-    }
-  }
-
   // Tool handler methods - now public for access from tool modules
   
-  private getPersonaIndicator(): string {
-    if (!this.activePersona) {
-      return "";
-    }
-
-    const persona = this.personas.get(this.activePersona);
-    if (!persona) {
-      return "";
-    }
-
-    return formatIndicator(this.indicatorConfig, {
-      name: persona.metadata.name,
-      version: persona.metadata.version,
-      author: persona.metadata.author,
-      category: persona.metadata.category
-    });
-  }
-
-  /**
-   * Normalize element type to handle both singular (new) and plural (legacy) forms
-   * This provides backward compatibility during the transition to v1.4.0
-   */
-  private normalizeElementType(type: string): string {
-    // Map plural forms to singular ElementType values
-    const pluralToSingularMap: Record<string, string> = {
-      'personas': ElementType.PERSONA,
-      'skills': ElementType.SKILL,
-      'templates': ElementType.TEMPLATE,
-      'agents': ElementType.AGENT,
-      'memories': ElementType.MEMORY,
-      'ensembles': ElementType.ENSEMBLE
-    };
-    
-    // If it's already a valid ElementType value, return as-is
-    if (Object.values(ElementType).includes(type as ElementType)) {
-      return type;
-    }
-    
-    // If it's a plural form, convert to singular
-    if (pluralToSingularMap[type]) {
-      // Log deprecation warning
-      logger.warn(`Using plural element type '${type}' is deprecated. Please use singular form '${pluralToSingularMap[type]}' instead.`);
-      return pluralToSingularMap[type];
-    }
-    
-    // Unknown type - return as-is and let validation handle it
-    return type;
-  }
-
-  /**
-   * Find an element by name, supporting both exact display name and filename (slug) matching
-   * This provides better UX by allowing users to reference elements by either format
-   * @param name - The name to search for (can be display name or filename without extension)
-   * @param elementList - The list of elements to search through
-   * @returns The found element or undefined
-   */
-  private async findElementFlexibly(name: string, elementList: any[]): Promise<any> {
-    if (!name || !elementList || elementList.length === 0) {
-      return undefined;
-    }
-    
-    // Normalize the search name for comparison
-    const searchNameLower = name.toLowerCase();
-    const searchNameSlug = slugify(name);
-    
-    // First try exact name match (case-insensitive)
-    let element = elementList.find(e => 
-      e.metadata?.name?.toLowerCase() === searchNameLower
-    );
-    
-    // If not found, try slug match (filename without extension)
-    if (!element) {
-      element = elementList.find(e => {
-        const elementSlug = slugify(e.metadata?.name || '');
-        return elementSlug === searchNameSlug || elementSlug === searchNameLower;
-      });
-    }
-    
-    // If still not found, try partial match on filename
-    if (!element) {
-      element = elementList.find(e => {
-        const elementName = e.metadata?.name || '';
-        const elementSlug = slugify(elementName);
-        return elementSlug.includes(searchNameSlug) || 
-               elementName.toLowerCase().includes(searchNameLower);
-      });
-    }
-    
-    return element;
-  }
-  
-  /**
-   * Convert a string to a slug format (lowercase with hyphens)
-   * Matches the format used for element filenames
-   */
-  
-  /**
-   * Sanitize metadata object to prevent prototype pollution
-   * Removes any dangerous properties that could affect Object.prototype
-   */
-  private sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
-    if (!metadata || typeof metadata !== 'object') {
-      return {};
-    }
-    
-    const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
-    const sanitized: Record<string, any> = {};
-    
-    for (const [key, value] of Object.entries(metadata)) {
-      if (!dangerousProperties.includes(key)) {
-        // Recursively sanitize nested objects
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
-          sanitized[key] = this.sanitizeMetadata(value);
-        } else {
-          sanitized[key] = value;
-        }
-      }
-    }
-    
-    return sanitized;
-  }
-
-
-  private async loadPersonas() {
-    // Validate the personas directory path
-    // personasDir is guaranteed to be set by completeInitialization before this is called
-    if (!path.isAbsolute(this.personasDir!)) {
-      logger.warn(`Personas directory path is not absolute: ${this.personasDir}`);
-    }
-    
-    try {
-      await fs.access(this.personasDir!);
-    } catch (error) {
-      // Create personas directory if it doesn't exist
-      try {
-        await fs.mkdir(this.personasDir!, { recursive: true });
-        logger.info(`Created personas directory at: ${this.personasDir}`);
-        // Continue to try loading (directory will be empty)
-      } catch (mkdirError) {
-        ErrorHandler.logError('DollhouseMCPServer.loadPersonas.mkdir', mkdirError, { personasDir: this.personasDir });
-        // Don't throw - empty portfolio is valid
-        this.personas.clear();
-        return;
-      }
-    }
-
-    try {
-      // personasDir is guaranteed to be set by completeInitialization before this is called
-      const files = await fs.readdir(this.personasDir!);
-      const markdownFiles = files
-        .filter(file => file.endsWith('.md'))
-        .filter(file => !this.portfolioManager.isTestElement(file));
-
-      this.personas.clear();
-      
-      if (markdownFiles.length === 0) {
-        logger.info('[DollhouseMCP] No personas found in portfolio. Use browse_collection to install some!');
-      }
-
-      for (const file of markdownFiles) {
-        try {
-          const filePath = path.join(this.personasDir!, file);
-          const fileContent = await PathValidator.safeReadFile(filePath);
-          
-          // Use secure YAML parser
-          let parsed;
-          try {
-            parsed = SecureYamlParser.safeMatter(fileContent);
-          } catch (error) {
-            if (error instanceof SecurityError) {
-              logger.warn(`Security threat detected in persona ${file}: ${error.message}`);
-              continue;
-            }
-            throw error;
-          }
-          
-          const metadata = parsed.data as PersonaMetadata;
-          const content = parsed.content;
-
-          if (!metadata.name) {
-            metadata.name = path.basename(file, '.md');
-          }
-
-          // Generate unique ID if not present
-          let uniqueId = metadata.unique_id;
-          if (!uniqueId) {
-            const authorForId = metadata.author || this.getCurrentUserForAttribution();
-            uniqueId = generateUniqueId(metadata.name, authorForId);
-            logger.debug(`Generated unique ID for ${metadata.name}: ${uniqueId}`);
-          }
-
-          // Set default values for new metadata fields
-          if (!metadata.category) metadata.category = 'general';
-          if (!metadata.age_rating) metadata.age_rating = 'all';
-          if (!metadata.content_flags) metadata.content_flags = [];
-          if (metadata.ai_generated === undefined) metadata.ai_generated = false;
-          if (!metadata.generation_method) metadata.generation_method = 'human';
-          if (!metadata.price) metadata.price = 'free';
-          if (!metadata.license) metadata.license = 'CC-BY-SA-4.0';
-
-          const persona: Persona = {
-            metadata,
-            content,
-            filename: file,
-            unique_id: uniqueId,
-          };
-
-          this.personas.set(file, persona);
-          logger.debug(`Loaded persona: ${metadata.name} (${uniqueId}`);
-        } catch (error) {
-          ErrorHandler.logError('DollhouseMCPServer.loadPersonas.loadFile', error, { file });
-        }
-      }
-    } catch (error) {
-      // Handle ENOENT gracefully - directory might not exist yet
-      if ((error as any).code === 'ENOENT') {
-        logger.info('[DollhouseMCP] Personas directory does not exist yet - portfolio is empty');
-        this.personas.clear();
-        return;
-      }
-      ErrorHandler.logError('DollhouseMCPServer.loadPersonas', error);
-      this.personas.clear();
-    }
-  }
-
   async listPersonas() {
-    const personaList = Array.from(this.personas.values()).map(persona => ({
-      filename: persona.filename,
-      unique_id: persona.unique_id,
-      name: persona.metadata.name,
-      description: persona.metadata.description,
-      triggers: persona.metadata.triggers || [],
-      version: persona.metadata.version || "1.0",
-      author: persona.metadata.author || "Unknown",
-      category: persona.metadata.category || 'general',
-      age_rating: persona.metadata.age_rating || 'all',
-      price: persona.metadata.price || 'free',
-      ai_generated: persona.metadata.ai_generated || false,
-      active: this.activePersona === persona.filename,
-    }));
-
-    if (personaList.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}You don't have any personas installed yet. Would you like to browse the DollhouseMCP collection on GitHub to see what's available? I can show you personas for creative writing, technical analysis, and more. Just say "yes" or use 'browse_collection'.`,
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}Available Personas (${personaList.length}):\n\n` +
-            personaList.map(p => 
-              `${p.active ? '🔹 ' : '▫️ '}**${p.name}** (${p.unique_id})\n` +
-              `   ${p.description}\n` +
-              `   📁 ${p.category} | 🎭 ${p.author} | 🔖 ${p.price} | ${p.ai_generated ? '🤖 AI' : '👤 Human'}\n` +
-              `   Age: ${p.age_rating} | Version: ${p.version}\n` +
-              `   Triggers: ${p.triggers.join(', ') || 'None'}\n`
-            ).join('\n'),
-        },
-      ],
-    };
+    await this.ensureInitialized();
+    return this.personaHandler!.listPersonas();
   }
 
-  async activatePersona(personaIdentifier: string) {
-    // Enhanced input validation for persona identifier
-    const validatedIdentifier = MCPInputValidator.validatePersonaIdentifier(personaIdentifier);
-    
-    // Try to find persona by filename first, then by name
-    let persona = this.personas.get(validatedIdentifier);
-    
-    if (!persona) {
-      // Search by name
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === validatedIdentifier.toLowerCase()
-      );
-    }
-
-    if (!persona) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Persona not found: ${personaIdentifier}`
-      );
-    }
-
-    this.activePersona = persona.filename;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}Persona Activated: **${persona.metadata.name}**\n\n` +
-            `${persona.metadata.description}\n\n` +
-            `**Instructions:**\n${persona.content}`,
-        },
-      ],
-    };
-  }
-
-  async getActivePersona() {
-    if (!this.activePersona) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}No persona is currently active.`,
-          },
-        ],
-      };
-    }
-
-    const persona = this.personas.get(this.activePersona);
-    if (!persona) {
-      this.activePersona = null;
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}Active persona not found. Deactivated.`,
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}Active Persona: **${persona.metadata.name}**\n\n` +
-            `${persona.metadata.description}\n\n` +
-            `File: ${persona.filename}\n` +
-            `Version: ${persona.metadata.version || '1.0'}\n` +
-            `Author: ${persona.metadata.author || 'Unknown'}`,
-        },
-      ],
-    };
-  }
-
-  async deactivatePersona() {
-    const wasActive = this.activePersona !== null;
-    const indicator = this.getPersonaIndicator();
-    this.activePersona = null;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: wasActive 
-            ? `${indicator}✅ Persona deactivated. Back to default mode.`
-            : "No persona was active.",
-        },
-      ],
-    };
-  }
-
-  async getPersonaDetails(personaIdentifier: string) {
-    // Try to find persona by filename first, then by name
-    let persona = this.personas.get(personaIdentifier);
-    
-    if (!persona) {
-      // Search by name with slugify normalization (fixes Debug Detective's identified issue)
-      const searchNameSlug = slugify(personaIdentifier);
-      const searchNameLower = personaIdentifier.toLowerCase();
-      
-      persona = Array.from(this.personas.values()).find(p => {
-        const personaNameLower = p.metadata.name?.toLowerCase();
-        const personaNameSlug = slugify(p.metadata.name || '');
-        
-        // Try both exact match and slug match for flexibility
-        return personaNameLower === searchNameLower || 
-               personaNameSlug === searchNameSlug;
-      });
-    }
-
-    if (!persona) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Persona not found: ${personaIdentifier}`
-      );
-    }
-
-    // FIX (Issue #874): Unescape content for proper markdown rendering
-    const unescapedContent = ElementFormatter.unescapeContent(persona.content);
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}📋 **${persona.metadata.name}** Details\n\n` +
-            `**Description:** ${persona.metadata.description}\n` +
-            `**File:** ${persona.filename}\n` +
-            `**Version:** ${persona.metadata.version || '1.0'}\n` +
-            `**Author:** ${persona.metadata.author || 'Unknown'}\n` +
-            `**Triggers:** ${persona.metadata.triggers?.join(', ') || 'None'}\n\n` +
-            `**Full Content:**\n\`\`\`\n${unescapedContent}\n\`\`\``,
-        },
-      ],
-    };
-  }
+  // ===== REMOVED: Legacy persona-specific methods (Issue #281) =====
+  // Use activateElement(name, 'persona'), deactivateElement(name, 'persona'),
+  // getActiveElements('persona'), and getElementDetails(name, 'persona') instead.
+  // These were removed to normalize persona handling through the generic element API.
 
   async reloadPersonas() {
-    await this.loadPersonas();
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}🔄 Reloaded ${this.personas.size} personas from ${this.personasDir}`,
-        },
-      ],
-    };
+    await this.ensureInitialized();
+    return this.personaHandler!.reloadPersonas();
   }
 
   // ===== Element Methods (Generic for all element types) =====
   
   async listElements(type: string) {
     try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.listPersonas();
-          
-        case ElementType.SKILL: {
-          const skills = await this.skillManager.list();
-          if (skills.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "No skills are currently installed. The DollhouseMCP collection has skills for code review, data analysis, creative writing and more. Would you like me to show you what's available? Just say \"yes\" or I can help you create a custom skill."
-              }]
-            };
-          }
-          
-          const skillList = skills.map(skill => {
-            const complexity = skill.metadata.complexity || 'beginner';
-            const domains = skill.metadata.domains?.join(', ') || 'general';
-            const version = skill.version || skill.metadata.version || '1.0.0';
-            return `🛠️ ${skill.metadata.name} (v${version}) - ${skill.metadata.description}\n   Complexity: ${complexity} | Domains: ${domains}`;
-          }).join('\n\n');
-          
-          return {
-            content: [{
-              type: "text",
-              text: `📚 Available Skills:\n\n${skillList}`
-            }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          const templates = await this.templateManager.list();
-          if (templates.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "You haven't installed any templates yet. Would you like to see available templates for emails, reports, and documentation? I can show you examples from the collection or help you create your own. What would you prefer?"
-              }]
-            };
-          }
-          
-          const templateList = templates.map(template => {
-            const variables = template.metadata.variables?.map(v => v.name).join(', ') || 'none';
-            const version = template.version || template.metadata.version || '1.0.0';
-            return `📄 ${template.metadata.name} (v${version}) - ${template.metadata.description}\n   Variables: ${variables}`;
-          }).join('\n\n');
-          
-          return {
-            content: [{
-              type: "text",
-              text: `📝 Available Templates:\n\n${templateList}`
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          const agents = await this.agentManager.list();
-          if (agents.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "No agents installed yet. Agents are autonomous helpers that can work on tasks independently. The DollhouseMCP collection includes task managers, research assistants, and more. Would you like to browse available agents or learn how to create your own?"
-              }]
-            };
-          }
-
-          const agentList = agents.map(agent => {
-            const specializations = (agent.metadata as any).specializations?.join(', ') || 'general';
-            const status = agent.getStatus();
-            const version = agent.version || agent.metadata.version || '1.0.0';
-            return `🤖 ${agent.metadata.name} (v${version}) - ${agent.metadata.description}\n   Status: ${status} | Specializations: ${specializations}`;
-          }).join('\n\n');
-
-          return {
-            content: [{
-              type: "text",
-              text: `🤖 Available Agents:\n\n${agentList}`
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          const memories = await this.memoryManager.list();
-          if (memories.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "No memories stored yet. Memories help me remember context about people, projects, and conversations. Would you like me to start creating memories to track important information?"
-              }]
-            };
-          }
-
-          const memoryList = memories.map(memory => {
-            const retentionDays = (memory.metadata as any).retentionDays || 'permanent';
-            const tags = (memory.metadata as any).tags?.join(', ') || 'none';
-            const version = memory.version || memory.metadata.version || '1.0.0';
-            return `🧠 ${memory.metadata.name} (v${version}) - ${memory.metadata.description}\n   Retention: ${retentionDays} days | Tags: ${tags}`;
-          }).join('\n\n');
-
-          return {
-            content: [{
-              type: "text",
-              text: `🧠 Available Memories:\n\n${memoryList}`
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'. Available types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
-            }]
-          };
+      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      if (normalizedType === ElementType.PERSONA) {
+        return this.listPersonas();
       }
+      return this.elementCRUDHandler!.listElements(normalizedType);
     } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.handleListElements', error, { type });
+      ErrorHandler.logError('DollhouseMCPServer.listElements', error, { type });
       return {
         content: [{
           type: "text",
@@ -934,122 +247,14 @@ export class DollhouseMCPServer implements IToolHandler {
     }
   }
   
-  async activateElement(name: string, type: string) {
+  async activateElement(name: string, type: string, context?: Record<string, any>) {
     try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.activatePersona(name);
-          
-        case ElementType.SKILL: {
-          // Use flexible finding to support both display name and filename
-          const allSkills = await this.skillManager.list();
-          const skill = await this.findElementFlexibly(name, allSkills);
-          if (!skill) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Skill '${name}' not found`
-              }]
-            };
-          }
-          
-          // Activate the skill
-          await skill.activate?.();
-          
-          return {
-            content: [{
-                type: "text",
-                text: `✅ Skill '${name}' activated\n\n${skill.instructions}`
-              }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          // Use flexible finding to support both display name and filename
-          const allTemplates = await this.templateManager.list();
-          const template = await this.findElementFlexibly(name, allTemplates);
-          if (!template) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Template '${name}' not found`
-              }]
-            };
-          }
-          
-          const variables = template.metadata.variables?.map((v: any) => v.name).join(', ') || 'none';
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Template '${name}' ready to use\nVariables: ${variables}\n\nUse 'render_template' to generate content with this template.`
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          // Use flexible finding to support both display name and filename
-          const allAgents = await this.agentManager.list();
-          const agent = await this.findElementFlexibly(name, allAgents);
-          if (!agent) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Agent '${name}' not found`
-              }]
-            };
-          }
-          
-          // Activate the agent
-          await agent.activate();
-          
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Agent '${name}' activated and ready\nSpecializations: ${(agent.metadata as any).specializations?.join(', ') || 'general'}\n\nUse 'execute_agent' to give this agent a goal.`
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          // Use flexible finding to support both display name and filename
-          const allMemories = await this.memoryManager.list();
-          const memory = await this.findElementFlexibly(name, allMemories);
-          if (!memory) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Memory '${name}' not found`
-              }]
-            };
-          }
-
-          // Activate the memory
-          await memory.activate();
-
-          const retentionDays = (memory.metadata as any).retentionDays || 'permanent';
-          const tags = (memory.metadata as any).tags?.join(', ') || 'none';
-
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Memory '${name}' activated\nRetention: ${retentionDays} days\nTags: ${tags}\n\nThis memory is now available for context and will be used to enhance responses.`
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'`
-            }]
-          };
-      }
+      // FIX: Issue #281 - Route all element types through elementCRUDHandler
+      // PersonaHandler.activatePersona is deprecated; PersonaActivationStrategy handles personas
+      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      return this.elementCRUDHandler!.activateElement(name, normalizedType, context);
     } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.handleActivateElement', error, { type, name });
+      ErrorHandler.logError('DollhouseMCPServer.activateElement', error, { type, name });
       return {
         content: [{
           type: "text",
@@ -1061,111 +266,16 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async getActiveElements(type: string) {
     try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.getActivePersona();
-          
-        case ElementType.SKILL: {
-          const skills = await this.skillManager.list();
-          const activeSkills = skills.filter(s => s.getStatus() === 'active');
-          
-          if (activeSkills.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "📋 No active skills"
-              }]
-            };
-          }
-          
-          const skillList = activeSkills.map(s => `🛠️ ${s.metadata.name}`).join(', ');
-          return {
-            content: [{
-              type: "text",
-              text: `Active skills: ${skillList}`
-            }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          return {
-            content: [{
-              type: "text",
-              text: "📝 Templates are stateless and activated on-demand when rendering"
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          const agents = await this.agentManager.list();
-          const activeAgents = agents.filter(a => a.getStatus() === 'active');
-          
-          if (activeAgents.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "🤖 No active agents"
-              }]
-            };
-          }
-          
-          const agentList = activeAgents.map(a => {
-            const goals = (a as any).state?.goals?.length || 0;
-            return `🤖 ${a.metadata.name} (${goals} active goals)`;
-          }).join('\n');
-          
-          return {
-            content: [{
-              type: "text",
-              text: `Active agents:\n${agentList}`
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          const memories = await this.memoryManager.list();
-          const activeMemories = memories.filter(m => m.getStatus() === 'active');
-
-          if (activeMemories.length === 0) {
-            return {
-              content: [{
-                type: "text",
-                text: "🧠 No active memories"
-              }]
-            };
-          }
-
-          const memoryList = activeMemories.map(m => {
-            const tags = (m.metadata as any).tags?.join(', ') || 'none';
-            const retentionDays = (m.metadata as any).retentionDays || 'permanent';
-            return `🧠 ${m.metadata.name} (Tags: ${tags}) - ${retentionDays} days retention`;
-          }).join('\n');
-
-          return {
-            content: [{
-              type: "text",
-              text: `Active memories:\n${memoryList}`
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'`
-            }]
-          };
-      }
+      // FIX: Issue #281 - Route all element types through elementCRUDHandler
+      // PersonaHandler.getActivePersona is deprecated; PersonaActivationStrategy handles personas
+      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      return this.elementCRUDHandler!.getActiveElements(normalizedType);
     } catch (error) {
-      logger.error(`Failed to get active ${type}:`, error);
+      ErrorHandler.logError('DollhouseMCPServer.getActiveElements', error, { type });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to get active ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to get active ${type}: ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
@@ -1173,3343 +283,166 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async deactivateElement(name: string, type: string) {
     try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.deactivatePersona();
-          
-        case ElementType.SKILL: {
-          // Use flexible finding to support both display name and filename
-          const allSkills = await this.skillManager.list();
-          const skill = await this.findElementFlexibly(name, allSkills);
-          if (!skill) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Skill '${name}' not found`
-              }]
-            };
-          }
-          
-          await skill.deactivate?.();
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Skill '${skill.metadata.name}' deactivated`
-            }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          return {
-            content: [{
-              type: "text",
-              text: "📝 Templates are stateless - nothing to deactivate"
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          // Use flexible finding to support both display name and filename
-          const allAgents = await this.agentManager.list();
-          const agent = await this.findElementFlexibly(name, allAgents);
-          if (!agent) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Agent '${name}' not found`
-              }]
-            };
-          }
-          
-          await agent.deactivate();
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Agent '${agent.metadata.name}' deactivated`
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          // Use flexible finding to support both display name and filename
-          const allMemories = await this.memoryManager.list();
-          const memory = await this.findElementFlexibly(name, allMemories);
-          if (!memory) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Memory '${name}' not found`
-              }]
-            };
-          }
-
-          await memory.deactivate();
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Memory '${memory.metadata.name}' deactivated`
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'`
-            }]
-          };
-      }
+      // FIX: Issue #281 - Route all element types through elementCRUDHandler
+      // PersonaHandler.deactivatePersona is deprecated; PersonaActivationStrategy handles personas
+      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      return this.elementCRUDHandler!.deactivateElement(name, normalizedType);
     } catch (error) {
-      logger.error(`Failed to deactivate ${type} '${name}':`, error);
+      ErrorHandler.logError('DollhouseMCPServer.deactivateElement', error, { type, name });
       return {
         content: [{
           type: "text",
-          text: `❌ Failed to deactivate ${type} '${name}': ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: `❌ Failed to deactivate ${type} '${name}': ${ErrorHandler.getUserMessage(error)}`
         }]
       };
     }
   }
   
   async getElementDetails(name: string, type: string) {
-    try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.getPersonaDetails(name);
-          
-        case ElementType.SKILL: {
-          // Use flexible finding to support both display name and filename
-          const allSkills = await this.skillManager.list();
-          const skill = await this.findElementFlexibly(name, allSkills);
-          if (!skill) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Skill '${name}' not found`
-              }]
-            };
-          }
-
-          // FIX (Issue #874): Unescape instructions for proper markdown rendering
-          const unescapedInstructions = ElementFormatter.unescapeContent(skill.instructions);
-
-          const details = [
-            `🛠️ **${skill.metadata.name}**`,
-            `${skill.metadata.description}`,
-            ``,
-            `**Complexity**: ${skill.metadata.complexity || 'beginner'}`,
-            `**Domains**: ${skill.metadata.domains?.join(', ') || 'general'}`,
-            `**Languages**: ${skill.metadata.languages?.join(', ') || 'any'}`,
-            `**Prerequisites**: ${skill.metadata.prerequisites?.join(', ') || 'none'}`,
-            ``,
-            `**Instructions**:`,
-            unescapedInstructions
-          ];
-
-          if (skill.metadata.parameters && skill.metadata.parameters.length > 0) {
-            details.push('', '**Parameters**:');
-            skill.metadata.parameters.forEach((p: any) => {
-              details.push(`- ${p.name} (${p.type}): ${p.description}`);
-            });
-          }
-
-          return {
-            content: [{
-              type: "text",
-              text: details.join('\n')
-            }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          // Use flexible finding to support both display name and filename
-          const allTemplates = await this.templateManager.list();
-          const template = await this.findElementFlexibly(name, allTemplates);
-          if (!template) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Template '${name}' not found`
-              }]
-            };
-          }
-
-          // FIX (Issue #874): Unescape content for proper markdown rendering
-          const unescapedContent = ElementFormatter.unescapeContent(template.content);
-
-          const details = [
-            `📄 **${template.metadata.name}**`,
-            `${template.metadata.description}`,
-            ``,
-            `**Output Format**: ${(template.metadata as any).output_format || 'text'}`,
-            `**Template Content**:`,
-            '```',
-            unescapedContent,
-            '```'
-          ];
-
-          if (template.metadata.variables && template.metadata.variables.length > 0) {
-            details.push('', '**Variables**:');
-            template.metadata.variables.forEach((v: any) => {
-              details.push(`- ${v.name} (${v.type}): ${v.description}`);
-            });
-          }
-
-          return {
-            content: [{
-              type: "text",
-              text: details.join('\n')
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          // Use flexible finding to support both display name and filename
-          const allAgents = await this.agentManager.list();
-          const agent = await this.findElementFlexibly(name, allAgents);
-          if (!agent) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Agent '${name}' not found`
-              }]
-            };
-          }
-
-          // FIX (Issue #874): Unescape instructions for proper markdown rendering
-          // FIX (SonarCloud S4325): Remove unnecessary type assertions
-          // Agents don't have instructions property, check extensions first
-          const agentMetadata = agent.metadata;
-          const agentInstructions = agent.extensions?.instructions || 'No instructions available';
-          const unescapedInstructions = ElementFormatter.unescapeContent(agentInstructions);
-
-          const details = [
-            `🤖 **${agent.metadata.name}**`,
-            `${agent.metadata.description}`,
-            ``,
-            `**Status**: ${agent.getStatus()}`,
-            `**Specializations**: ${agentMetadata.specializations?.join(', ') || 'general'}`,
-            `**Decision Framework**: ${agentMetadata.decisionFramework || 'rule-based'}`,
-            `**Risk Tolerance**: ${agentMetadata.riskTolerance || 'low'}`,
-            ``,
-            `**Instructions**:`,
-            unescapedInstructions
-          ];
-
-          const agentState = agent.getState();
-          if (agentState?.goals && agentState.goals.length > 0) {
-            details.push('', '**Current Goals**:');
-            agentState.goals.forEach((g: any) => {
-              details.push(`- ${g.description} (${g.status})`);
-            });
-          }
-
-          return {
-            content: [{
-              type: "text",
-              text: details.join('\n')
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          // Use flexible finding to support both display name and filename
-          const allMemories = await this.memoryManager.list();
-          const memory = await this.findElementFlexibly(name, allMemories);
-          if (!memory) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Memory '${name}' not found`
-              }]
-            };
-          }
-
-          // FIX (Issue #874): Unescape content for proper markdown rendering
-          const memoryContent = memory.content || 'No content stored';
-          const unescapedContent = ElementFormatter.unescapeContent(memoryContent);
-
-          const details = [
-            `🧠 **${memory.metadata.name}**`,
-            `${memory.metadata.description}`,
-            ``,
-            `**Status**: ${memory.getStatus()}`,
-            `**Retention**: ${(memory.metadata as any).retentionDays || 'permanent'} days`,
-            `**Tags**: ${(memory.metadata as any).tags?.join(', ') || 'none'}`,
-            `**Storage Backend**: ${(memory.metadata as any).storageBackend || 'file'}`,
-            `**Privacy Level**: ${(memory.metadata as any).privacyLevel || 'private'}`,
-            ``,
-            `**Content**:`,
-            unescapedContent
-          ];
-
-          return {
-            content: [{
-              type: "text",
-              text: details.join('\n')
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'`
-            }]
-          };
-      }
-    } catch (error) {
-      logger.error(`Failed to get ${type} details for '${name}':`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to get ${type} details: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
+    // PersonaHandler.getPersonaDetails is deprecated; PersonaActivationStrategy handles personas
+    const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+    return this.elementCRUDHandler!.getElementDetails(name, normalizedType);
   }
   
   async reloadElements(type: string) {
-    try {
-      // Normalize the type to handle both plural and singular forms
-      const normalizedType = this.normalizeElementType(type);
-      
-      switch (normalizedType) {
-        case ElementType.PERSONA:
-          return this.reloadPersonas();
-          
-        case ElementType.SKILL: {
-          this.skillManager.clearCache();
-          const skills = await this.skillManager.list();
-          return {
-            content: [{
-              type: "text",
-              text: `🔄 Reloaded ${skills.length} skills from portfolio`
-            }]
-          };
-        }
-        
-        case ElementType.TEMPLATE: {
-          // Template manager doesn't have clearCache, just list
-          const templates = await this.templateManager.list();
-          return {
-            content: [{
-              type: "text",
-              text: `🔄 Reloaded ${templates.length} templates from portfolio`
-            }]
-          };
-        }
-        
-        case ElementType.AGENT: {
-          // Agent manager doesn't have clearCache, just list
-          const agents = await this.agentManager.list();
-          return {
-            content: [{
-              type: "text",
-              text: `🔄 Reloaded ${agents.length} agents from portfolio`
-            }]
-          };
-        }
-
-        case ElementType.MEMORY: {
-          // Memory manager doesn't have clearCache, just list
-          const memories = await this.memoryManager.list();
-          return {
-            content: [{
-              type: "text",
-              text: `🔄 Reloaded ${memories.length} memories from portfolio`
-            }]
-          };
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Unknown element type '${type}'`
-            }]
-          };
-      }
-    } catch (error) {
-      logger.error(`Failed to reload ${type}:`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to reload ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.elementCRUDHandler!.reloadElements(type);
   }
-  
+
   // Element-specific methods
   async renderTemplate(name: string, variables: Record<string, any>) {
-    // Use the new TemplateRenderer utility for cleaner code and better validation
-    const result = await this.templateRenderer.render(name, variables);
-    
-    if (result.success && result.content) {
-      return {
-        content: [{
-          type: "text",
-          text: `📄 Rendered template '${name}':\n\n${result.content}`
-        }]
-      };
-    } else {
-      return {
-        content: [{
-          type: "text",
-          text: `❌ ${result.error || 'Failed to render template'}`
-        }]
-      };
-    }
-  }
-  
-  async executeAgent(name: string, goal: string) {
-    try {
-      const agent = await this.agentManager.find(a => a.metadata.name === name);
-      if (!agent) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Agent '${name}' not found`
-          }]
-        };
-      }
-      
-      // Simple agent execution simulation
-      const result = {
-        summary: `Agent '${name}' is now working on: ${goal}`,
-        status: 'in-progress',
-        actionsTaken: 1
-      };
-      
-      return {
-        content: [{
-          type: "text",
-          text: `🤖 Agent '${name}' execution result:\n\n${result.summary}\n\nStatus: ${result.status}\nActions taken: ${result.actionsTaken || 0}`
-        }]
-      };
-    } catch (error) {
-      logger.error(`Failed to execute agent '${name}':`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to execute agent: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
-  }
-  
-  async createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}) {
-    // Ensure initialization for test compatibility
     await this.ensureInitialized();
-    
-    try {
-      const { name, type, description, content, metadata } = args;
-      
-      // Validate element type
-      if (!Object.values(ElementType).includes(type as ElementType)) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
-          }]
-        };
-      }
-      
-      // Validate inputs
-      const validatedName = validateFilename(name);
-      const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
-      
-      // CRITICAL FIX: Validate content size BEFORE processing to prevent memory exhaustion
-      // This prevents Claude from trying to output massive content in responses
-      if (content) {
-        try {
-          validateContentSize(content, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-        } catch (error: any) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Content too large: ${error.message}. Maximum allowed size is ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 1024)}KB).`
-            }]
-          };
-        }
-      }
-      
-      // SECURITY FIX: Sanitize metadata to prevent prototype pollution
-      const sanitizedMetadata = this.sanitizeMetadata(metadata || {});
-      
-      // Create element based on type
-      switch (type as ElementType) {
-        case ElementType.PERSONA:
-          // Use existing persona creation logic
-          return this.createPersona(
-            validatedName, 
-            validatedDescription, 
-            content || '',
-            sanitizedMetadata?.triggers
-          );
-          
-        case ElementType.SKILL:
-          const skill = await this.skillManager.create({
-            name: validatedName,
-            description: validatedDescription,
-            ...sanitizedMetadata,
-            content: content || ''
-          });
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Created skill '${skill.metadata.name}' successfully`
-            }]
-          };
-          
-        case ElementType.TEMPLATE:
-          const template = await this.templateManager.create({
-            name: validatedName,
-            description: validatedDescription,
-            content: content || '',
-            ...sanitizedMetadata
-          });
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Created template '${template.metadata.name}' successfully`
-            }]
-          };
-          
-        case ElementType.AGENT:
-          const agentResult = await this.agentManager.create(
-            validatedName,
-            validatedDescription,
-            content || '',
-            sanitizedMetadata
-          );
-          if (!agentResult.success) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ ${agentResult.message}`
-              }]
-            };
-          }
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Created agent '${validatedName}' successfully`
-            }]
-          };
+    return this.elementCRUDHandler!.renderTemplate(name, variables);
+  }
 
-        case ElementType.MEMORY:
-          const memory = new Memory({
-            name: validatedName,
-            description: validatedDescription,
-            ...sanitizedMetadata
-          });
-
-          // Add content if provided
-          if (content) {
-            await memory.addEntry(content);
-          }
-
-          // Save the memory
-          await this.memoryManager.save(memory);
-
-          return {
-            content: [{
-              type: "text",
-              text: `✅ Created memory '${validatedName}' successfully`
-            }]
-          };
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Element type '${type}' is not yet supported for creation`
-            }]
-          };
-      }
-    } catch (error) {
-      logger.error(`Failed to create element:`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to create element: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+  async executeAgent(name: string, parameters: Record<string, any>) {
+    await this.ensureInitialized();
+    return this.elementCRUDHandler!.executeAgent(name, parameters);
   }
   
-  async editElement(args: {name: string; type: string; field: string; value: string | number | boolean | Record<string, any> | any[]}) {
-    try {
-      const { name, type, field, value } = args;
-      
-      // Validate element type
-      if (!Object.values(ElementType).includes(type as ElementType)) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
-          }]
-        };
-      }
-      
-      // For personas, use existing edit logic
-      if (type === ElementType.PERSONA) {
-        return this.editPersona(name, field, String(value));
-      }
-      
-      // TYPE SAFETY: Define a common interface for element managers
-      interface ElementManagerBase<T> {
-        find(predicate: (element: T) => boolean): Promise<T | undefined>;
-        save(element: T, filePath: string): Promise<void>;
-      }
-      
-      // Get the appropriate manager based on type with proper typing
-      let manager: ElementManagerBase<Skill | Template | Agent | any> | null = null;
-      let element: Skill | Template | Agent | any | undefined;
-
-      switch (type as ElementType) {
-        case ElementType.SKILL:
-          manager = this.skillManager as ElementManagerBase<Skill>;
-          element = await this.skillManager.find((e: Skill) => e.metadata.name === name);
-          break;
-        case ElementType.TEMPLATE:
-          manager = this.templateManager as ElementManagerBase<Template>;
-          element = await this.templateManager.find((e: Template) => e.metadata.name === name);
-          break;
-        case ElementType.AGENT:
-          manager = this.agentManager as ElementManagerBase<Agent>;
-          element = await this.agentManager.find((e: Agent) => e.metadata.name === name);
-          break;
-        case ElementType.MEMORY:
-          manager = this.memoryManager as ElementManagerBase<any>;
-          element = await this.memoryManager.find((e: any) => e.metadata.name === name);
-          break;
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Element type '${type}' is not yet supported for editing`
-            }]
-          };
-      }
-      
-      // Check if element was found
-      if (!element) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ ${type} '${name}' not found`
-          }]
-        };
-      }
-      
-      // Handle nested field updates (e.g., "metadata.author")
-      const fieldParts = field.split('.');
-      
-      // SECURITY FIX: Validate field names to prevent prototype pollution
-      const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
-      for (const part of fieldParts) {
-        if (dangerousProperties.includes(part)) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Invalid field name: '${part}' is not allowed for security reasons`
-            }]
-          };
-        }
-      }
-      
-      let target: any = element;
-      for (let i = 0; i < fieldParts.length - 1; i++) {
-        // SECURITY: Additional check to prevent prototype pollution
-        if (typeof target !== 'object' || target === null) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Cannot set property '${fieldParts[i]}' on non-object`
-            }]
-          };
-        }
-        
-        if (!target[fieldParts[i]]) {
-          // SECURITY: Use Object.defineProperty to avoid prototype chain pollution
-          Object.defineProperty(target, fieldParts[i], {
-            value: {},
-            writable: true,
-            enumerable: true,
-            configurable: true
-          });
-        }
-        target = target[fieldParts[i]];
-      }
-      
-      // Update the field
-      const lastField = fieldParts[fieldParts.length - 1];
-      // SECURITY: Use Object.defineProperty for the final assignment too
-      Object.defineProperty(target, lastField, {
-        value: value,
-        writable: true,
-        enumerable: true,
-        configurable: true
-      });
-
-      // MEMORY FIX: Special handling for memory entries to ensure timestamps are Date objects
-      // Issue #1069: When editing memory entries, timestamps might be strings instead of Date objects
-      // This causes toISOString() errors when saving
-      if (type === ElementType.MEMORY && field === 'entries' && Array.isArray(value)) {
-        // Convert array of entries to Map with proper Date conversion and validation
-        const entriesMap = new Map();
-        const errors: string[] = [];
-
-        for (let i = 0; i < value.length; i++) {
-          const entry = value[i];
-
-          // Validate and convert timestamp
-          if (entry.timestamp) {
-            if (!(entry.timestamp instanceof Date)) {
-              const date = new Date(entry.timestamp);
-              if (Number.isNaN(date.getTime())) {
-                errors.push(`Entry ${i}: Invalid timestamp '${entry.timestamp}'`);
-                continue; // Skip this entry
-              }
-              // Check for reasonable date range (not before 1970, not more than 100 years in future)
-              const now = Date.now();
-              const timestamp = date.getTime();
-              if (timestamp < 0 || timestamp > now + (100 * 365 * 24 * 60 * 60 * 1000)) {
-                errors.push(`Entry ${i}: Timestamp out of reasonable range '${entry.timestamp}'`);
-                continue; // Skip this entry
-              }
-              entry.timestamp = date;
-            }
-          } else {
-            // No timestamp provided, use current time
-            entry.timestamp = new Date();
-          }
-
-          // Validate and convert expiresAt if present
-          if (entry.expiresAt) {
-            if (!(entry.expiresAt instanceof Date)) {
-              const date = new Date(entry.expiresAt);
-              if (Number.isNaN(date.getTime())) {
-                errors.push(`Entry ${i}: Invalid expiresAt '${entry.expiresAt}'`);
-                // Don't skip entry, just remove invalid expiresAt
-                delete entry.expiresAt;
-              } else {
-                entry.expiresAt = date;
-              }
-            }
-          }
-
-          entriesMap.set(entry.id || generateMemoryId(), entry);
-        }
-
-        // If there were validation errors, return them
-        if (errors.length > 0) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Memory entry validation errors:\n${errors.join('\n')}\n\nValid entries were saved.`
-            }]
-          };
-        }
-
-        // Replace the entries array with the properly formatted Map
-        (element as any).entries = entriesMap;
-      }
-
-      // VERSION FIX: Handle version field updates differently
-      // If user is directly editing version field, don't auto-increment
-      if (field === 'version' || field === 'metadata.version') {
-        const versionString = String(value);
-        
-        // VERSION VALIDATION: Validate version format
-        // Accept semver (1.0.0), two-part (1.0), or single digit (1)
-        // Also accepts pre-release versions (1.0.0-beta, 1.0.0-alpha.1)
-        const isValidVersion = /^(\d+)(\.\d+)?(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(versionString);
-        if (!isValidVersion) {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Invalid version format: '${versionString}'. Please use format like 1.0.0, 1.0, or 1`
-            }]
-          };
-        }
-        
-        // ERROR HANDLING: Wrap version update in try-catch
-        try {
-          // Update both locations to ensure consistency
-          element.version = versionString;
-          if (element.metadata) {
-            element.metadata.version = versionString;
-          }
-        } catch (error) {
-          logger.error(`Failed to update version for ${name}:`, error);
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Failed to update version: ${error instanceof Error ? error.message : 'Unknown error'}`
-            }]
-          };
-        }
-      } else {
-        // For other field edits, auto-increment version
-        // VERSION FIX: Update both element.version AND element.metadata.version
-        // Previously: Only element.version was updated, but some managers read from metadata.version
-        // Now: Keep both in sync to ensure version persists correctly
-        
-        // ERROR HANDLING: Wrap auto-increment in try-catch
-        try {
-          if (element.version) {
-            // PRE-RELEASE HANDLING: Check for pre-release versions
-            const preReleaseMatch = element.version.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
-            
-            if (preReleaseMatch) {
-              // Handle pre-release versions (e.g., 1.0.0-beta.1)
-              const baseVersion = preReleaseMatch[1];
-              const preReleaseTag = preReleaseMatch[3];
-              
-              if (preReleaseTag) {
-                // If it has a pre-release tag, increment the pre-release number
-                const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
-                if (preReleaseNumberMatch) {
-                  const preReleaseType = preReleaseNumberMatch[1];
-                  const preReleaseNumber = Number.parseInt(preReleaseNumberMatch[2] || '0') + 1;
-                  element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
-                } else {
-                  // Complex pre-release, just increment patch
-                  const [major, minor, patch] = baseVersion.split('.').map(Number);
-                  element.version = `${major}.${minor}.${patch + 1}`;
-                }
-              } else {
-                // Regular semver, increment patch
-                const [major, minor, patch] = baseVersion.split('.').map(Number);
-                element.version = `${major}.${minor}.${patch + 1}`;
-              }
-            } else {
-              // Handle non-semver versions
-              const versionParts = element.version.split('.');
-              if (versionParts.length >= 3) {
-                // Standard semver format (e.g., 1.0.0)
-                const patch = Number.parseInt(versionParts[2]) || 0;
-                versionParts[2] = String(patch + 1);
-                element.version = versionParts.join('.');
-              } else if (versionParts.length === 2) {
-                // Two-part version (e.g., 1.0) - add patch version
-                element.version = `${element.version}.1`;
-              } else if (versionParts.length === 1 && /^\d+$/.test(versionParts[0])) {
-                // Single number version (e.g., 1) - convert to semver
-                element.version = `${element.version}.0.1`;
-              } else {
-                // Non-standard version - append or replace with standard format
-                element.version = '1.0.1';
-              }
-            }
-          } else {
-            // No version - set initial version
-            element.version = '1.0.0';
-          }
-          
-          // Ensure metadata.version is also updated for managers that use it
-          if (element.metadata) {
-            element.metadata.version = element.version;
-          }
-        } catch (error) {
-          logger.error(`Failed to auto-increment version for ${name}:`, error);
-          // Don't fail the entire operation, just log the error
-          // Version will remain unchanged
-        }
-      }
-      
-      // Save the element - need to determine filename with correct extension
-      // FIX: Use .yaml extension for memories, .md for other elements
-      // Previously: All elements used .md extension, causing memory saves to fail
-      // Now: Memories use .yaml as required by MemoryManager
-      const extension = type === ElementType.MEMORY ? '.yaml' : '.md';
-      const filename = `${element.metadata.name.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-')}${extension}`;
-      // TYPE SAFETY: No need for 'as any' cast anymore with proper typing
-      await manager!.save(element, filename);
-      
-      return {
-        content: [{
-          type: "text",
-          text: `✅ Updated ${type} '${name}' - ${field} set to: ${JSON.stringify(value)}`
-        }]
-      };
-    } catch (error) {
-      logger.error(`Failed to edit element:`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to edit element: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+  /**
+   * Create a new element in the portfolio.
+   * @param args.elements - For ensembles: array of element references (Issue #278)
+   */
+  async createElement(args: {name: string; type: string; description: string; content?: string; instructions?: string; metadata?: Record<string, unknown>; elements?: EnsembleElement[]}) {
+    await this.ensureInitialized();
+    // FIX: Issue #20 - Remove persona special case, route all element creation through ElementCRUDHandler
+    // This ensures consistent duplicate checking and error handling for all element types
+    // FIX: Issue #278 - Support elements parameter for ensembles
+    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
+    return this.elementCRUDHandler!.createElement({...args, type: normalizedType});
   }
-  
+
+  async editElement(args: {name: string; type: string; input: Record<string, unknown>}) {
+    await this.ensureInitialized();
+    // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
+    // PersonaHandler.editPersona is deprecated; elementCRUDHandler handles personas via PersonaActivationStrategy
+    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
+    return this.elementCRUDHandler!.editElement({...args, type: normalizedType});
+  }
+
   async validateElement(args: {name: string; type: string; strict?: boolean}) {
-    try {
-      const { name, type, strict = false } = args;
-      
-      // Validate element type
-      if (!Object.values(ElementType).includes(type as ElementType)) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Invalid element type '${type}'. Valid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
-          }]
-        };
-      }
-      
-      // For personas, use existing validation logic
-      if (type === ElementType.PERSONA) {
-        return this.validatePersona(name);
-      }
-      
-      // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | MemoryManager | null = null;
-      switch (type as ElementType) {
-        case ElementType.SKILL:
-          manager = this.skillManager;
-          break;
-        case ElementType.TEMPLATE:
-          manager = this.templateManager;
-          break;
-        case ElementType.AGENT:
-          manager = this.agentManager;
-          break;
-        case ElementType.MEMORY:
-          // FIX: Added memory validation support (fixes #1042)
-          // Previously: Memories returned "not yet supported for validation"
-          // Now: Full validation including metadata, retention, entry structure
-          manager = this.memoryManager;
-          break;
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Element type '${type}' is not yet supported for validation`
-            }]
-          };
-      }
-      
-      // Find the element
-      const element = await manager!.find((e: any) => e.metadata.name === name);
-      if (!element) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ ${type} '${name}' not found`
-          }]
-        };
-      }
-      
-      // Perform validation
-      const validationResult = element.validate();
-      
-      // Format validation report
-      let report = `🔍 Validation Report for ${type} '${name}':\n`;
-      report += `${validationResult.valid ? '✅' : '❌'} Status: ${validationResult.valid ? 'Valid' : 'Invalid'}\n\n`;
-      
-      if (validationResult.errors && validationResult.errors.length > 0) {
-        report += `❌ Errors (${validationResult.errors.length}):\n`;
-        validationResult.errors.forEach((error: any) => {
-          report += `   • ${error.field || 'General'}: ${error.message}\n`;
-          if (error.fix) {
-            report += `     💡 Fix: ${error.fix}\n`;
-          }
-        });
-        report += '\n';
-      }
-      
-      if (validationResult.warnings && validationResult.warnings.length > 0) {
-        report += `⚠️  Warnings (${validationResult.warnings.length}):\n`;
-        validationResult.warnings.forEach((warning: any) => {
-          report += `   • ${warning.field || 'General'}: ${warning.message}\n`;
-          if (warning.suggestion) {
-            report += `     💡 Suggestion: ${warning.suggestion}\n`;
-          }
-        });
-        report += '\n';
-      }
-      
-      if (validationResult.suggestions && validationResult.suggestions.length > 0) {
-        report += `💡 Suggestions:\n`;
-        validationResult.suggestions.forEach((suggestion: string) => {
-          report += `   • ${suggestion}\n`;
-        });
-      }
-      
-      // Add strict mode additional checks if requested
-      if (strict) {
-        report += '\n📋 Strict Mode: Additional quality checks applied';
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: report
-        }]
-      };
-    } catch (error) {
-      logger.error(`Failed to validate element:`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to validate element: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
-  }
-  
-  async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
-    // Ensure initialization for test compatibility
     await this.ensureInitialized();
-    
-    try {
-      const { name, type, deleteData } = args;
-      
-      // Validate element type
-      if (!Object.values(ElementType).includes(type as ElementType)) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Invalid element type: ${type}\nValid types: ${Object.values(ElementType).join(', ')} (or legacy plural forms: personas, skills, templates, agents)`
-          }]
-        };
-      }
-      
-      // Get the appropriate manager based on type
-      let manager: SkillManager | TemplateManager | AgentManager | null = null;
-      switch (type as ElementType) {
-        case ElementType.SKILL:
-          manager = this.skillManager;
-          break;
-        case ElementType.TEMPLATE:
-          manager = this.templateManager;
-          break;
-        case ElementType.AGENT:
-          manager = this.agentManager;
-          break;
-        case ElementType.PERSONA:
-          // For personas, use a different approach
-          // personasDir is guaranteed to be set after ensureInitialized()
-          const personaPath = path.join(this.personasDir!, `${name}.md`);
-          try {
-            await fs.access(personaPath);
-            await fs.unlink(personaPath);
-
-            // Reload personas to update the cache
-            await this.loadPersonas();
-
-            return {
-              content: [{
-                type: "text",
-                text: `✅ Successfully deleted persona '${name}'`
-              }]
-            };
-          } catch (error) {
-            if ((error as any).code === 'ENOENT') {
-              return {
-                content: [{
-                  type: "text",
-                  text: `❌ ${type.charAt(0).toUpperCase() + type.slice(1)} '${name}' not found`
-                }]
-              };
-            }
-            throw error;
-          }
-
-        case ElementType.MEMORY: {
-          // FIX: Added memory deletion support (v1.9.8)
-          // Previously: Memories couldn't be deleted - returned "not yet supported"
-          // Now: Full deletion with proper cleanup of .yaml and optional .storage files
-          const allMemories = await this.memoryManager.list();
-          const memory = await this.findElementFlexibly(name, allMemories);
-
-          if (!memory) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Memory '${name}' not found`
-              }]
-            };
-          }
-
-          // Deactivate if currently active
-          if (memory.getStatus() === 'active') {
-            await memory.deactivate();
-          }
-
-          // Delete the memory YAML file
-          // Memories are stored in date folders (YYYY-MM-DD format)
-          const memoriesDir = PortfolioManager.getInstance().getElementDir(ElementType.MEMORY);
-          let memoryPath: string | null = null;
-
-          // First check if memory has a filePath property
-          if ((memory as any).filePath) {
-            memoryPath = (memory as any).filePath;
-          } else {
-            // Search for the file in date folders
-            const today = new Date().toISOString().split('T')[0];
-            const possiblePaths = [
-              path.join(memoriesDir, today, `${memory.metadata.name}.yaml`),
-              path.join(memoriesDir, `${memory.metadata.name}.yaml`) // fallback to root
-            ];
-
-            // Also check recent date folders
-            try {
-              const dirs = await fs.readdir(memoriesDir);
-              const dateDirs = dirs.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
-              for (const dir of dateDirs.reverse()) { // Check most recent first
-                possiblePaths.unshift(path.join(memoriesDir, dir, `${memory.metadata.name}.yaml`));
-              }
-            } catch {
-              // Directory listing failed, continue with basic paths
-            }
-
-            // Find the actual file
-            for (const testPath of possiblePaths) {
-              try {
-                await fs.access(testPath);
-                memoryPath = testPath;
-                break;
-              } catch {
-                continue;
-              }
-            }
-          }
-
-          if (!memoryPath) {
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Memory file for '${memory.metadata.name}' not found in portfolio`
-              }]
-            };
-          }
-
-          try {
-            await fs.unlink(memoryPath);
-
-            // Delete storage data if requested
-            if (deleteData) {
-              const storagePath = path.join(
-                PortfolioManager.getInstance().getElementDir(ElementType.MEMORY),
-                '.storage',
-                `${memory.metadata.name}.json`
-              );
-              try {
-                await fs.access(storagePath);
-                await fs.unlink(storagePath);
-              } catch (storageError: any) {
-                // Storage file may not exist, that's fine
-                // Log for debugging if needed
-                if (storageError.code !== 'ENOENT') {
-                  logger.debug(`Storage file deletion warning: ${storageError.message}`);
-                }
-              }
-            }
-
-            // FIX: Memory manager cache consistency
-            // Previously: Cache could contain stale references after deletion
-            // Now: The next list() call will refresh from disk since the file is gone
-            // Note: MemoryManager doesn't expose clearCache(), but list() reads from disk
-
-            // Log successful deletion for audit trail
-            logger.info(`Memory deleted: ${memory.metadata.name}${deleteData ? ' (with storage)' : ''}`);
-
-            return {
-              content: [{
-                type: "text",
-                text: `✅ Successfully deleted memory '${memory.metadata.name}'${deleteData ? ' and its storage data' : ''}`
-              }]
-            };
-          } catch (error: any) {
-            // Enhanced error handling with more specific messages
-            if (error.code === 'ENOENT') {
-              return {
-                content: [{
-                  type: "text",
-                  text: `❌ Memory file '${memory.metadata.name}.yaml' not found in portfolio`
-                }]
-              };
-            } else if (error.code === 'EACCES' || error.code === 'EPERM') {
-              return {
-                content: [{
-                  type: "text",
-                  text: `❌ Permission denied: Cannot delete memory '${memory.metadata.name}' - ${error.message}`
-                }]
-              };
-            } else if (error.code === 'EBUSY') {
-              return {
-                content: [{
-                  type: "text",
-                  text: `❌ File is busy: Memory '${memory.metadata.name}' is currently in use`
-                }]
-              };
-            }
-
-            // Log unexpected errors for debugging
-            logger.error(`Failed to delete memory '${memory.metadata.name}':`, error);
-
-            return {
-              content: [{
-                type: "text",
-                text: `❌ Failed to delete memory '${memory.metadata.name}': ${error.message || 'Unknown error'}`
-              }]
-            };
-          }
-        }
-
-        default:
-          return {
-            content: [{
-              type: "text",
-              text: `❌ Element type '${type}' is not yet supported for deletion`
-            }]
-          };
-      }
-      
-      // Ensure manager was assigned (TypeScript type safety)
-      if (!manager) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Element type '${type}' is not supported for deletion`
-          }]
-        };
-      }
-      
-      // Find the element first to check if it exists
-      const element = await manager!.find((e: any) => e.metadata.name === name);
-      if (!element) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ ${type} '${name}' not found`
-          }]
-        };
-      }
-      
-      // Check for associated data files
-      let dataFiles: string[] = [];
-      
-      // Agent-specific: Check for state files
-      if (type === ElementType.AGENT) {
-        const stateDir = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state');
-        const stateFile = path.join(stateDir, `${name}-state.json`);
-        try {
-          const stat = await fs.stat(stateFile);
-          dataFiles.push(`- .state/${name}-state.json (${(stat.size / 1024).toFixed(2)} KB)`);
-        } catch (error) {
-          // No state file exists, which is fine
-        }
-      }
-      
-      // Memory-specific: Check for storage files
-      if (type === ElementType.MEMORY) {
-        const storageDir = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage');
-        const storageFile = path.join(storageDir, `${name}-memory.json`);
-        try {
-          const stat = await fs.stat(storageFile);
-          dataFiles.push(`- .storage/${name}-memory.json (${(stat.size / 1024).toFixed(2)} KB)`);
-        } catch (error) {
-          // No storage file exists, which is fine
-        }
-      }
-      
-      // Ensemble-specific: Check for config files
-      if (type === ElementType.ENSEMBLE) {
-        const configDir = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs');
-        const configFile = path.join(configDir, `${name}-config.json`);
-        try {
-          const stat = await fs.stat(configFile);
-          dataFiles.push(`- .configs/${name}-config.json (${(stat.size / 1024).toFixed(2)} KB)`);
-        } catch (error) {
-          // No config file exists, which is fine
-        }
-      }
-      
-      // If data files exist and deleteData is not specified, we need to inform the user
-      if (dataFiles.length > 0 && deleteData === undefined) {
-        return {
-          content: [{
-            type: "text",
-            text: `⚠️  This ${type} has associated data files:\n${dataFiles.join('\n')}\n\nWould you like to delete these data files as well?\n\n• To delete everything (element + data), say: "Yes, delete all data"\n• To keep the data files, say: "No, keep the data"\n• To cancel, say: "Cancel"`
-          }]
-        };
-      }
-      
-      // Delete the main element file
-      const filename = `${slugify(name)}.md`;
-      const filepath = path.join(this.portfolioManager.getElementDir(type as ElementType), filename);
-      
-      try {
-        await fs.unlink(filepath);
-      } catch (error) {
-        if ((error as any).code === 'ENOENT') {
-          return {
-            content: [{
-              type: "text",
-              text: `❌ ${type} file '${filename}' not found`
-            }]
-          };
-        }
-        throw error;
-      }
-      
-      // Delete associated data files if requested
-      if (deleteData && dataFiles.length > 0) {
-        const updatedDataFiles: string[] = [];
-        
-        if (type === ElementType.AGENT) {
-          const stateFile = path.join(this.portfolioManager.getElementDir(ElementType.AGENT), '.state', `${name}-state.json`);
-          try {
-            await fs.unlink(stateFile);
-            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
-          } catch (error) {
-            // Log but don't fail if state file deletion fails
-            logger.warn(`Failed to delete agent state file: ${error}`);
-            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
-          }
-        } else if (type === ElementType.MEMORY) {
-          const storageFile = path.join(this.portfolioManager.getElementDir(ElementType.MEMORY), '.storage', `${name}-memory.json`);
-          try {
-            await fs.unlink(storageFile);
-            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
-          } catch (error) {
-            // Log but don't fail if storage file deletion fails
-            logger.warn(`Failed to delete memory storage file: ${error}`);
-            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
-          }
-        } else if (type === ElementType.ENSEMBLE) {
-          const configFile = path.join(this.portfolioManager.getElementDir(ElementType.ENSEMBLE), '.configs', `${name}-config.json`);
-          try {
-            await fs.unlink(configFile);
-            updatedDataFiles.push(`${dataFiles[0]} ✓ deleted`);
-          } catch (error) {
-            // Log but don't fail if config file deletion fails
-            logger.warn(`Failed to delete ensemble config file: ${error}`);
-            updatedDataFiles.push(`${dataFiles[0]} ⚠️ deletion failed`);
-          }
-        }
-        
-        dataFiles = updatedDataFiles;
-      }
-      
-      // Build success message
-      let message = `✅ Successfully deleted ${type} '${name}'`;
-      if (dataFiles.length > 0) {
-        if (deleteData) {
-          message += `\n\nAssociated data files:\n${dataFiles.join('\n')}`;
-        } else {
-          message += `\n\n⚠️ Associated data files were preserved:\n${dataFiles.join('\n')}`;
-        }
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: message
-        }]
-      };
-      
-    } catch (error) {
-      logger.error(`Failed to delete element:`, error);
-      return {
-        content: [{
-          type: "text",
-          text: `❌ Failed to delete element: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
+    // PersonaHandler.validatePersona is deprecated; elementCRUDHandler handles personas
+    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
+    return this.elementCRUDHandler!.validateElement({...args, type: normalizedType});
   }
 
-  // checkRateLimit and fetchFromGitHub are now handled by GitHubClient
+  async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    await this.ensureInitialized();
+    // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
+    // PersonaHandler.deletePersona is deprecated; elementCRUDHandler handles personas via dedicated delete path
+    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
+    return this.elementCRUDHandler!.deleteElement({...args, type: normalizedType});
+  }
 
   async browseCollection(section?: string, type?: string) {
-    try {
-      // FIX #471: Replace legacy category validation with proper section/type validation
-      // Valid sections: library, showcase, catalog
-      // Valid types for MCP: personas, skills, agents, templates (others filtered per Issue #144)
-      // Note: tools, prompts, ensembles, memories exist in collection but are filtered from MCP
-      const validSections = ['library', 'showcase', 'catalog'];
-      
-      // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
-      // See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete checklist
-      // This array is often forgotten and causes validation failures for new types
-      const validTypes = ['personas', 'skills', 'agents', 'templates', 'memories'];  // Only MCP-supported types
-      
-      // Validate section if provided
-      const validatedSection = section ? sanitizeInput(section.toLowerCase(), 100) : undefined;
-      if (validatedSection && !validSections.includes(validatedSection)) {
-        throw new Error(`Invalid section '${validatedSection}'. Must be one of: ${validSections.join(', ')}`);
-      }
-      
-      // Validate type if provided (only valid when section is 'library')
-      const validatedType = type ? sanitizeInput(type.toLowerCase(), 100) : undefined;
-      if (validatedType && validatedSection === 'library' && !validTypes.includes(validatedType)) {
-        throw new Error(`Invalid type '${validatedType}'. Must be one of: ${validTypes.join(', ')}`);
-      }
-      if (validatedType && validatedSection !== 'library') {
-        throw new Error('Type parameter is only valid when section is "library"');
-      }
-      
-      const result = await this.collectionBrowser.browseCollection(validatedSection, validatedType);
-      
-      // Handle sections view
-      const items = result.items;
-      const categories = result.sections || result.categories;
-      
-      const text = this.collectionBrowser.formatBrowseResults(
-        items, 
-        categories, 
-        validatedSection, 
-        validatedType, 
-        this.getPersonaIndicator()
-      );
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Collection browsing failed: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.browseCollection(section, type);
   }
 
   async searchCollection(query: string) {
-    try {
-      // Enhanced input validation for search query
-      const validatedQuery = MCPInputValidator.validateSearchQuery(query);
-      
-      const items = await this.collectionSearch.searchCollection(validatedQuery);
-      const text = this.collectionSearch.formatSearchResults(items, validatedQuery, this.getPersonaIndicator());
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.searchCollection(query);
   }
 
   async searchCollectionEnhanced(query: string, options: any = {}) {
-    try {
-      // Enhanced input validation for search query
-      const validatedQuery = MCPInputValidator.validateSearchQuery(query);
-      
-      // Validate and sanitize options
-      const validatedOptions = {
-        elementType: options.elementType ? String(options.elementType) : undefined,
-        category: options.category ? String(options.category) : undefined,
-        page: options.page ? Math.max(1, Number.parseInt(options.page) || 1) : 1,
-        pageSize: options.pageSize ? Math.min(100, Math.max(1, Number.parseInt(options.pageSize) || 25)) : 25,
-        sortBy: options.sortBy && ['relevance', 'name', 'date'].includes(options.sortBy) ? options.sortBy : 'relevance'
-      };
-      
-      const results = await this.collectionSearch.searchCollectionWithOptions(validatedQuery, validatedOptions);
-      const text = this.collectionSearch.formatSearchResultsWithPagination(results, this.getPersonaIndicator());
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error searching collection: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.searchCollectionEnhanced(query, options);
   }
 
   async getCollectionContent(path: string) {
-    try {
-      const { metadata, content } = await this.personaDetails.getCollectionContent(path);
-      const text = this.personaDetails.formatPersonaDetails(metadata, content, path, this.getPersonaIndicator());
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error fetching content: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.getCollectionContent(path);
   }
 
   async installContent(inputPath: string) {
-    try {
-      const result = await this.elementInstaller.installContent(inputPath);
-      
-      if (!result.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `⚠️ ${result.message}`,
-            },
-          ],
-        };
-      }
-      
-      // If it's a persona, reload personas
-      if (result.elementType === ElementType.PERSONA) {
-        await this.loadPersonas();
-      }
-      
-      const text = this.elementInstaller.formatInstallSuccess(
-        result.metadata!, 
-        result.filename!,
-        result.elementType!
-      );
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error installing AI customization element: ${sanitized.message}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.installContent(inputPath);
   }
 
   async submitContent(contentIdentifier: string) {
-    try {
-      // Use the new portfolio-based submission tool
-      const { SubmitToPortfolioTool } = await import('./tools/portfolio/submitToPortfolioTool.js');
-      const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
-      const submitTool = new SubmitToPortfolioTool(this.apiCache);
-    
-    // Try to find the content across all element types
-    const portfolioManager = PortfolioManager.getInstance();
-    let elementType: ElementType | undefined;
-    let foundPath: string | null = null;
-    
-    // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
-    // NOTE: This dynamically handles ALL element types from the ElementType enum
-    // No hardcoded count - if you add 10 more element types tomorrow, this code
-    // will automatically search all 16 types without any changes needed here
-    const searchPromises = Object.values(ElementType).map(async (type) => {
-      const dir = portfolioManager.getElementDir(type);
-      try {
-        const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
-          extensions: ['.md', '.json', '.yaml', '.yml'],
-          partialMatch: true,
-          cacheResults: true
-        });
-        
-        return file ? { type: type as ElementType, file } : null;
-      } catch (error: any) {
-        // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
-        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
-          // Not just a missing directory - this could be a permission issue or other problem
-          logger.warn(`Unexpected error searching ${type} directory`, { 
-            contentIdentifier,
-            type,
-            error: error?.message || String(error),
-            code: error?.code 
-          });
-        } else {
-          // Directory doesn't exist - this is expected for unused element types
-          logger.debug(`${type} directory does not exist, skipping`, { type });
-        }
-        return null;
-      }
-    });
-    
-    // Wait for all searches to complete and find the first match
-    const searchResults = await Promise.allSettled(searchPromises);
-    
-    // NOTE: File validation - we rely on the portfolio directory structure to ensure
-    // files are in the correct element type directory. Additional schema validation
-    // could be added here if needed, but the current approach is sufficient as:
-    // 1. FileDiscoveryUtil already validates file extensions
-    // 2. Portfolio structure enforces proper organization
-    // 3. submitToPortfolioTool performs additional validation downstream
-    for (const result of searchResults) {
-      if (result.status === 'fulfilled' && result.value) {
-        foundPath = result.value.file;
-        elementType = result.value.type;
-        logger.debug(`Found content in ${elementType} directory`, { 
-          contentIdentifier, 
-          type: elementType, 
-          file: foundPath 
-        });
-        break;
-      }
-    }
-    
-    // CRITICAL FIX: Never default to any element type when content is not found
-    // This prevents incorrect submissions and forces proper type detection or user specification
-    if (!elementType) {
-      // Content not found in any element directory - provide helpful error with suggestions
-      const availableTypes = Object.values(ElementType).join(', ');
-      logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, { 
-        contentIdentifier,
-        searchedTypes: Object.values(ElementType) 
-      });
-      
-      // UX IMPROVEMENT: Enhanced error message with smart suggestions
-      let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
-      errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
-      
-      // Try to provide smart suggestions based on partial matches
-      try {
-        const { FileDiscoveryUtil } = await import('./utils/FileDiscoveryUtil.js');
-        const suggestions: string[] = [];
-        
-        // Search for similar names across all element types
-        for (const elementType of Object.values(ElementType)) {
-          const dir = portfolioManager.getElementDir(elementType);
-          try {
-            const partialMatches = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
-              extensions: ['.md', '.json', '.yaml', '.yml'],
-              partialMatch: true,
-              cacheResults: false
-            });
-            
-            if (Array.isArray(partialMatches) && partialMatches.length > 0) {
-              for (const match of partialMatches.slice(0, 2)) {
-                const basename = path.basename(match, path.extname(match));
-                suggestions.push(`"${basename}" (${elementType})`);
-              }
-            } else if (partialMatches) {
-              const basename = path.basename(partialMatches, path.extname(partialMatches));
-              suggestions.push(`"${basename}" (${elementType})`);
-            }
-          } catch (error) {
-            // Skip this type if there's an error
-            continue;
-          }
-        }
-        
-        if (suggestions.length > 0) {
-          errorMessage += `💡 **Did you mean one of these?**\n`;
-          for (const suggestion of suggestions.slice(0, 5)) {
-            errorMessage += `  • ${suggestion}\n`;
-          }
-          errorMessage += `\n`;
-        }
-      } catch (suggestionError) {
-        // If suggestions fail, continue without them
-        logger.debug('Failed to generate suggestions', { suggestionError });
-      }
-      
-      errorMessage += `🛠️ **Step-by-step troubleshooting**:\n`;
-      errorMessage += `1. 📝 **List all content**: Use \`list_portfolio\` to see what's available\n`;
-      errorMessage += `2. 🔍 **Check spelling**: Verify the exact name and try variations\n`;
-      errorMessage += `3. 🎯 **Specify type**: Try \`submit_collection_content "${contentIdentifier}" --type=personas\`\n`;
-      errorMessage += `4. 📁 **Browse files**: Check your portfolio directory manually\n\n`;
-      errorMessage += `📝 **Tip**: The system searches both filenames and display names with fuzzy matching.`;
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: errorMessage,
-          },
-        ],
-      };
-    }
-    
-    // Check for duplicates across all sources before submission
-    try {
-      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
-      const unifiedManager = UnifiedIndexManager.getInstance();
-      
-      // Extract the actual element name from the content path
-      const basename = path.basename(foundPath!, path.extname(foundPath!));
-      const duplicates = await unifiedManager.checkDuplicates(basename);
-      
-      if (duplicates.length > 0) {
-        const duplicate = duplicates[0];
-        let warningText = `⚠️ **Duplicate Detection Alert**\n\n`;
-        warningText += `Found "${duplicate.name}" in multiple sources:\n\n`;
-        
-        for (const source of duplicate.sources) {
-          const sourceIcon = this.getSourceIcon(source.source);
-          warningText += `${sourceIcon} **${source.source}**: ${source.version || 'unknown version'} (${source.lastModified.toLocaleDateString()})\n`;
-        }
-        
-        warningText += `\n`;
-        
-        if (duplicate.hasVersionConflict && duplicate.versionConflict) {
-          warningText += `🔄 **Version Conflict Detected**\n`;
-          warningText += `Recommended source: **${duplicate.versionConflict.recommended}**\n`;
-          warningText += `Reason: ${duplicate.versionConflict.reason}\n\n`;
-        }
-        
-        warningText += `**Recommendations:**\n`;
-        warningText += `• Review existing versions before submitting\n`;
-        warningText += `• Consider updating local version instead of creating duplicate\n`;
-        warningText += `• Ensure your version adds meaningful improvements\n`;
-        warningText += `• Update version number in metadata if submitting enhancement\n\n`;
-        warningText += `**Proceeding with submission anyway...**\n\n`;
-        
-        // Log the duplicate detection for monitoring
-        logger.warn('Duplicate content detected during submission', {
-          contentIdentifier,
-          elementType,
-          duplicateInfo: duplicate
-        });
-        
-        // Continue with submission but show warning
-        const result = await submitTool.execute({
-          name: contentIdentifier,
-          type: elementType
-        });
-        
-        // Combine warning with submission result
-        const responseText = `${this.getPersonaIndicator()}${result.success ? '⚠️' : '❌'} ${warningText}${result.message}`;
-        
-        return {
-          content: [{
-            type: "text",
-            text: responseText,
-          }],
-        };
-      }
-    } catch (duplicateError) {
-      // If duplicate checking fails, log but continue with submission
-      logger.warn('Duplicate checking failed during submission', {
-        contentIdentifier,
-        error: duplicateError instanceof Error ? duplicateError.message : String(duplicateError)
-      });
-    }
-    
-    // Execute the submission with the detected element type
-    const result = await submitTool.execute({
-      name: contentIdentifier,
-      type: elementType
-    });
-    
-    // Format the response - the message already contains all details
-    let responseText = result.message;
-    
-    // Add persona indicator for consistency
-    responseText = `${this.getPersonaIndicator()}${result.success ? '✅' : '❌'} ${responseText}`;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: responseText,
-        },
-      ],
-    };
-    
-    } catch (error: any) {
-      // UX IMPROVEMENT: Comprehensive error handling with fallback suggestions
-      logger.error('Unexpected error in submitContent', {
-        contentIdentifier,
-        error: error.message,
-        stack: error.stack
-      });
-      
-      let errorMessage = `${this.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
-      errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
-      
-      // Provide contextual troubleshooting based on error type
-      if (error.message?.includes('auth') || error.message?.includes('token')) {
-        errorMessage += `🔐 **Authentication Issue**:\n`;
-        errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
-        errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
-      }
-      
-      if (error.message?.includes('network') || error.message?.includes('connection')) {
-        errorMessage += `🌐 **Network Issue**:\n`;
-        errorMessage += `• Check your internet connection\n`;
-        errorMessage += `• Try again in a few minutes\n`;
-        errorMessage += `• Check GitHub status: https://status.github.com\n\n`;
-      }
-      
-      errorMessage += `🚑 **Emergency Alternatives**:\n`;
-      errorMessage += `1. 🔄 **Retry**: Try the same command again\n`;
-      errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
-      errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
-      errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface\n\n`;
-      errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: errorMessage,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.submitContent(contentIdentifier);
   }
 
   async getCollectionCacheHealth() {
-    try {
-      // Get cache statistics from both caches
-      const collectionStats = await this.collectionCache.getCacheStats();
-      const searchStats = await this.collectionSearch.getCacheStats();
-      
-      // Check if cache directory exists
-      const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
-      let cacheFileExists = false;
-      let cacheFileSize = 0;
-      
-      try {
-        const cacheFile = path.join(cacheDir, 'collection-cache.json');
-        const fileStats = await fs.stat(cacheFile);
-        cacheFileExists = true;
-        cacheFileSize = fileStats.size;
-      } catch (error) {
-        // Cache file doesn't exist yet
-      }
-      
-      // Format cache age
-      const formatAge = (ageMs: number): string => {
-        if (ageMs === 0) return 'Not cached';
-        const hours = Math.floor(ageMs / (1000 * 60 * 60));
-        const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
-        if (hours > 0) {
-          return `${hours}h ${minutes}m old`;
-        }
-        return `${minutes}m old`;
-      };
-      
-      // Build health report with both cache systems
-      const healthReport = {
-        collection: {
-          status: collectionStats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
-          cacheExists: cacheFileExists,
-          itemCount: collectionStats.itemCount,
-          cacheAge: formatAge(collectionStats.cacheAge),
-          cacheAgeMs: collectionStats.cacheAge,
-          isValid: collectionStats.isValid,
-          cacheFileSize: cacheFileSize,
-          cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
-          ttlRemaining: collectionStats.isValid ? formatAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
-        },
-        index: {
-          status: searchStats.index.isValid ? 'healthy' : (searchStats.index.hasCache ? 'expired' : 'empty'),
-          hasCache: searchStats.index.hasCache,
-          elements: searchStats.index.elements,
-          cacheAge: formatAge(searchStats.index.age),
-          isValid: searchStats.index.isValid,
-          ttlRemaining: searchStats.index.isValid ? formatAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
-        },
-        overall: {
-          recommendation: (collectionStats.isValid || searchStats.index.isValid)
-            ? 'Cache system is operational and serving content efficiently'
-            : 'Cache system will refresh on next access for optimal performance'
-        }
-      };
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
-              `## 🗄️ Collection Cache (Legacy)\n` +
-              `**Status**: ${healthReport.collection.status === 'healthy' ? '✅' : healthReport.collection.status === 'expired' ? '⚠️' : '📦'} ${healthReport.collection.status.toUpperCase()}\n` +
-              `**Items Cached**: ${healthReport.collection.itemCount}\n` +
-              `**Cache Age**: ${healthReport.collection.cacheAge}\n` +
-              `**Cache Size**: ${healthReport.collection.cacheFileSizeFormatted}\n` +
-              `**TTL Remaining**: ${healthReport.collection.ttlRemaining}\n\n` +
-              `## 🚀 Index Cache (Enhanced Search)\n` +
-              `**Status**: ${healthReport.index.status === 'healthy' ? '✅' : healthReport.index.status === 'expired' ? '⚠️' : '📦'} ${healthReport.index.status.toUpperCase()}\n` +
-              `**Elements Indexed**: ${healthReport.index.elements}\n` +
-              `**Cache Age**: ${healthReport.index.cacheAge}\n` +
-              `**TTL Remaining**: ${healthReport.index.ttlRemaining}\n\n` +
-              `**Overall Status**: ${healthReport.overall.recommendation}\n\n` +
-              `The enhanced index cache provides fast search with pagination, filtering, and sorting. ` +
-              `The collection cache serves as a fallback for offline browsing.`,
-          },
-        ],
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error(`Failed to get cache health: ${errorMessage}`);
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Failed to get cache health: ${errorMessage}`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.getCollectionCacheHealth();
   }
 
-  // User identity management
+  // User identity management - delegated to IdentityHandler
   async setUserIdentity(username: string, email?: string) {
-    try {
-      if (!username || username.trim().length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Username cannot be empty`,
-            },
-          ],
-        };
-      }
-
-      // Validate and sanitize username
-      const validatedUsername = validateUsername(username);
-      
-      // Validate email if provided
-      let validatedEmail: string | undefined;
-      if (email) {
-        const sanitizedEmail = sanitizeInput(email, 100);
-        if (!VALIDATION_PATTERNS.SAFE_EMAIL.test(sanitizedEmail)) {
-          throw new Error('Invalid email format');
-        }
-        validatedEmail = sanitizedEmail;
-      }
-
-      // Set the validated user identity
-      this.currentUser = validatedUsername;
-      if (validatedEmail) {
-        process.env.DOLLHOUSE_EMAIL = validatedEmail;
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ **User Identity Set**\n\n` +
-            `👤 **Username:** ${validatedUsername}\n` +
-            `${validatedEmail ? `📧 **Email:** ${validatedEmail}\n` : ''}` +
-            `\n🎯 **Next Steps:**\n` +
-            `• New personas you create will be attributed to "${validatedUsername}"\n` +
-            `• Set environment variable \`DOLLHOUSE_USER=${validatedUsername}\` to persist this setting\n` +
-            `${validatedEmail ? `• Set environment variable \`DOLLHOUSE_EMAIL=${validatedEmail}\` for contact info\n` : ''}` +
-            `• Use \`clear_user_identity\` to return to anonymous mode`,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
-              `${sanitized.message}\n\n` +
-              `Please provide a valid username (alphanumeric characters, hyphens, underscores, dots only).`,
-          },
-        ],
-      };
-    }
+    await this.ensureInitialized();
+    return this.identityHandler!.setUserIdentity(username, email);
   }
 
   async getUserIdentity() {
-    const email = process.env.DOLLHOUSE_EMAIL;
-    
-    if (!this.currentUser) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}👤 **User Identity: Anonymous**\n\n` +
-            `🔒 **Status:** Anonymous mode\n` +
-            `📝 **Attribution:** Personas will use anonymous IDs\n\n` +
-            `**To set your identity:**\n` +
-            `• Use: \`set_user_identity "your-username"\`\n` +
-            `• Or set environment variable: \`DOLLHOUSE_USER=your-username\``,
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}👤 **User Identity: ${this.currentUser}**\n\n` +
-          `✅ **Status:** Authenticated\n` +
-          `👤 **Username:** ${this.currentUser}\n` +
-          `${email ? `📧 **Email:** ${email}\n` : ''}` +
-          `📝 **Attribution:** New personas will be credited to "${this.currentUser}"\n\n` +
-          `**Environment Variables:**\n` +
-          `• \`DOLLHOUSE_USER=${this.currentUser}\`\n` +
-          `${email ? `• \`DOLLHOUSE_EMAIL=${email}\`\n` : ''}` +
-          `\n**Management:**\n` +
-          `• Use \`clear_user_identity\` to return to anonymous mode\n` +
-          `• Use \`set_user_identity "new-username"\` to change username`,
-        },
-      ],
-    };
+    await this.ensureInitialized();
+    return this.identityHandler!.getUserIdentity();
   }
 
   async clearUserIdentity() {
-    const wasSet = this.currentUser !== null;
-    const previousUser = this.currentUser;
-    this.currentUser = null;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: wasSet 
-            ? `${this.getPersonaIndicator()}✅ **User Identity Cleared**\n\n` +
-              `👤 **Previous:** ${previousUser}\n` +
-              `🔒 **Current:** Anonymous mode\n\n` +
-              `📝 **Effect:** New personas will use anonymous IDs\n\n` +
-              `⚠️ **Note:** This only affects the current session.\n` +
-              `To persist this change, unset the \`DOLLHOUSE_USER\` environment variable.`
-            : `${this.getPersonaIndicator()}ℹ️ **Already in Anonymous Mode**\n\n` +
-              `👤 No user identity was set.\n\n` +
-              `Use \`set_user_identity "username"\` to set your identity.`,
-        },
-      ],
-    };
+    await this.ensureInitialized();
+    return this.identityHandler!.clearUserIdentity();
   }
 
   private getCurrentUserForAttribution(): string {
-    return this.currentUser || generateAnonymousId();
+    return this.identityHandler!.getCurrentUserForAttribution();
   }
 
   // GitHub authentication management
   async setupGitHubAuth() {
-    try {
-      // Check current auth status first
-      const currentStatus = await this.githubAuthManager.getAuthStatus();
-      
-      if (currentStatus.isAuthenticated) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ **Already Connected to GitHub**\n\n` +
-                  `👤 **Username:** ${currentStatus.username}\n` +
-                  `🔑 **Permissions:** ${currentStatus.scopes?.join(', ') || 'basic access'}\n\n` +
-                  `You're all set! You can:\n` +
-                  `• Browse the collection\n` +
-                  `• Install content\n` +
-                  `• Submit your creations\n\n` +
-                  `To disconnect, say "disconnect from GitHub"`
-          }]
-        };
-      }
-      
-      // Initiate device flow
-      let deviceResponse: DeviceCodeResponse;
-      try {
-        deviceResponse = await this.githubAuthManager.initiateDeviceFlow();
-      } catch (deviceFlowError) {
-        logger.error('OAUTH_INDEX_2681: Failed to initiate device flow', { error: deviceFlowError });
-        throw new Error(`OAUTH_INDEX_2681: Device flow initiation failed - ${deviceFlowError instanceof Error ? deviceFlowError.message : 'Unknown error'}`);
-      }
-      
-      // CRITICAL FIX: Use helper process approach from PR #518
-      // MCP servers are stateless and terminate after returning response
-      // The helper process survives MCP termination and can complete OAuth polling
-      
-      // Get the OAuth client ID - use the same method that has the default fallback
-      // This ensures we get the default client ID if no env/config is set
-      logger.debug('OAUTH_STEP_4: Getting client ID for helper process');
-      const clientId = await GitHubAuthManager.getClientId();
-      logger.debug('OAUTH_STEP_5: Client ID obtained', { clientId: clientId?.substring(0, 8) + '...' });
-      
-      // This should never happen now since getClientId() always returns a value
-      // (env, config, or default), but keeping for safety
-      if (!clientId) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **GitHub OAuth Configuration Error**\n\n` +
-                  `Unable to obtain GitHub OAuth client ID.\n\n` +
-                  `This is unexpected - please report this issue.\n\n` +
-                  `**Workaround:**\n` +
-                  `• Set environment variable: DOLLHOUSE_GITHUB_CLIENT_ID\n` +
-                  `• Or use GitHub CLI: gh auth login --web`
-          }]
-        };
-      }
-      
-      // Spawn the OAuth helper process
-      // The helper runs independently and survives MCP server termination
-      let helperPath: string | null = null;
-      try {
-        // Get the directory where the compiled JS file is
-        const __filename = fileURLToPath(import.meta.url);
-        const __dirname = path.dirname(__filename);
-        
-        // Find the oauth-helper.mjs file
-        // It should be in the root directory (one level up from dist/)
-        const possiblePaths = [
-          path.join(__dirname, '..', 'oauth-helper.mjs'),  // From dist/index.js
-          path.join(process.cwd(), 'oauth-helper.mjs'),    // From CWD
-          path.join(__dirname, 'oauth-helper.mjs'),        // Same directory
-          path.join(__dirname, '..', '..', 'oauth-helper.mjs') // NPM package root
-        ];
-        
-        helperPath = null;
-        for (const testPath of possiblePaths) {
-          try {
-            await fs.access(testPath);
-            helperPath = testPath;
-            break;
-          } catch {
-            // Try next path
-          }
-        }
-        
-        if (!helperPath) {
-          logger.error('OAUTH_INDEX_2734: oauth-helper.mjs not found', { 
-            searchedPaths: possiblePaths,
-            cwd: process.cwd(),
-            dirname: __dirname
-          });
-          throw new Error(`OAUTH_HELPER_NOT_FOUND: oauth-helper.mjs not found at line 2734. Searched: ${possiblePaths.join(', ')}`);
-        }
-        
-        logger.debug('OAUTH_STEP_6: Spawning helper process', { 
-          helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
-          deviceCode: deviceResponse.device_code.substring(0, 8) + '...'
-        });
-        
-        // Spawn the helper as a detached process
-        const helper = spawn('node', [
-          helperPath,
-          deviceResponse.device_code,
-          (deviceResponse.interval || 5).toString(),
-          deviceResponse.expires_in.toString(),
-          clientId
-        ], {
-          detached: true,
-          stdio: 'ignore', // Completely detach I/O
-          windowsHide: true // Hide console on Windows
-        });
-        
-        // Allow the parent process to exit without waiting for the helper
-        helper.unref();
-        
-        logger.debug('OAUTH_STEP_7: Helper process spawned successfully', { pid: helper.pid });
-        
-        logger.info('OAuth helper process spawned', {
-          pid: helper.pid,
-          expiresIn: deviceResponse.expires_in,
-          userCode: deviceResponse.user_code
-        });
-        
-        // Write state file for monitoring
-        const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
-        const stateDir = path.dirname(stateFile);
-        await fs.mkdir(stateDir, { recursive: true });
-        
-        const state = {
-          pid: helper.pid,
-          deviceCode: deviceResponse.device_code,
-          userCode: deviceResponse.user_code,
-          startTime: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
-        };
-        
-        await fs.writeFile(stateFile, JSON.stringify(state, null, 2));
-        
-      } catch (spawnError) {
-        logger.error('OAUTH_INDEX_2774: Failed to spawn OAuth helper process', { 
-          error: spawnError,
-          helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
-          errorCode: (spawnError as any)?.code,
-          syscall: (spawnError as any)?.syscall
-        });
-        
-        // Provide specific error message based on error type
-        let errorDetail = '';
-        if (spawnError instanceof Error) {
-          if (spawnError.message.includes('ENOENT')) {
-            errorDetail = `OAUTH_HELPER_SPAWN_ENOENT: Node.js executable not found or helper script missing at ${helperPath}`;
-          } else if (spawnError.message.includes('EACCES')) {
-            errorDetail = `OAUTH_HELPER_SPAWN_EACCES: Permission denied when trying to execute ${helperPath}`;
-          } else if (spawnError.message.includes('E2BIG')) {
-            errorDetail = `OAUTH_HELPER_SPAWN_E2BIG: Argument list too long for helper process`;
-          } else {
-            errorDetail = `OAUTH_HELPER_SPAWN_FAILED: Could not start background authentication process at line 2774 - ${spawnError.message}`;
-          }
-        } else {
-          errorDetail = `OAUTH_HELPER_SPAWN_UNKNOWN: Unknown spawn error at line 2774`;
-        }
-        
-        // Fall back to informing user about the issue
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⚠️ **OAuth Helper Launch Failed**\n\n` +
-                  `${errorDetail}\n\n` +
-                  `**Alternative Options:**\n` +
-                  `1. Try again: Run setup_github_auth again\n` +
-                  `2. Use GitHub CLI: gh auth login --web\n` +
-                  `3. Set token manually: export GITHUB_TOKEN=your_token`
-          }]
-        };
-      }
-      
-      // Return instructions to user
-      return {
-        content: [{
-          type: "text",
-          text: this.githubAuthManager.formatAuthInstructions(deviceResponse) +
-                '\n\n📝 **Note**: Authentication will complete automatically once you authorize. ' +
-                'Your token will be stored securely for future use!'
-        }]
-      };
-    } catch (error) {
-      logger.error('OAUTH_INDEX_2806: Main catch block - authentication setup failed', { 
-        error,
-        errorType: error?.constructor?.name,
-        errorMessage: error instanceof Error ? error.message : 'Unknown'
-      });
-      
-      // If error already has our error code, pass it through
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const hasErrorCode = errorMessage.includes('OAUTH_');
-      
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ **Authentication Setup Failed**\n\n` +
-                `${hasErrorCode ? errorMessage : `OAUTH_INDEX_2806: Unable to start GitHub authentication - ${errorMessage}`}\n\n` +
-                `${!errorMessage.includes('OAUTH_NETWORK') ? 'Please check your internet connection and try again.' : ''}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.githubAuthHandler!.setupGitHubAuth();
   }
   
   async checkGitHubAuth() {
-    try {
-      // First check for OAuth helper process health
-      const helperHealth = await this.checkOAuthHelperHealth();
-      const status = await this.githubAuthManager.getAuthStatus();
-      
-      if (status.isAuthenticated) {
-        // Clean up helper state file if auth is successful
-        if (helperHealth.exists) {
-          const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
-          await fs.unlink(stateFile).catch(() => {});
-        }
-        
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ **GitHub Connected**\n\n` +
-                  `👤 **Username:** ${status.username}\n` +
-                  `🔑 **Permissions:** ${status.scopes?.join(', ') || 'basic access'}\n\n` +
-                  `**Available Actions:**\n` +
-                  `✅ Browse collection\n` +
-                  `✅ Install content\n` +
-                  `✅ Submit content\n\n` +
-                  `Everything is working properly!`
-          }]
-        };
-      } else if (helperHealth.isActive) {
-        // OAuth helper is actively polling
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⏳ **GitHub Authentication In Progress**\n\n` +
-                  `🔑 **User Code:** ${helperHealth.userCode}\n` +
-                  `⏱️ **Time Remaining:** ${Math.floor(helperHealth.timeRemaining / 60)}m ${helperHealth.timeRemaining % 60}s\n` +
-                  `🔄 **Process Status:** ${helperHealth.processAlive ? '✅ Running' : '⚠️ May have stopped'}\n` +
-                  `📁 **Log Available:** ${helperHealth.hasLog ? 'Yes' : 'No'}\n\n` +
-                  `**Waiting for you to:**\n` +
-                  `1. Go to: https://github.com/login/device\n` +
-                  `2. Enter code: **${helperHealth.userCode}**\n` +
-                  `3. Authorize the application\n\n` +
-                  `The authentication will complete automatically once you authorize.\n` +
-                  `Run this command again to check status.`
-          }]
-        };
-      } else if (helperHealth.exists && helperHealth.expired) {
-        // Helper state exists but expired
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⏱️ **Authentication Expired**\n\n` +
-                  `The GitHub authentication request has expired.\n` +
-                  `User code: ${helperHealth.userCode} (expired)\n\n` +
-                  `**To try again:**\n` +
-                  `Run: \`setup_github_auth\` to get a new code\n\n` +
-                  `${helperHealth.errorLog ? `**Error Log:**\n\`\`\`\n${helperHealth.errorLog}\n\`\`\`\n` : ''}`
-          }]
-        };
-      } else if (status.hasToken) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}⚠️ **GitHub Token Invalid**\n\n` +
-                  `A GitHub token was found but it appears to be invalid or expired.\n\n` +
-                  `**To fix this:**\n` +
-                  `1. Say "set up GitHub" to authenticate again\n` +
-                  `2. Or check your GITHUB_TOKEN environment variable\n\n` +
-                  `Note: Browse and install still work without authentication!`
-          }]
-        };
-      } else {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}🔒 **Not Connected to GitHub**\n\n` +
-                  `You're not currently authenticated with GitHub.\n\n` +
-                  `**What works without auth:**\n` +
-                  `✅ Browse the public collection\n` +
-                  `✅ Install community content\n` +
-                  `❌ Submit your own content (requires auth)\n\n` +
-                  `To connect, just say "set up GitHub" or "connect to GitHub"`
-          }]
-        };
-      }
-    } catch (error) {
-      logger.error('Failed to check GitHub auth', { error });
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ **Unable to Check Authentication**\n\n` +
-                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.githubAuthHandler!.checkGitHubAuth();
   }
   
-  // Public method for oauth_helper_status tool
   async getOAuthHelperStatus(verbose: boolean = false) {
-    try {
-      const health = await this.checkOAuthHelperHealth();
-      const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
-      const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
-      const pidFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
-      
-      let statusText = `${this.getPersonaIndicator()}📊 **OAuth Helper Process Diagnostics**\n\n`;
-      
-      // Basic status
-      if (!health.exists) {
-        statusText += `**Status:** No OAuth process detected\n`;
-        statusText += `**State File:** Not found\n\n`;
-        statusText += `No active authentication process. Run \`setup_github_auth\` to start one.\n`;
-      } else if (health.isActive) {
-        statusText += `**Status:** 🟢 ACTIVE - Authentication in progress\n`;
-        statusText += `**User Code:** ${health.userCode}\n`;
-        statusText += `**Process ID:** ${health.pid}\n`;
-        statusText += `**Process Alive:** ${health.processAlive ? '✅ Yes' : '❌ No (may have crashed)'}\n`;
-        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
-        statusText += `**Expires:** ${health.expiresAt?.toLocaleString()}\n`;
-        statusText += `**Time Remaining:** ${Math.floor(health.timeRemaining / 60)}m ${health.timeRemaining % 60}s\n\n`;
-        
-        if (!health.processAlive) {
-          statusText += `⚠️ **WARNING:** Process appears to have stopped!\n`;
-          statusText += `The helper process (PID ${health.pid}) is not responding.\n`;
-          statusText += `You may need to run \`setup_github_auth\` again.\n\n`;
-        }
-      } else if (health.expired) {
-        statusText += `**Status:** 🔴 EXPIRED\n`;
-        statusText += `**User Code:** ${health.userCode} (expired)\n`;
-        statusText += `**Process ID:** ${health.pid}\n`;
-        statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`;
-        statusText += `**Expired:** ${health.expiresAt?.toLocaleString()}\n\n`;
-        statusText += `The authentication request has expired. Run \`setup_github_auth\` to try again.\n\n`;
-      }
-      
-      // File locations
-      statusText += `**📁 File Locations:**\n`;
-      statusText += `• State: ${stateFile}\n`;
-      statusText += `• Log: ${logFile} ${health.hasLog ? '(exists)' : '(not found)'}\n`;
-      statusText += `• PID: ${pidFile}\n\n`;
-      
-      // Error log if available
-      if (health.errorLog) {
-        statusText += `**⚠️ Recent Errors:**\n\`\`\`\n${health.errorLog}\n\`\`\`\n\n`;
-      }
-      
-      // Verbose log output
-      if (verbose && health.hasLog) {
-        try {
-          const fullLog = await fs.readFile(logFile, 'utf-8');
-          const lines = fullLog.split('\n').filter(line => line.trim());
-          const recentLines = lines.slice(-20); // Last 20 lines
-          
-          statusText += `**📜 Recent Log Output (last 20 lines):**\n\`\`\`\n`;
-          statusText += recentLines.join('\n');
-          statusText += `\n\`\`\`\n\n`;
-        } catch (error) {
-          statusText += `**📜 Log:** Unable to read log file\n\n`;
-        }
-      }
-      
-      // Troubleshooting tips
-      if (health.exists && !health.processAlive && !health.expired) {
-        statusText += `**🔧 Troubleshooting Tips:**\n`;
-        statusText += `1. The helper process may have crashed\n`;
-        statusText += `2. Check the log file for errors: ${logFile}\n`;
-        statusText += `3. Try running \`setup_github_auth\` again\n`;
-        statusText += `4. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n`;
-        statusText += `5. Check your internet connection\n`;
-      }
-      
-      // Manual cleanup instructions
-      if (health.exists && (health.expired || !health.processAlive)) {
-        statusText += `\n**🧹 Manual Cleanup (if needed):**\n`;
-        statusText += `\`\`\`bash\n`;
-        statusText += `rm "${stateFile}"\n`;
-        statusText += `rm "${logFile}"\n`;
-        statusText += `rm "${pidFile}"\n`;
-        statusText += `\`\`\`\n`;
-      }
-      
-      return {
-        content: [{
-          type: "text",
-          text: statusText
-        }]
-      };
-      
-    } catch (error) {
-      logger.error('Failed to get OAuth helper status', { error });
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ **Failed to Get OAuth Helper Status**\n\n` +
-                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.githubAuthHandler!.getOAuthHelperStatus(verbose);
   }
   
-  // Helper method to check OAuth helper process health
-  private async checkOAuthHelperHealth() {
-    const stateFile = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
-    const logFile = path.join(homedir(), '.dollhouse', 'oauth-helper.log');
-    
-    const health = {
-      exists: false,
-      isActive: false,
-      expired: false,
-      processAlive: false,
-      hasLog: false,
-      userCode: '',
-      timeRemaining: 0,
-      pid: 0,
-      startTime: null as Date | null,
-      expiresAt: null as Date | null,
-      errorLog: ''
-    };
-    
-    try {
-      // Check if state file exists
-      const stateData = await fs.readFile(stateFile, 'utf-8');
-      const state = JSON.parse(stateData);
-      health.exists = true;
-      health.pid = state.pid;
-      health.userCode = state.userCode;
-      health.startTime = new Date(state.startTime);
-      health.expiresAt = new Date(state.expiresAt);
-      
-      const now = new Date();
-      if (health.expiresAt > now) {
-        health.isActive = true;
-        health.timeRemaining = Math.ceil((health.expiresAt.getTime() - now.getTime()) / 1000);
-        
-        // Check if process is still alive (Unix/Linux/Mac)
-        if (process.platform !== 'win32') {
-          try {
-            // Send signal 0 to check if process exists
-            process.kill(health.pid, 0);
-            health.processAlive = true;
-          } catch {
-            health.processAlive = false;
-          }
-        } else {
-          // On Windows, we can't easily check, so assume it's alive if not expired
-          health.processAlive = true;
-        }
-      } else {
-        health.expired = true;
-      }
-      
-      // Check for log file
-      try {
-        await fs.access(logFile);
-        health.hasLog = true;
-        
-        // Read last few lines of log if there's an error
-        if (!health.processAlive || health.expired) {
-          const logContent = await fs.readFile(logFile, 'utf-8');
-          const lines = logContent.split('\n');
-          // Get last 10 lines that contain errors or important info
-          const importantLines = lines.filter(line => 
-            line.includes('error') || 
-            line.includes('Error') || 
-            line.includes('failed') ||
-            line.includes('Failed') ||
-            line.includes('❌') ||
-            line.includes('⏱️')
-          ).slice(-10);
-          
-          if (importantLines.length > 0) {
-            health.errorLog = importantLines.join('\n');
-          }
-        }
-      } catch {
-        // Log file doesn't exist
-      }
-      
-    } catch (error) {
-      // State file doesn't exist or is invalid
-      if (error instanceof Error && error.message.includes('ENOENT')) {
-        // File doesn't exist, that's ok
-      } else {
-        logger.debug('Error reading OAuth helper state', { error });
-      }
-    }
-    
-    return health;
-  }
+
   
   async clearGitHubAuth() {
-    try {
-      await this.githubAuthManager.clearAuthentication();
-      
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}✅ **GitHub Disconnected**\n\n` +
-                `Your GitHub connection has been cleared.\n\n` +
-                `**What still works:**\n` +
-                `✅ Browse the public collection\n` +
-                `✅ Install community content\n` +
-                `❌ Submit content (requires reconnection)\n\n` +
-                `To reconnect later, just say "connect to GitHub"\n\n` +
-                `⚠️ **Note:** To fully remove authentication, also unset the GITHUB_TOKEN environment variable.`
-        }]
-      };
-    } catch (error) {
-      logger.error('Failed to clear GitHub auth', { error });
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ **Failed to Clear Authentication**\n\n` +
-                `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.githubAuthHandler!.clearGitHubAuth();
   }
 
   // OAuth configuration management
   async configureOAuth(client_id?: string) {
-    try {
-      const configManager = ConfigManager.getInstance();
-      await configManager.initialize();
-      
-      // If no client_id provided, show current configuration status
-      if (!client_id) {
-        // Check what OAuth client ID will actually be used
-        // This matches the logic in GitHubAuthManager.getClientId()
-        const currentClientId = await GitHubAuthManager.getClientId();
-        
-        if (currentClientId) {
-          // Check if it's using the default or a custom config
-          const configuredClientId = configManager.getGitHubClientId();
-          const isUsingDefault = !configuredClientId;
-          
-          // Show first 10 characters for security
-          const maskedClientId = currentClientId.substring(0, 10) + '...';
-          
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}✅ **GitHub OAuth Configuration**\n\n` +
-                    `**Current Status:** ${isUsingDefault ? 'Using Default' : 'Configured'}\n` +
-                    `**Client ID:** ${maskedClientId}\n` +
-                    `**Source:** ${isUsingDefault ? 'Built-in DollhouseMCP OAuth App' : 'Custom Configuration'}\n\n` +
-                    `Your GitHub OAuth is ready to use! You can now:\n` +
-                    `• Run setup_github_auth to connect\n` +
-                    `• Submit content to the collection\n` +
-                    `• Access authenticated features\n\n` +
-                    (isUsingDefault ? 
-                      `**Note:** Using the default DollhouseMCP OAuth app.\n` +
-                      `To use your own OAuth app, provide a client_id parameter.\n\n` : 
-                      `To update the configuration, provide a new client_id parameter.\n\n`)
-            }]
-          };
-        } else {
-          // This should never happen since GitHubAuthManager.getClientId() always returns something
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}⚠️ **GitHub OAuth Not Configured**\n\n` +
-                    `No GitHub OAuth client ID is currently configured.\n\n` +
-                    `**To set up OAuth:**\n` +
-                    `1. Create a GitHub OAuth app at: https://github.com/settings/applications/new\n` +
-                    `2. Use these settings:\n` +
-                    `   • Homepage URL: https://github.com/DollhouseMCP\n` +
-                    `   • Authorization callback URL: http://localhost:3000/callback\n` +
-                    `3. Copy your Client ID (starts with "Ov23li")\n` +
-                    `4. Run: configure_oauth with your client_id parameter\n\n` +
-                    `**Need help?** Check the documentation for detailed setup instructions.`
-            }]
-          };
-        }
-      }
-      
-      // Validate client ID format
-      if (!ConfigManager.validateClientId(client_id)) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Invalid Client ID Format**\n\n` +
-                  `GitHub OAuth Client IDs must:\n` +
-                  `• Start with "Ov23li"\n` +
-                  `• Be followed by at least 14 alphanumeric characters\n\n` +
-                  `**Example:** Ov23liABCDEFGHIJKLMN\n\n` +
-                  `Please check your client ID and try again.`
-          }]
-        };
-      }
-      
-      // Save the client ID
-      await configManager.setGitHubClientId(client_id);
-      
-      // Show success message with masked ID
-      const maskedClientId = client_id.substring(0, 10) + '...';
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}✅ **GitHub OAuth Configured Successfully**\n\n` +
-                `**Client ID:** ${maskedClientId}\n` +
-                `**Saved to:** ~/.dollhouse/config.json\n\n` +
-                `Your GitHub OAuth is now ready! Next steps:\n` +
-                `• Run setup_github_auth to connect your account\n` +
-                `• Start submitting content to the collection\n` +
-                `• Access all authenticated features\n\n` +
-                `**Note:** Your client ID is securely stored in your local config file.`
-        }]
-      };
-      
-    } catch (error) {
-      logger.error('Failed to configure OAuth', { error });
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ **OAuth Configuration Failed**\n\n` +
-                `Error: ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
-                `Please check:\n` +
-                `• File permissions for ~/.dollhouse/config.json\n` +
-                `• Valid client ID format (starts with "Ov23li")\n` +
-                `• Available disk space`
-        }]
-      };
-    }
-  }
-
-  // Chat-based persona management tools
-  async createPersona(name: string, description: string, instructions: string, triggers?: string) {
-    // Ensure initialization for test compatibility
     await this.ensureInitialized();
-    
-    try {
-      // Validate required fields
-      if (!name || !description || !instructions) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **Missing Required Fields**\n\n` +
-                `Please provide all required fields:\n` +
-                `• **name**: Display name for the persona\n` +
-                `• **description**: Brief description of what it does\n` +
-                `• **instructions**: The persona's behavioral guidelines\n\n` +
-                `**Optional:**\n` +
-                `• **triggers**: Comma-separated keywords for activation`,
-            },
-          ],
-        };
-      }
-
-      // Sanitize and validate inputs
-      const sanitizedName = sanitizeInput(name, 100);
-      const sanitizedDescription = sanitizeInput(description, 500);
-      // FIX: Pass MAX_CONTENT_LENGTH to prevent truncation at default 1000 chars
-      const sanitizedInstructions = sanitizeInput(instructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-      const sanitizedTriggers = triggers ? sanitizeInput(triggers, 200) : '';
-
-      // Validate name length and format
-      if (sanitizedName.length < 2) {
-        throw new Error('Persona name must be at least 2 characters long');
-      }
-
-      // No category validation needed - categories are deprecated
-
-      // Validate content sizes
-      validateContentSize(sanitizedInstructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-      validateContentSize(sanitizedDescription, 2000); // 2KB max for description
-
-      // Validate content for security threats
-      const nameValidation = ContentValidator.validateAndSanitize(sanitizedName);
-      if (!nameValidation.isValid) {
-        throw new Error(`Name contains prohibited content: ${nameValidation.detectedPatterns?.join(', ')}`);
-      }
-
-      const descValidation = ContentValidator.validateAndSanitize(sanitizedDescription);
-      if (!descValidation.isValid) {
-        throw new Error(`Description contains prohibited content: ${descValidation.detectedPatterns?.join(', ')}`);
-      }
-
-      const instructionsValidation = ContentValidator.validateAndSanitize(sanitizedInstructions);
-      if (!instructionsValidation.isValid && instructionsValidation.severity === 'critical') {
-        throw new Error(`Instructions contain security threats: ${instructionsValidation.detectedPatterns?.join(', ')}`);
-      }
-
-      // Generate metadata
-      const author = this.getCurrentUserForAttribution();
-      const uniqueId = generateUniqueId(sanitizedName, this.currentUser || undefined);
-      const filename = validateFilename(`${slugify(sanitizedName)}.md`);
-      // personasDir is guaranteed to be set after ensureInitialized()
-      const filePath = path.join(this.personasDir!, filename);
-
-    // Check if file already exists
-    try {
-      await PathValidator.validatePersonaPath(filePath);
-      await fs.access(filePath);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}⚠️ **Persona Already Exists**\n\n` +
-              `A persona file named "${filename}" already exists.\n` +
-              `Use \`edit_persona\` to modify it, or choose a different name.`,
-          },
-        ],
-      };
-    } catch {
-      // File doesn't exist, proceed with creation
-    }
-
-      // Parse and sanitize triggers
-      const triggerList = sanitizedTriggers ? 
-        sanitizedTriggers.split(',').map(t => sanitizeInput(t.trim(), 50)).filter(t => t.length > 0) : 
-        [];
-
-      // Create persona metadata with sanitized values
-      const metadata: PersonaMetadata = {
-        name: sanitizedName,
-        description: sanitizedDescription,
-        unique_id: uniqueId,
-        author,
-        triggers: triggerList,
-        version: "1.0",
-        age_rating: "all",
-        content_flags: ["user-created"],
-        ai_generated: true,
-        generation_method: "Claude",
-        price: "free",
-        revenue_split: "80/20",
-        license: "CC-BY-SA-4.0",
-        created_date: new Date().toISOString().slice(0, 10)
-      };
-
-      // Create full persona content with sanitized values
-      // SECURITY: Comprehensive YAML formatting to prevent type confusion and injection attacks
-      const frontmatter = Object.entries(metadata)
-        .filter(([key, value]) => {
-          // CRITICAL: Block prototype pollution attempts
-          if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-            logger.warn(`Blocked potential prototype pollution attempt with key: ${key}`);
-            return false;
-          }
-          // CRITICAL: Block null/undefined values that could crash server
-          if (value === null || value === undefined) {
-            logger.warn(`Skipping null/undefined value for key: ${key}`);
-            return false;
-          }
-          return true;
-        })
-        .map(([key, value]) => {
-          if (Array.isArray(value)) {
-            // Format arrays properly in YAML
-            if (value.length === 0) {
-              return `${key}: []`;
-            }
-            // SECURITY: Quote all array string elements to prevent type confusion
-            return `${key}:\n${value.map(v => {
-              if (typeof v === 'string') {
-                // Always quote string array elements to prevent YAML interpretation
-                return `  - ${JSON.stringify(v)}`;
-              } else if (v === null || v === undefined) {
-                // Skip null/undefined array elements
-                return null;
-              } else {
-                return `  - ${v}`;
-              }
-            }).filter(v => v !== null).join('\n')}`;
-          } else if (typeof value === 'string') {
-            // Fields that must always be quoted to preserve type
-            const alwaysQuoteFields = [
-              'version',      // Prevent 1.0 -> 1
-              'price',        // Prevent 10.99 -> float
-              'revenue_split', // Prevent fraction interpretation
-              'postal_code',   // Prevent octal interpretation
-              'user_id',      // Prevent number conversion
-              'unique_id'     // Preserve exact format
-            ];
-            
-            // YAML special values that become boolean/null/float
-            const yamlSpecialValues = /^(true|false|yes|no|on|off|null|~|\.inf|\.nan|-\.inf)$/i;
-            
-            // Patterns that indicate string needs quoting
-            const needsQuoting = 
-              alwaysQuoteFields.includes(key) ||
-              yamlSpecialValues.test(value) ||           // YAML keywords
-              /^[\d+\-.]/.test(value) ||                 // Starts with number-like
-              /^0[0-7]+$/.test(value) ||                 // Octal numbers
-              /^0x[0-9a-fA-F]+$/.test(value) ||         // Hexadecimal
-              /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) || // Scientific notation
-              /(^\s)|(\s$)/.test(value) ||                   // Leading/trailing whitespace
-              /[:#@!&*\|>[\]{}]/.test(value) ||         // Special YAML characters
-              value === '' ||                             // Empty string
-              value.includes('\n') ||                    // Multiline
-              value.includes('"');                       // Contains quotes
-            
-            if (needsQuoting) {
-              return `${key}: ${JSON.stringify(value)}`;
-            }
-            return `${key}: ${value}`;
-          } else if (typeof value === 'number') {
-            // CRITICAL: Reject special float values that break logic
-            if (!Number.isFinite(value)) {
-              logger.warn(`Rejected non-finite number for ${key}: ${value}`);
-              return `${key}: 0`; // Safe default
-            }
-            if (Number.isNaN(value)) {
-              logger.warn(`Rejected NaN for ${key}`);
-              return `${key}: 0`; // Safe default
-            }
-            return `${key}: ${value}`;
-          } else if (typeof value === 'boolean') {
-            // Explicit boolean values
-            return `${key}: ${value}`;
-          } else {
-            // Other types - stringify for safety
-            return `${key}: ${JSON.stringify(value)}`;
-          }
-        })
-        .join('\n');
-
-      const personaContent = `---
-${frontmatter}
----
-
-# ${sanitizedName}
-
-${sanitizedInstructions}
-
-## Response Style
-- Follow the behavioral guidelines above
-- Maintain consistency with the persona's character
-- Adapt responses to match the intended purpose
-
-## Usage Notes
-- Created via DollhouseMCP chat interface
-- Author: ${author}
-- Version: 1.0`;
-
-      // Validate final content size
-      validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
-
-    try {
-      // Use file locking to prevent race conditions
-      await FileLockManager.withLock(`persona:${sanitizedName}`, async () => {
-        // Double-check file doesn't exist (in case of race condition)
-        try {
-          await fs.access(filePath);
-          throw new Error(`Persona file "${filename}" already exists`);
-        } catch (error: any) {
-          // If error is not ENOENT (file not found), re-throw it
-          if (error.code !== 'ENOENT' && error.message?.includes('already exists')) {
-            throw error;
-          }
-          // File doesn't exist, proceed
-        }
-        
-        // Write the file atomically
-        await FileLockManager.atomicWriteFile(filePath, personaContent);
-      });
-      
-      // Reload personas to include the new one
-      await this.loadPersonas();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ **Persona Created Successfully!**\n\n` +
-              `🎭 **${sanitizedName}** by ${author}\n` +
-              `🆔 Unique ID: ${uniqueId}\n` +
-              `📄 Saved as: ${filename}\n` +
-              `📊 Total personas: ${this.personas.size}\n\n` +
-              `🎯 **Ready to use:** \`activate_persona "${sanitizedName}"\`\n` +
-              `📤 **Share it:** \`submit_collection_content "${sanitizedName}"\`\n` +
-              `✏️ **Edit it:** \`edit_persona "${sanitizedName}" "field" "new value"\``,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Error Creating Persona**\n\n` +
-              `Failed to write persona file: ${sanitized.message}\n\n` +
-              `Please check permissions and try again.`,
-          },
-        ],
-      };
-    }
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Validation Error**\n\n` +
-              `${sanitized.message}\n\n` +
-              `Please fix the issue and try again.`,
-          },
-        ],
-      };
-    }
+    return this.githubAuthHandler!.configureOAuth(client_id);
   }
 
-  async editPersona(personaIdentifier: string, field: string, value: string) {
-    if (!personaIdentifier || !field || !value) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Missing Parameters**\n\n` +
-              `Usage: \`edit_persona "persona_name" "field" "new_value"\`\n\n` +
-              `**Editable fields:**\n` +
-              `• **name** - Display name\n` +
-              `• **description** - Brief description\n` +
-              `• **instructions** - Main persona content\n` +
-              `• **triggers** - Comma-separated keywords\n` +
-              `• **version** - Version number`,
-          },
-        ],
-      };
-    }
-
-    // Find the persona
-    // First try exact match (with or without .md extension)
-    let persona = this.personas.get(personaIdentifier);
-    
-    if (!persona && !personaIdentifier.endsWith('.md')) {
-      // Try adding .md extension
-      persona = this.personas.get(`${personaIdentifier}.md`);
-    }
-    
-    if (!persona) {
-      // Search by name (case-insensitive)
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
-      );
-    }
-    
-    if (!persona) {
-      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
-      );
-    }
-
-    if (!persona) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Persona Not Found**\n\n` +
-              `Could not find persona: "${personaIdentifier}"\n\n` +
-              `Use \`list_personas\` to see available personas.`,
-          },
-        ],
-      };
-    }
-
-    const validFields = ['name', 'description', 'instructions', 'triggers', 'version'];
-    if (!validFields.includes(field.toLowerCase())) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Invalid Field**\n\n` +
-              `Field "${field}" is not editable.\n\n` +
-              `**Valid fields:** ${validFields.join(', ')}`,
-          },
-        ],
-      };
-    }
-
-    // personasDir is guaranteed to be set after initialization
-    let filePath = path.join(this.personasDir!, persona.filename);
-    let isDefault = isDefaultPersona(persona.filename);
-
-    try {
-      // Read current file
-      const fileContent = await PathValidator.safeReadFile(filePath);
-      
-      // Use secure YAML parser
-      let parsed;
-      try {
-        parsed = SecureYamlParser.safeMatter(fileContent);
-      } catch (error) {
-        if (error instanceof SecurityError) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${this.getPersonaIndicator()}❌ **Security Error**\n\n` +
-                  `Cannot edit persona due to security threat: ${error.message}`,
-              },
-            ],
-          };
-        }
-        throw error;
-      }
-      
-      // If editing a default persona, create a copy instead
-      if (isDefault) {
-        // Generate unique ID for the copy
-        const author = this.currentUser || generateAnonymousId();
-        const uniqueId = generateUniqueId(persona.metadata.name, author);
-        const newFilename = `${uniqueId}.md`;
-        const newFilePath = path.join(this.personasDir!, newFilename);
-        
-        // Create copy of the default persona
-        const content = await PathValidator.safeReadFile(filePath);
-        
-        // Use file locking to prevent race conditions when creating the copy
-        await FileLockManager.withLock(`persona:${persona.metadata.name}-copy`, async () => {
-          await FileLockManager.atomicWriteFile(newFilePath, content);
-        });
-        
-        // Update file path to point to the copy
-        filePath = newFilePath;
-        
-        // Update the unique_id in the metadata
-        parsed.data.unique_id = uniqueId;
-        parsed.data.author = author;
-      }
-      
-      // Update the appropriate field
-      const normalizedField = field.toLowerCase();
-      
-      // Validate the new value for security threats
-      const valueValidation = ContentValidator.validateAndSanitize(value);
-      if (!valueValidation.isValid && valueValidation.severity === 'critical') {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **Security Validation Failed**\n\n` +
-              `The new value contains prohibited content:\n` +
-              `• ${valueValidation.detectedPatterns?.join('\n• ')}\n\n` +
-              `Please remove these patterns and try again.`,
-            },
-          ],
-        };
-      }
-      
-      // Use sanitized value if needed
-      let sanitizedValue = valueValidation.sanitizedContent || value;
-      
-      // Always remove shell metacharacters from display output
-      const displayValue = MCPInputValidator.sanitizeForDisplay(sanitizedValue);
-      
-      if (normalizedField === 'instructions') {
-        // Update the main content
-        parsed.content = sanitizedValue;
-      } else if (normalizedField === 'triggers') {
-        // Parse triggers as comma-separated list
-        parsed.data[normalizedField] = sanitizedValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
-      } else if (normalizedField === 'category') {
-        // Category field is deprecated but still editable for backward compatibility
-        parsed.data[normalizedField] = sanitizedValue;
-      } else {
-        // Update metadata field
-        // For name field, apply additional sanitization to remove shell metacharacters
-        if (normalizedField === 'name') {
-          parsed.data[normalizedField] = sanitizeInput(sanitizedValue, 100);
-        } else {
-          parsed.data[normalizedField] = sanitizedValue;
-        }
-      }
-
-      // Update version and modification info
-      if (normalizedField !== 'version') {
-        const currentVersion = parsed.data.version || '1.0';
-        const versionParts = currentVersion.split('.').map(Number);
-        versionParts[1] = (versionParts[1] || 0) + 1;
-        parsed.data.version = versionParts.join('.');
-      }
-
-      // Regenerate file content
-      // Use secure YAML stringification
-      const secureParser = SecureYamlParser.createSecureMatterParser();
-      const updatedContent = secureParser.stringify(parsed.content, parsed.data);
-      
-      // Use file locking to prevent race conditions
-      await FileLockManager.withLock(`persona:${persona.metadata.name}`, async () => {
-        // Write updated file atomically
-        await FileLockManager.atomicWriteFile(filePath, updatedContent);
-      });
-      
-      // Reload personas
-      await this.loadPersonas();
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ **Persona Updated Successfully!**\n\n` +
-              (isDefault ? `📋 **Note:** Created a copy of the default persona to preserve the original.\n\n` : '') +
-              `🎭 **${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}**\n` +
-              `📝 **Field Updated:** ${field}\n` +
-              `🔄 **New Value:** ${normalizedField === 'instructions' ? 'Content updated' : displayValue}\n` +
-              `📊 **Version:** ${parsed.data.version}\n` +
-              (isDefault ? `🆔 **New ID:** ${parsed.data.unique_id}\n` : '') +
-              `\n` +
-              `Use \`get_persona_details "${MCPInputValidator.sanitizeForDisplay(parsed.data.name || persona.metadata.name || '')}"\` to see all changes.`,
-          },
-        ],
-      };
-    } catch (error) {
-      const sanitized = SecureErrorHandler.sanitizeError(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Error Updating Persona**\n\n` +
-              `Failed to update persona: ${sanitized.message}\n\n` +
-              `Please check file permissions and try again.`,
-          },
-        ],
-      };
-    }
-  }
-
-  async validatePersona(personaIdentifier: string) {
-    if (!personaIdentifier) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Missing Persona Identifier**\n\n` +
-              `Usage: \`validate_persona "persona_name"\`\n\n` +
-              `Use \`list_personas\` to see available personas.`,
-          },
-        ],
-      };
-    }
-
-    // Find the persona
-    // First try exact match (with or without .md extension)
-    let persona = this.personas.get(personaIdentifier);
-    
-    if (!persona && !personaIdentifier.endsWith('.md')) {
-      // Try adding .md extension
-      persona = this.personas.get(`${personaIdentifier}.md`);
-    }
-    
-    if (!persona) {
-      // Search by name (case-insensitive)
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === personaIdentifier.toLowerCase()
-      );
-    }
-    
-    if (!persona) {
-      // Search by name with hyphen-to-space conversion (e.g., "debug-detective" -> "Debug Detective")
-      const nameWithSpaces = personaIdentifier.replaceAll('-', ' ');
-      persona = Array.from(this.personas.values()).find(p => 
-        p.metadata.name.toLowerCase() === nameWithSpaces.toLowerCase()
-      );
-    }
-
-    if (!persona) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **Persona Not Found**\n\n` +
-              `Could not find persona: "${personaIdentifier}"\n\n` +
-              `Use \`list_personas\` to see available personas.`,
-          },
-        ],
-      };
-    }
-
-    // Validation checks
-    const issues: string[] = [];
-    const warnings: string[] = [];
-    const metadata = persona.metadata;
-
-    // Required field checks
-    if (!metadata.name || metadata.name.trim().length === 0) {
-      issues.push("Missing or empty 'name' field");
-    }
-    if (!metadata.description || metadata.description.trim().length === 0) {
-      issues.push("Missing or empty 'description' field");
-    }
-    if (!persona.content || persona.content.trim().length < 50) {
-      issues.push("Persona content is too short (minimum 50 characters)");
-    }
-
-    // Category validation
-    const validCategories = ['creative', 'professional', 'educational', 'gaming', 'personal', 'general'];
-    if (metadata.category && !validCategories.includes(metadata.category)) {
-      issues.push(`Invalid category '${metadata.category}'. Must be one of: ${validCategories.join(', ')}`);
-    }
-
-    // Age rating validation
-    const validAgeRatings = ['all', '13+', '18+'];
-    if (metadata.age_rating && !validAgeRatings.includes(metadata.age_rating)) {
-      warnings.push(`Invalid age_rating '${metadata.age_rating}'. Should be one of: ${validAgeRatings.join(', ')}`);
-    }
-
-    // Optional field warnings
-    if (!metadata.triggers || metadata.triggers.length === 0) {
-      warnings.push("No trigger keywords defined - users may have difficulty finding this persona");
-    }
-    if (!metadata.version) {
-      warnings.push("No version specified - defaulting to '1.0'");
-    }
-    if (!metadata.unique_id) {
-      warnings.push("No unique_id - one will be generated automatically");
-    }
-
-    // Content quality checks
-    if (persona.content.length > 5000) {
-      warnings.push("Persona content is very long - consider breaking it into sections");
-    }
-    if (metadata.name && metadata.name.length > 50) {
-      warnings.push("Persona name is very long - consider shortening for better display");
-    }
-    if (metadata.description && metadata.description.length > 200) {
-      warnings.push("Description is very long - consider keeping it under 200 characters");
-    }
-
-    // Generate validation report
-    let report = `${this.getPersonaIndicator()}📋 **Validation Report: ${persona.metadata.name}**\n\n`;
-    
-    if (issues.length === 0 && warnings.length === 0) {
-      report += `✅ **All Checks Passed!**\n\n` +
-        `🎭 **Persona:** ${metadata.name}\n` +
-        `📁 **Category:** ${metadata.category || 'general'}\n` +
-        `📊 **Version:** ${metadata.version || '1.0'}\n` +
-        `📝 **Content Length:** ${persona.content.length} characters\n` +
-        `🔗 **Triggers:** ${metadata.triggers?.length || 0} keywords\n\n` +
-        `This persona meets all validation requirements and is ready for use!`;
-    } else {
-      if (issues.length > 0) {
-        report += `❌ **Issues Found (${issues.length}):**\n`;
-        issues.forEach((issue, i) => {
-          report += `   ${i + 1}. ${issue}\n`;
-        });
-        report += '\n';
-      }
-
-      if (warnings.length > 0) {
-        report += `⚠️ **Warnings (${warnings.length}):**\n`;
-        warnings.forEach((warning, i) => {
-          report += `   ${i + 1}. ${warning}\n`;
-        });
-        report += '\n';
-      }
-
-      if (issues.length > 0) {
-        report += `**Recommendation:** Fix the issues above before using this persona.\n`;
-        report += `Use \`edit_persona "${persona.metadata.name}" "field" "value"\` to make corrections.`;
-      } else {
-        report += `**Status:** Persona is functional but could be improved.\n`;
-        report += `Address warnings above for optimal performance.`;
-      }
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: report,
-        },
-      ],
-    };
-  }
+  // REMOVED: createPersona() - use createElement() with type='persona' instead (v2 breaking change)
 
   // retryNetworkOperation has been removed with UpdateTools
 
@@ -4522,227 +455,35 @@ ${sanitizedInstructions}
 
 
   /**
-   * Configure indicator settings
+   * Configure indicator settings (delegated to DisplayConfigHandler)
    */
   async configureIndicator(config: Partial<IndicatorConfig>) {
-    try {
-      // Update the configuration
-      if (config.enabled !== undefined) {
-        this.indicatorConfig.enabled = config.enabled;
-      }
-      if (config.style !== undefined) {
-        this.indicatorConfig.style = config.style;
-      }
-      if (config.customFormat !== undefined) {
-        // Validate custom format before applying
-        const validation = validateCustomFormat(config.customFormat);
-        if (!validation.valid) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${this.getPersonaIndicator()}❌ Invalid custom format: ${validation.error}`
-              }
-            ]
-          };
-        }
-        this.indicatorConfig.customFormat = config.customFormat;
-      }
-      if (config.showVersion !== undefined) {
-        this.indicatorConfig.showVersion = config.showVersion;
-      }
-      if (config.showAuthor !== undefined) {
-        this.indicatorConfig.showAuthor = config.showAuthor;
-      }
-      if (config.showCategory !== undefined) {
-        this.indicatorConfig.showCategory = config.showCategory;
-      }
-      if (config.emoji !== undefined) {
-        this.indicatorConfig.emoji = config.emoji;
-      }
-      if (config.bracketStyle !== undefined) {
-        this.indicatorConfig.bracketStyle = config.bracketStyle;
-      }
-
-      // Show example of what the indicator would look like
-      let exampleIndicator = "";
-      if (this.activePersona) {
-        const persona = this.personas.get(this.activePersona);
-        if (persona) {
-          exampleIndicator = formatIndicator(this.indicatorConfig, {
-            name: persona.metadata.name,
-            version: persona.metadata.version,
-            author: persona.metadata.author,
-            category: persona.metadata.category
-          });
-        }
-      } else {
-        // Show example with sample data
-        exampleIndicator = formatIndicator(this.indicatorConfig, {
-          name: "Example Persona",
-          version: "1.0",
-          author: "@username",
-          category: "creative"
-        });
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ Indicator configuration updated successfully!
-
-Current settings:
-- Enabled: ${this.indicatorConfig.enabled}
-- Style: ${this.indicatorConfig.style}
-- Show Version: ${this.indicatorConfig.showVersion}
-- Show Author: ${this.indicatorConfig.showAuthor}
-- Show Category: ${this.indicatorConfig.showCategory}
-- Emoji: ${this.indicatorConfig.emoji}
-- Brackets: ${this.indicatorConfig.bracketStyle}
-${this.indicatorConfig.customFormat ? `- Custom Format: ${this.indicatorConfig.customFormat}` : ''}
-
-Example indicator: ${exampleIndicator || "(none - indicators disabled)"}
-
-Note: Configuration is temporary for this session. To make permanent, set environment variables:
-- DOLLHOUSE_INDICATOR_ENABLED=true/false
-- DOLLHOUSE_INDICATOR_STYLE=full/minimal/compact/custom
-- DOLLHOUSE_INDICATOR_FORMAT="custom format template"
-- DOLLHOUSE_INDICATOR_SHOW_VERSION=true/false
-- DOLLHOUSE_INDICATOR_SHOW_AUTHOR=true/false
-- DOLLHOUSE_INDICATOR_SHOW_CATEGORY=true/false
-- DOLLHOUSE_INDICATOR_EMOJI=🎭
-- DOLLHOUSE_INDICATOR_BRACKETS=square/round/curly/angle/none`
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Error configuring indicator: ${SecureErrorHandler.sanitizeError(error).message}`
-          }
-        ]
-      };
-    }
+    await this.ensureInitialized();
+    return this.displayConfigHandler!.configureIndicator(config);
   }
 
   /**
-   * Get current indicator configuration
+   * Get current indicator configuration (delegated to DisplayConfigHandler)
+   */
+  async getIndicatorConfig() {
+    await this.ensureInitialized();
+    return this.displayConfigHandler!.getIndicatorConfig();
+  }
+
+  /**
+   * Configure collection submission settings (delegated to CollectionHandler)
    */
   async configureCollectionSubmission(autoSubmit: boolean) {
-    try {
-      // Store the configuration in environment variable
-      if (autoSubmit) {
-        process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
-      } else {
-        delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
-      }
-
-      const message = autoSubmit 
-        ? "✅ Collection submission enabled! Content will automatically be submitted to the DollhouseMCP collection after portfolio upload."
-        : "✅ Collection submission disabled. Content will only be uploaded to your personal portfolio.";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}${message}`
-          }
-        ]
-      };
-    } catch (error) {
-      logger.error('Error configuring collection submission', { error });
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Failed to configure collection submission: ${error instanceof Error ? error.message : 'Unknown error'}`
-          }
-        ]
-      };
-    }
+    await this.ensureInitialized();
+    return this.collectionHandler!.configureCollectionSubmission(autoSubmit);
   }
 
+  /**
+   * Get collection submission configuration (delegated to CollectionHandler)
+   */
   async getCollectionSubmissionConfig() {
-    const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
-    
-    const message = `**Collection Submission Configuration**\n\n` +
-      `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
-      `When auto-submit is enabled, the \`submit_collection_content\` tool will:\n` +
-      `1. Upload content to your GitHub portfolio\n` +
-      `2. Automatically create a submission issue in DollhouseMCP/collection\n\n` +
-      `To change this setting, use:\n` +
-      `\`\`\`\nconfigure_collection_submission autoSubmit: true/false\n\`\`\``;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}${message}`
-        }
-      ]
-    };
-  }
-
-  async getIndicatorConfig() {
-    // Show current configuration and example
-    let exampleIndicator = "";
-    if (this.activePersona) {
-      const persona = this.personas.get(this.activePersona);
-      if (persona) {
-        exampleIndicator = formatIndicator(this.indicatorConfig, {
-          name: persona.metadata.name,
-          version: persona.metadata.version,
-          author: persona.metadata.author,
-          category: persona.metadata.category
-        });
-      }
-    } else {
-      // Show example with sample data
-      exampleIndicator = formatIndicator(this.indicatorConfig, {
-        name: "Example Persona",
-        version: "1.0",
-        author: "@username",
-        category: "creative"
-      });
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${this.getPersonaIndicator()}📊 Current Indicator Configuration:
-
-Settings:
-- Enabled: ${this.indicatorConfig.enabled}
-- Style: ${this.indicatorConfig.style}
-- Show Version: ${this.indicatorConfig.showVersion}
-- Show Author: ${this.indicatorConfig.showAuthor}
-- Show Category: ${this.indicatorConfig.showCategory}
-- Emoji: ${this.indicatorConfig.emoji}
-- Brackets: ${this.indicatorConfig.bracketStyle}
-- Separator: "${this.indicatorConfig.separator}"
-${this.indicatorConfig.customFormat ? `- Custom Format: ${this.indicatorConfig.customFormat}` : ''}
-
-Available styles:
-- full: [🎭 Persona Name v1.0 by @author]
-- minimal: 🎭 Persona Name
-- compact: [Persona Name v1.0]
-- custom: Use your own format with placeholders
-
-Example with current settings: ${exampleIndicator || "(none - indicators disabled)"}
-
-Placeholders for custom format:
-- {emoji} - The configured emoji
-- {name} - Persona name
-- {version} - Persona version
-- {author} - Persona author
-- {category} - Persona category`
-        }
-      ]
-    };
+    await this.ensureInitialized();
+    return this.collectionHandler!.getCollectionSubmissionConfig();
   }
 
 
@@ -4750,109 +491,24 @@ Placeholders for custom format:
    * Export a single persona
    */
   async exportPersona(personaName: string) {
-    try {
-      // Use a single lookup to avoid race conditions
-      let persona = this.personas.get(personaName);
-      if (!persona) {
-        // Try by filename
-        persona = Array.from(this.personas.values()).find(p => p.filename === personaName);
-        if (!persona) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Persona not found: ${personaName}`
-            }]
-          };
-        }
-      }
-
-      const exportData = this.personaExporter.exportPersona(persona);
-      const base64 = this.personaExporter.toBase64(exportData);
-      const result = this.personaExporter.formatExportResult(persona, base64);
-
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}${result}`
-        }]
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Export failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.personaHandler!.exportPersona(personaName);
   }
 
   /**
    * Export all personas
    */
   async exportAllPersonas(includeDefaults = true) {
-    try {
-      const personasArray = Array.from(this.personas.values());
-      const bundle = this.personaExporter.exportBundle(personasArray, includeDefaults);
-      const base64 = this.personaExporter.toBase64(bundle);
-      const result = this.personaExporter.formatBundleResult(bundle, base64);
-
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}${result}`
-        }]
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Export failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.personaHandler!.exportAllPersonas(includeDefaults);
   }
 
   /**
    * Import a persona
    */
   async importPersona(source: string, overwrite = false) {
-    try {
-      if (!this.personaImporter) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Import functionality not available (initialization in progress)`
-          }]
-        };
-      }
-      const result = await this.personaImporter.importPersona(source, this.personas, overwrite);
-      
-      if (result.success) {
-        // Reload personas to include the new one
-        await this.loadPersonas();
-        
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ ${result.message}\n\nPersona "${result.persona?.metadata.name}" is now available.\nTotal personas: ${this.personas.size}`
-          }]
-        };
-      } else {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ ${result.message}`
-          }]
-        };
-      }
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Import failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.personaHandler!.importPersona(source, overwrite);
   }
 
 
@@ -4864,610 +520,58 @@ Placeholders for custom format:
    * Check portfolio status including repository existence and sync information
    */
   async portfolioStatus(username?: string) {
-    try {
-      // Validate username parameter if provided
-      if (username && typeof username === 'string') {
-        try {
-          validateUsername(username);
-        } catch (error) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Invalid username: ${error instanceof Error ? error.message : 'Validation failed'}`
-            }]
-          };
-        }
-      }
-
-      // Get current user if username not provided
-      let targetUsername = username;
-      if (!targetUsername) {
-        const authStatus = await this.githubAuthManager.getAuthStatus();
-        if (!authStatus.isAuthenticated || !authStatus.username) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
-            `🔐 **Quick Setup**:\n` +
-            `1. Run: \`setup_github_auth\` to authenticate\n` +
-            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
-            `📝 **What this enables**:\n` +
-            `• Upload elements to your GitHub portfolio\n` +
-            `• Sync your local portfolio with GitHub\n` +
-            `• Share elements with the community\n\n` +
-            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
-            }]
-          };
-        }
-        targetUsername = authStatus.username;
-      }
-
-      // Check if portfolio exists
-      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
-      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-      const portfolioExists = await portfolioManager.checkPortfolioExists(targetUsername);
-
-      let statusText = `${this.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
-
-      if (portfolioExists) {
-        statusText += `✅ **Repository**: ${portfolioManager.getRepositoryName()} exists\n`;
-        statusText += `🔗 **URL**: https://github.com/${targetUsername}/${portfolioManager.getRepositoryName()}\n\n`;
-        
-        // Get local elements count
-        const localPortfolioManager = PortfolioManager.getInstance();
-        const personasPath = localPortfolioManager.getElementDir(ElementType.PERSONA);
-        const skillsPath = localPortfolioManager.getElementDir(ElementType.SKILL);
-        const templatesPath = localPortfolioManager.getElementDir(ElementType.TEMPLATE);
-        const agentsPath = localPortfolioManager.getElementDir(ElementType.AGENT);
-        const memoriesPath = localPortfolioManager.getElementDir(ElementType.MEMORY);
-        const ensemblesPath = localPortfolioManager.getElementDir(ElementType.ENSEMBLE);
-
-        const [personas, skills, templates, agents, memories, ensembles] = await Promise.all([
-          this.countElementsInDir(personasPath),
-          this.countElementsInDir(skillsPath),
-          this.countElementsInDir(templatesPath),
-          this.countElementsInDir(agentsPath),
-          this.countElementsInDir(memoriesPath),
-          this.countElementsInDir(ensemblesPath)
-        ]);
-
-        const totalElements = personas + skills + templates + agents + memories + ensembles;
-        statusText += `📈 **Local Elements**:\n`;
-        statusText += `  • Personas: ${personas}\n`;
-        statusText += `  • Skills: ${skills}\n`;
-        statusText += `  • Templates: ${templates}\n`;
-        statusText += `  • Agents: ${agents}\n`;
-        statusText += `  • Memories: ${memories}\n`;
-        statusText += `  • Ensembles: ${ensembles}\n`;
-        statusText += `  • **Total**: ${totalElements}\n\n`;
-
-        statusText += `🔄 **Sync Status**: Use sync_portfolio to update GitHub\n`;
-      } else {
-        statusText += `❌ **Repository**: No portfolio found\n`;
-        statusText += `💡 **Next Step**: Use init_portfolio to create one\n\n`;
-        
-        statusText += `📝 **What you'll get**:\n`;
-        statusText += `  • GitHub repository for your elements\n`;
-        statusText += `  • Organized folder structure\n`;
-        statusText += `  • README with usage instructions\n`;
-        statusText += `  • Easy sharing and backup\n`;
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: statusText
-        }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Failed to check portfolio status: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.portfolioStatus(username);
   }
 
   /**
    * Initialize a new GitHub portfolio repository
    */
   async initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}) {
-    try {
-      // Check authentication
-      const authStatus = await this.githubAuthManager.getAuthStatus();
-      if (!authStatus.isAuthenticated || !authStatus.username) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
-            `🔐 **Quick Setup**:\n` +
-            `1. Run: \`setup_github_auth\` to authenticate\n` +
-            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
-            `📝 **What this enables**:\n` +
-            `• Upload elements to your GitHub portfolio\n` +
-            `• Sync your local portfolio with GitHub\n` +
-            `• Share elements with the community\n\n` +
-            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
-          }]
-        };
-      }
-
-      const username = authStatus.username;
-
-      // Check if portfolio already exists
-      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
-      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
-
-      if (portfolioExists) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}✅ Portfolio already exists at https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\nUse portfolio_status to see details or sync_portfolio to update it.`
-          }]
-        };
-      }
-
-      // Create portfolio with explicit consent
-      const portfolioUrl = await portfolioManager.createPortfolio(username, true);
-
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}🎉 **Portfolio Created Successfully!**\n\n` +
-                `✅ **Repository**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n` +
-                `📁 **Structure**: Organized folders for all element types\n` +
-                `📝 **README**: Usage instructions included\n` +
-                `🔄 **Next Step**: Use sync_portfolio to upload your elements\n\n` +
-                `Your portfolio is ready for sharing your DollhouseMCP creations!`
-        }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Failed to initialize portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.initPortfolio(options);
   }
 
   /**
    * Configure portfolio settings
    */
   async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
-    try {
-      const configManager = ConfigManager.getInstance();
-      await configManager.initialize();
-
-      let statusText = `${this.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
-
-      // Update settings if provided
-      if (options.autoSync !== undefined) {
-        // This would be implemented when auto-sync feature is added
-        statusText += `🔄 Auto-sync: ${options.autoSync ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
-      }
-
-      if (options.defaultVisibility) {
-        statusText += `🔒 Default visibility: ${options.defaultVisibility}\n`;
-      }
-
-      if (options.autoSubmit !== undefined) {
-        // Note: Auto-submit configuration would be implemented here
-        // For now, we'll just show the status
-        statusText += `📤 Auto-submit to collection: ${options.autoSubmit ? 'Enabled' : 'Disabled'} (Coming soon)\n`;
-      }
-
-      if (options.repositoryName) {
-        statusText += `📁 Repository name: ${options.repositoryName} (Custom names coming soon)\n`;
-      }
-
-      // Show current configuration
-      statusText += `\n📋 **Current Settings**:\n`;
-      statusText += `  • Auto-submit: Disabled (Coming soon)\n`;
-      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
-      statusText += `  • Repository name: ${getPortfolioRepositoryName()}\n`;
-      statusText += `  • Default visibility: public\n`;
-
-      return {
-        content: [{
-          type: "text",
-          text: statusText
-        }]
-      };
-
-    } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Failed to configure portfolio: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.portfolioConfig(options);
   }
 
   /**
    * Sync portfolio with GitHub
    */
   async syncPortfolio(options: {
-    direction: string; 
+    direction: string;
     mode?: string;
-    force: boolean; 
+    force: boolean;
     dryRun: boolean;
     confirmDeletions?: boolean;
   }) {
-    try {
-      // Check authentication
-      const authStatus = await this.githubAuthManager.getAuthStatus();
-      if (!authStatus.isAuthenticated || !authStatus.username) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
-            `🔐 **Quick Setup**:\n` +
-            `1. Run: \`setup_github_auth\` to authenticate\n` +
-            `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
-            `📝 **What this enables**:\n` +
-            `• Upload elements to your GitHub portfolio\n` +
-            `• Sync your local portfolio with GitHub\n` +
-            `• Share elements with the community\n\n` +
-            `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
-          }]
-        };
-      }
-
-      const username = authStatus.username;
-
-      // Check if portfolio exists
-      const { PortfolioRepoManager } = await import('./portfolio/PortfolioRepoManager.js');
-      const { getPortfolioRepositoryName } = await import('./config/portfolioConfig.js');
-      const portfolioManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-      
-      // CRITICAL FIX: Set GitHub token like submit_collection_content does
-      // Without this, checkPortfolioExists fails because it can't authenticate to GitHub
-      const { TokenManager } = await import('./security/tokenManager.js');
-      const token = await TokenManager.getGitHubTokenAsync();
-      if (!token) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ GitHub authentication required. Please authenticate first using setup_github_auth.`
-          }]
-        };
-      }
-      portfolioManager.setToken(token);
-      
-      const portfolioExists = await portfolioManager.checkPortfolioExists(username);
-
-      if (!portfolioExists) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
-                  `🏠 **Quick Setup**:\n` +
-                  `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
-                  `2. This creates: https://github.com/[username]/${portfolioManager.getRepositoryName()}\n\n` +
-                  `📝 **What you'll get**:\n` +
-                  `• Public repository to showcase your AI elements\n` +
-                  `• Organized structure for personas, skills, templates, and agents\n` +
-                  `• Automatic syncing of your local portfolio\n` +
-                  `• Community sharing capabilities\n\n` +
-                  `🚀 **After setup**: Use \`sync_portfolio\` to upload your content!`
-          }]
-        };
-      }
-
-      if (options.dryRun) {
-        // Show what would be synced
-        const localPortfolioManager = PortfolioManager.getInstance();
-        
-        const elementTypeCounts: Record<string, number | string> = {};
-        const elementTypeErrors: string[] = [];
-        
-        // Get element counts with better error handling
-        for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
-          try {
-            const elements = await this.getElementsList(elementType);
-            elementTypeCounts[elementType] = elements.length;
-          } catch (error: any) {
-            elementTypeCounts[elementType] = 'ERROR';
-            elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
-          }
-        }
-
-        let dryRunText = `${this.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
-        dryRunText += `📤 **Elements to sync** (${options.direction}):\n`;
-        dryRunText += `  • Personas: ${elementTypeCounts.personas}\n`;
-        dryRunText += `  • Skills: ${elementTypeCounts.skills}\n`;
-        dryRunText += `  • Templates: ${elementTypeCounts.templates}\n`;
-        dryRunText += `  • Agents: ${elementTypeCounts.agents}\n\n`;
-        
-        // Include any errors encountered during dry run
-        if (elementTypeErrors.length > 0) {
-          dryRunText += `⚠️ **Errors found during preview:**\n`;
-          for (const error of elementTypeErrors) {
-            dryRunText += `  • ${error}\n`;
-          }
-          dryRunText += `\n`;
-        }
-        
-        dryRunText += `🎯 **Target**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
-        dryRunText += `⚠️  **Note**: This is a preview. Remove dry_run=true to perform actual sync.`;
-
-        return {
-          content: [{
-            type: "text",
-            text: dryRunText
-          }]
-        };
-      }
-
-      // For now, implement basic push functionality
-      if (options.direction === 'push' || options.direction === 'both') {
-        let syncCount = 0;
-        let totalElements = 0;
-        let syncText = `${this.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`;
-
-        // UX IMPROVEMENT: Calculate total elements for progress tracking
-        const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
-        const elementCounts: Record<string, number> = {};
-        const failedElements: Array<{type: string, name: string, error: string}> = [];
-        
-        // Pre-calculate totals for better progress indicators
-        try {
-          syncText += `📊 **Calculating sync scope...**\n`;
-          for (const elementType of elementTypes) {
-            try {
-              const elements = await this.getElementsList(elementType);
-              elementCounts[elementType] = elements.length;
-              totalElements += elements.length;
-            } catch (error: any) {
-              elementCounts[elementType] = 0;
-              logger.warn(`Failed to count ${elementType}`, { error: error.message });
-            }
-          }
-          
-          syncText += `\n🎯 **Ready to sync ${totalElements} elements:**\n`;
-          for (const [type, count] of Object.entries(elementCounts)) {
-            const icon = count > 0 ? '✅' : '⚪';
-            syncText += `  ${icon} ${type}: ${count} elements\n`;
-          }
-          syncText += `\n🚀 **Starting sync process...**\n\n`;
-          
-        } catch (error: any) {
-          syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
-        }
-        
-        // UX IMPROVEMENT: Process each element type with progress tracking
-        for (const elementType of elementTypes) {
-          const typeCount = elementCounts[elementType] || 0;
-          if (typeCount === 0) {
-            syncText += `⏩ **Skipping ${elementType}** (no elements found)\n`;
-            continue;
-          }
-          
-          syncText += `📁 **Processing ${elementType}** (${typeCount} elements):\n`;
-          let typeSuccessCount = 0;
-          
-          try {
-            const elements = await this.getElementsList(elementType);
-            
-            for (let i = 0; i < elements.length; i++) {
-              const elementName = elements[i];
-              const progress = `[${i + 1}/${elements.length}]`;
-              
-              try {
-                // UX IMPROVEMENT: Show individual element progress
-                syncText += `  ${progress} 🔄 Syncing "${elementName}"...`;
-                
-                // Load element and save to portfolio
-                const element = await this.loadElementByType(elementName, elementType);
-                if (element) {
-                  await portfolioManager.saveElement(element, true); // Explicit consent
-                  syncCount++;
-                  typeSuccessCount++;
-                  syncText += ` ✅\n`;
-                  logger.debug(`Successfully synced ${elementType}/${elementName}`);
-                } else {
-                  syncText += ` ❌ (null element)\n`;
-                  failedElements.push({
-                    type: elementType,
-                    name: elementName,
-                    error: 'Element loaded as null/undefined'
-                  });
-                }
-              } catch (elementError: any) {
-                // Extract error code if present
-                const errorCode = elementError.code || (elementError.message?.match(/\[([A-Z_]+_\d+)\]/)?.[1]) || '';
-                const errorMessage = elementError.message || 'Unknown error during element sync';
-                
-                // Clean up error message for display (remove code if already extracted)
-                const displayMessage = errorCode 
-                  ? errorMessage.replace(/\[[A-Z_]+_\d+\]\s*/, '')
-                  : errorMessage;
-                
-                // Show error code in output for better diagnostics
-                const errorOutput = errorCode 
-                  ? `${errorCode}: ${displayMessage}`
-                  : displayMessage;
-                
-                syncText += ` ❌ (${errorOutput})\n`;
-                failedElements.push({
-                  type: elementType,
-                  name: elementName,
-                  error: errorOutput
-                });
-                logger.warn(`Failed to sync ${elementType}/${elementName}`, { 
-                  error: errorMessage,
-                  errorCode,
-                  elementName,
-                  elementType
-                });
-              }
-            }
-            
-            // UX IMPROVEMENT: Show completion summary for each type
-            const successRate = elements.length > 0 ? Math.round((typeSuccessCount / elements.length) * 100) : 0;
-            const statusIcon = successRate === 100 ? '🎉' : successRate > 50 ? '⚠️' : '❌';
-            syncText += `  ${statusIcon} **${elementType} complete**: ${typeSuccessCount}/${elements.length} synced (${successRate}%)\n\n`;
-          } catch (listError: any) {
-            // UX IMPROVEMENT: Better error reporting for list failures
-            const errorMessage = listError.message || 'Failed to get elements list';
-            syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
-            failedElements.push({
-              type: elementType,
-              name: 'ALL',
-              error: `Failed to list ${elementType}: ${errorMessage}`
-            });
-            logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
-          }
-        }
-
-        // UX IMPROVEMENT: Enhanced final summary with actionable insights
-        const successRate = totalElements > 0 ? Math.round((syncCount / totalElements) * 100) : 0;
-        const summaryIcon = successRate === 100 ? '🎉' : successRate >= 80 ? '✅' : successRate >= 50 ? '⚠️' : '❌';
-        
-        syncText += `${summaryIcon} **Sync Complete!**\n`;
-        syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
-        syncText += `🏠 **Portfolio**: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n\n`;
-        
-        // Include failed elements information with actionable suggestions
-        if (failedElements.length > 0) {
-          syncText += `⚠️ **Issues Encountered** (${failedElements.length} problems):\n\n`;
-          
-          // Group failures by type for better organization
-          const failuresByType: Record<string, Array<{name: string, error: string}>> = {};
-          for (const failed of failedElements) {
-            if (!failuresByType[failed.type]) {
-              failuresByType[failed.type] = [];
-            }
-            failuresByType[failed.type].push({ name: failed.name, error: failed.error });
-          }
-          
-          for (const [type, failures] of Object.entries(failuresByType)) {
-            syncText += `📁 **${type}** (${failures.length} issues):\n`;
-            for (const failure of failures) {
-              if (failure.name === 'ALL') {
-                syncText += `  ❌ ${failure.error}\n`;
-              } else {
-                syncText += `  ❌ "${failure.name}": ${failure.error}\n`;
-              }
-            }
-            syncText += `\n`;
-          }
-          
-          // UX IMPROVEMENT: Add helpful suggestions based on error codes found
-          syncText += `💡 **Troubleshooting Tips**:\n`;
-          
-          // Check for specific error codes and provide targeted advice
-          const errorCodes = failedElements.map(f => f.error.match(/^([A-Z_]+_\d+):/)?.[1]).filter(Boolean);
-          const uniqueErrorCodes = [...new Set(errorCodes)];
-          
-          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_001')) {
-            syncText += `  • 🔐 **Auth Error**: Run \`setup_github_auth\` to re-authenticate\n`;
-          }
-          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_002')) {
-            syncText += `  • 📁 **Repo Missing**: Run \`init_portfolio\` to create your repository\n`;
-          }
-          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_004')) {
-            syncText += `  • 🔧 **API Error**: GitHub response format issue - please report this bug\n`;
-          }
-          if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_006')) {
-            syncText += `  • ⏳ **Rate Limited**: Wait a few minutes and try again\n`;
-          }
-          
-          // General tips
-          syncText += `  • Check element file formats and metadata\n`;
-          syncText += `  • Try syncing individual elements with \`portfolio_element_manager\` (upload operation)\n`;
-          syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
-          
-          // Add error code legend if we found any
-          if (uniqueErrorCodes.length > 0) {
-            syncText += `📋 **Error Codes Detected**:\n`;
-            for (const code of uniqueErrorCodes) {
-              const errorDescriptions: Record<string, string> = {
-                'PORTFOLIO_SYNC_001': 'Authentication failure',
-                'PORTFOLIO_SYNC_002': 'Repository not found',
-                'PORTFOLIO_SYNC_003': 'File creation failed',
-                'PORTFOLIO_SYNC_004': 'API response parsing error',
-                'PORTFOLIO_SYNC_005': 'Network error',
-                'PORTFOLIO_SYNC_006': 'Rate limit exceeded'
-              };
-              const description = errorDescriptions[code as string] || 'Unknown error';
-              syncText += `  • ${code}: ${description}\n`;
-            }
-            syncText += `\n`;
-          }
-        } else {
-          syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
-        }
-        
-        // UX IMPROVEMENT: Add next steps and helpful links
-        if (syncCount > 0) {
-          syncText += `🚀 **Next Steps**:\n`;
-          syncText += `  • View your portfolio: https://github.com/${username}/${portfolioManager.getRepositoryName()}\n`;
-          syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
-          syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
-        }
-        
-        syncText += `Your elements are now available on GitHub!`;
-
-        return {
-          content: [{
-            type: "text",
-            text: syncText
-          }]
-        };
-      }
-
-      if (options.direction === 'pull' || options.direction === 'both') {
-        const { PortfolioPullHandler } = await import('./handlers/PortfolioPullHandler.js');
-        const handler = new PortfolioPullHandler();
-        return handler.executePull(options, this.getPersonaIndicator());
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Invalid sync direction. Use 'push', 'pull', or 'both'.`
-        }]
-      };
-
-    } catch (error) {
-      // IMPROVED ERROR HANDLING: Ensure we always have a meaningful error message
-      const sanitizedError = SecureErrorHandler.sanitizeError(error);
-      const errorMessage = sanitizedError?.message || (error as any)?.message || String(error) || 'Unknown error occurred';
-      
-      return {
-        content: [{
-          type: "text",
-          text: `${this.getPersonaIndicator()}❌ Failed to sync portfolio: ${errorMessage}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.syncPortfolio(options);
   }
 
   /**
    * Handle configuration operations - delegates to ConfigHandler
-   */
+  */
   async handleConfigOperation(options: any) {
-    const { ConfigHandler } = await import('./handlers/ConfigHandler.js');
-    const handler = new ConfigHandler();
-    return handler.handleConfigOperation(options, this.getPersonaIndicator());
+    await this.ensureInitialized();
+    return this.configHandler!.handleConfigOperation(options);
   }
 
   /**
    * Handle sync operations - delegates to SyncHandler
    */
   async handleSyncOperation(options: any) {
-    const { SyncHandler } = await import('./handlers/SyncHandlerV2.js');
-    const handler = new SyncHandler();
-    return handler.handleSyncOperation(options, this.getPersonaIndicator());
+    await this.ensureInitialized();
+    return this.syncHandler!.handleSyncOperation(options);
+  }
+
+  async dispose(): Promise<void> {
+    await this.container.dispose();
   }
 
   /**
@@ -5484,126 +588,8 @@ Placeholders for custom format:
     includeTriggers?: boolean; 
     includeDescriptions?: boolean;
   }) {
-    try {
-      // Validate the query parameter
-      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
-          }]
-        };
-      }
-
-      // Import portfolio index manager
-      const { PortfolioIndexManager } = await import('./portfolio/PortfolioIndexManager.js');
-      const indexManager = PortfolioIndexManager.getInstance();
-
-      // Parse element type if provided
-      let elementType: ElementType | undefined;
-      if (options.elementType) {
-        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
-        if (!validTypes.includes(options.elementType)) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
-            }]
-          };
-        }
-        elementType = options.elementType as ElementType;
-      }
-
-      // Build search options
-      const searchOptions = {
-        elementType,
-        fuzzyMatch: options.fuzzyMatch !== false, // Default to true
-        maxResults: options.maxResults || 20,
-        includeKeywords: options.includeKeywords !== false,
-        includeTags: options.includeTags !== false,
-        includeTriggers: options.includeTriggers !== false,
-        includeDescriptions: options.includeDescriptions !== false
-      };
-
-      // Perform the search
-      const results = await indexManager.search(options.query, searchOptions);
-
-      // Format the results
-      let text = `${this.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
-      text += `**Query**: "${options.query}"\n`;
-      
-      if (elementType) {
-        text += `**Type Filter**: ${elementType}\n`;
-      }
-      
-      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
-
-      if (results.length === 0) {
-        text += `No elements found matching your search criteria.\n\n`;
-        text += `**Tips for better results:**\n`;
-        text += `• Try different keywords or partial names\n`;
-        text += `• Remove the type filter to search all element types\n`;
-        text += `• Check spelling and try synonyms\n`;
-        text += `• Use the list_elements tool to see all available content`;
-      } else {
-        text += `**Results:**\n\n`;
-        
-        for (const result of results) {
-          const { entry, matchType } = result;
-          const icon = this.getElementIcon(entry.elementType);
-          
-          text += `${icon} **${entry.metadata.name}**\n`;
-          text += `   📁 Type: ${entry.elementType}\n`;
-          text += `   🎯 Match: ${matchType}\n`;
-          
-          if (entry.metadata.description) {
-            const desc = entry.metadata.description.length > 100 
-              ? entry.metadata.description.substring(0, 100) + '...'
-              : entry.metadata.description;
-            text += `   📝 ${desc}\n`;
-          }
-          
-          if (entry.metadata.tags && entry.metadata.tags.length > 0) {
-            text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
-          }
-
-          // FIX (#1213): Use correct file extension based on element type
-          // Previously: Hardcoded .md for all types (wrong for memories which are .yaml)
-          // Now: Get correct extension from PortfolioManager
-          const fileExtension = this.portfolioManager.getFileExtension(entry.elementType);
-          text += `   📄 File: ${entry.filename}${fileExtension}\n\n`;
-        }
-        
-        if (results.length >= searchOptions.maxResults) {
-          text += `⚠️ Results limited to ${searchOptions.maxResults}. Refine your search for more specific results.\n\n`;
-        }
-        
-        text += `💡 **Next steps:**\n`;
-        text += `• Use get_element_details to see full content\n`;
-        text += `• Use activate_element to activate elements\n`;
-        text += `• Use submit_collection_content to share with the community`;
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text
-        }]
-      };
-
-    } catch (error: any) {
-      ErrorHandler.logError('DollhouseMCPServer.searchPortfolio', error, { 
-        query: options.query,
-        elementType: options.elementType 
-      });
-      
-      return {
-        content: [{
-          type: "text", 
-          text: `${this.getPersonaIndicator()}❌ Search failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.searchPortfolio(options);
   }
 
   /**
@@ -5618,148 +604,8 @@ Placeholders for custom format:
     pageSize?: number;
     sortBy?: string;
   }) {
-    try {
-      // Validate the query parameter
-      if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `${this.getPersonaIndicator()}❌ Search query is required and must be a non-empty string.`
-          }]
-        };
-      }
-
-      // Import unified index manager
-      const { UnifiedIndexManager } = await import('./portfolio/UnifiedIndexManager.js');
-      const { ElementType } = await import('./portfolio/types.js');
-      const unifiedManager = UnifiedIndexManager.getInstance();
-
-      // Parse element type if provided
-      let elementType: ElementType | undefined;
-      if (options.elementType) {
-        const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
-        if (!validTypes.includes(options.elementType)) {
-          return {
-            content: [{
-              type: "text",
-              text: `${this.getPersonaIndicator()}❌ Invalid element type. Valid types: ${validTypes.join(', ')}`
-            }]
-          };
-        }
-        elementType = options.elementType as ElementType;
-      }
-
-      // Parse sources (default to local and github)
-      const sources = options.sources || ['local', 'github'];
-      const includeLocal = sources.includes('local');
-      const includeGitHub = sources.includes('github');
-      const includeCollection = sources.includes('collection');
-
-      // Build search options
-      const searchOptions = {
-        query: options.query,
-        includeLocal,
-        includeGitHub,
-        includeCollection,
-        elementType,
-        page: options.page || 1,
-        pageSize: options.pageSize || 20,
-        sortBy: (options.sortBy as any) || 'relevance'
-      };
-
-      // Perform the unified search
-      const results = await unifiedManager.search(searchOptions);
-
-      // Format the results
-      let text = `${this.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
-      text += `**Query**: "${options.query}"\n`;
-      text += `**Sources**: ${sources.join(', ')}\n`;
-      
-      if (elementType) {
-        text += `**Type Filter**: ${elementType}\n`;
-      }
-      
-      text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
-
-      if (results.length === 0) {
-        text += `No elements found matching your search criteria.\n\n`;
-        text += `**Tips for better results:**\n`;
-        text += `• Try different keywords or partial names\n`;
-        text += `• Remove the type filter to search all element types\n`;
-        text += `• Include more sources: local, github, collection\n`;
-        text += `• Check spelling and try synonyms\n`;
-        text += `• Use browse_collection to explore available content`;
-      } else {
-        text += `**Results:**\n\n`;
-        
-        for (const result of results) {
-          const { entry, source, matchType, score, isDuplicate, versionConflict } = result;
-          const icon = this.getElementIcon(entry.elementType);
-          const sourceIcon = this.getSourceIcon(source);
-          
-          text += `${icon} **${entry.name}** ${sourceIcon}\n`;
-          text += `   📁 Type: ${entry.elementType} | Source: ${source}\n`;
-          text += `   🎯 Match: ${matchType} | Score: ${score.toFixed(2)}\n`;
-          
-          if (entry.description) {
-            const desc = entry.description.length > 100 
-              ? entry.description.substring(0, 100) + '...'
-              : entry.description;
-            text += `   📝 ${desc}\n`;
-          }
-
-          if (entry.version) {
-            text += `   🏷️ Version: ${entry.version}\n`;
-          }
-
-          // Show duplicate information
-          if (isDuplicate) {
-            text += `   ⚠️ **Duplicate detected across sources**\n`;
-            if (versionConflict) {
-              text += `   🔄 Version conflict - Recommended: ${versionConflict.recommended} (${versionConflict.reason})\n`;
-            }
-          }
-          
-          text += `\n`;
-        }
-        
-        const hasMore = results.length >= searchOptions.pageSize;
-        if (hasMore) {
-          const nextPage = searchOptions.page + 1;
-          text += `⚠️ Results limited to ${searchOptions.pageSize}. Use page=${nextPage} for more results.\n\n`;
-        }
-        
-        text += `💡 **Next steps:**\n`;
-        text += `• Use get_element_details to see full content\n`;
-        text += `• Use install_collection_content for collection items\n`;
-        text += `• Use activate_element for local elements\n`;
-        text += `• Check for duplicates before submitting new content`;
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text
-        }]
-      };
-
-    } catch (error: any) {
-      const { ErrorHandler } = await import('./utils/ErrorHandler.js');
-      const { SecureErrorHandler } = await import('./security/errorHandler.js');
-      
-      ErrorHandler.logError('DollhouseMCPServer.searchAll', error, { 
-        query: options.query,
-        sources: options.sources,
-        elementType: options.elementType 
-      });
-      
-      return {
-        content: [{
-          type: "text", 
-          text: `${this.getPersonaIndicator()}❌ Unified search failed: ${SecureErrorHandler.sanitizeError(error).message}`
-        }]
-      };
-    }
+    await this.ensureInitialized();
+    return this.portfolioHandler!.searchAll(options);
   }
 
   /**
@@ -5771,7 +617,7 @@ Placeholders for custom format:
     limit: number;
     threshold: number;
   }) {
-    return this.enhancedIndexHandler.findSimilarElements(options);
+    return this.enhancedIndexHandler!.findSimilarElements(options);
   }
 
   /**
@@ -5782,7 +628,7 @@ Placeholders for custom format:
     elementType?: string;
     relationshipTypes?: string[];
   }) {
-    return this.enhancedIndexHandler.getElementRelationships(options);
+    return this.enhancedIndexHandler!.getElementRelationships(options);
   }
 
   /**
@@ -5792,331 +638,102 @@ Placeholders for custom format:
     verb: string;
     limit: number;
   }) {
-    return this.enhancedIndexHandler.searchByVerb(options);
+    return this.enhancedIndexHandler!.searchByVerb(options);
   }
 
   /**
    * Get statistics about Enhanced Index relationships
    */
   async getRelationshipStats() {
-    return this.enhancedIndexHandler.getRelationshipStats();
-  }
-
-  /**
-   * Get icon for source type
-   */
-  private getSourceIcon(source: string): string {
-    const icons: { [key: string]: string } = {
-      local: '💻',
-      github: '🐙',
-      collection: '🌐'
-    };
-    return icons[source] || '📁';
-  }
-
-  /**
-   * Get icon for element type
-   */
-  private getElementIcon(elementType: ElementType): string {
-    const icons = {
-      personas: '🎭',
-      skills: '🎯',
-      templates: '📄',
-      agents: '🤖',
-      memories: '🧠',
-      ensembles: '🎼'
-    };
-    return icons[elementType] || '📁';
-  }
-
-  /**
-   * Helper method to count elements in a directory
-   */
-  private async countElementsInDir(dirPath: string): Promise<number> {
-    try {
-      // Check if directory exists and is accessible
-      await fs.access(dirPath);
-      const files = await fs.readdir(dirPath);
-      
-      // Count all element files (.md, .json, .yaml) to support all element types
-      // - Personas: .md files
-      // - Skills: .md files  
-      // - Templates: .md or .yaml files
-      // - Agents: .md files
-      return files.filter(file => 
-        file.endsWith('.md') || 
-        file.endsWith('.json') || 
-        file.endsWith('.yaml')
-      ).length;
-    } catch (error) {
-      return 0;
-    }
-  }
-
-  /**
-   * Helper method to get list of elements by type
-   */
-  private async getElementsList(elementType: string): Promise<string[]> {
-    try {
-      const localPortfolioManager = PortfolioManager.getInstance();
-      let elementTypeEnum: ElementType;
-      
-      switch (elementType) {
-        case 'personas':
-          elementTypeEnum = ElementType.PERSONA;
-          break;
-        case 'skills':
-          elementTypeEnum = ElementType.SKILL;
-          break;
-        case 'templates':
-          elementTypeEnum = ElementType.TEMPLATE;
-          break;
-        case 'agents':
-          elementTypeEnum = ElementType.AGENT;
-          break;
-        case 'memories':
-          elementTypeEnum = ElementType.MEMORY;
-          break;
-        default:
-          // Instead of silently returning empty array, throw descriptive error
-          const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories'];
-          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
-      }
-
-      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
-      
-      // Check if directory exists and is accessible
-      await fs.access(dirPath);
-      const files = await fs.readdir(dirPath);
-      
-      // Filter and extract names for all element file types
-      // - Personas: .md files
-      // - Skills: .md files  
-      // - Templates: .md or .yaml files
-      // - Agents: .md files
-      return files
-        .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
-        .map(file => {
-          // Remove file extension to get element name
-          if (file.endsWith('.md')) return file.replace('.md', '');
-          if (file.endsWith('.json')) return file.replace('.json', '');
-          if (file.endsWith('.yaml')) return file.replace('.yaml', '');
-          return file;
-        });
-    } catch (error: any) {
-      // Check if this is our validation error for invalid element types
-      if (error.message && error.message.includes('Invalid element type:')) {
-        throw error; // Re-throw validation errors for debugging
-      }
-      
-      // For file system errors, provide context about the operation
-      const errorMessage = error.code === 'ENOENT' 
-        ? `Element directory not found for type '${elementType}'. Directory may not exist yet.`
-        : `Failed to read elements directory for type '${elementType}': ${error.message || 'Unknown file system error'}`;
-      
-      logger.warn('Error in getElementsList', { 
-        elementType, 
-        error: error.message, 
-        code: error.code 
-      });
-      
-      throw new Error(errorMessage);
-    }
-  }
-
-  /**
-   * Helper method to load element by type
-   * Returns an object with content, filename, and type properties
-   */
-  private async loadElementByType(elementName: string, elementType: string): Promise<any> {
-    // SECURITY: Sanitize elementName early to use in error messages too
-    const sanitizedName = path.basename(elementName);
-    
-    try {
-      const localPortfolioManager = PortfolioManager.getInstance();
-      let elementTypeEnum: ElementType;
-      
-      switch (elementType) {
-        case 'personas':
-          elementTypeEnum = ElementType.PERSONA;
-          break;
-        case 'skills':
-          elementTypeEnum = ElementType.SKILL;
-          break;
-        case 'templates':
-          elementTypeEnum = ElementType.TEMPLATE;
-          break;
-        case 'agents':
-          elementTypeEnum = ElementType.AGENT;
-          break;
-        case 'memories':
-          elementTypeEnum = ElementType.MEMORY;
-          break;
-        default:
-          // Instead of silently returning null, throw descriptive error
-          const validTypes = ['personas', 'skills', 'templates', 'agents', 'memories'];
-          throw new Error(`Invalid element type: '${elementType}'. Valid types are: ${validTypes.join(', ')}`);
-      }
-
-      const dirPath = localPortfolioManager.getElementDir(elementTypeEnum);
-      
-      // FIX: Check for actual file extensions used by elements (.md, .json, .yaml)
-      // Elements are stored as markdown files with YAML frontmatter, not JSON files
-      // Priority order: .md (primary format), .json (legacy), .yaml/.yml (config)
-      const extensions = ['.md', '.json', '.yaml', '.yml'];
-      let content: string | null = null;
-      let foundFile: string | null = null;
-      
-      // Define reasonable file size limit (10MB)
-      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-      
-      for (const ext of extensions) {
-        const filePath = path.join(dirPath, `${sanitizedName}${ext}`);
-        try {
-          // Check file size before reading to prevent memory issues
-          const stats = await fs.stat(filePath);
-          if (stats.size > MAX_FILE_SIZE) {
-            throw new Error(`File size exceeds limit of 10MB: ${stats.size} bytes`);
-          }
-          
-          content = await fs.readFile(filePath, 'utf-8');
-          foundFile = filePath;
-          break; // Found the file, stop searching
-        } catch (err: any) {
-          // File doesn't exist with this extension, try the next one
-          if (err.code !== 'ENOENT') {
-            throw err; // Re-throw non-file-not-found errors
-          }
-        }
-      }
-      
-      // FIX: Only check foundFile, not content (empty files are valid)
-      if (!foundFile) {
-        throw Object.assign(new Error(`File not found`), { code: 'ENOENT' });
-      }
-      
-      // Return a minimal IElement-like object that portfolioManager.saveElement can handle
-      // This preserves the raw markdown content for syncing to GitHub
-      return {
-        // IElement required properties
-        id: `${elementType}_${sanitizedName}_${Date.now()}`,
-        type: elementTypeEnum,
-        version: '1.0.0',
-        metadata: {
-          name: sanitizedName,
-          description: `Loaded from ${path.basename(foundFile)}`,
-          author: 'unknown',
-          created: new Date().toISOString(),
-          modified: new Date().toISOString(),
-          tags: []
-        },
-        
-        // IElement required methods (minimal implementations for sync)
-        validate: () => ({ 
-          isValid: true, 
-          errors: [] as any[], 
-          warnings: [] as any[] 
-        }),
-        serialize: () => content || '',
-        deserialize: () => { /* no-op */ },
-        getStatus: () => ({ status: 'active' as const }),
-        
-        // Additional properties for portfolio sync
-        content: content || '',
-        filename: path.basename(foundFile)
-      } as any; // Type assertion needed since we're duck-typing IElement
-    } catch (error: any) {
-      // Check if this is our validation error for invalid element types
-      if (error.message && error.message.includes('Invalid element type:')) {
-        throw error; // Re-throw validation errors for debugging
-      }
-      
-      // Provide specific error messages for common file system errors
-      let errorMessage: string;
-      
-      if (error.code === 'ENOENT') {
-        errorMessage = `Element '${sanitizedName}' not found in ${elementType}. Searched for: ${sanitizedName}.md, ${sanitizedName}.json, ${sanitizedName}.yaml, ${sanitizedName}.yml`;
-      } else if (error instanceof SyntaxError) {
-        errorMessage = `Element '${sanitizedName}' in ${elementType} contains invalid content: ${error.message}`;
-      } else {
-        errorMessage = `Failed to load element '${sanitizedName}' from ${elementType}: ${error.message || 'Unknown error'}`;
-      }
-      
-      logger.warn('Error in loadElementByType', { 
-        elementName: sanitizedName, 
-        originalName: elementName !== sanitizedName ? elementName : undefined,
-        elementType, 
-        error: error.message, 
-        code: error.code 
-      });
-      
-      throw new Error(errorMessage);
-    }
+    return this.enhancedIndexHandler!.getRelationshipStats();
   }
 
   async run() {
+    logger.info("DEBUG: DollhouseMCPServer.run() started.");
     logger.info("Starting DollhouseMCP server...");
     // Docker build verification - proves we're running fresh code
     logger.info("BUILD VERIFICATION: Running build from 2025-08-17 16:30 UTC - PR606 ARM64 fix");
 
-    // FIX #610: Initialize portfolio and complete setup BEFORE connecting to MCP
-    // This ensures personas and portfolio are ready when MCP commands arrive
+    const timer = this.container.resolve<StartupTimer>('StartupTimer');
+
+    // Issue #706: Critical path only — get to connect() as fast as possible
+    // Non-critical work (memory auto-load, activation restore, etc.) is
+    // deferred to completeDeferredSetup() which runs post-connect.
     try {
-      // Initialize ConfigManager to load user settings
-      await this.configManager.initialize();
-
+      timer.startPhase('portfolio_prepare', true);
       await this.initializePortfolio();
+      timer.endPhase('portfolio_prepare');
+
+      timer.startPhase('handler_creation', true);
       await this.completeInitialization();
+      timer.endPhase('handler_creation');
+
+      // Initialize operational telemetry (async, non-blocking, never throws)
+      const operationalTelemetry = this.container.resolve<OperationalTelemetry>('OperationalTelemetry');
+      operationalTelemetry.initialize().catch(() => {
+        // Telemetry errors are logged internally, safe to ignore here
+      });
+
       logger.info("Portfolio and personas initialized successfully");
-
-      // Setup MCP resource handlers (conditional based on config)
-      await this.setupResourceHandlers();
-
-      // Start background validation service for memory security
-      backgroundValidator.start();
-      logger.info("Background validation service started");
-
-      // Output message that Docker tests can detect
       logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
+      logger.info("DEBUG: DollhouseMCPServer.run() completed initialization successfully.");
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
       throw error; // Re-throw to prevent server from starting with incomplete initialization
     }
 
     const transport = new StdioServerTransport();
-    
+
     // Set up graceful shutdown handlers
     const cleanup = async () => {
       logger.info("Shutting down DollhouseMCP server...");
 
       try {
-        // Stop background validation service
-        backgroundValidator.stop();
-
-        // Clean up GitHub auth manager
-        if (this.githubAuthManager) {
-          await this.githubAuthManager.cleanup();
-        }
-
-        // Clean up any other resources
-
+        await this.container.dispose();
         logger.info("Cleanup completed");
       } catch (error) {
         logger.error("Error during cleanup", { error });
       }
-      
+
       process.exit(0);
     };
-    
+
     // Register shutdown handlers
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
     process.on('SIGHUP', cleanup);
-    
+
+    // Connect ASAP — tools are registered, server can accept requests
+    timer.startPhase('mcp_connect', true);
     await this.server.connect(transport);
+    timer.endPhase('mcp_connect');
+    timer.markConnect();
+
     // Mark that MCP is now connected - no more console output allowed
     logger.setMCPConnected();
+
+    // Issue #706 Phase 3: Emit READY sentinel for bridge clients
+    process.stderr.write('DOLLHOUSEMCP_READY\n');
+
     logger.info("DollhouseMCP server running on stdio");
+
+    // Issue #706 Phase 2: Deferred setup — runs post-connect, non-blocking
+    // Pattern encryption, background validator, memory auto-load, activation
+    // restore, log hooks, danger zone init all move here.
+    const deferredPromise = this.container.completeDeferredSetup();
+    deferredPromise.catch(err => logger.warn('[Startup] Deferred setup error:', err));
+
+    // Issue #706 Phase 4: Wire deferred promise into ServerSetup for request buffering
+    const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
+    serverSetup.setDeferredSetupPromise(deferredPromise);
+
+    // Log startup report after deferred setup completes
+    deferredPromise.then(() => {
+      const report = timer.getReport();
+      logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
+        `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
+        `total ${report.totalMs}ms`);
+    }).catch(() => { /* already logged */ });
   }
 }
 
@@ -6124,22 +741,27 @@ Placeholders for custom format:
 
 // Only start the server if this file is being run directly (not imported by tests)
 // Handle different execution methods (direct, npx, CLI)
-const isDirectExecution = import.meta.url === `file://${process.argv[1]}`;
+const scriptPath = process.argv?.[1] ? path.normalize(process.argv[1]) : '';
+const isDirectExecution =
+  scriptPath.endsWith(`${path.sep}dist${path.sep}index.js`) ||
+  scriptPath.endsWith(`${path.sep}src${path.sep}index.ts`);
 const isNpxExecution = process.env.npm_execpath?.includes('npx');
 const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || process.argv[1]?.endsWith('\\dollhousemcp');
-const isTest = process.env.JEST_WORKER_ID;
+const isTest = process.env.JEST_WORKER_ID; // This is set when Jest runs tests
+const isTestMode = process.env.TEST_MODE === 'true'; // Check for TEST_MODE environment variable
+const dollhouseDebugFlag = process.env.DOLLHOUSE_DEBUG?.toLowerCase();
+const isDebugStartupLogging = dollhouseDebugFlag === 'true' || dollhouseDebugFlag === '1';
 
 // Progressive startup with retries for npx/CLI execution
 const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
 
 async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promise<void> {
+  if (isDebugStartupLogging) {
+    console.error("DEBUG: startServerWithRetry called.");
+  }
   try {
-    // Initialize operational telemetry (async, non-blocking, never throws)
-    OperationalTelemetry.initialize().catch(() => {
-      // Telemetry errors are logged internally, safe to ignore here
-    });
-
-    const server = new DollhouseMCPServer();
+    const container = new DollhouseContainer();
+    const server = new DollhouseMCPServer(container);
     await server.run();
   } catch (error) {
     if (retriesLeft > 0 && (isNpxExecution || isCliExecution)) {
@@ -6151,15 +773,51 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     }
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
-    console.error("[DollhouseMCP] Server startup failed");
+    console.error("[DollhouseMCP] Server startup failed", error); // Added error object
     process.exit(1);
   }
 }
 
-if ((isDirectExecution || isNpxExecution || isCliExecution) && !isTest) {
-  startServerWithRetry().catch(() => {
-    // Note: Using console.error here is intentional as it's the final error before exit
-    console.error("[DollhouseMCP] Server startup failed");
-    process.exit(1);
-  });
+if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
+  // Issue #704: --web flag starts the portfolio web UI instead of MCP server
+  const isWebMode = process.argv.includes('--web');
+  if (isWebMode) {
+    // Issue #796: Bootstrap DI container for web-only mode so API routes
+    // go through MCPAQLHandler (validated, cached, gatekeeper-checked)
+    (async () => {
+      const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+      const portArg = process.argv.find(a => a.startsWith('--port='));
+      const port = portArg ? parseInt(portArg.split('=')[1], 10) : undefined;
+      const noBrowser = process.argv.includes('--no-open');
+
+      let mcpAqlHandler;
+      try {
+        const container = new DollhouseContainer();
+        await container.preparePortfolio();
+        const bundle = await container.bootstrapHandlers();
+        await container.completeDeferredSetup();
+        mcpAqlHandler = bundle.mcpAqlHandler;
+        console.error("[DollhouseMCP] Container bootstrapped — web routes using MCP-AQL Gateway");
+      } catch (err) {
+        console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
+        console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
+        console.error("[DollhouseMCP] This may indicate a corrupt portfolio or missing dependencies.");
+      }
+
+      const { startWebServer } = await import('./web/server.js');
+      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler });
+    })().catch(err => {
+      console.error("[DollhouseMCP] Web UI failed to start:", err);
+      process.exit(1);
+    });
+  } else {
+    if (isDebugStartupLogging) {
+      console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
+    }
+    startServerWithRetry().catch(() => {
+      // Note: Using console.error here is intentional as it's the final error before exit
+      console.error("[DollhouseMCP] Server startup failed");
+      process.exit(1);
+    });
+  }
 }

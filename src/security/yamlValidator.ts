@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
-import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 
 const PersonaMetadataSchema = z.object({
@@ -175,6 +174,7 @@ export class YamlValidator {
     
     // Remove null bytes and normalize whitespace
     sanitized = sanitized
+      // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
       .replaceAll(/\u0000/g, '')          // NOSONAR - Remove null bytes for security
       .replaceAll(/[\r\n]+/g, ' ')      // Replace newlines with spaces
       .trim();

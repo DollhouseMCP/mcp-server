@@ -8,19 +8,28 @@ import { CollectionIndexCache } from '../cache/CollectionIndexCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
 import { logger } from '../utils/logger.js';
 import { normalizeSearchTerm, validateSearchQuery, isSearchMatch, debugNormalization } from '../utils/searchUtils.js';
-import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { IndexEntry, SearchResults, SearchOptions, CollectionIndex } from '../types/collection.js';
+import { InvertedIndex } from './InvertedIndex.js';
 
 export class CollectionSearch {
   private githubClient: GitHubClient;
   private collectionCache: CollectionCache;
   private indexCache: CollectionIndexCache;
   private searchBaseUrl = 'https://api.github.com/search/code';
-  
-  constructor(githubClient: GitHubClient, collectionCache?: CollectionCache) {
+
+  // Inverted index for fast search
+  private invertedIndex: InvertedIndex | null = null;
+  private lastIndexVersion: string | null = null;
+
+  constructor(
+    githubClient: GitHubClient,
+    collectionCache: CollectionCache,
+    indexCache: CollectionIndexCache
+  ) {
     this.githubClient = githubClient;
-    this.collectionCache = collectionCache || new CollectionCache();
-    this.indexCache = new CollectionIndexCache(githubClient);
+    this.collectionCache = collectionCache;
+    this.indexCache = indexCache;
   }
   
   /**
@@ -289,32 +298,132 @@ export class CollectionSearch {
    */
   private async searchFromIndex(query: string, options: SearchOptions): Promise<SearchResults> {
     const index = await this.indexCache.getIndex();
+
+    // Build or rebuild inverted index if needed
+    await this.ensureInvertedIndex(index);
+
+    // If inverted index is available, use it for fast search
+    if (this.invertedIndex && !this.invertedIndex.isEmpty()) {
+      return this.searchWithInvertedIndex(query, options);
+    }
+
+    // Fallback to linear search if inverted index is not available
+    return this.searchWithLinearScan(query, options, index);
+  }
+
+  /**
+   * Ensure inverted index is built and up-to-date
+   */
+  private async ensureInvertedIndex(collectionIndex: CollectionIndex): Promise<void> {
+    // Check if we need to rebuild the index
+    const needsRebuild = !this.invertedIndex ||
+      this.lastIndexVersion !== collectionIndex.version ||
+      this.invertedIndex.isEmpty();
+
+    if (needsRebuild) {
+      logger.debug('Building inverted index...');
+      const allEntries = this.flattenIndexEntries(collectionIndex);
+
+      this.invertedIndex = new InvertedIndex();
+      this.invertedIndex.build(allEntries);
+      this.lastIndexVersion = collectionIndex.version;
+
+      const stats = this.invertedIndex.getStats();
+      logger.debug(`Inverted index built: ${stats.totalTokens} tokens, ${stats.totalEntries} entries, ${stats.buildTimeMs.toFixed(2)}ms`);
+    }
+  }
+
+  /**
+   * Search using inverted index (fast O(k) lookup)
+   */
+  private searchWithInvertedIndex(query: string, options: SearchOptions): SearchResults {
+    if (!this.invertedIndex) {
+      throw new Error('Inverted index not initialized');
+    }
+
+    // Search the inverted index
+    const searchResults = this.invertedIndex.search(query);
+
+    // Get full entries from results
+    let matchedEntries = searchResults
+      .map(result => {
+        const entry = this.invertedIndex!.getEntry(result.entryId);
+        return entry ? { entry, score: result.score } : null;
+      })
+      .filter((item): item is { entry: IndexEntry; score: number } => item !== null);
+
+    // Filter by element type if specified
+    if (options.elementType) {
+      matchedEntries = matchedEntries.filter(item => item.entry.type === options.elementType);
+    }
+
+    // Filter by category if specified
+    if (options.category) {
+      matchedEntries = matchedEntries.filter(item => item.entry.category === options.category);
+    }
+
+    // Sort by relevance (already sorted by inverted index, but apply sortBy option)
+    const sortedEntries = this.sortSearchResultsWithScores(
+      matchedEntries,
+      options.sortBy || 'relevance',
+      query
+    );
+
+    // Extract just the entries (scores already used for sorting)
+    const entries = sortedEntries.map(item => item.entry);
+
+    // Apply pagination
+    const page = options.page || 1;
+    const pageSize = options.pageSize || 25;
+    const startIndex = (page - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    const paginatedEntries = entries.slice(startIndex, endIndex);
+
+    return {
+      items: paginatedEntries,
+      total: entries.length,
+      page,
+      pageSize,
+      hasMore: endIndex < entries.length,
+      query,
+      searchTime: 0 // Will be set by caller
+    };
+  }
+
+  /**
+   * Fallback to linear search (legacy O(n) scan)
+   */
+  private searchWithLinearScan(
+    query: string,
+    options: SearchOptions,
+    index: CollectionIndex
+  ): SearchResults {
     const allEntries = this.flattenIndexEntries(index);
-    
+
     // Filter by element type if specified
     let filteredEntries = allEntries;
     if (options.elementType) {
       filteredEntries = allEntries.filter(entry => entry.type === options.elementType);
     }
-    
+
     // Filter by category if specified
     if (options.category) {
       filteredEntries = filteredEntries.filter(entry => entry.category === options.category);
     }
-    
+
     // Search matching
     const matchedEntries = this.performIndexSearch(query, filteredEntries);
-    
+
     // Sort results
     const sortedEntries = this.sortSearchResults(matchedEntries, options.sortBy || 'relevance', query);
-    
+
     // Apply pagination
     const page = options.page || 1;
     const pageSize = options.pageSize || 25;
     const startIndex = (page - 1) * pageSize;
     const endIndex = startIndex + pageSize;
     const paginatedEntries = sortedEntries.slice(startIndex, endIndex);
-    
+
     return {
       items: paginatedEntries,
       total: sortedEntries.length,
@@ -331,11 +440,11 @@ export class CollectionSearch {
    */
   private flattenIndexEntries(index: CollectionIndex): IndexEntry[] {
     const entries: IndexEntry[] = [];
-    
-    for (const [elementType, typeEntries] of Object.entries(index.index)) {
+
+    for (const [, typeEntries] of Object.entries(index.index)) {
       entries.push(...typeEntries);
     }
-    
+
     return entries;
   }
 
@@ -343,18 +452,7 @@ export class CollectionSearch {
    * Perform search matching on index entries
    */
   private performIndexSearch(query: string, entries: IndexEntry[]): IndexEntry[] {
-    const normalizedQuery = normalizeSearchTerm(query);
-    const queryWords = normalizedQuery.split(/\s+/).filter(word => word.length > 0);
-    
     return entries.filter(entry => {
-      // Search in multiple fields
-      const searchableText = [
-        entry.name,
-        entry.description,
-        entry.path,
-        ...entry.tags
-      ].join(' ').toLowerCase();
-      
       // Use existing search utilities for consistency
       const nameMatch = isSearchMatch(query, entry.name);
       const descMatch = isSearchMatch(query, entry.description);
@@ -370,7 +468,7 @@ export class CollectionSearch {
    */
   private sortSearchResults(entries: IndexEntry[], sortBy: 'relevance' | 'name' | 'date', query: string): IndexEntry[] {
     const sorted = [...entries];
-    
+
     switch (sortBy) {
       case 'name':
         sorted.sort((a, b) => a.name.localeCompare(b.name));
@@ -388,7 +486,34 @@ export class CollectionSearch {
         });
         break;
     }
-    
+
+    return sorted;
+  }
+
+  /**
+   * Sort search results with pre-calculated scores
+   */
+  private sortSearchResultsWithScores(
+    entries: Array<{ entry: IndexEntry; score: number }>,
+    sortBy: 'relevance' | 'name' | 'date',
+    _query: string
+  ): Array<{ entry: IndexEntry; score: number }> {
+    const sorted = [...entries];
+
+    switch (sortBy) {
+      case 'name':
+        sorted.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+        break;
+      case 'date':
+        sorted.sort((a, b) => new Date(b.entry.created).getTime() - new Date(a.entry.created).getTime());
+        break;
+      case 'relevance':
+      default:
+        // Already sorted by score from inverted index, but can re-sort if needed
+        sorted.sort((a, b) => b.score - a.score);
+        break;
+    }
+
     return sorted;
   }
 

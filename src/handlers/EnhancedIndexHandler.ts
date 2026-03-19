@@ -8,6 +8,10 @@
  * - Uses centralized element ID parsing utilities
  * - Consistent ID format handling
  * - Better error handling for invalid IDs
+ *
+ * Uses dependency injection for all services:
+ * - EnhancedIndexManager for semantic search and relationships
+ * - PersonaIndicatorService for persona indicator formatting
  */
 
 import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
@@ -18,15 +22,14 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { parseElementIdWithFallback, formatElementId } from '../utils/elementId.js';
 import { parseRelationship, isParsedRelationship } from '../portfolio/types/RelationshipTypes.js';
+import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
+import { normalizeElementTypeInput } from './element-crud/helpers.js';
 
 export class EnhancedIndexHandler {
-  private enhancedIndexManager: EnhancedIndexManager;
-  private personaIndicator: string;
-
-  constructor(personaIndicator: string = '') {
-    this.enhancedIndexManager = EnhancedIndexManager.getInstance();
-    this.personaIndicator = personaIndicator;
-  }
+  constructor(
+    private readonly enhancedIndexManager: EnhancedIndexManager,
+    private readonly indicatorService: PersonaIndicatorService
+  ) {}
 
   /**
    * Find semantically similar elements using NLP scoring
@@ -72,7 +75,7 @@ export class EnhancedIndexHandler {
         // Try to recover by forcing rebuild
         try {
           await this.enhancedIndexManager.getIndex({ forceRebuild: true });
-        } catch (rebuildError) {
+        } catch {
           throw new Error('Enhanced Index is unavailable. Please try again later.');
         }
       }
@@ -119,7 +122,7 @@ export class EnhancedIndexHandler {
         .slice(0, options.limit);
 
       // Format results
-      let text = `${this.personaIndicator}🔍 **Similar Elements**\n\n`;
+      let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Similar Elements**\n\n`;
       text += `**Reference**: ${options.elementName}\n`;
       if (options.elementType) {
         text += `**Type**: ${options.elementType}\n`;
@@ -151,7 +154,7 @@ export class EnhancedIndexHandler {
       return {
         content: [{
           type: "text",
-          text: `${this.personaIndicator}❌ Failed to find similar elements: ${SecureErrorHandler.sanitizeError(error).message}`
+          text: `${this.indicatorService.getPersonaIndicator()}❌ Failed to find similar elements: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -199,6 +202,16 @@ export class EnhancedIndexHandler {
         }
       });
 
+      // Issue #749: Normalize element type (singular→plural) before ID formatting
+      if (options.elementType) {
+        const { type: resolvedType } = normalizeElementTypeInput(options.elementType);
+        if (resolvedType) {
+          options.elementType = resolvedType;
+        } else {
+          logger.warn(`Unknown element type '${options.elementType}' in relationship query — proceeding with original value`);
+        }
+      }
+
       // FIX: Use centralized element ID formatting
       // If no element type provided, use full element name as-is (may already include type)
       const elementId = options.elementType ?
@@ -219,7 +232,7 @@ export class EnhancedIndexHandler {
       }
 
       // Format results
-      let text = `${this.personaIndicator}🔗 **Element Relationships**\n\n`;
+      let text = `${this.indicatorService.getPersonaIndicator()}🔗 **Element Relationships**\n\n`;
       text += `**Element**: ${options.elementName}\n`;
       if (options.elementType) {
         text += `**Type**: ${options.elementType}\n`;
@@ -247,7 +260,8 @@ export class EnhancedIndexHandler {
                 text += '\n';
               } else {
                 // Fallback for invalid relationships
-                const parsed = parseElementIdWithFallback(rel.element);
+                const idToParse = typeof rel === 'string' ? rel : (rel as any).element;
+                const parsed = parseElementIdWithFallback(idToParse);
                 const icon = this.getElementIcon(parsed.type);
                 text += `  ${icon} ${parsed.name} ⚠️\n`;
               }
@@ -268,7 +282,7 @@ export class EnhancedIndexHandler {
       return {
         content: [{
           type: "text",
-          text: `${this.personaIndicator}❌ Failed to get relationships: ${SecureErrorHandler.sanitizeError(error).message}`
+          text: `${this.indicatorService.getPersonaIndicator()}❌ Failed to get relationships: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -314,7 +328,7 @@ export class EnhancedIndexHandler {
       const limited = results.slice(0, options.limit);
 
       // Format results
-      let text = `${this.personaIndicator}🎯 **Elements for Action: "${options.verb}"**\n\n`;
+      let text = `${this.indicatorService.getPersonaIndicator()}🎯 **Elements for Action: "${options.verb}"**\n\n`;
       text += `**Found**: ${limited.length} element${limited.length === 1 ? '' : 's'}\n\n`;
 
       if (limited.length === 0) {
@@ -347,7 +361,7 @@ export class EnhancedIndexHandler {
       return {
         content: [{
           type: "text",
-          text: `${this.personaIndicator}❌ Failed to search by verb: ${SecureErrorHandler.sanitizeError(error).message}`
+          text: `${this.indicatorService.getPersonaIndicator()}❌ Failed to search by verb: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }
@@ -380,7 +394,7 @@ export class EnhancedIndexHandler {
       const index = await this.enhancedIndexManager.getIndex();
 
       // Format results
-      let text = `${this.personaIndicator}📊 **Enhanced Index Statistics**\n\n`;
+      let text = `${this.indicatorService.getPersonaIndicator()}📊 **Enhanced Index Statistics**\n\n`;
       text += `**Index Metadata:**\n`;
       text += `• Version: ${index.metadata.version}\n`;
       text += `• Last Updated: ${new Date(index.metadata.last_updated).toLocaleString()}\n`;
@@ -417,7 +431,7 @@ export class EnhancedIndexHandler {
       return {
         content: [{
           type: "text",
-          text: `${this.personaIndicator}❌ Failed to get stats: ${SecureErrorHandler.sanitizeError(error).message}`
+          text: `${this.indicatorService.getPersonaIndicator()}❌ Failed to get stats: ${SecureErrorHandler.sanitizeError(error).message}`
         }]
       };
     }

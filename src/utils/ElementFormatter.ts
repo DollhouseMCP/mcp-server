@@ -20,6 +20,7 @@ import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 // Security: Maximum file size for processing (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -50,8 +51,9 @@ export interface FormatterResult {
 
 export class ElementFormatter {
   private readonly options: Required<ElementFormatterOptions>;
+  private readonly fileOperations: IFileOperationsService;
 
-  constructor(options: ElementFormatterOptions = {}) {
+  constructor(options: ElementFormatterOptions = {}, fileOperations: IFileOperationsService) {
     this.options = {
       backup: options.backup ?? true,
       inPlace: options.inPlace ?? false,
@@ -59,6 +61,7 @@ export class ElementFormatter {
       outputDir: options.outputDir ?? '',
       maxFileSize: options.maxFileSize ?? MAX_FILE_SIZE
     };
+    this.fileOperations = fileOperations;
   }
 
   // Note: validateYamlContent removed - SecureYamlParser handles all validation internally
@@ -123,7 +126,7 @@ export class ElementFormatter {
    * Validate file size
    */
   private async validateFileSize(filePath: string, result: FormatterResult): Promise<any> {
-    const stats = await fs.stat(filePath);
+    const stats = await this.fileOperations.stat(filePath);
     if (stats.size > this.options.maxFileSize) {
       result.error = `File size (${stats.size} bytes) exceeds maximum allowed (${this.options.maxFileSize} bytes)`;
       result.issues.push('File too large for processing');
@@ -136,7 +139,7 @@ export class ElementFormatter {
    * Read and normalize file content
    */
   private async readAndNormalizeFile(filePath: string, stats: any): Promise<string> {
-    let content = await fs.readFile(filePath, 'utf-8');
+    let content = await this.fileOperations.readFile(filePath, { source: 'ElementFormatter.readAndNormalizeFile' });
     content = this.normalizeUnicode(content);
 
     SecurityMonitor.logSecurityEvent({
@@ -205,7 +208,7 @@ export class ElementFormatter {
     if (!this.options.backup) return;
 
     const backupPath = filePath + '.backup';
-    await fs.copyFile(filePath, backupPath);
+    await this.fileOperations.copyFile(filePath, backupPath, { source: 'ElementFormatter.createBackupIfNeeded' });
     result.backupPath = backupPath;
     result.fixed.push(`Created backup at ${backupPath}`);
 
@@ -226,7 +229,7 @@ export class ElementFormatter {
    */
   private async writeFormattedFile(filePath: string, formatted: string, result: FormatterResult): Promise<void> {
     const outputPath = this.getOutputPath(filePath);
-    await fs.writeFile(outputPath, formatted, 'utf-8');
+    await this.fileOperations.writeFile(outputPath, formatted, { source: 'ElementFormatter.writeFormattedFile' });
 
     SecurityMonitor.logSecurityEvent({
       type: 'FILE_COPIED',
@@ -315,11 +318,11 @@ export class ElementFormatter {
     const results: FormatterResult[] = [];
 
     try {
-      const entries = await fs.readdir(memoryDir, { withFileTypes: true });
+      const entries = await this.fileOperations.listDirectoryWithTypes(memoryDir);
 
       // Process root .yaml files
       for (const entry of entries) {
-        if (!entry.isDirectory() && entry.name.endsWith('.yaml')) {
+        if (!entry.isDirectory && entry.name.endsWith('.yaml')) {
           const filePath = path.join(memoryDir, entry.name);
           results.push(await this.formatFile(filePath));
         }
@@ -329,7 +332,7 @@ export class ElementFormatter {
       // Use RegExp.test() directly as per SonarCloud S6594
       const datePattern = /^\d{4}-\d{2}-\d{2}$/;
       const dateFolders = entries.filter(e =>
-        e.isDirectory() && datePattern.test(e.name)
+        e.isDirectory && datePattern.test(e.name)
       );
 
       for (const folder of dateFolders) {
@@ -355,7 +358,7 @@ export class ElementFormatter {
     const results: FormatterResult[] = [];
 
     try {
-      const files = await fs.readdir(elementDir);
+      const files = await this.fileOperations.listDirectory(elementDir);
       const mdFiles = files.filter(f => f.endsWith('.md'));
 
       for (const file of mdFiles) {
@@ -640,33 +643,8 @@ export class ElementFormatter {
   }
 
   /**
-   * Unescapes common escape sequences in text content for proper markdown rendering.
-   *
-   * Converts escaped newlines, carriage returns, tabs, and backslashes to their actual characters.
-   * This is essential for displaying element content (personas, skills, templates, etc.) with
-   * proper formatting in MCP tool outputs.
-   *
-   * @param text - The text content containing escaped sequences (e.g., "Line 1\nLine 2")
-   * @returns The unescaped text with actual control characters (e.g., "Line 1\nLine 2" with real newline)
-   *
-   * @example
-   * ```typescript
-   * const escaped = "# Title\n\nContent with\ttabs and\\nmore";
-   * const unescaped = ElementFormatter.unescapeContent(escaped);
-   * // Result: "# Title\n\nContent with    tabs and\nmore" (with actual newlines and tabs)
-   * ```
-   *
-   * @remarks
-   * - Uses replaceAll for performance (SonarCloud S7781 compliance)
-   * - Uses placeholder approach to handle \\ correctly (prevents \\t from becoming tab)
-   * - Processing order: 1) Replace \\ with placeholder, 2) Replace \n, \r, \t, 3) Restore \\
-   * - Safe for all UTF-8 content including emojis and special characters
-   * - Input validation: Returns empty string for null/undefined inputs
-   *
-   * @public
-   * @static
-   * @since 1.9.21
-   * @see {@link https://github.com/DollhouseMCP/mcp-server/issues/874 | Issue #874}
+   * Unescape content (public static method - Issue #874)
+   * Handles escaped newlines, tabs, and other escape sequences
    */
   public static unescapeContent(text: string): string {
     // Input validation: Handle edge cases

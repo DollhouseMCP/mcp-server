@@ -19,178 +19,67 @@
  * - Consistent ID format handling throughout
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { logger } from '../utils/logger.js';
-import { PortfolioIndexManager, IndexEntry } from './PortfolioIndexManager.js';
+import { PortfolioIndexManager } from './PortfolioIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { NLPScoringManager } from './NLPScoringManager.js';
 import { VerbTriggerManager } from './VerbTriggerManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
-import { IndexConfigManager, IndexConfiguration } from './config/IndexConfig.js';
+import { IndexConfigManager } from './config/IndexConfig.js';
 import { FileLock } from '../utils/FileLock.js';
-import { parseElementId, parseElementIdStrict, formatElementId } from '../utils/elementId.js';
-import { RelationshipManager, ElementPath } from './RelationshipManager.js';
+import { parseElementId } from '../utils/elementId.js';
+import { RelationshipManager } from './RelationshipManager.js';
+import { FileOperationsService } from '../services/FileOperationsService.js';
 import {
-  BaseRelationship,
-  createRelationship,
-  RelationshipTypes
-} from './types/RelationshipTypes.js';
+  MEMORY_LIMITS,
+  getValidatedBatchSize,
+  getValidatedFlushInterval
+} from '../config/performance-constants.js';
+import { ElementDefinitionBuilder } from './enhanced-index/ElementDefinitionBuilder.js';
+import {
+  ActionTriggerExtractor,
+  TriggerExtractionConfig,
+  TriggerExtractionPatterns
+} from './enhanced-index/ActionTriggerExtractor.js';
+import { TriggerMetricsTracker } from './enhanced-index/TriggerMetricsTracker.js';
+import { SemanticRelationshipService } from './enhanced-index/SemanticRelationshipService.js';
+import { EnhancedIndexHelpers } from './enhanced-index/EnhancedIndexHelpers.js';
+import {
+  EnhancedIndex,
+  IndexMetadata,
+  ElementDefinition,
+  UseWhenPattern,
+  Relationship,
+  SemanticData,
+  ContextTracking,
+  KeywordTracking,
+  RelationshipTracking,
+  ScoringConfig,
+  IndexOptions,
+  ElementPath
+} from './types/IndexTypes.js';
 
-/**
- * Enhanced index schema - fully extensible
- */
-export interface EnhancedIndex {
-  // Metadata about the index itself
-  metadata: IndexMetadata;
+// Re-export types for backward compatibility
+export type {
+  EnhancedIndex,
+  IndexMetadata,
+  ElementDefinition,
+  UseWhenPattern,
+  Relationship,
+  SemanticData,
+  ContextTracking,
+  KeywordTracking,
+  RelationshipTracking,
+  ScoringConfig,
+  IndexOptions,
+  ElementPath
+};
 
-  // Verb-based action triggers (extensible)
-  action_triggers: Record<string, string[]>;
-
-  // Element definitions (extensible types and fields)
-  elements: Record<string, Record<string, ElementDefinition>>;
-
-  // Context tracking for smart injection
-  context?: ContextTracking;
-
-  // Scoring configuration
-  scoring?: ScoringConfig;
-
-  // Extension point for future features
-  extensions?: Record<string, any>;
-}
-
-export interface IndexMetadata {
-  version: string;           // Schema version for compatibility
-  created: string;           // ISO timestamp
-  last_updated: string;      // ISO timestamp
-  total_elements: number;
-
-  // Extensible metadata
-  [key: string]: any;
-}
-
-export interface ElementDefinition {
-  // Core fields (always present)
-  core: {
-    name: string;
-    type: string;
-    version?: string;
-    description?: string;
-    created?: string;
-    updated?: string;
-  };
-
-  // Search optimization
-  search?: {
-    keywords?: string[];
-    tags?: string[];
-    triggers?: string[];
-  };
-
-  // Verb-based actions (extensible)
-  actions?: Record<string, ActionDefinition>;
-
-  // USE_WHEN patterns for automatic activation
-  use_when?: UseWhenPattern[];
-
-  // Cross-element relationships
-  relationships?: Record<string, Relationship[]>;
-
-  // Context snippets for injection
-  context_snippets?: Record<string, string>;
-
-  // Semantic scoring data
-  semantic?: SemanticData;
-
-  // Extension point - any custom fields
-  custom?: Record<string, any>;
-}
-
-export interface ActionDefinition {
-  verb: string;
-  behavior?: string;
-  confidence?: number;
-
-  // Extensible action properties
-  [key: string]: any;
-}
-
-export interface UseWhenPattern {
-  pattern: string;      // Regex pattern
-  confidence: number;   // 0-1 confidence score
-  description?: string;
-
-  // Extensible pattern properties
-  [key: string]: any;
-}
-
-/**
- * Re-export BaseRelationship as Relationship for backward compatibility
- *
- * This maintains API compatibility with existing code while the internal
- * implementation now uses type-safe variants (ParsedRelationship, InvalidRelationship).
- * Existing code using the 'Relationship' type will continue to work without changes.
- */
-export type Relationship = BaseRelationship;
-
-export interface SemanticData {
-  entropy?: number;           // Shannon entropy
-  unique_terms?: number;
-  total_terms?: number;
-  jaccard_scores?: Record<string, number>;  // Pairwise similarities
-
-  // Extensible semantic properties
-  [key: string]: any;
-}
-
-export interface ContextTracking {
-  recent_keywords: KeywordTracking[];
-  active_relationships?: RelationshipTracking[];
-
-  // Extensible context properties
-  [key: string]: any;
-}
-
-export interface KeywordTracking {
-  term: string;
-  frequency: number;
-  last_seen: string;
-  weight: number;
-}
-
-export interface RelationshipTracking {
-  from: string;
-  to: string;
-  strength: number;
-  reason?: string;
-}
-
-export interface ScoringConfig {
-  jaccard_weights?: Record<string, number>;
-  entropy_thresholds?: Record<string, number>;
-  context_decay?: {
-    half_life_minutes: number;
-    minimum_weight: number;
-  };
-
-  // Extensible scoring properties
-  [key: string]: any;
-}
-
-/**
- * Options for index operations
- */
-export interface IndexOptions {
-  forceRebuild?: boolean;
-  updateOnly?: string[];  // Only update specific elements
-  preserveCustom?: boolean;  // Preserve custom fields during update
-}
 
 export class EnhancedIndexManager {
-  private static instance: EnhancedIndexManager | null = null;
   private index: EnhancedIndex | null = null;
   private indexPath: string;
   private lastLoaded: Date | null = null;
@@ -200,22 +89,43 @@ export class EnhancedIndexManager {
   private verbTriggers: VerbTriggerManager;
   private relationshipManager: RelationshipManager;
   private config: IndexConfigManager;
+  private readonly configManager: ConfigManager;
+  private readonly portfolioIndexManager: PortfolioIndexManager;
   private fileLock: FileLock;
   private memoryCleanupInterval: NodeJS.Timeout | null = null;
   private lastMemoryCleanup: Date = new Date();
+  private readonly elementDefinitionBuilder: ElementDefinitionBuilder;
+  private readonly actionTriggerExtractor: ActionTriggerExtractor;
+  private readonly metricsTracker: TriggerMetricsTracker;
+  private readonly semanticRelationshipService: SemanticRelationshipService;
+  private readonly fileOperations: FileOperationsService;
 
-  // Batch metrics update support for high-volume scenarios
-  private metricsBatch: Map<string, number> = new Map();
-  private metricsFlushTimer: NodeJS.Timeout | null = null;
-  private readonly METRICS_BATCH_SIZE = 10;
-  private readonly METRICS_FLUSH_INTERVAL = 5000; // 5 seconds
+  // Using centralized configuration for metrics batching
+  private readonly METRICS_BATCH_SIZE = getValidatedBatchSize();
+  private readonly METRICS_FLUSH_INTERVAL = getValidatedFlushInterval();
 
-  private constructor() {
+  // Cache configuration constants - using centralized configuration
+  private static readonly MAX_METRICS_CACHE_SIZE = MEMORY_LIMITS.METRICS_CACHE.MAX_SIZE;
+  private static readonly MAX_METRICS_CACHE_MEMORY_MB = MEMORY_LIMITS.METRICS_CACHE.MAX_MEMORY_MB;
+
+  public constructor(
+    indexConfigManager: IndexConfigManager,
+    configManager: ConfigManager,
+    portfolioIndexManager: PortfolioIndexManager,
+    nlpScoringManager: NLPScoringManager,
+    verbTriggerManager: VerbTriggerManager,
+    relationshipManager: RelationshipManager,
+    helpers: EnhancedIndexHelpers,
+    fileOperations: FileOperationsService
+  ) {
     const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
     this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
 
     // Initialize configuration
-    this.config = IndexConfigManager.getInstance();
+    this.config = indexConfigManager;
+    this.configManager = configManager;
+    this.portfolioIndexManager = portfolioIndexManager;
+    this.fileOperations = fileOperations;
     const config = this.config.getConfig();
     this.TTL_MS = config.index.ttlMinutes * 60 * 1000;
 
@@ -223,23 +133,24 @@ export class EnhancedIndexManager {
     this.loadEnhancedIndexConfig();
 
     // Initialize components with config
-    this.nlpScoring = new NLPScoringManager({
-      cacheExpiry: config.nlp.cacheExpiryMinutes * 60 * 1000,
-      minTokenLength: config.nlp.minTokenLength,
-      entropyBands: config.nlp.entropyBands,
-      jaccardThresholds: config.nlp.jaccardThresholds
+    this.nlpScoring = nlpScoringManager;
+    this.verbTriggers = verbTriggerManager;
+    this.relationshipManager = relationshipManager;
+    this.elementDefinitionBuilder = helpers.elementDefinitionBuilder;
+    this.semanticRelationshipService = helpers.semanticRelationshipService;
+    this.actionTriggerExtractor = helpers.createActionTriggerExtractor({
+      getConfig: () => EnhancedIndexManager.VERB_EXTRACTION_CONFIG,
+      getPatterns: () => this.getTriggerPatterns()
     });
-
-    this.verbTriggers = VerbTriggerManager.getInstance({
-      confidenceThreshold: config.verbs.confidenceThreshold,
-      maxElementsPerVerb: config.verbs.maxElementsPerVerb,
-      includeSynonyms: config.verbs.includeSynonyms
-    });
-
-    // Initialize relationship manager
-    this.relationshipManager = RelationshipManager.getInstance({
-      minConfidence: config.performance.similarityThreshold,
-      enableAutoDiscovery: true
+    this.metricsTracker = helpers.createTriggerMetricsTracker({
+      batchSize: this.METRICS_BATCH_SIZE,
+      flushIntervalMs: this.METRICS_FLUSH_INTERVAL,
+      cacheLimits: {
+        maxSize: EnhancedIndexManager.MAX_METRICS_CACHE_SIZE,
+        maxMemoryMB: EnhancedIndexManager.MAX_METRICS_CACHE_MEMORY_MB
+      },
+      getIndex: () => this.getIndex(),
+      persistIndex: (index) => this.writeToFile(index)
     });
 
     // Initialize file lock
@@ -257,11 +168,28 @@ export class EnhancedIndexManager {
     this.startMemoryCleanup();
   }
 
-  public static getInstance(): EnhancedIndexManager {
-    if (!this.instance) {
-      this.instance = new EnhancedIndexManager();
+  public async dispose(): Promise<void> {
+    // Clear all timers
+    if (this.memoryCleanupInterval) {
+      clearInterval(this.memoryCleanupInterval);
+      this.memoryCleanupInterval = null;
     }
-    return this.instance;
+
+    // Flush pending metrics before disposal
+    try {
+      await this.metricsTracker.flush();
+    } catch (error) {
+      logger.warn('Failed to flush metrics batch during disposal', error);
+    }
+
+    this.metricsTracker.dispose();
+
+    // Dispose of file lock
+    if (this.fileLock) {
+      this.fileLock.dispose();
+    }
+
+    logger.debug('Disposed EnhancedIndexManager timers and caches');
   }
 
   /**
@@ -314,7 +242,9 @@ export class EnhancedIndexManager {
    */
   private async loadIndex(): Promise<void> {
     try {
-      const yamlContent = await fs.readFile(this.indexPath, 'utf-8');
+      const yamlContent = await this.fileOperations.readFile(this.indexPath, {
+        source: 'EnhancedIndexManager.loadIndex'
+      });
 
       let loadedData;
       try {
@@ -405,8 +335,7 @@ export class EnhancedIndexManager {
       };
 
       // Get portfolio index for element discovery
-      const portfolioIndex = PortfolioIndexManager.getInstance();
-      const portfolioData = await portfolioIndex.getIndex();
+      const portfolioData = await this.portfolioIndexManager.getIndex();
 
       // Process each element type
       for (const [elementType, entries] of portfolioData.byType.entries()) {
@@ -432,8 +361,7 @@ export class EnhancedIndexManager {
             }
           }
 
-          // Build element definition
-          const elementDef = await this.buildElementDefinition(entry, existingIndex);
+          const elementDef = this.elementDefinitionBuilder.build(entry, existingIndex);
           newIndex.elements[elementType][entryName] = elementDef;
           newIndex.metadata.total_elements++;
 
@@ -480,113 +408,8 @@ export class EnhancedIndexManager {
     }
   }
 
-  /**
-   * Build element definition from portfolio entry
-   */
-  private async buildElementDefinition(
-    entry: IndexEntry,
-    existingIndex: EnhancedIndex | null
-  ): Promise<ElementDefinition> {
-    // FIX: Add defensive checks for entry.metadata properties
-    const entryName = entry.metadata?.name || 'unknown';
-    const existing = existingIndex?.elements[entry.elementType]?.[entryName];
-
-    const definition: ElementDefinition = {
-      core: {
-        name: entryName,
-        type: entry.elementType,
-        version: entry.metadata?.version,
-        description: entry.metadata?.description,
-        created: entry.metadata?.created,
-        updated: entry.metadata?.updated || new Date().toISOString()
-      }
-    };
-
-    // Add search fields if present
-    // FIX: Add defensive checks for metadata properties
-    if (entry.metadata?.keywords || entry.metadata?.tags || entry.metadata?.triggers) {
-      definition.search = {
-        keywords: entry.metadata?.keywords,
-        tags: entry.metadata?.tags,
-        triggers: entry.metadata?.triggers
-      };
-
-      // Debug logging for trigger extraction
-      if (entry.metadata?.triggers && entry.metadata.triggers.length > 0) {
-        logger.debug('Found triggers for element', {
-          name: entryName,
-          type: entry.elementType,
-          triggers: entry.metadata.triggers
-        });
-      }
-    }
-
-    // Preserve custom fields from existing
-    if (existing?.custom) {
-      definition.custom = existing.custom;
-    }
-
-    // Preserve relationships from existing
-    if (existing?.relationships) {
-      definition.relationships = existing.relationships;
-    }
-
-    // Preserve actions from existing
-    if (existing?.actions) {
-      definition.actions = existing.actions;
-    }
-
-    // Auto-generate basic action triggers from name/description
-    if (!definition.actions) {
-      definition.actions = this.generateDefaultActions(entry);
-    }
-
-    return definition;
-  }
-
-  /**
-   * Generate default actions based on element type and metadata
-   */
-  private generateDefaultActions(entry: IndexEntry): Record<string, ActionDefinition> | undefined {
-    const actions: Record<string, ActionDefinition> = {};
-
-    // FIX: Add defensive check for metadata.name
-    const entryName = entry.metadata?.name || '';
-    if (!entryName) {
-      return undefined;
-    }
-
-    // Generate based on element type
-    switch (entry.elementType) {
-      case 'personas':
-        if (entryName.includes('debug')) {
-          actions.debug = { verb: 'debug', behavior: 'activate', confidence: 0.8 };
-          actions.fix = { verb: 'fix', behavior: 'activate', confidence: 0.7 };
-        }
-        if (entryName.includes('creative')) {
-          actions.write = { verb: 'write', behavior: 'activate', confidence: 0.8 };
-          actions.create = { verb: 'create', behavior: 'activate', confidence: 0.8 };
-        }
-        break;
-
-      case 'memories':
-        if (entryName.includes('session')) {
-          actions.recall = { verb: 'recall', behavior: 'retrieve', confidence: 0.7 };
-          actions.remember = { verb: 'remember', behavior: 'retrieve', confidence: 0.7 };
-        }
-        break;
-
-      case 'skills':
-        actions.use = { verb: 'use', behavior: 'execute', confidence: 0.6 };
-        actions.apply = { verb: 'apply', behavior: 'execute', confidence: 0.6 };
-        break;
-    }
-
-    return Object.keys(actions).length > 0 ? actions : undefined;
-  }
-
   // Configuration for verb extraction (will be overridden by ConfigManager)
-  private static VERB_EXTRACTION_CONFIG = {
+  private static VERB_EXTRACTION_CONFIG: TriggerExtractionConfig = {
     // Security limits for DoS protection
     limits: {
       maxTriggersPerElement: 50,  // Maximum triggers to extract per element
@@ -636,6 +459,14 @@ export class EnhancedIndexManager {
     `(${EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes.join('|')})$`
   );
 
+  private getTriggerPatterns(): TriggerExtractionPatterns {
+    return {
+      verbPrefixPattern: EnhancedIndexManager.VERB_PREFIX_PATTERN,
+      verbSuffixPattern: EnhancedIndexManager.VERB_SUFFIX_PATTERN,
+      nounSuffixPattern: EnhancedIndexManager.NOUN_SUFFIX_PATTERN
+    };
+  }
+
   /**
    * Extract action triggers from element definition
    *
@@ -660,166 +491,23 @@ export class EnhancedIndexManager {
     elementName: string,
     triggers: Record<string, string[]>
   ): void {
-    // Null safety check
-    if (!elementDef) return;
+    if (!elementDef) {
+      return;
+    }
 
-    // Start telemetry tracking if enabled
     const telemetryStartTime = this.startTelemetry('extractActionTriggers');
+    const result = this.actionTriggerExtractor.extract(elementDef, elementName);
 
-    // Track unique triggers for this element to prevent duplicates
-    const elementTriggers = new Set<string>();
-    const triggerCountRef = { count: 0 }; // Use object reference to track count across methods
+    for (const trigger of result.triggers) {
+      this.addTriggerMapping(trigger, elementName, triggers);
+    }
 
-    // Extract from search.triggers field
-    this.extractTriggersFromSearchField(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
-
-    // Extract from actions field
-    this.extractTriggersFromActions(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
-
-    // Extract from keywords (limited to prevent DoS)
-    this.extractTriggersFromKeywords(elementDef, elementName, triggers, elementTriggers, triggerCountRef);
-
-    // Record telemetry
     this.recordTelemetry('extractActionTriggers', telemetryStartTime, {
       elementName,
-      elementType: elementDef.core?.type,
-      triggersExtracted: triggerCountRef.count,
-      uniqueTriggers: elementTriggers.size,
+      elementType: elementDef?.core?.type,
+      triggersExtracted: result.extractedCount,
+      uniqueTriggers: result.triggers.length,
     });
-  }
-
-  /**
-   * Extract triggers from search.triggers field
-   */
-  private extractTriggersFromSearchField(
-    elementDef: ElementDefinition,
-    elementName: string,
-    triggers: Record<string, string[]>,
-    elementTriggers: Set<string>,
-    triggerCountRef: { count: number }
-  ): void {
-    if (!elementDef.search?.triggers) return;
-
-    const triggerArray = this.normalizeToArray(elementDef.search.triggers);
-
-    for (const trigger of triggerArray) {
-      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
-        logger.warn('Trigger limit exceeded for element', {
-          elementName,
-          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
-        });
-        break;
-      }
-
-      const normalizedTrigger = this.normalizeTrigger(trigger);
-      if (!normalizedTrigger) continue;
-
-      if (!elementTriggers.has(normalizedTrigger)) {
-        elementTriggers.add(normalizedTrigger);
-        this.addTriggerMapping(normalizedTrigger, elementName, triggers);
-        triggerCountRef.count++;
-      }
-    }
-  }
-
-  /**
-   * Extract triggers from actions field
-   */
-  private extractTriggersFromActions(
-    elementDef: ElementDefinition,
-    elementName: string,
-    triggers: Record<string, string[]>,
-    elementTriggers: Set<string>,
-    triggerCountRef: { count: number }
-  ): void {
-    if (!elementDef.actions) return;
-
-    for (const [actionKey, action] of Object.entries(elementDef.actions)) {
-      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
-        logger.warn('Trigger limit exceeded for element', {
-          elementName,
-          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
-        });
-        break;
-      }
-
-      const verb = action.verb || actionKey;
-      const normalizedVerb = this.normalizeTrigger(verb);
-      if (!normalizedVerb) continue;
-
-      if (!elementTriggers.has(normalizedVerb)) {
-        elementTriggers.add(normalizedVerb);
-        this.addTriggerMapping(normalizedVerb, elementName, triggers);
-        triggerCountRef.count++;
-      }
-    }
-  }
-
-  /**
-   * Extract verb-like keywords as triggers
-   */
-  private extractTriggersFromKeywords(
-    elementDef: ElementDefinition,
-    elementName: string,
-    triggers: Record<string, string[]>,
-    elementTriggers: Set<string>,
-    triggerCountRef: { count: number }
-  ): void {
-    if (!elementDef.search?.keywords) return;
-
-    const keywords = this.normalizeToArray(elementDef.search.keywords);
-
-    for (const keyword of keywords) {
-      if (triggerCountRef.count >= EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement) {
-        logger.warn('Trigger limit exceeded for element', {
-          elementName,
-          limit: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggersPerElement
-        });
-        break;
-      }
-
-      const normalizedKeyword = this.normalizeTrigger(keyword);
-      if (!normalizedKeyword || !this.looksLikeVerb(normalizedKeyword)) continue;
-
-      if (!elementTriggers.has(normalizedKeyword)) {
-        elementTriggers.add(normalizedKeyword);
-        this.addTriggerMapping(normalizedKeyword, elementName, triggers);
-        triggerCountRef.count++;
-      }
-    }
-  }
-
-  /**
-   * Normalize a value to an array of strings
-   */
-  private normalizeToArray(value: any): string[] {
-    if (!value) return [];
-    if (Array.isArray(value)) {
-      return value.filter(v => typeof v === 'string');
-    }
-    if (typeof value === 'string') {
-      return [value];
-    }
-    return [];
-  }
-
-  /**
-   * Normalize and validate a trigger string
-   */
-  private normalizeTrigger(trigger: any): string | null {
-    if (typeof trigger !== 'string') return null;
-
-    // Trim and lowercase
-    const normalized = trigger.trim().toLowerCase();
-
-    // Validate
-    if (!normalized ||
-        normalized.length > EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits.maxTriggerLength ||
-        !/^[a-z][a-z-]*$/.test(normalized)) {
-      return null;
-    }
-
-    return normalized;
   }
 
   /**
@@ -854,28 +542,11 @@ export class EnhancedIndexManager {
   }
 
   /**
-   * Check if a word looks like a verb using pre-compiled patterns
-   * Avoid false positives like "documentation" which ends in "ation" (noun suffix)
-   */
-  private looksLikeVerb(word: string): boolean {
-    const lowerWord = word.toLowerCase();
-
-    // Check for noun suffixes that should NOT be considered verbs
-    if (EnhancedIndexManager.NOUN_SUFFIX_PATTERN.test(lowerWord)) {
-      return false;
-    }
-
-    // Check for verb patterns
-    return EnhancedIndexManager.VERB_PREFIX_PATTERN.test(lowerWord) ||
-           EnhancedIndexManager.VERB_SUFFIX_PATTERN.test(lowerWord);
-  }
-
-  /**
    * Load enhanced index configuration from ConfigManager
    */
   private loadEnhancedIndexConfig(): void {
     try {
-      const configManager = ConfigManager.getInstance();
+      const configManager = this.configManager;
       const config = configManager.getConfig();
 
       // Update limits from config
@@ -1047,7 +718,7 @@ export class EnhancedIndexManager {
   /**
    * Start telemetry tracking for an operation
    */
-  private startTelemetry(operationName: string): number | null {
+  private startTelemetry(_operationName: string): number | null {
     if (!this.isTelemetryEnabled()) return null;
 
     // Sample based on configured rate
@@ -1152,7 +823,7 @@ export class EnhancedIndexManager {
     try {
       // Ensure directory exists
       const dir = path.dirname(this.indexPath);
-      await fs.mkdir(dir, { recursive: true });
+      await this.fileOperations.createDirectory(dir);
 
       // Convert to YAML with nice formatting
       const yamlContent = yamlDump(index, {
@@ -1168,7 +839,9 @@ export class EnhancedIndexManager {
         throw new Error(`Unicode issues in index: ${validation.detectedIssues.join(', ')}`);
       }
 
-      await fs.writeFile(this.indexPath, yamlContent, 'utf-8');
+      await this.fileOperations.writeFile(this.indexPath, yamlContent, {
+        source: 'EnhancedIndexManager.writeToFile'
+      });
 
       logger.debug('Index saved to file', { path: this.indexPath });
     } catch (error) {
@@ -1183,7 +856,7 @@ export class EnhancedIndexManager {
   private async needsRebuild(): Promise<boolean> {
     try {
       // Check if index file exists
-      const indexStats = await fs.stat(this.indexPath).catch(() => null);
+      const indexStats = await this.fileOperations.stat(this.indexPath).catch(() => null);
       if (!indexStats) {
         logger.info('Enhanced index file does not exist, rebuild needed');
         return true;
@@ -1321,27 +994,8 @@ export class EnhancedIndexManager {
    */
   private async trackTriggerUsage(trigger: string, immediate: boolean = false): Promise<void> {
     try {
-      // Add to batch
-      this.metricsBatch.set(trigger, (this.metricsBatch.get(trigger) || 0) + 1);
-
-      // Check if we should flush immediately
-      const shouldFlush = immediate ||
-                         this.metricsBatch.size >= this.METRICS_BATCH_SIZE;
-
-      if (shouldFlush) {
-        await this.flushMetricsBatch();
-      } else {
-        // Schedule a flush if not already scheduled
-        if (!this.metricsFlushTimer) {
-          this.metricsFlushTimer = setTimeout(() => {
-            this.flushMetricsBatch().catch(error => {
-              logger.warn('Failed to flush metrics batch', { error });
-            });
-          }, this.METRICS_FLUSH_INTERVAL);
-        }
-      }
+      await this.metricsTracker.track(trigger, immediate);
     } catch (error) {
-      // Don't fail the operation if metrics tracking fails
       logger.warn('Failed to track trigger usage', { trigger, error });
     }
   }
@@ -1351,89 +1005,7 @@ export class EnhancedIndexManager {
    * Combines multiple metric updates into a single disk write for efficiency
    */
   private async flushMetricsBatch(): Promise<void> {
-    if (this.metricsBatch.size === 0) {
-      return;
-    }
-
-    // Clear the timer
-    if (this.metricsFlushTimer) {
-      clearTimeout(this.metricsFlushTimer);
-      this.metricsFlushTimer = null;
-    }
-
-    try {
-      const index = await this.getIndex();
-
-      // Initialize trigger metrics if not present
-      if (!index.metadata.trigger_metrics) {
-        index.metadata.trigger_metrics = {
-          usage_count: {},
-          last_used: {},
-          first_used: {},
-          daily_usage: {}
-        };
-      }
-
-      const metrics = index.metadata.trigger_metrics;
-      const today = new Date().toISOString().split('T')[0];
-      const now = new Date().toISOString();
-
-      // Initialize daily usage for today
-      if (!metrics.daily_usage[today]) {
-        metrics.daily_usage[today] = {};
-      }
-
-      // Process all batched metrics
-      for (const [trigger, count] of this.metricsBatch.entries()) {
-        // Update usage count
-        metrics.usage_count[trigger] = (metrics.usage_count[trigger] || 0) + count;
-
-        // Update last used timestamp
-        metrics.last_used[trigger] = now;
-
-        // Set first used if not present
-        if (!metrics.first_used[trigger]) {
-          metrics.first_used[trigger] = now;
-        }
-
-        // Track daily usage
-        metrics.daily_usage[today][trigger] = (metrics.daily_usage[today][trigger] || 0) + count;
-
-        logger.debug('Flushing batched metrics', {
-          trigger,
-          batch_count: count,
-          total_uses: metrics.usage_count[trigger]
-        });
-      }
-
-      // Clean up old daily usage (keep last 30 days)
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - 30);
-      const cutoff = cutoffDate.toISOString().split('T')[0];
-
-      for (const date in metrics.daily_usage) {
-        if (date < cutoff) {
-          delete metrics.daily_usage[date];
-        }
-      }
-
-      // Update metadata timestamp
-      index.metadata.last_updated = now;
-
-      // Persist the updated metrics
-      await this.writeToFile(index);
-
-      logger.info('Metrics batch flushed', {
-        triggers_updated: this.metricsBatch.size,
-        total_updates: Array.from(this.metricsBatch.values()).reduce((a, b) => a + b, 0)
-      });
-
-      // Clear the batch
-      this.metricsBatch.clear();
-    } catch (error) {
-      logger.error('Failed to flush metrics batch', { error });
-      // Don't clear batch on error - will retry on next trigger
-    }
+    await this.metricsTracker.flush();
   }
 
   /**
@@ -1641,534 +1213,14 @@ export class EnhancedIndexManager {
     return results;
   }
 
-  /**
-   * Calculate semantic relationships between elements using NLP
-   * Optimized for large numbers of elements
-   */
   private async calculateSemanticRelationships(index: EnhancedIndex): Promise<void> {
-    const startTime = Date.now();
     const config = this.config.getConfig();
-
-    // FIX: Add timeout circuit breaker to prevent infinite loops
-    // FIX: Use configuration instead of hardcoded value
-    const MAX_EXECUTION_TIME = config.performance.circuitBreakerTimeoutMs;
-
-    // Prepare text content for each element
-    const elementTexts = new Map<string, string>();
-    const elementCount = Object.values(index.elements)
-      .reduce((sum, elements) => sum + Object.keys(elements).length, 0);
-
-    logger.info('Starting semantic relationship calculation', {
-      elementCount,
-      maxForFullMatrix: config.performance.maxElementsForFullMatrix
-    });
-
-    // First pass: Calculate entropy for all elements
-    for (const [elementType, elements] of Object.entries(index.elements)) {
-      for (const [name, element] of Object.entries(elements)) {
-        // FIX: Check for timeout
-        if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-          logger.warn('Semantic relationship calculation timeout', {
-            elapsed: Date.now() - startTime,
-            processed: elementTexts.size
-          });
-          return;
-        }
-        // Combine relevant text fields for analysis
-        const textParts = [
-          element.core.name,
-          element.core.description || '',
-          ...(element.search?.keywords || []),
-          ...(element.search?.tags || []),
-          ...(element.search?.triggers || [])
-        ];
-
-        const fullText = textParts.join(' ');
-        const key = `${elementType}:${name}`;
-        elementTexts.set(key, fullText);
-
-        // Calculate entropy for this element
-        if (!element.semantic) {
-          element.semantic = {};
-        }
-        element.semantic.entropy = this.nlpScoring.calculateEntropy(fullText);
-        element.semantic.unique_terms = fullText.split(/\s+/).filter(t => t.length > 1).length;
-      }
-    }
-
-    const keys = Array.from(elementTexts.keys());
-
-    // FIX: Use configuration for safety limits
-    // These are hard safety limits to prevent runaway memory usage in tests
-    const MAX_SAFE_ELEMENTS = 50;  // Hard safety limit for full matrix
-    const MAX_SAFE_COMPARISONS = 500;  // Hard safety limit for total comparisons
-
-    // Override config if it's too high
-    const safeConfig = {
-      ...config,
-      performance: {
-        ...config.performance,
-        maxElementsForFullMatrix: Math.min(config.performance.maxElementsForFullMatrix, MAX_SAFE_ELEMENTS),
-        maxSimilarityComparisons: Math.min(config.performance.maxSimilarityComparisons, MAX_SAFE_COMPARISONS)
-      }
-    };
-
-    // Decide strategy based on element count
-    if (elementCount <= safeConfig.performance.maxElementsForFullMatrix) {
-      // Small dataset: Calculate all relationships
-      await this.calculateFullMatrix(index, elementTexts, keys, safeConfig);
-    } else {
-      // Large dataset: Use smart sampling and batching
-      await this.calculateSampledRelationships(index, elementTexts, keys, safeConfig);
-    }
-
-    const duration = Date.now() - startTime;
-    logger.info('Semantic relationships calculated', {
-      elements: elementTexts.size,
-      duration: `${duration}ms`,
-      strategy: elementCount <= config.performance.maxElementsForFullMatrix ? 'full' : 'sampled',
-      timedOut: duration > MAX_EXECUTION_TIME
-    });
+    await this.semanticRelationshipService.calculate(index, config);
   }
 
-  /**
-   * Calculate full similarity matrix for small datasets
-   */
-  private async calculateFullMatrix(
-    index: EnhancedIndex,
-    elementTexts: Map<string, string>,
-    keys: string[],
-    config: IndexConfiguration
-  ): Promise<void> {
-    let comparisons = 0;
-    const batchSize = config.performance.similarityBatchSize;
-    const threshold = config.performance.similarityThreshold;
-    const startTime = Date.now();
-    // FIX: Use configuration instead of hardcoded value
-    const MAX_EXECUTION_TIME = config.performance.circuitBreakerTimeoutMs;
+  
 
-    // Process in batches to allow event loop to breathe
-    for (let i = 0; i < keys.length; i++) {
-      // FIX: Check for timeout
-      if (Date.now() - startTime > MAX_EXECUTION_TIME) {
-        logger.warn('Full matrix calculation timeout', {
-          elapsed: Date.now() - startTime,
-          processed: `${i}/${keys.length}`,
-          comparisons
-        });
-        return;
-      }
-      const key1 = keys[i];
-      // FIX: Use centralized element ID parsing
-      const parsed1 = parseElementIdStrict(key1);
-      const text1 = elementTexts.get(key1)!;
-
-      // Process batch of comparisons
-      const batch: Array<{ key2: string; type2: string; name2: string }> = [];
-
-      for (let j = i + 1; j < keys.length && batch.length < batchSize; j++) {
-        const key2 = keys[j];
-        // FIX: Use centralized element ID parsing
-        const parsed2 = parseElementIdStrict(key2);
-        batch.push({ key2, type2: parsed2.type, name2: parsed2.name });
-      }
-
-      // Process batch asynchronously
-      await Promise.all(batch.map(async ({ key2, type2, name2 }) => {
-        const text2 = elementTexts.get(key2)!;
-        const scoring = this.nlpScoring.scoreRelevance(text1, text2);
-
-        // Store high-confidence relationships
-        if (scoring.combinedScore > threshold) {
-          // Get elements safely
-          const element1 = index.elements[parsed1.type]?.[parsed1.name];
-          const element2 = index.elements[type2]?.[name2];
-
-          if (!element1 || !element2) return;
-
-          // Add relationship to element1
-          if (!element1.relationships) {
-            element1.relationships = {};
-          }
-          if (!element1.relationships.similar) {
-            element1.relationships.similar = [];
-          }
-          element1.relationships.similar.push(createRelationship(
-            type2,
-            name2,
-            RelationshipTypes.SEMANTIC_SIMILARITY,
-            scoring.combinedScore,
-            {
-              jaccard: scoring.jaccard,
-              entropy_diff: Math.abs(
-                (element1.semantic?.entropy || 0) -
-                (element2.semantic?.entropy || 0)
-              )
-            }
-          ));
-
-          // Add reverse relationship to element2
-          if (!element2.relationships) {
-            element2.relationships = {};
-          }
-          if (!element2.relationships.similar) {
-            element2.relationships.similar = [];
-          }
-          element2.relationships.similar.push(createRelationship(
-            parsed1.type,
-            parsed1.name,
-            RelationshipTypes.SEMANTIC_SIMILARITY,
-            scoring.combinedScore,
-            {
-              jaccard: scoring.jaccard,
-              entropy_diff: Math.abs(
-                (element1.semantic?.entropy || 0) -
-                (element2.semantic?.entropy || 0)
-              )
-            }
-          ));
-
-          // Store Jaccard scores in semantic data
-          if (element1.semantic) {
-            if (!element1.semantic.jaccard_scores) {
-              element1.semantic.jaccard_scores = {};
-            }
-            element1.semantic.jaccard_scores[formatElementId(type2, name2)] = scoring.jaccard;
-          }
-
-          if (element2.semantic) {
-            if (!element2.semantic.jaccard_scores) {
-              element2.semantic.jaccard_scores = {};
-            }
-            element2.semantic.jaccard_scores[formatElementId(parsed1.type, parsed1.name)] = scoring.jaccard;
-          }
-        }
-      }));
-
-      comparisons += batch.length;
-
-      // Yield to event loop periodically
-      if (comparisons % 100 === 0) {
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    }
-  }
-
-  /**
-   * Calculate sampled relationships for large datasets
-   * Uses proportional sampling and keyword clustering
-   */
-  private async calculateSampledRelationships(
-    index: EnhancedIndex,
-    elementTexts: Map<string, string>,
-    keys: string[],
-    config: IndexConfiguration
-  ): Promise<void> {
-    const threshold = config.performance.similarityThreshold;
-    const maxComparisons = config.performance.maxSimilarityComparisons;
-
-    logger.info('Using sampled relationship calculation', {
-      elements: keys.length,
-      maxComparisons
-    });
-
-    // FIX: Early return if no keys to process
-    if (keys.length === 0) {
-      logger.debug('No elements to calculate relationships for');
-      return;
-    }
-
-    // First Pass: Keyword-based clustering for high-probability relationships
-    const keywordClusters = await this.buildKeywordClusters(index, keys);
-    let comparisons = 0;
-
-    // Compare within clusters first (high probability of relationships)
-    // FIX: Make cluster budget ratio configurable
-    const clusterBudgetRatio = 0.6; // 60% of budget for clusters (could be made configurable)
-    const clusterComparisons = Math.floor(maxComparisons * clusterBudgetRatio);
-
-    for (const [, clusterKeys] of keywordClusters.entries()) {
-      if (comparisons >= clusterComparisons) break;
-
-      // Within-cluster comparisons
-      for (let i = 0; i < clusterKeys.length - 1; i++) {
-        if (comparisons >= clusterComparisons) break;
-
-        const key1 = clusterKeys[i];
-        // FIX: Use centralized element ID parsing
-        const parsed1 = parseElementIdStrict(key1);
-        const text1 = elementTexts.get(key1)!;
-
-        // Sample from rest of cluster
-        const sampleSize = Math.min(
-          Math.ceil(Math.sqrt(clusterKeys.length - i - 1)),
-          config.sampling.clusterSampleLimit  // Configurable cluster limit
-        );
-
-        const sampledIndices = this.randomSample(
-          Array.from({ length: clusterKeys.length - i - 1 }, (_, j) => i + j + 1),
-          sampleSize
-        );
-
-        for (const j of sampledIndices) {
-          if (comparisons >= clusterComparisons) break;
-
-          const key2 = clusterKeys[j];
-          // FIX: Use centralized element ID parsing
-          const parsed2 = parseElementIdStrict(key2);
-          const text2 = elementTexts.get(key2)!;
-
-          const scoring = this.nlpScoring.scoreRelevance(text1, text2);
-          comparisons++;
-
-          if (scoring.combinedScore > threshold) {
-            this.storeRelationship(index, parsed1.type, parsed1.name, parsed2.type, parsed2.name, scoring);
-          }
-        }
-      }
-
-      // Yield to event loop
-      if (comparisons % 100 === 0) {
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    }
-
-    // Second Pass: Proportional cross-type sampling for unexpected relationships
-    const crossTypeComparisons = maxComparisons - comparisons; // Remaining budget
-
-    // FIX: Skip second pass if we've already hit our comparison limit
-    if (comparisons >= maxComparisons || crossTypeComparisons <= 0) {
-      logger.debug('Skipping cross-type sampling, comparison budget exhausted', {
-        comparisons,
-        maxComparisons
-      });
-      return;
-    }
-
-    // Build type distribution
-    const elementsByType = new Map<string, string[]>();
-    const typeCounts = new Map<string, number>();
-
-    for (const key of keys) {
-      // FIX: Use centralized element ID parsing
-      const parsed = parseElementId(key);
-      if (!parsed) continue;
-      if (!elementsByType.has(parsed.type)) {
-        elementsByType.set(parsed.type, []);
-        typeCounts.set(parsed.type, 0);
-      }
-      elementsByType.get(parsed.type)!.push(key);
-      typeCounts.set(parsed.type, typeCounts.get(parsed.type)! + 1);
-    }
-
-    // Calculate proportional sample sizes
-    const totalElements = keys.length;
-    const typeSampleSizes = new Map<string, number>();
-
-    for (const [type, count] of typeCounts.entries()) {
-      const proportion = count / totalElements;
-      // Allocate comparisons proportionally, with minimum of 1
-      const allocatedComparisons = Math.max(1, Math.floor(crossTypeComparisons * proportion));
-      // Sample size is sqrt of allocated comparisons for efficiency
-      const sampleSize = Math.ceil(Math.sqrt(allocatedComparisons));
-      typeSampleSizes.set(type, sampleSize);
-    }
-
-    logger.debug('Proportional sampling distribution', {
-      typeCounts: Object.fromEntries(typeCounts),
-      sampleSizes: Object.fromEntries(typeSampleSizes)
-    });
-
-    // FIX: Perform LIMITED cross-type sampling to prevent O(n²) explosion
-    // Previously: for each key1, sample from EVERY type - this creates n * types * sampleSize comparisons!
-    // Now: Sample a subset of keys first, then process those
-
-    // Sample a limited number of keys to process (sqrt of total for balanced coverage)
-    const maxKeysToProcess = Math.min(
-      Math.ceil(Math.sqrt(keys.length)),
-      Math.ceil(crossTypeComparisons / typeSampleSizes.size)
-    );
-
-    const sampledKeys1 = this.randomSample(keys, maxKeysToProcess);
-
-    logger.debug('Cross-type sampling with limited key set', {
-      totalKeys: keys.length,
-      sampledKeys: sampledKeys1.length,
-      maxKeysToProcess
-    });
-
-    // Perform proportional cross-type sampling on LIMITED key set
-    for (const key1 of sampledKeys1) {
-      if (comparisons >= maxComparisons) break;
-
-      // FIX: Use centralized element ID parsing
-      const parsed1 = parseElementIdStrict(key1);
-      const text1 = elementTexts.get(key1)!;
-
-      // Sample from each type proportionally
-      for (const [type, typeKeys] of elementsByType.entries()) {
-        if (comparisons >= maxComparisons) break;
-
-        const sampleSize = typeSampleSizes.get(type) || 1;
-        const sampledKeys = this.randomSample(typeKeys, Math.min(sampleSize, typeKeys.length))
-          .filter(k => k !== key1);
-
-        for (const key2 of sampledKeys) {
-          if (comparisons >= maxComparisons) break;
-
-          // FIX: Use centralized element ID parsing
-          const parsed2 = parseElementIdStrict(key2);
-          const text2 = elementTexts.get(key2)!;
-
-          const scoring = this.nlpScoring.scoreRelevance(text1, text2);
-          comparisons++;
-
-          if (scoring.combinedScore > threshold) {
-            this.storeRelationship(index, parsed1.type, parsed1.name, parsed2.type, parsed2.name, scoring);
-          }
-        }
-      }
-
-      // Yield to event loop
-      if (comparisons % 100 === 0) {
-        await new Promise(resolve => setImmediate(resolve));
-      }
-    }
-
-    logger.info('Sampled relationships calculated', {
-      comparisons,
-      maxComparisons,
-      clusterComparisons,
-      crossTypeComparisons: comparisons - clusterComparisons
-    });
-  }
-
-  /**
-   * Build keyword clusters for first-pass relationship discovery
-   */
-  private async buildKeywordClusters(
-    index: EnhancedIndex,
-    keys: string[]
-  ): Promise<Map<string, string[]>> {
-    const clusters = new Map<string, string[]>();
-    const keywordFrequency = new Map<string, number>();
-
-    // Extract keywords from all elements
-    for (const key of keys) {
-      // FIX: Use centralized element ID parsing
-      const parsed = parseElementIdStrict(key);
-      const element = index.elements[parsed.type][parsed.name];
-      const keywords = [
-        ...(element.search?.keywords || []),
-        ...(element.search?.tags || [])
-      ];
-
-      for (const keyword of keywords) {
-        const normalized = keyword.toLowerCase();
-        keywordFrequency.set(normalized, (keywordFrequency.get(normalized) || 0) + 1);
-
-        if (!clusters.has(normalized)) {
-          clusters.set(normalized, []);
-        }
-        clusters.get(normalized)!.push(key);
-      }
-    }
-
-    // Keep only significant clusters (appears in at least 2 elements but not more than 50% of elements)
-    const significantClusters = new Map<string, string[]>();
-    const maxFrequency = Math.floor(keys.length * 0.5);
-
-    for (const [keyword, elementKeys] of clusters.entries()) {
-      if (elementKeys.length >= 2 && elementKeys.length <= maxFrequency) {
-        significantClusters.set(keyword, elementKeys);
-      }
-    }
-
-    logger.debug('Keyword clusters built', {
-      totalClusters: clusters.size,
-      significantClusters: significantClusters.size,
-      largestCluster: Math.max(...Array.from(significantClusters.values()).map(v => v.length))
-    });
-
-    return significantClusters;
-  }
-
-  /**
-   * Store a bidirectional relationship between elements
-   */
-  private storeRelationship(
-    index: EnhancedIndex,
-    type1: string,
-    name1: string,
-    type2: string,
-    name2: string,
-    scoring: any
-  ): void {
-    // Add relationship to element1
-    if (!index.elements[type1][name1].relationships) {
-      index.elements[type1][name1].relationships = {};
-    }
-    if (!index.elements[type1][name1].relationships.similar) {
-      index.elements[type1][name1].relationships.similar = [];
-    }
-
-    // Check if relationship already exists to avoid duplicates
-    const targetElement = formatElementId(type2, name2);
-    const existing1 = index.elements[type1][name1].relationships.similar
-      .find(r => r.element === targetElement);
-
-    if (!existing1) {
-      index.elements[type1][name1].relationships.similar.push(createRelationship(
-        type2,
-        name2,
-        RelationshipTypes.SEMANTIC_SIMILARITY,
-        scoring.combinedScore,
-        {
-          jaccard: scoring.jaccard,
-          entropy_diff: Math.abs(
-            (index.elements[type1][name1].semantic?.entropy || 0) -
-            (index.elements[type2][name2].semantic?.entropy || 0)
-          )
-        }
-      ));
-    }
-
-    // Add reverse relationship
-    if (!index.elements[type2][name2].relationships) {
-      index.elements[type2][name2].relationships = {};
-    }
-    if (!index.elements[type2][name2].relationships.similar) {
-      index.elements[type2][name2].relationships.similar = [];
-    }
-
-    const sourceElement = formatElementId(type1, name1);
-    const existing2 = index.elements[type2][name2].relationships.similar
-      .find(r => r.element === sourceElement);
-
-    if (!existing2) {
-      index.elements[type2][name2].relationships.similar.push(createRelationship(
-        type1,
-        name1,
-        RelationshipTypes.SEMANTIC_SIMILARITY,
-        scoring.combinedScore,
-        {
-          jaccard: scoring.jaccard,
-          entropy_diff: Math.abs(
-            (index.elements[type1][name1].semantic?.entropy || 0) -
-            (index.elements[type2][name2].semantic?.entropy || 0)
-          )
-        }
-      ));
-    }
-  }
-
-  /**
-   * Random sample from array
-   */
-  private randomSample<T>(array: T[], size: number): T[] {
-    const shuffled = [...array].sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, size);
-  }
+  
 
   /**
    * Find shortest path between two elements
@@ -2294,6 +1346,9 @@ export class EnhancedIndexManager {
     this.memoryCleanupInterval = setInterval(() => {
       this.clearMemoryCache();
     }, actualInterval);
+    if (typeof this.memoryCleanupInterval.unref === 'function') {
+      this.memoryCleanupInterval.unref();
+    }
 
     logger.debug('Started automatic memory cleanup', { intervalMs: actualInterval });
   }
@@ -2316,24 +1371,20 @@ export class EnhancedIndexManager {
     this.stopMemoryCleanup();
     this.clearMemoryCache();
 
+    try {
+      await this.metricsTracker.flush();
+    } catch (_error) {
+      // Ignore cleanup flush errors
+    }
+    this.metricsTracker.dispose();
+
+    if (this.nlpScoring && typeof (this.nlpScoring as any).dispose === 'function') {
+      (this.nlpScoring as any).dispose();
+    }
+
     // Release file lock if held
     if (this.fileLock) {
       await this.fileLock.release().catch(() => {});
-    }
-
-    // Clear the singleton instance
-    if (EnhancedIndexManager.instance === this) {
-      EnhancedIndexManager.instance = null;
-    }
-  }
-
-  /**
-   * Reset singleton instance (mainly for testing)
-   */
-  public static resetInstance(): void {
-    if (this.instance) {
-      this.instance.cleanup().catch(() => {});
-      this.instance = null;
     }
   }
 }

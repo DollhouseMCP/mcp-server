@@ -2,7 +2,7 @@
  * Portfolio Manager - Manages the portfolio directory structure for all element types
  */
 
-import * as fs from 'fs/promises';
+
 import * as path from 'path';
 import { homedir } from 'os';
 import { logger } from '../utils/logger.js';
@@ -11,6 +11,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
+import { FileOperationsService } from '../services/FileOperationsService.js';
 
 // Constants
 const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
@@ -25,17 +26,34 @@ const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
 // Default extension for backward compatibility
 const DEFAULT_ELEMENT_FILE_EXTENSION = '.md';
 
+/**
+ * Get the file extension for an element type without requiring a PortfolioManager instance.
+ * Issue #815: Shared by PortfolioRepoManager and submitToPortfolioTool to avoid
+ * hardcoded '.md' assumptions.
+ */
+export function getElementFileExtension(type: string): string {
+  return ELEMENT_FILE_EXTENSIONS[type as ElementType] || DEFAULT_ELEMENT_FILE_EXTENSION;
+}
+
 export { ElementType };
 export type { PortfolioConfig };
 
 export class PortfolioManager {
-  private static instance: PortfolioManager;
-  private static instanceLock = false;
-  private static initializationLock = false;
-  private static initializationPromise: Promise<void> | null = null;
+  private initializationPromise: Promise<void> | null = null;
   private baseDir: string;
-  
-  private constructor(config?: PortfolioConfig) {
+  private fileOperations: FileOperationsService;
+
+  /**
+   * Create a new PortfolioManager instance
+   *
+   * @param config - Optional portfolio configuration
+   * @param fileOperations - Optional FileOperationsService for dependency injection.
+   *                         BREAKING CHANGE (v1.5.0): Added as second parameter for DI.
+   *                         Direct instantiation without DI container should pass undefined
+   *                         or provide a FileOperationsService instance.
+   */
+  constructor(fileOperations: FileOperationsService, config?: PortfolioConfig) {
+    this.fileOperations = fileOperations;
     // Get potential directory from environment or config
     const envDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
     const configDir = config?.baseDir;
@@ -61,23 +79,6 @@ export class PortfolioManager {
     this.baseDir = envDir || configDir || defaultDir;
     
     logger.info(`[PortfolioManager] Portfolio base directory: ${this.baseDir}`);
-  }
-  
-  public static getInstance(config?: PortfolioConfig): PortfolioManager {
-    if (!PortfolioManager.instance) {
-      // Check if another thread is already creating the instance
-      if (PortfolioManager.instanceLock) {
-        throw new Error('PortfolioManager instance is being created by another thread');
-      }
-      
-      try {
-        PortfolioManager.instanceLock = true;
-        PortfolioManager.instance = new PortfolioManager(config);
-      } finally {
-        PortfolioManager.instanceLock = false;
-      }
-    }
-    return PortfolioManager.instance;
   }
   
   /**
@@ -108,24 +109,24 @@ export class PortfolioManager {
    */
   public async initialize(): Promise<void> {
     // If already initializing, wait for the existing initialization
-    if (PortfolioManager.initializationPromise) {
-      return PortfolioManager.initializationPromise;
+    if (this.initializationPromise) {
+      return this.initializationPromise;
     }
-    
-    // If already initialized, check if directories exist
-    if (await this.exists()) {
-      logger.debug('[PortfolioManager] Portfolio already initialized');
+
+    // Check if portfolio is fully initialized (base dir + all subdirectories exist)
+    if (await this.isFullyInitialized()) {
+      logger.debug('[PortfolioManager] Portfolio already fully initialized');
       return;
     }
-    
+
     // Create initialization promise to prevent concurrent initialization
-    PortfolioManager.initializationPromise = this.performInitialization();
-    
+    this.initializationPromise = this.performInitialization();
+
     try {
-      await PortfolioManager.initializationPromise;
+      await this.initializationPromise;
     } finally {
       // Clear the promise after completion
-      PortfolioManager.initializationPromise = null;
+      this.initializationPromise = null;
     }
   }
   
@@ -137,7 +138,7 @@ export class PortfolioManager {
     
     // Create base directory
     try {
-      await fs.mkdir(this.baseDir, { recursive: true });
+      await this.fileOperations.createDirectory(this.baseDir);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       // In read-only environments (like Docker), we can't create directories
@@ -153,13 +154,13 @@ export class PortfolioManager {
     // Create subdirectories for each element type
     for (const elementType of Object.values(ElementType)) {
       const elementDir = path.join(this.baseDir, elementType);
-      await fs.mkdir(elementDir, { recursive: true });
+      await this.fileOperations.createDirectory(elementDir);
       logger.debug(`[PortfolioManager] Created directory: ${elementDir}`);
     }
     
     // Create special directories for stateful elements
     const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
-    await fs.mkdir(agentStateDir, { recursive: true });
+    await this.fileOperations.createDirectory(agentStateDir);
     
     logger.info('[PortfolioManager] Portfolio directory structure initialized');
     
@@ -186,9 +187,36 @@ export class PortfolioManager {
    */
   public async exists(): Promise<boolean> {
     try {
-      await fs.access(this.baseDir);
+      return await this.fileOperations.exists(this.baseDir);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if portfolio is fully initialized (base dir + all subdirectories exist)
+   * This prevents the bug where base dir exists but subdirectories were deleted
+   */
+  private async isFullyInitialized(): Promise<boolean> {
+    // First check if base directory exists
+    if (!await this.exists()) {
+      return false;
+    }
+
+    // Check if all required subdirectories exist
+    try {
+      for (const elementType of Object.values(ElementType)) {
+        const elementDir = path.join(this.baseDir, elementType);
+        if (!await this.fileOperations.exists(elementDir)) return false;
+      }
+
+      // Check special directories
+      const agentStateDir = path.join(this.baseDir, ElementType.AGENT, '.state');
+      if (!await this.fileOperations.exists(agentStateDir)) return false;
+
       return true;
     } catch {
+      // If any subdirectory is missing, portfolio is not fully initialized
       return false;
     }
   }
@@ -196,6 +224,9 @@ export class PortfolioManager {
   /**
    * Check if a filename appears to be a test element
    * SAFETY: Pattern-based filtering only, no content parsing
+   *
+   * This method IDENTIFIES test patterns (always returns true for test files).
+   * The actual FILTERING decision (whether to exclude them) is made in listElements().
    */
   public isTestElement(filename: string): boolean {
     // Dangerous test patterns that should never appear in production
@@ -214,35 +245,18 @@ export class PortfolioManager {
       /^cmd-c-/i,
       /shell-injection/i
     ];
-    
-    // Common test patterns
-    const testPatterns = [
-      /^test-/i,
-      /^memory-test-/i,
-      /^yaml-test/i,
-      /^perf-test-/i,
-      /^stability-test-/i,
-      /^roundtrip-test/i,
-      /test-persona/i,
-      /test-skill/i,
-      /test-template/i,
-      /test-agent/i,
-      /\.test\./,
-      /__test__/,
-      /test-data/,
-      /penetration-test/i,
-      /metadata-test/i,
-      /testpersona\d+/i  // Generated test personas with timestamps
-    ];
-    
-    // Check dangerous patterns first
+
+    // NOTE: Test-pattern filtering removed entirely (Issue #287)
+    // Users can legitimately create elements with "test" in the name.
+    // Only dangerous patterns (security concerns) are filtered.
+
+    // Check dangerous patterns only
     if (dangerousPatterns.some(pattern => pattern.test(filename))) {
-      logger.warn(`[PortfolioManager] Filtered dangerous test element: ${filename}`);
+      logger.warn(`[PortfolioManager] Filtered dangerous element: ${filename}`);
       return true;
     }
-    
-    // Check common test patterns
-    return testPatterns.some(pattern => pattern.test(filename));
+
+    return false;
   }
 
   /**
@@ -253,11 +267,26 @@ export class PortfolioManager {
     const fileExtension = ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
 
     try {
-      const files = await fs.readdir(elementDir);
-      // Filter for correct file extension based on element type and exclude test elements
-      return files
-        .filter(file => file.endsWith(fileExtension))
-        .filter(file => !this.isTestElement(file));
+      const files = await this.fileOperations.listDirectory(elementDir);
+      // Filter for correct file extension based on element type
+      let filteredFiles = files.filter(file => file.endsWith(fileExtension));
+
+      // Issue #654: Exclude backup files from all element types.
+      // Safety net — MemoryStorageLayer also filters, but any code path that
+      // calls listElements() directly should never return backup artifacts.
+      filteredFiles = filteredFiles.filter(file =>
+        !file.includes('.backup-') && !file.includes('.backup.')
+      );
+
+      // Filter out test/dangerous elements unless explicitly disabled
+      // DISABLE_ELEMENT_FILTERING can be set in E2E tests that need test elements
+      // Integration tests and production both use filtering by default
+      const shouldFilter = process.env.DISABLE_ELEMENT_FILTERING !== 'true';
+      if (shouldFilter) {
+        filteredFiles = filteredFiles.filter(file => !this.isTestElement(file));
+      }
+
+      return filteredFiles;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       
@@ -335,8 +364,7 @@ export class PortfolioManager {
    */
   public async elementExists(type: ElementType, filename: string): Promise<boolean> {
     try {
-      await fs.access(this.getElementPath(type, filename));
-      return true;
+      return await this.fileOperations.exists(this.getElementPath(type, filename));
     } catch {
       return false;
     }
@@ -354,8 +382,9 @@ export class PortfolioManager {
    */
   public async hasLegacyPersonas(): Promise<boolean> {
     try {
-      await fs.access(this.getLegacyPersonasDir());
-      const files = await fs.readdir(this.getLegacyPersonasDir());
+      const legacyDir = this.getLegacyPersonasDir();
+      if (!await this.fileOperations.exists(legacyDir)) return false;
+      const files = await this.fileOperations.listDirectory(legacyDir);
       return files.some(file => file.endsWith('.md'));
     } catch {
       return false;
@@ -406,17 +435,19 @@ export class PortfolioManager {
       
       try {
         // Check if old directory exists
-        await fs.access(oldDir);
+        if (!await this.fileOperations.exists(oldDir)) continue;
         
         // Check if new directory already has content
         try {
-          const newDirFiles = await fs.readdir(newDir);
-          if (newDirFiles.length > 0) {
-            logger.warn(
-              `[PortfolioManager] Both ${oldName} and ${newName} directories exist. Keeping ${newName}, skipping migration.`,
-              { oldDir, newDir, fileCount: newDirFiles.length }
-            );
-            continue;
+          if (await this.fileOperations.exists(newDir)) {
+            const newDirFiles = await this.fileOperations.listDirectory(newDir);
+            if (newDirFiles.length > 0) {
+              logger.warn(
+                `[PortfolioManager] Both ${oldName} and ${newName} directories exist. Keeping ${newName}, skipping migration.`,
+                { oldDir, newDir, fileCount: newDirFiles.length }
+              );
+              continue;
+            }
           }
         } catch {
           // New directory doesn't exist or is empty, proceed with migration
@@ -424,7 +455,7 @@ export class PortfolioManager {
         
         // Perform the migration
         logger.info(`[PortfolioManager] Migrating ${oldName} → ${newName}`);
-        await fs.rename(oldDir, newDir);
+        await this.fileOperations.renameFile(oldDir, newDir);
         
         // Log security event for audit trail
         SecurityMonitor.logSecurityEvent({

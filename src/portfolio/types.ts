@@ -6,7 +6,7 @@
 // - validTypes array in src/index.ts (line ~1812)
 // - MCP_SUPPORTED_TYPES in src/collection/CollectionBrowser.ts
 // - All mapping objects (pluralToSingularMap, pluralToDirMap)
-// See docs/development/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
+// See docs/developer-guide/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
 export enum ElementType {
   PERSONA = 'personas',
   SKILL = 'skills',

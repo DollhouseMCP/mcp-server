@@ -48,15 +48,15 @@ export const ELEMENT_TYPE_CONFIG = {
     plural: 'memories',
     directory: 'memories',
     mcpSupported: false, // Hidden from MCP per Issue #144
-    hasManager: false,   // Not yet implemented
+    hasManager: true,    // Implemented
     icon: '🧠',
     description: 'Persistent context storage for continuity and learning'
   },
   [ElementType.ENSEMBLE]: {
     plural: 'ensembles',
     directory: 'ensembles',
-    mcpSupported: false, // Hidden from MCP per Issue #144
-    hasManager: false,   // Not yet implemented
+    mcpSupported: true,  // Re-enabled - was working before, agent incorrectly disabled it
+    hasManager: true,    // Implemented in this phase
     icon: '🎭',
     description: 'Groups of elements working together as a cohesive unit'
   }

@@ -12,6 +12,11 @@
  * - Ensures patterns never leak to LLM responses
  * - Provides audit trail for context checks
  *
+ * REFACTOR NOTE:
+ * Converted from static class to instance-based for DI architecture compatibility.
+ * ContextTracker now uses instance methods instead of static methods, allowing
+ * proper lifecycle management and testability within DI container.
+ *
  * @module ContextTracker
  */
 
@@ -41,9 +46,18 @@ export interface ExecutionContext {
  *
  * Maintains execution context across async operations to detect
  * LLM request handling and prevent pattern decryption in those contexts.
+ *
+ * DI-COMPATIBLE: Instance-based service for dependency injection.
  */
 export class ContextTracker {
-  private static readonly storage = new AsyncLocalStorage<ExecutionContext>();
+  private readonly storage = new AsyncLocalStorage<ExecutionContext>();
+
+  /**
+   * Create a new ContextTracker instance
+   */
+  constructor() {
+    logger.debug('ContextTracker initialized');
+  }
 
   /**
    * Run a function within a specific execution context
@@ -52,12 +66,7 @@ export class ContextTracker {
    * @param fn - Function to run within the context
    * @returns Result of the function
    */
-  static run<T>(context: ExecutionContext, fn: () => T): T {
-    logger.debug('Setting execution context', {
-      type: context.type,
-      requestId: context.requestId,
-    });
-
+  run<T>(context: ExecutionContext, fn: () => T): T {
     return this.storage.run(context, fn);
   }
 
@@ -68,15 +77,10 @@ export class ContextTracker {
    * @param fn - Async function to run within the context
    * @returns Promise resolving to the function result
    */
-  static async runAsync<T>(
+  async runAsync<T>(
     context: ExecutionContext,
     fn: () => Promise<T>
   ): Promise<T> {
-    logger.debug('Setting async execution context', {
-      type: context.type,
-      requestId: context.requestId,
-    });
-
     return this.storage.run(context, fn);
   }
 
@@ -85,7 +89,7 @@ export class ContextTracker {
    *
    * @returns Current context or undefined if no context is set
    */
-  static getContext(): ExecutionContext | undefined {
+  getContext(): ExecutionContext | undefined {
     return this.storage.getStore();
   }
 
@@ -94,19 +98,9 @@ export class ContextTracker {
    *
    * @returns true if in LLM request context, false otherwise
    */
-  static isLLMContext(): boolean {
+  isLLMContext(): boolean {
     const context = this.getContext();
-    const isLLM = context?.type === 'llm-request';
-
-    if (context) {
-      logger.debug('Checked LLM context', {
-        type: context.type,
-        isLLM,
-        requestId: context.requestId,
-      });
-    }
-
-    return isLLM;
+    return context?.type === 'llm-request';
   }
 
   /**
@@ -116,7 +110,7 @@ export class ContextTracker {
    * @param metadata - Optional metadata
    * @returns New execution context
    */
-  static createContext(
+  createContext(
     type: ExecutionContext['type'],
     metadata?: Record<string, unknown>
   ): ExecutionContext {
@@ -133,18 +127,34 @@ export class ContextTracker {
    *
    * @returns Unique request ID
    */
-  private static generateRequestId(): string {
+  private generateRequestId(): string {
     // Use cryptographically secure random bytes instead of Math.random()
     const randomId = randomBytes(4).toString('hex');
     return `${Date.now()}-${randomId}`;
   }
 
   /**
+   * Get the current correlation ID (request-level identifier).
+   * Returns undefined when no context is active (e.g. background timers).
+   */
+  getCorrelationId(): string | undefined {
+    return this.getContext()?.requestId;
+  }
+
+  /**
    * Clear the current context (useful for testing)
    */
-  static clearContext(): void {
+  clearContext(): void {
     // AsyncLocalStorage doesn't have a direct clear method
     // Context is automatically cleared when execution exits
-    logger.debug('Context cleared (will be garbage collected)');
+  }
+
+  /**
+   * Dispose of the context tracker and clean up resources
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.clearContext();
+    logger.debug('ContextTracker disposed');
   }
 }

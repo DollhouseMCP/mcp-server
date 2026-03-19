@@ -22,7 +22,8 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Reserved for future use in migration utilities
+const _dirname = path.dirname(__filename);
 
 interface MigrationResult {
   file: string;

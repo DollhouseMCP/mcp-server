@@ -27,7 +27,7 @@ const execAsync = promisify(exec);
  * This script supports both PAT (testing) and OAuth device flow (production)
  * - PAT Mode: Set TEST_GITHUB_TOKEN environment variable
  * - OAuth Mode: Leave TEST_GITHUB_TOKEN unset
- * See docs/development/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
+ * See docs/developer-guide/OAUTH_TESTING_VS_PRODUCTION.md for critical differences
  */
 
 class OAuthGitHubTest {
@@ -187,7 +187,7 @@ class OAuthGitHubTest {
       
       // Test 2: Access dollhouse-portfolio repository
       console.log(chalk.cyan('\nAccessing dollhouse-portfolio repository...'));
-      const repoData = await this.githubFetch('https://api.github.com/repos/mickdarling/dollhouse-portfolio');
+      const repoData = await this.githubFetch('https://api.github.com/repos/test-user/dollhouse-portfolio');
       console.log(chalk.green(`✅ Repository: ${repoData.full_name}`));
       console.log(`   Description: ${repoData.description}`);
       console.log(`   Private: ${repoData.private}`);
@@ -195,7 +195,7 @@ class OAuthGitHubTest {
       // Test 3: List contents of templates folder
       console.log(chalk.cyan('\nListing templates folder contents...'));
       try {
-        const contents = await this.githubFetch('https://api.github.com/repos/mickdarling/dollhouse-portfolio/contents/templates');
+        const contents = await this.githubFetch('https://api.github.com/repos/test-user/dollhouse-portfolio/contents/templates');
         
         if (Array.isArray(contents)) {
           console.log(chalk.green(`✅ Found ${contents.length} items in templates folder:`));

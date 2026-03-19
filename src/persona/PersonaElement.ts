@@ -8,10 +8,13 @@ import { IElement, IElementMetadata, ElementValidationResult } from '../types/el
 import { ElementType } from '../portfolio/types.js';
 import { PersonaMetadata } from '../types/persona.js';
 import { logger } from '../utils/logger.js';
-import matter from 'gray-matter';
+import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { MetadataService } from '../services/MetadataService.js';
+import { sanitizeGatekeeperPolicy } from '../handlers/mcp-aql/policies/ElementPolicies.js';
 
 // Extend IElementMetadata with persona-specific fields
 export interface PersonaElementMetadata extends IElementMetadata {
+  type?: ElementType.PERSONA;               // Persona type constraint for type safety
   unique_id?: string;  // Legacy ID for backward compatibility
   triggers?: string[];
   category?: string;
@@ -26,25 +29,38 @@ export interface PersonaElementMetadata extends IElementMetadata {
 }
 
 export class PersonaElement extends BaseElement implements IElement {
-  public content: string;
+  // instructions and content inherited from BaseElement (v2.0 dual-field architecture)
   public filename: string;
   public declare metadata: PersonaElementMetadata;
 
-  constructor(metadata: Partial<PersonaElementMetadata>, content: string = '', filename: string = '') {
-    super(ElementType.PERSONA, metadata);
+  /**
+   * Backward compatibility: provide unique_id as an alias for id
+   */
+  get unique_id(): string {
+    return this.id;
+  }
+
+  set unique_id(value: string) {
+    this.id = value;
+  }
+
+  constructor(metadata: Partial<PersonaElementMetadata>, instructions: string = '', filename: string = '', metadataService: MetadataService, content: string = '') {
+    super(ElementType.PERSONA, metadata, metadataService);
+    this.instructions = instructions;
     this.content = content;
     this.filename = filename;
     
     // Ensure persona-specific metadata
     this.metadata = {
       ...this.metadata,
-      triggers: metadata.triggers || [],
+      triggers: metadata.triggers && metadata.triggers.length > 0 ? metadata.triggers : undefined,
       category: metadata.category || 'personal',
       age_rating: metadata.age_rating || 'all',
       content_flags: metadata.content_flags || [],
       ai_generated: metadata.ai_generated || false,
       generation_method: metadata.generation_method || 'human',
       price: metadata.price || 'free',
+      revenue_split: metadata.revenue_split,  // Preserve revenue_split if provided
       license: metadata.license || 'CC-BY-SA-4.0',
       created_date: metadata.created_date || new Date().toISOString().split('T')[0]
     };
@@ -53,7 +69,7 @@ export class PersonaElement extends BaseElement implements IElement {
   /**
    * Create PersonaElement from legacy Persona interface
    */
-  static fromLegacy(legacyPersona: { metadata: PersonaMetadata; content: string; filename: string; unique_id: string }): PersonaElement {
+  static fromLegacy(legacyPersona: { metadata: PersonaMetadata; content: string; filename: string; unique_id: string }, metadataService: MetadataService): PersonaElement {
     const metadata: Partial<PersonaElementMetadata> = {
       name: legacyPersona.metadata.name,
       description: legacyPersona.metadata.description,
@@ -61,21 +77,22 @@ export class PersonaElement extends BaseElement implements IElement {
       version: legacyPersona.metadata.version,
       triggers: legacyPersona.metadata.triggers,
       category: legacyPersona.metadata.category,
-      age_rating: legacyPersona.metadata.age_rating,
+      age_rating: legacyPersona.metadata.age_rating as "all" | "13+" | "18+" | undefined,
       content_flags: legacyPersona.metadata.content_flags,
       ai_generated: legacyPersona.metadata.ai_generated,
-      generation_method: legacyPersona.metadata.generation_method,
+      generation_method: legacyPersona.metadata.generation_method as "human" | "ChatGPT" | "Claude" | "hybrid" | undefined,
       price: legacyPersona.metadata.price,
       revenue_split: legacyPersona.metadata.revenue_split,
       license: legacyPersona.metadata.license,
       created_date: legacyPersona.metadata.created_date
     };
 
-    const persona = new PersonaElement(metadata, legacyPersona.content, legacyPersona.filename);
-    
+    // Legacy personas: body content maps to instructions (it IS behavioral directives)
+    const persona = new PersonaElement(metadata, legacyPersona.content, legacyPersona.filename, metadataService);
+
     // Preserve the legacy unique_id as the element id
     persona.id = legacyPersona.unique_id;
-    
+
     return persona;
   }
 
@@ -103,7 +120,7 @@ export class PersonaElement extends BaseElement implements IElement {
 
     return {
       metadata: legacyMetadata,
-      content: this.content,
+      content: this.instructions || this.content,
       filename: this.filename,
       unique_id: this.id
     };
@@ -120,21 +137,22 @@ export class PersonaElement extends BaseElement implements IElement {
     if (!result.warnings) result.warnings = [];
     
     // Add persona-specific validation rules
-    
-    // Content should not be empty
-    if (!this.content || this.content.trim().length === 0) {
+
+    // Instructions should not be empty (primary field for personas)
+    const effectiveInstructions = this.instructions || this.content;
+    if (!effectiveInstructions || effectiveInstructions.trim().length === 0) {
       result.errors.push({
-        field: 'content',
-        message: 'Persona content cannot be empty',
-        code: 'EMPTY_CONTENT'
+        field: 'instructions',
+        message: 'Persona instructions cannot be empty',
+        code: 'EMPTY_INSTRUCTIONS'
       });
     }
 
-    // Content should be reasonable length
-    if (this.content && this.content.length > 10000) {
+    // Instructions should be reasonable length
+    if (effectiveInstructions && effectiveInstructions.length > 10000) {
       result.warnings.push({
-        field: 'content',
-        message: 'Persona content is very long, consider breaking it down',
+        field: 'instructions',
+        message: 'Persona instructions are very long, consider breaking them down',
         severity: 'medium'
       });
     }
@@ -164,10 +182,12 @@ export class PersonaElement extends BaseElement implements IElement {
   }
 
   /**
-   * Get content for serialization
+   * Get content for serialization.
+   * Returns instructions as the primary body text (v1 compat).
+   * v2 format writes instructions to YAML frontmatter and content as body.
    */
   protected override getContent(): string {
-    return this.content;
+    return this.instructions || this.content;
   }
 
   /**
@@ -211,6 +231,7 @@ export class PersonaElement extends BaseElement implements IElement {
     // Include persona-specific fields
     const data = {
       ...JSON.parse(super.serializeToJSON()),
+      instructions: this.instructions,
       content: this.content
     };
     return JSON.stringify(data, null, 2);
@@ -221,7 +242,7 @@ export class PersonaElement extends BaseElement implements IElement {
    */
   public override deserialize(data: string): void {
     try {
-      const parsed = matter(data);
+      const parsed = SecureYamlParser.safeMatter(data);
       const metadata = parsed.data as PersonaMetadata;
       
       // Update metadata
@@ -233,19 +254,29 @@ export class PersonaElement extends BaseElement implements IElement {
         version: metadata.version,
         triggers: metadata.triggers,
         category: metadata.category,
-        age_rating: metadata.age_rating,
+        age_rating: metadata.age_rating as "all" | "13+" | "18+" | undefined,
         content_flags: metadata.content_flags,
         ai_generated: metadata.ai_generated,
-        generation_method: metadata.generation_method,
+        generation_method: metadata.generation_method as "human" | "ChatGPT" | "Claude" | "hybrid" | undefined,
         price: metadata.price,
         revenue_split: metadata.revenue_split,
         license: metadata.license,
-        created_date: metadata.created_date
+        created_date: metadata.created_date,
+        gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name || 'unknown', 'persona'),
       };
-      
-      // Update content (trim to remove leading/trailing whitespace)
-      this.content = parsed.content.trim();
-      
+
+      // Dual-field loading: detect v2 format (instructions in YAML frontmatter)
+      const bodyText = parsed.content.trim();
+      if (metadata.instructions) {
+        // v2 format: instructions from YAML, body text is content (reference material)
+        this.instructions = metadata.instructions;
+        this.content = bodyText;
+      } else {
+        // v1 format: body text maps to instructions (it IS behavioral directives)
+        this.instructions = bodyText;
+        this.content = '';
+      }
+
       // Update ID if provided
       if (metadata.unique_id) {
         this.id = metadata.unique_id;

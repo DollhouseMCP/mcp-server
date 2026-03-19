@@ -9,11 +9,11 @@
  *    No user-provided data flows through this service that requires Unicode normalization
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import * as child_process from 'child_process';
 import { logger } from '../utils/logger.js';
+import { IFileOperationsService } from './FileOperationsService.js';
+import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
+import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
 
 export interface BuildInfo {
   package: {
@@ -47,43 +47,99 @@ export interface BuildInfo {
     uptime: number;
     mcpConnection: boolean;
   };
+  /** Issue #706: Startup timing and readiness status. */
+  startup?: {
+    status: 'ready' | 'initializing';
+    deferredSetupComplete: boolean;
+    uptimeMs: number;
+    startupTimingMs?: StartupReport;
+  };
 }
 
 export class BuildInfoService {
-  private static instance: BuildInfoService;
   private readonly startTime: Date;
-  private packageInfo?: { name: string; version: string };
+  private readonly fileOperations: IFileOperationsService;
+  /** Issue #706: Optional startup timer for timing instrumentation. */
+  private startupTimer: StartupTimer | null = null;
+  /** Issue #706: Callback to check deferred setup status. */
+  private deferredSetupChecker: (() => boolean) | null = null;
 
-  private constructor() {
+  constructor(fileOperations: IFileOperationsService) {
     this.startTime = new Date();
+    this.fileOperations = fileOperations;
   }
 
-  public static getInstance(): BuildInfoService {
-    if (!BuildInfoService.instance) {
-      BuildInfoService.instance = new BuildInfoService();
-    }
-    return BuildInfoService.instance;
+  /**
+   * Issue #706: Wire in startup instrumentation after DI is ready.
+   * Called from Container to avoid circular dependency at registration time.
+   */
+  setStartupTimer(timer: StartupTimer): void {
+    this.startupTimer = timer;
+  }
+
+  /**
+   * Issue #706: Wire in deferred setup status checker.
+   */
+  setDeferredSetupChecker(checker: () => boolean): void {
+    this.deferredSetupChecker = checker;
   }
 
   /**
    * Get comprehensive build information
    * SECURITY NOTE: This method processes only system-generated data
    * No user input is involved - all data comes from filesystem, git, and Node.js process
+   *
+   * Uses Promise.allSettled to collect partial results even if some sources fail,
+   * providing maximum information availability with graceful degradation.
    */
   public async getBuildInfo(): Promise<BuildInfo> {
-    const [packageInfo, gitInfo, dockerInfo] = await Promise.all([
-      this.getPackageInfo(),
+    // Use Promise.allSettled to collect all available info, even if some sources fail
+    const results = await Promise.allSettled([
       this.getGitInfo(),
       this.getDockerInfo()
     ]);
 
-    const buildTimestamp = await this.getBuildTimestamp();
+    // Package info comes from build-time generated constants
+    const packageInfo = { name: PACKAGE_NAME, version: PACKAGE_VERSION };
+
+    const gitInfo = results[0].status === 'fulfilled'
+      ? results[0].value
+      : { commit: undefined, branch: undefined };
+
+    const dockerInfo = results[1].status === 'fulfilled'
+      ? results[1].value
+      : { isDocker: false, info: undefined };
+
+    // Log any failures for diagnostics
+    const failures: string[] = [];
+    if (results[0].status === 'rejected') {
+      failures.push(`git info: ${results[0].reason}`);
+    }
+    if (results[1].status === 'rejected') {
+      failures.push(`docker info: ${results[1].reason}`);
+    }
+
+    if (failures.length > 0) {
+      logger.debug(`Build info collection had ${failures.length} failure(s): ${failures.join('; ')}`);
+    }
+
+    // Build timestamp comes from build-time generated constants
+    const buildTimestamp = BUILD_TIMESTAMP;
+
+    // Issue #706: Startup timing and readiness
+    const deferredComplete = this.deferredSetupChecker ? this.deferredSetupChecker() : true;
+    const startupInfo: BuildInfo['startup'] = {
+      status: deferredComplete ? 'ready' : 'initializing',
+      deferredSetupComplete: deferredComplete,
+      uptimeMs: Date.now() - this.startTime.getTime(),
+      startupTimingMs: this.startupTimer?.getReport(),
+    };
 
     return {
       package: packageInfo,
       build: {
         timestamp: buildTimestamp,
-        type: gitInfo.commit ? 'git' : buildTimestamp ? 'npm' : 'unknown',
+        type: BUILD_TYPE,
         gitCommit: gitInfo.commit,
         gitBranch: gitInfo.branch,
         collectionFix: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
@@ -107,7 +163,8 @@ export class BuildInfoService {
         startTime: this.startTime,
         uptime: Date.now() - this.startTime.getTime(),
         mcpConnection: true // We're connected if this method is being called via MCP
-      }
+      },
+      startup: startupInfo,
     };
   }
 
@@ -166,97 +223,32 @@ export class BuildInfoService {
     lines.push(`- **Started**: ${info.server.startTime.toISOString()}`);
     lines.push(`- **Uptime**: ${this.formatUptime(info.server.uptime / 1000)}`);
     lines.push(`- **MCP Connection**: ${info.server.mcpConnection ? '✅ Connected' : '❌ Disconnected'}`);
-    
+
+    // Issue #706: Startup timing
+    if (info.startup) {
+      lines.push('');
+      lines.push('## ⏱️ Startup');
+      lines.push(`- **Status**: ${info.startup.status === 'ready' ? '✅ Ready' : '⏳ Initializing'}`);
+      lines.push(`- **Deferred Setup**: ${info.startup.deferredSetupComplete ? 'Complete' : 'In Progress'}`);
+      if (info.startup.startupTimingMs) {
+        const timing = info.startup.startupTimingMs;
+        lines.push(`- **Critical Path**: ${timing.criticalPathMs}ms`);
+        lines.push(`- **Deferred Work**: ${timing.deferredMs}ms`);
+        lines.push(`- **Total Startup**: ${timing.totalMs}ms`);
+        if (timing.connectAtMs !== null) {
+          lines.push(`- **Time to Connect**: ${timing.connectAtMs}ms`);
+        }
+        if (timing.phases.length > 0) {
+          lines.push('- **Phases**:');
+          for (const phase of timing.phases) {
+            const tag = phase.critical ? 'critical' : 'deferred';
+            lines.push(`  - ${phase.name}: ${phase.durationMs}ms (${tag})`);
+          }
+        }
+      }
+    }
+
     return lines.join('\n');
-  }
-
-  /**
-   * SECURITY NOTE: No Unicode normalization needed - reads application's own package.json
-   * Data source: Controlled file system path, no user input
-   */
-  private async getPackageInfo(): Promise<{ name: string; version: string }> {
-    if (this.packageInfo) {
-      return this.packageInfo;
-    }
-
-    try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-      
-      // Try multiple paths to find package.json
-      // This handles both normal execution and compiled test scenarios
-      const possiblePaths = [
-        path.join(__dirname, '..', '..', 'package.json'), // Normal: dist/services -> root
-        path.join(__dirname, '..', '..', '..', 'package.json'), // Test: dist/test/services -> root
-        path.join(__dirname, '..', '..', '..', '..', 'package.json'), // Deep test: dist/test/deep/services -> root
-        path.join(process.cwd(), 'package.json') // Fallback to current working directory
-      ];
-      
-      let pkg: any = null;
-      
-      for (const packagePath of possiblePaths) {
-        try {
-          // SECURITY NOTE: Reading our own package.json file - not user input
-          // This file is controlled by the application, no Unicode normalization needed
-          const content = await fs.readFile(packagePath, 'utf-8');
-          pkg = JSON.parse(content);
-          break;
-        } catch {
-          // Try next path
-          continue;
-        }
-      }
-      
-      if (!pkg) {
-        throw new Error('Could not find package.json in any expected location');
-      }
-      
-      this.packageInfo = {
-        name: pkg.name || 'unknown',
-        version: pkg.version || 'unknown'
-      };
-      
-      return this.packageInfo;
-    } catch (error) {
-      logger.debug('Failed to read package.json:', error);
-      return { name: 'unknown', version: 'unknown' };
-    }
-  }
-
-  /**
-   * SECURITY NOTE: No Unicode normalization needed - reads build-generated version file
-   * Data source: Build system output file, no user input
-   */
-  private async getBuildTimestamp(): Promise<string | undefined> {
-    try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-      
-      // Try multiple paths to find version.json
-      // This handles both normal execution and compiled test scenarios
-      const possiblePaths = [
-        path.join(__dirname, '..', '..', 'dist', 'version.json'), // Normal location
-        path.join(__dirname, '..', '..', '..', 'dist', 'version.json'), // Test scenario
-        path.join(process.cwd(), 'dist', 'version.json') // Fallback to cwd
-      ];
-      
-      for (const versionPath of possiblePaths) {
-        try {
-          const content = await fs.readFile(versionPath, 'utf-8');
-          const version = JSON.parse(content);
-          return version.buildTime || version.timestamp;
-        } catch {
-          // Try next path
-          continue;
-        }
-      }
-      
-      // Version file might not exist, that's okay
-      return undefined;
-    } catch {
-      // Version file might not exist, that's okay
-      return undefined;
-    }
   }
 
   /**
@@ -267,8 +259,8 @@ export class BuildInfoService {
     try {
       // SECURITY NOTE: Git commands return system-controlled data - not user input
       // Git commit hashes and branch names are controlled by git, no Unicode normalization needed
-      const commit = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
+      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
       
       return { commit, branch };
     } catch {
@@ -285,7 +277,9 @@ export class BuildInfoService {
     try {
       // SECURITY NOTE: Reading system cgroup file - controlled by container runtime, not user input
       // Container runtime generates this file content, no Unicode normalization needed
-      const cgroupContent = await fs.readFile('/proc/1/cgroup', 'utf-8');
+      const cgroupContent = await this.fileOperations.readFile('/proc/1/cgroup', {
+        source: 'BuildInfoService.getDockerInfo'
+      });
       const isDocker = cgroupContent.includes('docker') || cgroupContent.includes('containerd');
       
       if (isDocker) {

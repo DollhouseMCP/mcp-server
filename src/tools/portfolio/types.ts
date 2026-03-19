@@ -14,6 +14,7 @@
 
 import { ElementType } from '../../portfolio/types.js';
 import { IElementMetadata } from '../../types/elements/IElement.js';
+import { PortfolioElementMetadata } from '../../config/portfolio-constants.js';
 
 /**
  * Simple portfolio element for submission
@@ -22,6 +23,16 @@ import { IElementMetadata } from '../../types/elements/IElement.js';
 export interface SimplePortfolioElement {
   type: ElementType;
   metadata: Partial<IElementMetadata>;
+  content: string;
+}
+
+/**
+ * Portfolio element structure used for submission
+ * Full version with complete metadata
+ */
+export interface PortfolioElement {
+  type: ElementType;
+  metadata: PortfolioElementMetadata;
   content: string;
 }
 

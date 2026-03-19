@@ -20,11 +20,15 @@
  * - All decryption attempts logged
  * - Key rotation supported
  *
+ * REFACTOR NOTE:
+ * Converted from static class to instance-based for DI architecture compatibility.
+ *
  * @module PatternEncryptor
  */
 
 import { randomBytes, createCipheriv, createDecipheriv, pbkdf2 } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
+import { env } from '../../config/env.js';
 
 /**
  * Encrypted pattern structure
@@ -65,12 +69,16 @@ export interface EncryptionConfig {
  * Default encryption configuration
  */
 const DEFAULT_CONFIG: EncryptionConfig = {
-  enabled: process.env.NODE_ENV === 'production',
-  secret: process.env.DOLLHOUSE_ENCRYPTION_SECRET,
+  // Honor DOLLHOUSE_DISABLE_ENCRYPTION environment variable
+  // If explicitly disabled, respect that setting regardless of NODE_ENV
+  enabled: env.DOLLHOUSE_DISABLE_ENCRYPTION
+    ? false
+    : env.NODE_ENV === 'production',
+  secret: env.DOLLHOUSE_ENCRYPTION_SECRET,
   iterations: 100000,
   // SECURITY FIX: Configurable salt to prevent rainbow table attacks
   // Falls back to default only if not configured
-  salt: process.env.DOLLHOUSE_ENCRYPTION_SALT || 'dollhouse-pattern-encryption-v1',
+  salt: env.DOLLHOUSE_ENCRYPTION_SALT || 'dollhouse-pattern-encryption-v1',
 };
 
 /**
@@ -78,16 +86,27 @@ const DEFAULT_CONFIG: EncryptionConfig = {
  *
  * Handles encryption and decryption of dangerous patterns using AES-256-GCM.
  * Provides authenticated encryption with integrity protection via GCM mode.
+ *
+ * DI-COMPATIBLE: Instance-based service for dependency injection.
  */
 export class PatternEncryptor {
-  private static readonly ALGORITHM = 'aes-256-gcm';
-  private static readonly KEY_LENGTH = 32; // 256 bits
-  private static readonly IV_LENGTH = 16; // 128 bits
-  private static readonly AUTH_TAG_LENGTH = 16; // 128 bits
+  private readonly ALGORITHM = 'aes-256-gcm';
+  private readonly KEY_LENGTH = 32; // 256 bits
+  private readonly IV_LENGTH = 16; // 128 bits
+  private readonly AUTH_TAG_LENGTH = 16; // 128 bits
 
-  private static config: EncryptionConfig = DEFAULT_CONFIG;
-  private static encryptionKey?: Buffer;
-  private static isInitialized: boolean = false;
+  private config: EncryptionConfig;
+  private encryptionKey?: Buffer;
+  private isInitialized: boolean = false;
+
+  /**
+   * Create a new PatternEncryptor instance
+   *
+   * @param config - Optional configuration overrides
+   */
+  constructor(config?: Partial<EncryptionConfig>) {
+    this.config = { ...DEFAULT_CONFIG, ...config };
+  }
 
   /**
    * Initialize encryption with configuration
@@ -95,11 +114,16 @@ export class PatternEncryptor {
    * @param config - Optional configuration overrides
    * @throws Error if encryption secret is not provided when enabled
    */
-  static async initialize(config?: Partial<EncryptionConfig>): Promise<void> {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+  async initialize(config?: Partial<EncryptionConfig>): Promise<void> {
+    if (config) {
+      this.config = { ...this.config, ...config };
+    }
 
     if (!this.config.enabled) {
-      logger.info('Pattern encryption disabled');
+      const reason = env.DOLLHOUSE_DISABLE_ENCRYPTION
+        ? 'explicitly disabled via DOLLHOUSE_DISABLE_ENCRYPTION environment variable'
+        : `disabled (NODE_ENV=${env.NODE_ENV})`;
+      logger.info(`Pattern encryption ${reason}`);
       this.isInitialized = true;
       return;
     }
@@ -133,7 +157,7 @@ export class PatternEncryptor {
    * @returns Encrypted pattern with metadata
    * @throws Error if encryption not initialized or pattern is empty
    */
-  static encrypt(pattern: string): EncryptedPattern {
+  encrypt(pattern: string): EncryptedPattern {
     if (!this.isInitialized) {
       throw new Error('PatternEncryptor not initialized. Call initialize() first.');
     }
@@ -201,7 +225,7 @@ export class PatternEncryptor {
    * @returns Decrypted plain text pattern
    * @throws Error if decryption fails or authentication fails
    */
-  static decrypt(encrypted: EncryptedPattern): string {
+  decrypt(encrypted: EncryptedPattern): string {
     if (!this.isInitialized) {
       throw new Error('PatternEncryptor not initialized. Call initialize() first.');
     }
@@ -273,7 +297,7 @@ export class PatternEncryptor {
    * @param iterations - Number of PBKDF2 iterations
    * @returns Derived encryption key
    */
-  private static async deriveKey(
+  private async deriveKey(
     secret: string,
     salt: string,
     iterations: number
@@ -306,7 +330,7 @@ export class PatternEncryptor {
    *
    * @returns true if encryption is enabled and initialized
    */
-  static isEnabled(): boolean {
+  isEnabled(): boolean {
     return this.config.enabled && this.isInitialized;
   }
 
@@ -315,7 +339,7 @@ export class PatternEncryptor {
    *
    * @returns Configuration status (without exposing secrets)
    */
-  static getStatus() {
+  getStatus() {
     return {
       enabled: this.config.enabled,
       initialized: this.isInitialized,
@@ -333,7 +357,7 @@ export class PatternEncryptor {
    * This prevents key recovery from memory dumps or process inspection.
    * Should be called when encryption is no longer needed.
    */
-  private static secureKeyClear(): void {
+  private secureKeyClear(): void {
     if (this.encryptionKey) {
       // Overwrite key material with zeros
       this.encryptionKey.fill(0);
@@ -347,10 +371,10 @@ export class PatternEncryptor {
    * SECURITY FIX: Now performs secure key clearing
    * WARNING: This will securely clear the encryption key from memory
    */
-  static reset(): void {
+  reset(): void {
     this.secureKeyClear();
     this.isInitialized = false;
-    this.config = DEFAULT_CONFIG;
+    this.config = { ...DEFAULT_CONFIG };
     logger.debug('PatternEncryptor reset');
   }
 
@@ -363,10 +387,18 @@ export class PatternEncryptor {
    * - Rotating encryption keys
    * - Responding to security incidents
    */
-  static secureReset(): void {
+  secureReset(): void {
     this.secureKeyClear();
     this.isInitialized = false;
-    this.config = DEFAULT_CONFIG;
+    this.config = { ...DEFAULT_CONFIG };
     logger.info('PatternEncryptor securely reset - all sensitive data cleared');
+  }
+
+  /**
+   * Dispose of the encryptor and securely clear all data
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.secureReset();
   }
 }

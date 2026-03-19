@@ -6,17 +6,19 @@
  * It ensures users have example content to work with immediately after installation.
  */
 
-import * as fs from 'fs/promises';
+// NOTE: fsSync is intentionally kept for synchronous development mode detection at module load time.
+// The IS_DEVELOPMENT_MODE check runs during module initialization before async operations are available.
+// All other file operations use FileOperationsService for centralized, secure file handling.
 import * as fsSync from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
-import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -43,7 +45,6 @@ const IS_DEVELOPMENT_MODE = (() => {
 })();
 
 // Internal constants
-const DATA_DIR_CACHE_KEY = 'dollhouse_data_dir';
 const COPY_RETRY_ATTEMPTS = 3;
 const COPY_RETRY_DELAY = 100; // ms
 
@@ -54,6 +55,8 @@ export interface DefaultElementProviderConfig {
   useDefaultPaths?: boolean;
   /** Whether to load test/example data from repository (default: false in dev mode) */
   loadTestData?: boolean;
+  /** FileOperationsService for centralized file operations */
+  fileOperations?: IFileOperationsService;
 }
 
 // PERFORMANCE: Metadata cache with mtime-based invalidation
@@ -68,14 +71,24 @@ export class DefaultElementProvider {
   private static cachedDataDir: string | null = null;
   private static populateInProgress: Map<string, Promise<void>> = new Map();
   private readonly config: DefaultElementProviderConfig;
-  
+  private readonly fileOperations?: IFileOperationsService;
+  private static logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
+
+  static addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): () => void {
+    this.logListener = fn;
+    return () => { this.logListener = undefined; };
+  }
+
   // PERFORMANCE OPTIMIZATION: Cache metadata with file mtime for invalidation
   private static metadataCache: Map<string, MetadataCacheEntry> = new Map();
   private static readonly MAX_CACHE_SIZE = 20; // MEMORY LEAK FIX: Further reduced cache size to prevent accumulation during performance tests
-  
+
   constructor(config?: DefaultElementProviderConfig) {
     const __filename = fileURLToPath(import.meta.url);
     this.__dirname = path.dirname(__filename);
+
+    // Store fileOperations service if provided
+    this.fileOperations = config?.fileOperations;
     
     // Check environment variable for test data loading
     const envLoadTestData = process.env.DOLLHOUSE_LOAD_TEST_DATA;
@@ -136,7 +149,91 @@ export class DefaultElementProvider {
   public get isDevelopmentMode(): boolean {
     return IS_DEVELOPMENT_MODE;
   }
-  
+
+  // ===== HELPER METHODS FOR FILE OPERATIONS =====
+  // These methods provide backward compatibility when fileOperations is not injected
+  // and centralize all file system calls through FileOperationsService when available
+
+  private async statFile(filePath: string): Promise<fsSync.Stats> {
+    if (this.fileOperations) {
+      return this.fileOperations.stat(filePath);
+    }
+    // Fallback: import fs/promises dynamically for backward compatibility
+    const { promises: fs } = await import('fs');
+    return fs.stat(filePath);
+  }
+
+  private async listDir(dirPath: string): Promise<string[]> {
+    if (this.fileOperations) {
+      return this.fileOperations.listDirectory(dirPath);
+    }
+    const { promises: fs } = await import('fs');
+    return fs.readdir(dirPath);
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    if (this.fileOperations) {
+      return this.fileOperations.exists(filePath);
+    }
+    const { promises: fs } = await import('fs');
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async makeDirectory(dirPath: string): Promise<void> {
+    if (this.fileOperations) {
+      return this.fileOperations.createDirectory(dirPath);
+    }
+    const { promises: fs } = await import('fs');
+    await fs.mkdir(dirPath, { recursive: true });
+  }
+
+  private async copyFileOp(sourcePath: string, destPath: string): Promise<void> {
+    if (this.fileOperations) {
+      return this.fileOperations.copyFile(sourcePath, destPath, {
+        source: 'DefaultElementProvider.copyFileOp'
+      });
+    }
+    const { promises: fs } = await import('fs');
+    await fs.copyFile(sourcePath, destPath);
+  }
+
+  private async chmodFile(filePath: string, mode: number): Promise<void> {
+    if (this.fileOperations) {
+      return this.fileOperations.chmod(filePath, mode, {
+        source: 'DefaultElementProvider.chmodFile'
+      });
+    }
+    const { promises: fs } = await import('fs');
+    await fs.chmod(filePath, mode);
+  }
+
+  private async deleteFileOp(filePath: string): Promise<void> {
+    if (this.fileOperations) {
+      return this.fileOperations.deleteFile(filePath, undefined, {
+        source: 'DefaultElementProvider.deleteFileOp'
+      });
+    }
+    const { promises: fs } = await import('fs');
+    await fs.unlink(filePath);
+  }
+
+  private async readFileContent(filePath: string): Promise<string> {
+    if (this.fileOperations) {
+      return this.fileOperations.readFile(filePath, {
+        source: 'DefaultElementProvider.readFileContent'
+      });
+    }
+    const { promises: fs } = await import('fs');
+    return fs.readFile(filePath, 'utf-8');
+  }
+
+  // ===== END HELPER METHODS =====
+
   /**
    * Search paths for bundled data directory
    * Ordered by priority - custom paths first, then development/git, then NPM locations
@@ -196,7 +293,7 @@ export class DefaultElementProvider {
     // Check all paths in parallel for better performance
     const checkPromises = this.dataSearchPaths.map(async (searchPath) => {
       try {
-        const stats = await fs.stat(searchPath);
+        const stats = await this.statFile(searchPath);
         if (stats.isDirectory()) {
           // Verify it contains expected subdirectories
           const hasPersonas = await this.directoryExists(path.join(searchPath, 'personas'));
@@ -205,7 +302,7 @@ export class DefaultElementProvider {
             return searchPath;
           }
         }
-      } catch (error) {
+      } catch {
         // Directory doesn't exist or can't be accessed
         return null;
       }
@@ -233,7 +330,7 @@ export class DefaultElementProvider {
    */
   private async directoryExists(dirPath: string): Promise<boolean> {
     try {
-      const stats = await fs.stat(dirPath);
+      const stats = await this.statFile(dirPath);
       return stats.isDirectory();
     } catch {
       return false;
@@ -435,7 +532,14 @@ export class DefaultElementProvider {
     const bufferHits = DefaultElementProvider.bufferPoolStats.hits;
     const bufferMisses = DefaultElementProvider.bufferPoolStats.misses;
     const totalRequests = bufferHits + bufferMisses;
-    
+
+    DefaultElementProvider.logListener?.('debug', 'Report buffer pool stats', {
+      hits: bufferHits,
+      misses: bufferMisses,
+      hitRate: totalRequests > 0 ? bufferHits / totalRequests : 0,
+      poolSize: DefaultElementProvider.bufferPool.length,
+    });
+
     return {
       bufferPool: {
         hits: bufferHits,
@@ -467,11 +571,11 @@ export class DefaultElementProvider {
   private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
     // PERFORMANCE: Check cache first before reading file
     try {
-      const stats = await fs.stat(filePath);
+      const stats = await this.statFile(filePath);
       const cacheKey = filePath;
       const cached = DefaultElementProvider.metadataCache.get(cacheKey);
-      
-      // Return cached metadata if file hasn't changed 
+
+      // Return cached metadata if file hasn't changed
       // CRITICAL FIX: Use integer mtime comparison to avoid floating-point precision issues
       if (cached && Math.floor(cached.mtime) === Math.floor(stats.mtimeMs) && cached.size === stats.size) {
         logger.debug(`[DefaultElementProvider] Cache hit for ${filePath}`);
@@ -482,7 +586,11 @@ export class DefaultElementProvider {
     }
     
     try {
-      // Open file and read only first 4KB to avoid reading dangerous content
+      // NOTE: Using direct fs.open for partial file read (first 4KB only).
+      // FileOperationsService doesn't support partial reads with file handles.
+      // This is intentionally kept as a direct fs call for performance-critical
+      // metadata extraction that only needs the YAML frontmatter.
+      const { promises: fs } = await import('fs');
       const fd = await fs.open(filePath, 'r');
       // PERFORMANCE: Use buffer pool instead of allocating new buffer each time
       const buffer = this.getBuffer();
@@ -519,7 +627,7 @@ export class DefaultElementProvider {
           // PERFORMANCE: Cache the metadata with file stats for future reads
           if (typeof metadata === 'object' && metadata !== null) {
             try {
-              const stats = await fs.stat(filePath);
+              const stats = await this.statFile(filePath);
               const cacheEntry: MetadataCacheEntry = {
                 metadata,
                 mtime: stats.mtimeMs,
@@ -682,10 +790,10 @@ export class DefaultElementProvider {
     
     try {
       // Ensure destination directory exists
-      await fs.mkdir(destDir, { recursive: true });
-      
+      await this.makeDirectory(destDir);
+
       // Read source directory
-      const files = await fs.readdir(sourceDir);
+      const files = await this.listDir(sourceDir);
       
       
       for (const file of files) {
@@ -752,19 +860,17 @@ export class DefaultElementProvider {
           }
         }
         
-        try {
-          // Check if destination file already exists
-          await fs.access(destPath);
+        // Check if destination file already exists
+        const destExists = await this.fileExists(destPath);
+        if (destExists) {
           logger.debug(`[DefaultElementProvider] Skipping existing file: ${normalizedFile.normalizedContent}`);
           continue;
-        } catch {
-          // File doesn't exist, proceed with copy
         }
         
         try {
           // Validate source file before copying
-          const sourceStats = await fs.stat(sourcePath);
-          
+          const sourceStats = await this.statFile(sourcePath);
+
           // Check file size limit
           if (sourceStats.size > FILE_CONSTANTS.MAX_FILE_SIZE) {
             logger.warn(
@@ -797,7 +903,7 @@ export class DefaultElementProvider {
               sourcePath,
               destPath,
               elementType,
-              fileSize: (await fs.stat(destPath)).size
+              fileSize: (await this.statFile(destPath)).size
             }
           });
         } catch (error) {
@@ -838,21 +944,26 @@ export class DefaultElementProvider {
    */
   private async calculateChecksum(filePath: string): Promise<string> {
     const hash = createHash(FILE_CONSTANTS.CHECKSUM_ALGORITHM);
+    // NOTE: Using direct fs.open for chunked/streaming file read.
+    // FileOperationsService doesn't support file handles for chunked reading.
+    // This is intentionally kept as a direct fs call for memory-efficient
+    // checksum calculation on potentially large files.
+    const { promises: fs } = await import('fs');
     const stream = await fs.open(filePath, 'r');
-    
+
     try {
       const buffer = Buffer.alloc(FILE_CONSTANTS.CHUNK_SIZE);
       let bytesRead: number;
-      
+
       do {
         const result = await stream.read(buffer, 0, FILE_CONSTANTS.CHUNK_SIZE);
         bytesRead = result.bytesRead;
-        
+
         if (bytesRead > 0) {
           hash.update(buffer.subarray(0, bytesRead));
         }
       } while (bytesRead > 0);
-      
+
       return hash.digest('hex');
     } finally {
       await stream.close();
@@ -867,65 +978,65 @@ export class DefaultElementProvider {
    */
   private async copyFileWithVerification(sourcePath: string, destPath: string): Promise<void> {
     let lastError: Error | null = null;
-    
+
     for (let attempt = 1; attempt <= COPY_RETRY_ATTEMPTS; attempt++) {
       try {
         // Copy the file
-        await fs.copyFile(sourcePath, destPath);
-        
+        await this.copyFileOp(sourcePath, destPath);
+
         // Verify size matches
         const [sourceStats, destStats] = await Promise.all([
-          fs.stat(sourcePath),
-          fs.stat(destPath)
+          this.statFile(sourcePath),
+          this.statFile(destPath)
         ]);
-        
+
         if (sourceStats.size !== destStats.size) {
           throw new Error(
             `Size mismatch after copy - source: ${sourceStats.size} bytes, ` +
             `destination: ${destStats.size} bytes`
           );
         }
-        
+
         // Verify checksum matches for complete integrity
         const [sourceChecksum, destChecksum] = await Promise.all([
           this.calculateChecksum(sourcePath),
           this.calculateChecksum(destPath)
         ]);
-        
+
         if (sourceChecksum !== destChecksum) {
           throw new Error(
             `Checksum mismatch after copy - source: ${sourceChecksum}, ` +
             `destination: ${destChecksum}`
           );
         }
-        
+
         // Set proper permissions
         try {
-          await fs.chmod(destPath, FILE_CONSTANTS.FILE_PERMISSIONS);
+          await this.chmodFile(destPath, FILE_CONSTANTS.FILE_PERMISSIONS);
         } catch (error) {
           logger.debug(
             `[DefaultElementProvider] Could not set permissions on ${destPath}: ${error}`,
             { sourcePath, destPath, attempt }
           );
         }
-        
+
         // Success - file copied and verified
         logger.debug(
           `[DefaultElementProvider] Successfully copied and verified: ${path.basename(sourcePath)}`,
           { size: sourceStats.size, checksum: sourceChecksum.substring(0, 8) }
         );
         return;
-        
+
       } catch (error) {
         lastError = error as Error;
-        
+
         // Clean up failed copy
         try {
-          await fs.unlink(destPath);
+          await this.deleteFileOp(destPath);
         } catch {
           // Ignore cleanup errors
         }
-        
+
         if (attempt < COPY_RETRY_ATTEMPTS) {
           logger.debug(
             `[DefaultElementProvider] Copy attempt ${attempt} failed, retrying...`,
@@ -1029,16 +1140,21 @@ export class DefaultElementProvider {
     for (const elementType of Object.values(ElementType)) {
       const sourceDir = path.join(dataDir, elementType);
       const destDir = path.join(portfolioBaseDir, elementType);
-      
+
+      // Check if source directory exists
+      const sourceDirExists = await this.fileExists(sourceDir);
+      if (!sourceDirExists) {
+        // Source directory doesn't exist, skip
+        logger.debug(`[DefaultElementProvider] No ${elementType} directory in bundled data`);
+        continue;
+      }
+
       try {
-        // Check if source directory exists
-        await fs.access(sourceDir);
         const copiedCount = await this.copyElementFiles(sourceDir, destDir, elementType);
         copiedCounts[elementType] = copiedCount;
         totalCopied += copiedCount;
       } catch (error) {
-        // Source directory doesn't exist, skip
-        logger.debug(`[DefaultElementProvider] No ${elementType} directory in bundled data`);
+        logger.error(`[DefaultElementProvider] Error copying ${elementType} elements:`, error);
       }
     }
     

@@ -1,0 +1,119 @@
+# GraphQL schema for MCP-AQL (MCP Agent Query Language)
+# This schema defines 4 CRUD endpoints that consolidate all element operations
+# into a streamlined query interface for AI agents.
+
+scalar JSON
+
+"""
+Element types supported by DollhouseMCP.
+These correspond to the 6 core element types in the system.
+"""
+enum ElementType {
+  persona
+  skill
+  template
+  agent
+  memory
+  ensemble
+}
+
+"""
+Input for all MCP-AQL operations.
+The operation field determines which handler function is invoked.
+"""
+input OperationInput {
+  """The operation to perform (e.g., 'create_element', 'list_elements')"""
+  operation: String!
+
+  """Element type for element operations"""
+  elementType: ElementType
+
+  """Operation-specific parameters as a JSON object"""
+  params: JSON
+}
+
+"""
+Standard result type for all MCP-AQL operations.
+Success indicates whether the operation completed successfully.
+Data contains the operation-specific result payload.
+Error contains a human-readable error message if success is false.
+"""
+type OperationResult {
+  success: Boolean!
+  data: JSON
+  error: String
+}
+
+type Mutation {
+  """
+  Additive, non-destructive operations.
+
+  Safety annotations:
+  - readOnly: false
+  - destructive: false
+
+  Supported operations:
+  - create_element: Create a new element
+  - import_element: Import an element from exported data
+  - addEntry: Add an entry to a memory element
+  - activate_element: Activate an element for use in session
+
+  These operations add new data or state without removing or overwriting existing content.
+  """
+  mcp_aql_create(input: OperationInput!): OperationResult!
+
+  """
+  Modifying operations that overwrite data.
+
+  Safety annotations:
+  - readOnly: false
+  - destructive: true
+
+  Supported operations:
+  - edit_element: Modify an existing element's fields
+
+  These operations modify existing data, potentially overwriting previous values.
+  """
+  mcp_aql_update(input: OperationInput!): OperationResult!
+
+  """
+  Destructive operations that remove data or execute state-changing behaviors.
+
+  Safety annotations:
+  - readOnly: false
+  - destructive: true
+
+  Supported operations:
+  - delete_element: Permanently delete an element
+  - execute_agent: Run an agent (may modify multiple elements)
+  - clear: Clear entries from a memory element
+
+  These operations remove data or trigger complex workflows with side effects.
+  Use with caution.
+  """
+  mcp_aql_delete(input: OperationInput!): OperationResult!
+}
+
+type Query {
+  """
+  Safe, read-only operations.
+
+  Safety annotations:
+  - readOnly: true
+  - destructive: false
+
+  Supported operations:
+  - list_elements: List elements with filtering and pagination
+  - get_element: Retrieve a single element by name
+  - search_elements: Full-text search across elements
+  - query_elements: Query elements with advanced filters
+  - get_active_elements: Get currently active elements
+  - validate_element: Validate an element's structure
+  - render: Render a template with variables
+  - export_element: Export an element to portable format
+  - deactivate_element: Deactivate an active element
+
+  These operations only read data and never modify server state.
+  """
+  mcp_aql_read(input: OperationInput!): OperationResult!
+}
