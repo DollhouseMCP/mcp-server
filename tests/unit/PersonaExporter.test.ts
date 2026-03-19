@@ -24,8 +24,8 @@ describe('PersonaExporter', () => {
   });
   
   describe('exportPersona', () => {
-    it('should export a persona with all metadata', async () => {
-      const result = await exporter.exportPersona(mockPersona);
+    it('should export a persona with all metadata', () => {
+      const result = exporter.exportPersona(mockPersona);
       
       expect(result).toHaveProperty('metadata');
       expect(result).toHaveProperty('content');
@@ -39,21 +39,21 @@ describe('PersonaExporter', () => {
       expect(result.exportedBy).toBe('test-user');
     });
 
-    it('should reflect updated user from provider on subsequent exports', async () => {
+    it('should reflect updated user from provider on subsequent exports', () => {
       let currentUser = 'initial-user';
       exporter = new PersonaExporter(() => currentUser);
 
-      const firstExport = await exporter.exportPersona(mockPersona);
+      const firstExport = exporter.exportPersona(mockPersona);
       expect(firstExport.exportedBy).toBe('initial-user');
 
       currentUser = 'updated-user';
-      const secondExport = await exporter.exportPersona(mockPersona);
+      const secondExport = exporter.exportPersona(mockPersona);
       expect(secondExport.exportedBy).toBe('updated-user');
     });
     
-    it('should include timestamp in exportedAt', async () => {
+    it('should include timestamp in exportedAt', () => {
       const before = new Date().toISOString();
-      const result = await exporter.exportPersona(mockPersona);
+      const result = exporter.exportPersona(mockPersona);
       const after = new Date().toISOString();
       
       expect(new Date(result.exportedAt).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
@@ -62,9 +62,9 @@ describe('PersonaExporter', () => {
   });
   
   describe('toBase64', () => {
-    it('should encode persona to base64', async () => {
-      const exportedPersona = await exporter.exportPersona(mockPersona);
-      const base64 = await exporter.toBase64(exportedPersona);
+    it('should encode persona to base64', () => {
+      const exportedPersona = exporter.exportPersona(mockPersona);
+      const base64 = exporter.toBase64(exportedPersona);
       
       expect(typeof base64).toBe('string');
       expect(base64.length).toBeGreaterThan(0);
@@ -129,7 +129,7 @@ describe('PersonaExporter', () => {
       expect(() => exporter.exportPersona(largePersona)).toThrow('Persona too large');
     });
     
-    it('should handle persona without optional fields', async () => {
+    it('should handle persona without optional fields', () => {
       const minimalPersona: Persona = {
         metadata: {
           name: "Minimal",
@@ -140,17 +140,17 @@ describe('PersonaExporter', () => {
         filename: "minimal.md",
         unique_id: "minimal_20250711-120000_test"
       };
-      
-      const result = await exporter.exportPersona(minimalPersona);
+
+      const result = exporter.exportPersona(minimalPersona);
       
       expect(result.metadata.name).toBe("Minimal");
       expect(result.metadata.version).toBeUndefined();
       expect(result.metadata.author).toBeUndefined();
     });
     
-    it('should handle exporter without currentUser', async () => {
+    it('should handle exporter without currentUser', () => {
       const anonymousExporter = new PersonaExporter(null);
-      const result = await anonymousExporter.exportPersona(mockPersona);
+      const result = anonymousExporter.exportPersona(mockPersona);
       
       expect(result.exportedBy).toBeUndefined();
     });

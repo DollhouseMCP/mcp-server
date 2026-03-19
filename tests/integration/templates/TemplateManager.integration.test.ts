@@ -57,7 +57,7 @@ describe('TemplateManager (BaseElementManager integration)', () => {
   afterAll(async () => {
     // Dispose manager to clean up file watchers
     if (manager) {
-      await manager.dispose();
+      manager.dispose();
     }
 
     await env.cleanup();

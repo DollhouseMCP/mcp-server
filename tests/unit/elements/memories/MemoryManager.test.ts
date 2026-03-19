@@ -519,29 +519,29 @@ data:
   });
   
   describe('validate', () => {
-    it('should validate memory element', async () => {
+    it('should validate memory element', () => {
       const validMemory = new Memory({ name: 'Valid', retentionDays: 30 }, metadataService);
-      const result = await manager.validate(validMemory);
+      const result = manager.validate(validMemory);
       expect(result.valid).toBe(true);
-      
+
       // retentionDays: -1 is invalid (MIN is 1)
       const invalidMemory = new Memory({ retentionDays: -1 }, metadataService);
-      const invalidResult = await manager.validate(invalidMemory);
+      const invalidResult = manager.validate(invalidMemory);
       expect(invalidResult.valid).toBe(false);
     });
   });
-  
+
   describe('validatePath', () => {
-    it('should validate safe paths', async () => {
-      expect(await manager.validatePath('memory.yaml')).toBe(true);
-      expect(await manager.validatePath('subfolder/memory.yaml')).toBe(true); // Subfolders are allowed
-      expect(await manager.validatePath('memory.md')).toBe(true);
+    it('should validate safe paths', () => {
+      expect(manager.validatePath('memory.yaml')).toBe(true);
+      expect(manager.validatePath('subfolder/memory.yaml')).toBe(true); // Subfolders are allowed
+      expect(manager.validatePath('memory.md')).toBe(true);
     });
-    
-    it('should reject dangerous paths', async () => {
-      expect(await manager.validatePath('../../../etc/passwd')).toBe(false);
-      expect(await manager.validatePath('/absolute/path')).toBe(false);
-      expect(await manager.validatePath('memory.txt')).toBe(false); // Wrong extension
+
+    it('should reject dangerous paths', () => {
+      expect(manager.validatePath('../../../etc/passwd')).toBe(false);
+      expect(manager.validatePath('/absolute/path')).toBe(false);
+      expect(manager.validatePath('memory.txt')).toBe(false); // Wrong extension
     });
   });
   

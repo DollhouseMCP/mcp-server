@@ -258,26 +258,26 @@ This is a test skill.`;
   });
 
   describe('validate', () => {
-    it('should validate a valid skill', async () => {
+    it('should validate a valid skill', () => {
       const skill = new Skill({
         name: 'Valid Skill',
         description: 'A valid skill',
         tags: ['test']
       }, 'Valid instructions', metadataService);
 
-      const result = await skillManager.validate(skill);
+      const result = skillManager.validate(skill);
 
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
 
-    it('should detect invalid skills', async () => {
+    it('should detect invalid skills', () => {
       const skill = new Skill({
         name: '', // Empty name
         description: 'Invalid skill'
       }, '', metadataService);
 
-      const result = await skillManager.validate(skill);
+      const result = skillManager.validate(skill);
 
       expect(result.valid).toBe(false);
       expect(result.errors?.length).toBeGreaterThan(0);

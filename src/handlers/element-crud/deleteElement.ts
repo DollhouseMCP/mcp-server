@@ -125,7 +125,7 @@ async function deleteMemory(
   deleteData?: boolean
 ) {
   const memories = await context.memoryManager.list();
-  const memory = await findElementFlexibly(name, memories);
+  const memory = findElementFlexibly(name, memories);
 
   if (!memory) {
     // FIX: Issue #275 - Throw error instead of returning content for missing elements

@@ -250,10 +250,10 @@ Test project context for ensemble testing.`;
 
     // Reload all managers to pick up new files
     await personaManager.reloadPersonas();
-    await skillManager.clearCache();
-    await templateManager.clearCache();
-    await agentManager.clearCache();
-    await memoryManager.clearCache();
+    skillManager.clearCache();
+    templateManager.clearCache();
+    agentManager.clearCache();
+    memoryManager.clearCache();
     await skillManager.list();
     await templateManager.list();
     await agentManager.list();
