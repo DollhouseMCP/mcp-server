@@ -120,6 +120,7 @@ export async function startWebServer(options: WebServerOptions): Promise<void> {
   }
 
   const app = express();
+  app.disable('x-powered-by');
 
   // Security headers
   app.use((_req, res, next) => {
