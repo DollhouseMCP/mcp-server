@@ -23,17 +23,21 @@ When you activate a persona, you're not just changing a prompt — you're changi
 
 ## Step 1: Install
 
+> **Note:** DollhouseMCP v2 is currently a release candidate. Use the `@rc` tag to install. When v2 reaches GA, the `@rc` tag will no longer be needed.
+
 ### Claude Code (Recommended)
 
 ```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
 That's it. Claude Code handles the rest.
 
 ### Claude Desktop
 
-Add this to your Claude Desktop configuration file:
+**One-click**: Download the [Desktop Extension (.mcpb)](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.1) and open it.
+
+**Manual config** — add this to your Claude Desktop configuration file:
 
 **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
@@ -43,7 +47,7 @@ Add this to your Claude Desktop configuration file:
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
