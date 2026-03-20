@@ -11,14 +11,12 @@
  */
 
 import { PortfolioRepoManager } from './PortfolioRepoManager.js';
-import { TokenManager } from '../security/tokenManager.js';
 import { ElementType } from './types.js';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { APICache } from '../cache/APICache.js';
-import { getPortfolioRepositoryName } from '../config/portfolioConfig.js';
 
 export interface GitHubIndexEntry {
   path: string;
@@ -55,9 +53,6 @@ export interface GitHubFetchOptions {
 }
 
 export class GitHubPortfolioIndexer {
-  private static instance: GitHubPortfolioIndexer | null = null;
-  private static instanceLock = false;
-  
   private cache: GitHubPortfolioIndex | null = null;
   private lastFetch: Date | null = null;
   private readonly ttl = 15 * 60 * 1000; // 15 minutes
@@ -68,32 +63,19 @@ export class GitHubPortfolioIndexer {
   private portfolioRepoManager: PortfolioRepoManager;
   private apiCache: APICache;
   private rateLimitTracker: Map<string, number[]>;
+  private readonly graphQLFeatureEnabled: boolean;
   
-  private constructor() {
+  constructor(portfolioRepoManager?: PortfolioRepoManager) {
     this.apiCache = new APICache(); // Uses default settings
     this.rateLimitTracker = new Map();
-    this.portfolioRepoManager = new PortfolioRepoManager(getPortfolioRepositoryName());
-    
-    logger.debug('GitHubPortfolioIndexer created');
-  }
-
-  /**
-   * Singleton pattern with thread safety
-   */
-  public static getInstance(): GitHubPortfolioIndexer {
-    if (!this.instance) {
-      if (this.instanceLock) {
-        throw new Error('GitHubPortfolioIndexer instance is being created by another thread');
-      }
-      
-      try {
-        this.instanceLock = true;
-        this.instance = new GitHubPortfolioIndexer();
-      } finally {
-        this.instanceLock = false;
-      }
+    this.portfolioRepoManager = portfolioRepoManager!;
+    const graphQLEnv = process.env.DOLLHOUSE_GITHUB_GRAPHQL?.toLowerCase();
+    this.graphQLFeatureEnabled = graphQLEnv === 'true' || graphQLEnv === '1';
+    if (this.graphQLFeatureEnabled) {
+      logger.info('GitHubPortfolioIndexer: GraphQL fetch enabled via DOLLHOUSE_GITHUB_GRAPHQL');
     }
-    return this.instance;
+
+    logger.debug('GitHubPortfolioIndexer created');
   }
 
   /**
@@ -206,7 +188,7 @@ export class GitHubPortfolioIndexer {
   private async fetchFresh(): Promise<GitHubPortfolioIndex> {
     const startTime = Date.now();
     logger.info('Fetching fresh GitHub portfolio index...');
-    
+
     try {
       // Get GitHub username from token
       const username = await this.getGitHubUsername();
@@ -258,23 +240,28 @@ export class GitHubPortfolioIndexer {
    * Fetch repository content from GitHub API
    */
   private async fetchRepositoryContent(username: string, repository: string): Promise<GitHubPortfolioIndex> {
-    // Try GraphQL first for better performance, fallback to REST
-    try {
-      return await this.fetchWithGraphQL(username, repository);
-    } catch (graphqlError) {
-      logger.debug('GraphQL fetch failed, falling back to REST API', {
-        error: graphqlError instanceof Error ? graphqlError.message : String(graphqlError)
-      });
-      
-      return await this.fetchWithREST(username, repository);
+    if (this.graphQLFeatureEnabled) {
+      try {
+        return await this.fetchWithGraphQL(username, repository);
+      } catch (graphqlError) {
+        logger.debug('GraphQL fetch failed, falling back to REST API', {
+          error: graphqlError instanceof Error ? graphqlError.message : String(graphqlError)
+        });
+      }
+    } else {
+      logger.debug('GraphQL portfolio fetch disabled; using REST API');
     }
+
+    return await this.fetchWithREST(username, repository);
   }
 
   /**
    * Fetch using GraphQL for better performance
+   * TODO: Implement GraphQL endpoint for portfolio operations
    */
   private async fetchWithGraphQL(username: string, repository: string): Promise<GitHubPortfolioIndex> {
-    const query = `
+    // GraphQL query stub - will be used when GraphQL endpoint is implemented
+    const _query = `
       query GetPortfolioContent($owner: String!, $name: String!) {
         repository(owner: $owner, name: $name) {
           defaultBranchRef {
@@ -319,13 +306,13 @@ export class GitHubPortfolioIndexer {
         }
       }
     `;
-    
-    const variables = { owner: username, name: repository };
-    
+
+    // GraphQL variables stub - will be used when GraphQL endpoint is implemented
+    const _variables = { owner: username, name: repository };
+
     // GraphQL endpoint not yet implemented with PortfolioRepoManager
     // For now, just throw to fall back to REST
-    // Note: This is a simplified GraphQL implementation
-    // In a real implementation, you would send POST request with query and variables
+    // Note: In a real implementation, you would send POST request with _query and _variables
     throw new Error('GraphQL not yet implemented for portfolio operations');
   }
 
@@ -334,14 +321,17 @@ export class GitHubPortfolioIndexer {
    */
   private async fetchWithREST(username: string, repository: string): Promise<GitHubPortfolioIndex> {
     const normalizedUsername = UnicodeValidator.normalize(username).normalizedContent;
-    
+
+    // Construct repository path (repository parameter is always just the repo name)
+    const repoPath = `${normalizedUsername}/${repository}`;
+
     // Get repository info and latest commit
-    const repoInfo = await this.portfolioRepoManager.githubRequest(
-      `/repos/${normalizedUsername}/${repository}`
+    await this.portfolioRepoManager.githubRequest(
+      `/repos/${repoPath}`
     );
-    
+
     const latestCommit = await this.portfolioRepoManager.githubRequest(
-      `/repos/${normalizedUsername}/${repository}/commits/HEAD`
+      `/repos/${repoPath}/commits/HEAD`
     );
     
     // Initialize index
@@ -361,11 +351,11 @@ export class GitHubPortfolioIndexer {
     
     // Fetch content for each element type
     logger.info(`Fetching content for all element types from GitHub portfolio...`);
-    
+
     for (const elementType of Object.values(ElementType)) {
       try {
         logger.debug(`Fetching ${elementType} from GitHub...`);
-        const entries = await this.fetchElementTypeContent(normalizedUsername, repository, elementType);
+        const entries = await this.fetchElementTypeContent(repoPath, elementType);
         index.elements.set(elementType, entries);
         index.totalElements += entries.length;
         
@@ -390,14 +380,13 @@ export class GitHubPortfolioIndexer {
    * Fetch content for a specific element type
    */
   private async fetchElementTypeContent(
-    username: string,
-    repository: string,
+    repoPath: string,
     elementType: ElementType
   ): Promise<GitHubIndexEntry[]> {
     try {
       // Get directory listing using PortfolioRepoManager
       const contents = await this.portfolioRepoManager.githubRequest(
-        `/repos/${username}/${repository}/contents/${elementType}`
+        `/repos/${repoPath}/contents/${elementType}`
       );
       
       if (!Array.isArray(contents)) {
@@ -412,7 +401,7 @@ export class GitHubPortfolioIndexer {
         const batch = contents.slice(i, i + maxConcurrent);
         const batchPromises = batch
           .filter(item => item.type === 'file' && item.name.endsWith('.md'))
-          .map(item => this.createGitHubIndexEntry(username, repository, elementType, item));
+          .map(item => this.createGitHubIndexEntry(elementType, item));
         
         const batchResults = await Promise.allSettled(batchPromises);
         
@@ -455,8 +444,6 @@ export class GitHubPortfolioIndexer {
    * Create GitHub index entry from API response
    */
   private async createGitHubIndexEntry(
-    username: string,
-    repository: string,
     elementType: ElementType,
     fileInfo: any
   ): Promise<GitHubIndexEntry | null> {
@@ -549,7 +536,7 @@ export class GitHubPortfolioIndexer {
     try {
       const userInfo = await this.portfolioRepoManager.githubRequest('/user');
       return userInfo.login;
-    } catch (error) {
+    } catch {
       throw new Error('Failed to get GitHub username. Please ensure you are authenticated with GitHub.');
     }
   }
@@ -612,4 +599,14 @@ export class GitHubPortfolioIndexer {
     
     return index;
   }
+
+  public dispose(): void {
+    this.clearCache();
+    this.apiCache.clear();
+    this.rateLimitTracker.clear();
+    this.recentUserAction = false;
+    this.actionTimestamp = null;
+  }
+
+
 }

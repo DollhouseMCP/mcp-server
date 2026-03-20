@@ -1,9 +1,15 @@
 import { SecurityAuditor } from './dist/security/audit/index.js';
+import { FileOperationsService } from './dist/services/FileOperationsService.js';
+import { FileLockManager } from './dist/security/fileLockManager.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 async function runComprehensiveAudit() {
-  const config = SecurityAuditor.getDefaultConfig();
+  // Create FileOperationsService for config loading
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+
+  const config = await SecurityAuditor.getDefaultConfig(fileOperations);
 
   // Enable all scanners for comprehensive audit
   config.scanners.code.enabled = true;

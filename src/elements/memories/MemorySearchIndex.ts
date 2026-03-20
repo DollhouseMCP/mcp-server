@@ -13,11 +13,21 @@
  * - Configurable thresholds
  */
 
-import { MemoryEntry } from './Memory.js';
+import { MemoryEntry } from './types.js';
 import { PrivacyLevel, MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+
+// Map-like interface for memory entries
+type MemoryEntryMap = Map<string, MemoryEntry> | {
+  has: (key: string) => boolean;
+  keys: () => Iterable<string>;
+  values: () => Iterable<MemoryEntry>;
+  get: (key: string) => MemoryEntry | undefined;
+  size: number;
+  [Symbol.iterator]: () => Iterator<[string, MemoryEntry]>;
+};
 
 export interface SearchIndexConfig {
   /**
@@ -359,7 +369,7 @@ export class MemorySearchIndex {
    * Build or rebuild the index from entries
    * FIX: Added race condition protection with isBuilding flag and build queue
    */
-  async buildIndex(entries: Map<string, MemoryEntry>): Promise<void> {
+  async buildIndex(entries: MemoryEntryMap): Promise<void> {
     // If already building, wait for the current build to complete
     if (this.isBuilding && this.buildQueue) {
       logger.debug('Index build already in progress, waiting...');
@@ -371,7 +381,7 @@ export class MemorySearchIndex {
     return this.buildQueue;
   }
 
-  private async _doBuildIndex(entries: Map<string, MemoryEntry>): Promise<void> {
+  private async _doBuildIndex(entries: MemoryEntryMap): Promise<void> {
     // Prevent concurrent builds
     if (this.isBuilding) {
       logger.warn('Attempted concurrent index build, skipping');
@@ -499,7 +509,7 @@ export class MemorySearchIndex {
   /**
    * Search the index with multiple criteria
    */
-  search(query: SearchQuery, entries: Map<string, MemoryEntry>): SearchResult[] {
+  search(query: SearchQuery, entries: MemoryEntryMap): SearchResult[] {
     if (!this.isBuilt) {
       logger.debug('Index not built, falling back to linear search');
       return this.linearSearch(query, entries);
@@ -603,10 +613,10 @@ export class MemorySearchIndex {
   /**
    * Fallback linear search when index is not available
    */
-  private linearSearch(query: SearchQuery, entries: Map<string, MemoryEntry>): SearchResult[] {
+  private linearSearch(query: SearchQuery, entries: MemoryEntryMap): SearchResult[] {
     const results: SearchResult[] = [];
 
-    for (const [id, entry] of entries) {
+    for (const [, entry] of entries) {
       // Check privacy level
       if (query.privacyLevel && entry.metadata?.privacyLevel !== query.privacyLevel) {
         continue;

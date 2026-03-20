@@ -1,12 +1,14 @@
 /**
  * Wizard Text Templates
- * 
+ *
  * Centralized configuration for all wizard text to support:
  * - Internationalization (i18n) in the future
  * - Consistent messaging across the application
  * - Easy updates without modifying business logic
  * - Template reusability
  */
+
+import { env } from './env.js';
 
 export interface WizardTemplates {
   title: string;
@@ -109,7 +111,7 @@ export const friendlyNullValues: Record<string, string> = {
   'portfolio.sync_status.last_sync': '(never synced)',
   'portfolio.sync_status.last_push': '(never pushed)',
   'portfolio.sync_status.last_pull': '(never pulled)',
-  'portfolio.repository_name': `(using default: ${process.env.TEST_GITHUB_REPO || 'dollhouse-portfolio'})`,
+  'portfolio.repository_name': `(using default: ${env.GITHUB_REPOSITORY || 'dollhouse-portfolio'})`,
   
   // Collection submission
   'collection_submission.auto_submit': '(disabled)',
@@ -242,7 +244,7 @@ ${this.formatConfigAsYaml(config)}
   /**
    * Format config as YAML (stub - would use actual yaml library)
    */
-  private formatConfigAsYaml(config: any): string {
+  private formatConfigAsYaml(_config: any): string {
     // This would use the actual yaml.dump with friendly values
     // For now, return a placeholder
     return 'user:\n  username: (not set)\n  email: (optional)';

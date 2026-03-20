@@ -458,7 +458,7 @@ export class TestDataCleanup {
       const tempPaths = [
         '/tmp/test-personas',
         '/tmp/qa-test',
-        join(process.cwd(), 'test/temp')
+        join(process.cwd(), 'tests/temp')
       ];
       
       for (const tempPath of tempPaths) {

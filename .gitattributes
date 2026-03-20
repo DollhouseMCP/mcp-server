@@ -1,0 +1,80 @@
+# DollhouseMCP Cross-Platform Line Ending Configuration
+
+# Default: Auto-detect text files and normalize to LF in repository
+* text=auto
+
+# Source code: Always LF (Unix style)
+*.ts text eol=lf
+*.js text eol=lf
+*.mts text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Markdown: Always LF
+*.md text eol=lf
+*.mdx text eol=lf
+
+# Configuration files: Always LF
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.eslintrc* text eol=lf
+.prettierrc* text eol=lf
+tsconfig*.json text eol=lf
+jest.config.* text eol=lf
+
+# Shell scripts: Always LF (Unix tools)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows scripts: Always CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Test fixtures: Preserve exact line endings (some tests may verify line endings)
+tests/fixtures/**/*.txt text eol=lf
+tests/fixtures/**/*.md text eol=lf
+tests/fixtures/**/*.yaml text eol=lf
+
+# Binary files: Never modify
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.pdf binary
+
+# Documentation: LF (consistency across platforms)
+docs/**/*.md text eol=lf
+
+# CI/CD: Always LF
+.github/**/* text eol=lf
+.gitlab-ci.yml text eol=lf
+.circleci/**/* text eol=lf
+
+# Docker: Always LF
+Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+.dockerignore text eol=lf
+
+# NPM/Yarn: Always LF
+package.json text eol=lf
+package-lock.json text eol=lf
+yarn.lock text eol=lf
+.npmrc text eol=lf
+.yarnrc text eol=lf
+
+# Export files: Always LF (for consistency)
+*.export.json text eol=lf

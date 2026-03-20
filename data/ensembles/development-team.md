@@ -15,56 +15,48 @@ resource_limits:
   max_memory_mb: 512
   max_execution_time_ms: 30000
 elements:
-  - name: "technical-analyst"
-    type: "persona"
+  - element_name: "technical-analyst"
+    element_type: "persona"
     role: "primary"
     priority: 100
     activation: "always"
     purpose: "Technical architecture and system design"
-  
-  - name: "code-review"
-    type: "skill"
+
+  - element_name: "code-review"
+    element_type: "skill"
     role: "support"
     priority: 90
     activation: "on-demand"
     purpose: "Code quality and security analysis"
-    
-  - name: "debug-detective"
-    type: "persona"
+
+  - element_name: "debug-detective"
+    element_type: "persona"
     role: "support"
     priority: 85
     activation: "conditional"
     condition: "errors_detected || debugging_requested"
     purpose: "Complex problem solving and debugging"
-    
-  - name: "code-documentation"
-    type: "template"
+
+  - element_name: "code-documentation"
+    element_type: "template"
     role: "support"
     priority: 70
     activation: "on-demand"
     purpose: "Consistent technical documentation"
-    
-  - name: "project-context"
-    type: "memory"
+
+  - element_name: "project-context"
+    element_type: "memory"
     role: "foundation"
     priority: 95
     activation: "always"
     purpose: "Maintain project knowledge and decisions"
-    
-  - name: "task-manager"
-    type: "agent"
+
+  - element_name: "task-manager"
+    element_type: "agent"
     role: "coordinator"
     priority: 80
     activation: "always"
     purpose: "Coordinate tasks and track progress"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "Workflow integration testing"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.342Z"
-  originalPath: "data/ensembles/development-team.md"
 ---
 # Development Team Ensemble
 

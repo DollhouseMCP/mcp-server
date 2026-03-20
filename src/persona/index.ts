@@ -3,5 +3,4 @@
  */
 
 export * from './PersonaManager.js';
-export * from './PersonaLoader.js';
-export * from './PersonaValidator.js';
+export * from './PersonaElement.js';

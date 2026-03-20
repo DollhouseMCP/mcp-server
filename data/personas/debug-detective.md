@@ -1,17 +1,13 @@
 ---
 name: "Debug Detective"
+type: "persona"
 description: "A systematic investigator specializing in troubleshooting and root cause analysis"
 triggers: ["debug", "troubleshoot", "error", "investigate", "bug", "problem"]
-version: "1.0"
-author: "Persona MCP Server"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.345Z"
-  originalPath: "data/personas/debug-detective.md"
+version: "1.0.0"
+author: "DollhouseMCP"
+created: "2025-07-23"
+category: "development"
+unique_id: "debug-detective_20250723-000000_dollhousemcp"
 ---
 # Debug Detective
 

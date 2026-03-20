@@ -2,7 +2,6 @@
  * Migration Manager - Handles migration from legacy structure to portfolio structure
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PortfolioManager } from './PortfolioManager.js';
 import { ElementType } from './types.js';
@@ -11,6 +10,8 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { FileOperationsService } from '../services/FileOperationsService.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
 
 export interface MigrationResult {
   success: boolean;
@@ -22,9 +23,17 @@ export interface MigrationResult {
 
 export class MigrationManager {
   private portfolioManager: PortfolioManager;
-  
-  constructor(portfolioManager: PortfolioManager) {
+  private fileLockManager: FileLockManager;
+  private fileOperations: FileOperationsService;
+
+  constructor(
+    portfolioManager: PortfolioManager,
+    fileLockManager: FileLockManager,
+    fileOperationsService: FileOperationsService
+  ) {
     this.portfolioManager = portfolioManager;
+    this.fileLockManager = fileLockManager;
+    this.fileOperations = fileOperationsService;
   }
   
   /**
@@ -89,7 +98,7 @@ export class MigrationManager {
       
       // Get legacy personas
       const legacyDir = this.portfolioManager.getLegacyPersonasDir();
-      const files = await fs.readdir(legacyDir);
+      const files = await this.fileOperations.listDirectory(legacyDir);
       const personaFiles = files.filter(file => file.endsWith('.md'));
       
       logger.info(`[MigrationManager] Found ${personaFiles.length} personas to migrate`);
@@ -216,8 +225,20 @@ export class MigrationManager {
     const newPath = this.portfolioManager.getElementPath(ElementType.PERSONA, normalizedFilename);
     
     // Read the content
-    const content = await fs.readFile(legacyPath, 'utf-8');
-    
+    const content = await this.fileOperations.readFile(legacyPath, {
+      source: 'MigrationManager.migratePersona'
+    });
+
+    // Validate content size before processing
+    const contentSize = Buffer.byteLength(content, 'utf8');
+    if (contentSize > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+      const maxSizeKB = Math.round(SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES / 1024);
+      const actualSizeKB = Math.round(contentSize / 1024);
+      throw new Error(
+        `Content size (${actualSizeKB}KB) exceeds maximum allowed size (${maxSizeKB}KB) for persona files`
+      );
+    }
+
     // Normalize content to prevent Unicode issues
     const contentValidation = UnicodeValidator.normalize(content);
     const normalizedContent = contentValidation.normalizedContent;
@@ -256,8 +277,10 @@ export class MigrationManager {
     // FIXED: Race condition vulnerability in file writes during migration
     // Original issue: Line 147 used non-atomic fs.writeFile operation
     // Security impact: Race conditions could cause data corruption or partial writes
-    // Fix: Replaced with FileLockManager.atomicWriteFile for guaranteed atomicity
-    await FileLockManager.atomicWriteFile(newPath, validatedContent, { encoding: 'utf-8' });
+    // Fix: Replaced with FileOperationsService.writeFile for guaranteed atomicity
+    await this.fileOperations.writeFile(newPath, validatedContent, {
+      source: 'MigrationManager.migratePersona'
+    });
     
     // SECURITY FIX: DMCP-SEC-006 - Log file operations for security audit trail
     SecurityMonitor.logSecurityEvent({
@@ -288,19 +311,21 @@ export class MigrationManager {
     const backupDir = `${legacyDir}_backup_${timestamp}`;
     
     // Create backup directory
-    await fs.mkdir(backupDir, { recursive: true });
-    
+    await this.fileOperations.createDirectory(backupDir);
+
     // Copy all files
-    const files = await fs.readdir(legacyDir);
+    const files = await this.fileOperations.listDirectory(legacyDir);
     let copiedCount = 0;
-    
+
     for (const file of files) {
       const srcPath = path.join(legacyDir, file);
       const destPath = path.join(backupDir, file);
-      
-      const stats = await fs.stat(srcPath);
+
+      const stats = await this.fileOperations.stat(srcPath);
       if (stats.isFile()) {
-        await fs.copyFile(srcPath, destPath);
+        await this.fileOperations.copyFile(srcPath, destPath, {
+          source: 'MigrationManager.createBackup'
+        });
         copiedCount++;
       }
     }
@@ -336,7 +361,7 @@ export class MigrationManager {
     
     if (hasLegacyPersonas) {
       const legacyDir = this.portfolioManager.getLegacyPersonasDir();
-      const files = await fs.readdir(legacyDir);
+      const files = await this.fileOperations.listDirectory(legacyDir);
       legacyPersonaCount = files.filter(file => file.endsWith('.md')).length;
     }
     

@@ -26,6 +26,7 @@ retention: permanent
 privacyLevel: public
 searchable: true
 trustLevel: VALIDATED
+memoryType: system
 ---
 
 # DollhouseMCP - Baseline Knowledge
@@ -34,7 +35,7 @@ trustLevel: VALIDATED
 
 **DollhouseMCP** is an MCP server providing **AI customization through modular, reusable elements**. It solves: AI forgets context, quality is inconsistent, configurations can't be shared, and there's no version control.
 
-**Current Version**: v1.9.25 (Development)
+**Current Version**: v1.9.26
 **Collection**: 76+ community elements (169+ pending)
 
 ---
@@ -84,13 +85,14 @@ Meta review layer evaluates and improves elements
 
 ---
 
-## Five Element Types
+## Six Element Types
 
 **PERSONAS** - Define HOW AI behaves (expertise, style, methodology)
 **SKILLS** - Define WHAT AI can do (capabilities, parameters)
 **TEMPLATES** - Define structured outputs (formats, variables)
 **AGENTS** - Autonomous actors (goals, state, decision-making)
 **MEMORIES** - Persistent context (forever storage, searchable)
+**ENSEMBLES** - Orchestrated combinations (multiple elements working together)
 
 **Key**: They ALL work together. Not isolated tools - integrated system.
 
@@ -131,14 +133,16 @@ activate_element type="personas" name="creative-writer"
 
 ---
 
-## Detailed Information
+## Additional Resources
 
-For deeper understanding, query these memories:
-- **Core Concepts**: "load dollhousemcp-core-concepts"
-- **Element Types**: "load dollhousemcp-element-types-detailed"
-- **Architecture**: "load dollhousemcp-architecture-and-technical-implementation"
-- **Workflows**: "load dollhousemcp-workflows-and-use-cases-comprehensive"
-- **Platform Support**: "load dollhousemcp-platform-capabilities-and-limitations"
+The following detailed memories MAY be available in your portfolio for deeper understanding:
+- **Core Concepts**: Search for "dollhousemcp-core-concepts"
+- **Element Types**: Search for "dollhousemcp-element-types-detailed"
+- **Architecture**: Search for "dollhousemcp-architecture-and-technical-implementation"
+- **Workflows**: Search for "dollhousemcp-workflows-and-use-cases-comprehensive"
+- **Platform Support**: Search for "dollhousemcp-platform-capabilities-and-limitations"
+
+If these memories don't exist, refer to documentation at: https://github.com/DollhouseMCP/mcp-server
 
 ---
 

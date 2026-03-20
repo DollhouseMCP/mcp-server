@@ -10,11 +10,11 @@
  * - Comprehensive error handling for production use
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { CollectionIndex } from '../types/collection';
 import { logger } from '../utils/logger.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 export interface CollectionIndexCacheEntry {
   data: CollectionIndex;
@@ -32,6 +32,7 @@ export interface CollectionIndexManagerConfig {
   baseRetryDelayMs?: number;
   maxRetryDelayMs?: number;
   cacheDir?: string;
+  fileOperations: IFileOperationsService;
 }
 
 export class CollectionIndexManager {
@@ -54,7 +55,10 @@ export class CollectionIndexManager {
   private readonly CIRCUIT_BREAKER_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   private readonly REFRESH_THRESHOLD = 0.8; // Refresh when 80% of TTL has passed
   private readonly JITTER_FACTOR = 0.25; // ±25% randomness for jitter
-  
+
+  // File operations service for secure file I/O
+  private readonly fileOperations: IFileOperationsService;
+
   // Default configuration constants
   private readonly DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
   private readonly DEFAULT_MAX_RETRIES = 3;
@@ -64,18 +68,21 @@ export class CollectionIndexManager {
   private readonly CHECKSUM_LENGTH = 8;
   private readonly JSON_INDENT = 2;
   
-  constructor(config: CollectionIndexManagerConfig = {}) {
+  constructor(config: CollectionIndexManagerConfig) {
     // Configuration with environment variable overrides
     this.TTL_MS = config.ttlMs || this.DEFAULT_TTL_MS;
     this.FETCH_TIMEOUT_MS = this.parseFetchTimeout(config.fetchTimeoutMs);
     this.MAX_RETRIES = config.maxRetries || this.DEFAULT_MAX_RETRIES;
     this.BASE_RETRY_DELAY_MS = config.baseRetryDelayMs || this.DEFAULT_BASE_RETRY_DELAY_MS;
     this.MAX_RETRY_DELAY_MS = config.maxRetryDelayMs || this.DEFAULT_MAX_RETRY_DELAY_MS;
-    
+
+    // Initialize file operations service
+    this.fileOperations = config.fileOperations;
+
     // Cache directory - use ~/.dollhouse/cache/collection-index.json as specified
     const cacheDir = config.cacheDir || path.join(os.homedir(), '.dollhouse', 'cache');
     this.CACHE_FILE = path.join(cacheDir, 'collection-index.json');
-    
+
     logger.debug('CollectionIndexManager initialized', {
       ttlMs: this.TTL_MS,
       fetchTimeoutMs: this.FETCH_TIMEOUT_MS,
@@ -452,15 +459,17 @@ export class CollectionIndexManager {
    */
   private async loadFromDisk(): Promise<void> {
     try {
-      const data = await fs.readFile(this.CACHE_FILE, 'utf8');
+      const data = await this.fileOperations.readFile(this.CACHE_FILE, {
+        source: 'CollectionIndexManager.loadFromDisk'
+      });
       const cached = JSON.parse(data) as CollectionIndexCacheEntry;
-      
+
       // Validate cache structure
       if (!cached.data || !cached.timestamp || !cached.version) {
         logger.debug('Invalid cache structure, ignoring');
         return;
       }
-      
+
       // Verify checksum if available
       if (cached.checksum) {
         const expectedChecksum = this.calculateChecksum(cached.data);
@@ -469,19 +478,19 @@ export class CollectionIndexManager {
           return;
         }
       }
-      
+
       this.cachedIndex = cached;
-      
+
       const age = Date.now() - cached.timestamp;
       const isExpired = age > this.TTL_MS;
-      
+
       logger.debug('Loaded collection index from disk cache', {
         version: cached.version,
         age: Math.round(age / 1000),
         isExpired,
         totalElements: cached.data.total_elements
       });
-      
+
     } catch (error) {
       if ((error as any).code !== 'ENOENT') {
         logger.debug('Failed to load cache from disk', { error: this.getErrorMessage(error) });
@@ -494,14 +503,16 @@ export class CollectionIndexManager {
    */
   private async saveToDisk(): Promise<void> {
     if (!this.cachedIndex) return;
-    
+
     try {
       // Ensure cache directory exists
-      await fs.mkdir(path.dirname(this.CACHE_FILE), { recursive: true });
-      
+      await this.fileOperations.createDirectory(path.dirname(this.CACHE_FILE));
+
       const cacheData = JSON.stringify(this.cachedIndex, null, this.JSON_INDENT);
-      await fs.writeFile(this.CACHE_FILE, cacheData, 'utf8');
-      
+      await this.fileOperations.writeFile(this.CACHE_FILE, cacheData, {
+        source: 'CollectionIndexManager.saveToDisk'
+      });
+
       logger.debug('Collection index cache saved to disk');
     } catch (error) {
       logger.debug('Failed to save cache to disk', { error: this.getErrorMessage(error) });
@@ -591,9 +602,11 @@ export class CollectionIndexManager {
   async clearCache(): Promise<void> {
     this.cachedIndex = null;
     this.circuitBreakerFailures = 0;
-    
+
     try {
-      await fs.unlink(this.CACHE_FILE);
+      await this.fileOperations.deleteFile(this.CACHE_FILE, undefined, {
+        source: 'CollectionIndexManager.clearCache'
+      });
       logger.debug('Collection index cache file deleted');
     } catch (error) {
       if ((error as any).code !== 'ENOENT') {

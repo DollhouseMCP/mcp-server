@@ -1,7 +1,7 @@
 /**
  * Agent element implementation.
  * Autonomous goal-oriented actors with decision-making capabilities.
- * 
+ *
  * SECURITY MEASURES IMPLEMENTED:
  * 1. Goal validation to prevent malicious objectives
  * 2. Decision framework sandboxing
@@ -11,43 +11,56 @@
  */
 
 import { BaseElement } from '../BaseElement.js';
-import { IElement, ElementValidationResult, ValidationError, ValidationWarning, ElementStatus } from '../../types/elements/index.js';
+import { IElement, ElementValidationResult, ValidationError, ValidationWarning } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
+import { randomBytes } from 'node:crypto';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
-import { ValidationErrorCodes, SystemErrorCodes } from '../../utils/errorCodes.js';
-import { 
-  AgentGoal, 
-  AgentDecision, 
-  AgentState, 
-  AgentMetadata 
+import { EvictingQueue } from '../../utils/EvictingQueue.js';
+import { ValidationErrorCodes } from '../../utils/errorCodes.js';
+import { MetadataService } from '../../services/MetadataService.js';
+import {
+  AgentGoal,
+  AgentDecision,
+  AgentState,
+  AgentMetadata,
+  SecurityValidationResult,
+  ConstraintResult,
+  RiskAssessmentResult,
+  PriorityScoreResult,
+  DecisionOutcome
 } from './types.js';
-import { 
-  AGENT_LIMITS, 
+import {
+  AGENT_LIMITS,
   AGENT_DEFAULTS,
+  AGENT_THRESHOLDS,
   DECISION_FRAMEWORKS,
-  RISK_TOLERANCE_LEVELS
+  RISK_TOLERANCE_LEVELS,
+  COMMIT_PERSISTED_VERSION
 } from './constants.js';
-import { 
-  RuleEngineConfig, 
-  DEFAULT_RULE_ENGINE_CONFIG, 
-  validateRuleEngineConfig 
+import {
+  RuleEngineConfig,
+  validateRuleEngineConfig
 } from './ruleEngineConfig.js';
-import { 
-  applyGoalTemplate, 
-  recommendGoalTemplate, 
-  validateGoalAgainstTemplate 
+import {
+  applyGoalTemplate,
+  calculateEisenhowerQuadrant,
+  recommendGoalTemplate,
+  validateGoalAgainstTemplate
 } from './goalTemplates.js';
 
 export class Agent extends BaseElement implements IElement {
+  public declare metadata: AgentMetadata;
+  // instructions and content inherited from BaseElement (v2.0 dual-field architecture)
   private state: AgentState;
   private isDirtyState: boolean = false;
   private ruleEngineConfig: RuleEngineConfig;
+  private _decisionHistory: EvictingQueue<AgentDecision>;
 
-  constructor(metadata: Partial<AgentMetadata>) {
+  constructor(metadata: Partial<AgentMetadata>, metadataService: MetadataService) {
     // Sanitize all inputs
     const sanitizedMetadata: Partial<AgentMetadata> = {
       ...metadata,
@@ -62,14 +75,14 @@ export class Agent extends BaseElement implements IElement {
 
     // MEDIUM PRIORITY IMPROVEMENT: Validate decision framework configuration
     // Ensures only supported frameworks are used
-    if (sanitizedMetadata.decisionFramework && 
+    if (sanitizedMetadata.decisionFramework &&
         !DECISION_FRAMEWORKS.includes(sanitizedMetadata.decisionFramework)) {
       throw ErrorHandler.createError(`Invalid decision framework: ${sanitizedMetadata.decisionFramework}. ` +
         `Supported frameworks: ${DECISION_FRAMEWORKS.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_FRAMEWORK);
     }
 
     // Validate risk tolerance level
-    if (sanitizedMetadata.riskTolerance && 
+    if (sanitizedMetadata.riskTolerance &&
         !RISK_TOLERANCE_LEVELS.includes(sanitizedMetadata.riskTolerance)) {
       throw ErrorHandler.createError(`Invalid risk tolerance: ${sanitizedMetadata.riskTolerance}. ` +
         `Supported levels: ${RISK_TOLERANCE_LEVELS.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_RISK_TOLERANCE);
@@ -83,16 +96,20 @@ export class Agent extends BaseElement implements IElement {
       }
     }
 
-    super(ElementType.AGENT, sanitizedMetadata);
+    super(ElementType.AGENT, sanitizedMetadata, metadataService);
 
-    // Initialize state
+    // Initialize state with version tracking for optimistic locking (Issue #24)
     this.state = {
       goals: [],
       decisions: [],
       context: {},
       lastActive: new Date(),
-      sessionCount: 0
+      sessionCount: 0,
+      stateVersion: 1  // Start at version 1
     };
+
+    // Bounded FIFO queue for decision history
+    this._decisionHistory = new EvictingQueue<AgentDecision>(AGENT_LIMITS.MAX_DECISION_HISTORY);
 
     // Set agent-specific extensions
     this.extensions = {
@@ -111,16 +128,29 @@ export class Agent extends BaseElement implements IElement {
 
   /**
    * Add a new goal with security validation
+   *
+   * @param goal - Goal configuration
+   * @param options - Optional configuration for strict validation mode
+   * @returns The created goal with any security warnings attached
+   *
+   * @since v2.0.0 - Security validation is advisory by default (Issue #112)
    */
-  public addGoal(goal: Partial<AgentGoal>): AgentGoal {
+  public addGoal(goal: Partial<AgentGoal>, options?: { strict?: boolean }): AgentGoal {
     // Validate goal count
     if (this.state.goals.length >= AGENT_LIMITS.MAX_GOALS) {
       throw ErrorHandler.createError(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.MAX_GOALS_EXCEEDED);
     }
 
-    // Sanitize goal description
+    // Normalize and validate BEFORE sanitization (Issue #112)
+    const normalizedDescription = UnicodeValidator.normalize(goal.description || '').normalizedContent;
+
+    // Validate goal for security threats on ORIGINAL input before sanitization
+    // This ensures patterns like backticks, $, etc. are detected before being stripped
+    const securityCheck = this.validateGoalSecurity(normalizedDescription);
+
+    // Now sanitize for storage (removes shell metacharacters)
     const sanitizedDescription = sanitizeInput(
-      UnicodeValidator.normalize(goal.description || '').normalizedContent,
+      normalizedDescription,
       AGENT_LIMITS.MAX_GOAL_LENGTH
     );
 
@@ -128,27 +158,36 @@ export class Agent extends BaseElement implements IElement {
       throw ErrorHandler.createError('Goal description must be at least 3 characters', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.GOAL_TOO_SHORT);
     }
 
-    // Validate goal for security threats
-    const securityCheck = this.validateGoalSecurity(sanitizedDescription);
+    // Handle security validation results (advisory by default, blocking if strict mode enabled)
     if (!securityCheck.safe) {
+      // Log security event for audit trail
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
-        severity: 'HIGH',
+        severity: options?.strict ? 'HIGH' : 'MEDIUM',
         source: 'Agent.addGoal',
-        details: `Potentially malicious goal rejected: ${securityCheck.reason}`,
-        additionalData: { agentId: this.id }
+        details: `Goal with security warnings ${options?.strict ? 'rejected' : 'created'}: ${securityCheck.warnings?.join(', ')}`,
+        additionalData: { agentId: this.id, strict: options?.strict }
       });
-      throw ErrorHandler.createError(`Goal contains potentially harmful content: ${securityCheck.reason}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.HARMFUL_CONTENT);
+
+      // In strict mode, throw error (backward compatible behavior)
+      if (options?.strict) {
+        throw ErrorHandler.createError(
+          `Goal contains potentially harmful content: ${securityCheck.warnings?.join(', ')}`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.HARMFUL_CONTENT
+        );
+      }
+      // Otherwise, continue with advisory warnings attached to goal
     }
 
     // Calculate Eisenhower quadrant
     const importance = goal.importance || 5;
     const urgency = goal.urgency || 5;
-    const eisenhowerQuadrant = this.calculateEisenhowerQuadrant(importance, urgency);
+    const eisenhowerQuadrant = calculateEisenhowerQuadrant(importance, urgency);
 
-    // Create new goal
+    // Create new goal with security warnings (if any)
     const newGoal: AgentGoal = {
-      id: `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `goal_${Date.now()}_${randomBytes(6).toString('hex')}`,
       description: sanitizedDescription,
       priority: goal.priority || AGENT_DEFAULTS.GOAL_PRIORITY,
       status: 'pending',
@@ -160,7 +199,11 @@ export class Agent extends BaseElement implements IElement {
       dependencies: goal.dependencies || [],
       riskLevel: goal.riskLevel || 'low',
       estimatedEffort: goal.estimatedEffort,
-      notes: goal.notes ? sanitizeInput(goal.notes, 500) : undefined
+      notes: goal.notes ? sanitizeInput(goal.notes, 500) : undefined,
+      // Store security warnings for LLM review (advisory pattern)
+      securityWarnings: securityCheck.warnings && securityCheck.warnings.length > 0
+        ? securityCheck.warnings
+        : undefined
     };
 
     // MEDIUM PRIORITY IMPROVEMENT: Detect dependency cycles before adding goal
@@ -172,6 +215,7 @@ export class Agent extends BaseElement implements IElement {
     }
 
     this.state.goals.push(newGoal);
+    // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
     this.markDirty();
 
@@ -181,256 +225,257 @@ export class Agent extends BaseElement implements IElement {
   }
 
   /**
-   * Make a decision for a goal
+   * Record a decision made by the LLM (or programmatic guardrail)
+   *
+   * This is NOT a decision-maker, it's a decision RECORDER.
+   * The LLM makes decisions, this method just persists them for audit trail.
+   *
+   * @since v2.0.0 - Agentic Loop Redesign
    */
-  public async makeDecision(goalId: string, context?: Record<string, any>): Promise<AgentDecision> {
-    // MEDIUM PRIORITY IMPROVEMENT: Track performance metrics for decision making
-    const startTime = Date.now();
-    const performanceMetrics: {
-      decisionTimeMs?: number;
-      frameworkTimeMs?: number;
-      riskAssessmentTimeMs?: number;
-    } = {};
-
-    const goal = this.state.goals.find(g => g.id === goalId);
+  public recordDecision(decision: {
+    goalId: string;
+    decision: string;
+    reasoning: string;
+    confidence: number;
+    riskAssessment?: RiskAssessmentResult;
+    outcome?: DecisionOutcome;
+  }): AgentDecision {
+    const goal = this.state.goals.find(g => g.id === decision.goalId);
     if (!goal) {
-      throw ErrorHandler.createError(`Goal ${goalId} not found`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.GOAL_NOT_FOUND);
+      throw ErrorHandler.createError(
+        `Goal ${decision.goalId} not found`,
+        ErrorCategory.VALIDATION_ERROR,
+        ValidationErrorCodes.GOAL_NOT_FOUND
+      );
     }
-
-    if (goal.status === 'completed' || goal.status === 'cancelled') {
-      throw ErrorHandler.createError(`Cannot make decision for ${goal.status} goal`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_GOAL_STATUS);
-    }
-
-    // Update goal status
-    goal.status = 'in_progress';
-    goal.updatedAt = new Date();
-
-    // Prepare decision context
-    const decisionContext = {
-      ...this.state.context,
-      ...context,
-      goal,
-      agentMetadata: this.metadata,
-      previousDecisions: this.state.decisions.filter(d => d.goalId === goalId)
-    };
-
-    // Make decision based on framework (with timing)
-    const frameworkStart = Date.now();
-    const decision = await this.executeDecisionFramework(goal, decisionContext);
-    performanceMetrics.frameworkTimeMs = Date.now() - frameworkStart;
-
-    // Risk assessment (with timing)
-    const riskStart = Date.now();
-    const riskAssessment = this.assessRisk(decision, goal, decisionContext);
-    performanceMetrics.riskAssessmentTimeMs = Date.now() - riskStart;
-
-    // Calculate total decision time
-    performanceMetrics.decisionTimeMs = Date.now() - startTime;
 
     // Create decision record
     const decisionRecord: AgentDecision = {
-      id: `decision_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      goalId,
+      id: `decision_${Date.now()}_${randomBytes(6).toString('hex')}`,
+      goalId: decision.goalId,
       timestamp: new Date(),
-      decision: decision.action,
-      reasoning: decision.reasoning,
-      framework: this.extensions?.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK,
-      confidence: decision.confidence,
-      riskAssessment,
-      performanceMetrics  // Add performance tracking
+      decision: sanitizeInput(decision.decision, 500),
+      reasoning: sanitizeInput(decision.reasoning, 1000),
+      framework: 'llm_driven',  // v2.0 agents are LLM-driven
+      confidence: Math.max(0, Math.min(1, decision.confidence)),
+      riskAssessment: decision.riskAssessment || {
+        level: 'low',
+        score: 0,
+        factors: [],
+        mitigations: []
+      },
+      outcome: decision.outcome
     };
 
-    // OPTIMIZATION: Use efficient circular buffer pattern
-    // Add to history with limit (avoid array slicing for better performance)
-    if (this.state.decisions.length >= AGENT_LIMITS.MAX_DECISION_HISTORY) {
-      // Remove oldest entry before adding new one (O(n) but happens infrequently)
-      this.state.decisions.shift();
-    }
-    this.state.decisions.push(decisionRecord);
+    // Bounded FIFO eviction — EvictingQueue handles capacity
+    this._decisionHistory.push(decisionRecord);
+    this.state.decisions = this._decisionHistory.toJSON();
 
+    // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
     this.markDirty();
 
-    // Log decision for audit
+    // Log for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'AGENT_DECISION',
       severity: 'LOW',
-      source: 'Agent.makeDecision',
-      details: `Agent ${this.metadata.name} made decision for goal ${goalId}`,
+      source: 'Agent.recordDecision',
+      details: `Agent ${this.metadata.name} recorded decision for goal ${decision.goalId}`,
       additionalData: {
         agentId: this.id,
-        goalId,
-        framework: decisionRecord.framework,
-        riskLevel: riskAssessment.level
+        goalId: decision.goalId,
+        framework: 'llm_driven',
+        riskLevel: decisionRecord.riskAssessment.level
       }
+    });
+
+    logger.info(`Decision recorded for agent ${this.metadata.name}`, {
+      goalId: decision.goalId,
+      decision: decision.decision
     });
 
     return decisionRecord;
   }
 
-  /**
-   * Execute decision framework
-   */
-  private async executeDecisionFramework(
-    goal: AgentGoal,
-    context: Record<string, any>
-  ): Promise<{ action: string; reasoning: string; confidence: number }> {
-    const framework = this.extensions?.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK;
 
-    switch (framework) {
-      case 'rule_based':
-        return this.ruleBasedDecision(goal, context);
-      
-      case 'ml_based':
-        // Placeholder for ML-based decisions
-        logger.warn('ML-based decisions not yet implemented, falling back to rule-based');
-        return this.ruleBasedDecision(goal, context);
-      
-      case 'programmatic':
-        return this.programmaticDecision(goal, context);
-      
-      case 'hybrid':
-        // Combine multiple frameworks
-        const ruleDecision = await this.ruleBasedDecision(goal, context);
-        const progDecision = await this.programmaticDecision(goal, context);
-        
-        // Average confidence and combine reasoning
-        return {
-          action: ruleDecision.confidence > progDecision.confidence ? ruleDecision.action : progDecision.action,
-          reasoning: `Rule-based: ${ruleDecision.reasoning}\nProgrammatic: ${progDecision.reasoning}`,
-          confidence: (ruleDecision.confidence + progDecision.confidence) / 2
-        };
-      
-      default:
-        throw ErrorHandler.createError(`Unknown decision framework: ${framework}`, ErrorCategory.SYSTEM_ERROR, SystemErrorCodes.UNKNOWN_FRAMEWORK);
-    }
-  }
+
 
   /**
-   * Rule-based decision making
+   * Assess risk for a decision or action
+   *
+   * This is a CHECKLIST, not a decision maker. It flags known risk factors
+   * that the LLM should consider when making decisions.
+   *
+   * Similar to how GitHub flags "this file is large" or "this PR changes many files" -
+   * programmatic signals that inform semantic judgment.
+   *
+   * @since v2.0.0 - Refactored for LLM-first agentic loop
    */
-  private async ruleBasedDecision(
+  public assessRisk(
+    action: string,
     goal: AgentGoal,
     context: Record<string, any>
-  ): Promise<{ action: string; reasoning: string; confidence: number }> {
-    const rules: Array<{
-      condition: (g: AgentGoal, ctx: Record<string, any>) => boolean;
-      action: string;
-      reasoning: string;
-      confidence: number;
-    }> = [
-      // High priority + high urgency = immediate action
-      {
-        condition: (g) => g.priority === this.ruleEngineConfig.ruleBased.priority.critical && 
-                           g.urgency > this.ruleEngineConfig.ruleBased.urgencyThresholds.immediate,
-        action: this.ruleEngineConfig.actions.executeImmediately,
-        reasoning: 'Critical priority with high urgency requires immediate action',
-        confidence: this.ruleEngineConfig.ruleBased.confidence.critical
-      },
-      // Blocked by dependencies
-      {
-        condition: (g, ctx) => {
-          if (!g.dependencies || g.dependencies.length === 0) return false;
-          const blockedDeps = g.dependencies.filter(depId => {
-            const dep = this.state.goals.find(goal => goal.id === depId);
-            return dep && dep.status !== 'completed';
-          });
-          return blockedDeps.length > 0;
-        },
-        action: this.ruleEngineConfig.actions.waitForDependencies,
-        reasoning: 'Goal has incomplete dependencies',
-        confidence: this.ruleEngineConfig.ruleBased.confidence.blocked
-      },
-      // Risk assessment
-      {
-        condition: (g) => g.riskLevel === 'high' && this.extensions?.riskTolerance === 'conservative',
-        action: this.ruleEngineConfig.actions.requestApproval,
-        reasoning: 'High risk goal requires approval in conservative mode',
-        confidence: this.ruleEngineConfig.ruleBased.confidence.riskApproval
-      },
-      // Resource availability
-      {
-        condition: (g, ctx) => {
-          const activeGoals = this.state.goals.filter(goal => goal.status === 'in_progress').length;
-          const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
-          return activeGoals >= maxConcurrent;
-        },
-        action: this.ruleEngineConfig.actions.queueForLater,
-        reasoning: 'Maximum concurrent goals reached',
-        confidence: this.ruleEngineConfig.ruleBased.confidence.resourceLimit
-      },
-      // Default action
-      {
-        condition: () => true,
-        action: this.ruleEngineConfig.actions.proceedWithGoal,
-        reasoning: 'No blocking conditions found',
-        confidence: this.ruleEngineConfig.ruleBased.confidence.default
-      }
-    ];
+  ): RiskAssessmentResult {
+    const factors: string[] = [];
+    let riskScore = 0;
 
-    // Evaluate rules in order
-    for (const rule of rules) {
-      if (rule.condition(goal, context)) {
-        return {
-          action: rule.action,
-          reasoning: rule.reasoning,
-          confidence: rule.confidence
-        };
-      }
+    // Factor: Immediate execution of high-risk goal
+    if (action === 'execute_immediately' && goal.riskLevel === 'high') {
+      factors.push('Immediate execution requested for high-risk goal');
+      riskScore += 30;
     }
 
-    // Fallback (should not reach here)
+    // Factor: Low confidence in decision
+    const confidence = context.decisionConfidence || 1.0;
+    if (confidence < 0.6) {
+      factors.push(`Low confidence in decision (${(confidence * 100).toFixed(0)}%)`);
+      riskScore += 20;
+    }
+
+    // Factor: Complex dependency chains
+    if (goal.dependencies && goal.dependencies.length > 3) {
+      factors.push(`Complex dependency chain (${goal.dependencies.length} dependencies)`);
+      riskScore += 15;
+    }
+
+    // Factor: Risk tolerance mismatch
+    if (this.extensions?.riskTolerance === 'aggressive' && goal.riskLevel === 'high') {
+      factors.push('Aggressive risk tolerance combined with high-risk goal');
+      riskScore += 25;
+    }
+
+    // Factor: Concurrent goals at limit
+    const activeGoals = this.state.goals.filter(g => g.status === 'in_progress').length;
+    const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
+    if (activeGoals >= maxConcurrent * AGENT_THRESHOLDS.CONCURRENT_GOAL_WARNING) {
+      factors.push(`High concurrent goal load (${activeGoals}/${maxConcurrent})`);
+      riskScore += 10;
+    }
+
+    // Map score to level
+    let level: 'low' | 'medium' | 'high';
+    const mitigations: string[] = [];
+
+    if (riskScore >= 50) {
+      level = 'high';
+      mitigations.push('Request human approval before proceeding');
+      mitigations.push('Create backup/rollback plan');
+      mitigations.push('Enable detailed monitoring and logging');
+      mitigations.push('Consider breaking into smaller steps');
+    } else if (riskScore >= 25) {
+      level = 'medium';
+      mitigations.push('Add progress checkpoints');
+      mitigations.push('Review results after completion');
+      mitigations.push('Monitor for unexpected outcomes');
+    } else {
+      level = 'low';
+      mitigations.push('Standard monitoring sufficient');
+    }
+
     return {
-      action: this.ruleEngineConfig.actions.reviewManually,
-      reasoning: 'No applicable rules found',
-      confidence: 0.5
+      level,
+      score: riskScore,  // Expose numeric score for transparency
+      factors,
+      mitigations
     };
   }
 
   /**
-   * Programmatic decision making
+   * Evaluate programmatic constraints on a goal
+   *
+   * Returns blocking constraints that MUST be satisfied before proceeding.
+   * The LLM can see these and decide how to handle them.
+   *
+   * @since v2.0.0 - Extracted from ruleBasedDecision for LLM-first agentic loop
    */
-  private async programmaticDecision(
-    goal: AgentGoal,
-    context: Record<string, any>
-  ): Promise<{ action: string; reasoning: string; confidence: number }> {
-    // Calculate decision score based on multiple factors
+  public evaluateConstraints(goal: AgentGoal): ConstraintResult {
+    const blockers: string[] = [];
+    const warnings: string[] = [];
+
+    // HARD CONSTRAINT: Incomplete dependencies
+    if (goal.dependencies && goal.dependencies.length > 0) {
+      const incompleteDeps = goal.dependencies.filter(depId => {
+        const dep = this.state.goals.find(g => g.id === depId);
+        return dep && dep.status !== 'completed';
+      });
+      if (incompleteDeps.length > 0) {
+        blockers.push(`${incompleteDeps.length} incomplete dependencies`);
+      }
+    }
+
+    // HARD CONSTRAINT: Max concurrent goals
+    const activeGoals = this.state.goals.filter(g => g.status === 'in_progress').length;
+    const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
+    if (activeGoals >= maxConcurrent) {
+      blockers.push(`Maximum concurrent goals reached (${maxConcurrent})`);
+    }
+
+    // SOFT CONSTRAINT: Risk + tolerance mismatch
+    if (goal.riskLevel === 'high' && this.extensions?.riskTolerance === 'conservative') {
+      warnings.push('High-risk goal with conservative risk tolerance - approval recommended');
+    }
+
+    return {
+      canProceed: blockers.length === 0,
+      blockers,
+      warnings
+    };
+  }
+
+  /**
+   * Calculate a programmatic "priority score" for a goal
+   *
+   * This is a simple heuristic the LLM can consider when prioritizing.
+   * The LLM is free to ignore this score if it has better judgment.
+   *
+   * @since v2.0.0 - Extracted from programmaticDecision for LLM-first agentic loop
+   */
+  public calculatePriorityScore(goal: AgentGoal): PriorityScoreResult {
     let score = 0;
     const factors: string[] = [];
+    const breakdown: Record<string, number> = {};
 
     // Factor 1: Eisenhower matrix
     if (goal.eisenhowerQuadrant === 'do_first') {
       score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.doFirst;
+      breakdown['eisenhower'] = this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.doFirst;
       factors.push('High importance and urgency (Do First quadrant)');
     } else if (goal.eisenhowerQuadrant === 'schedule') {
       score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.schedule;
+      breakdown['eisenhower'] = this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.schedule;
       factors.push('High importance, low urgency (Schedule quadrant)');
     } else if (goal.eisenhowerQuadrant === 'delegate') {
       score += this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.delegate;
+      breakdown['eisenhower'] = this.ruleEngineConfig.programmatic.scoreWeights.eisenhower.delegate;
       factors.push('Low importance, high urgency (Delegate quadrant)');
     }
 
     // Factor 2: Risk level
     if (goal.riskLevel === 'low') {
       score += this.ruleEngineConfig.programmatic.scoreWeights.risk.low;
+      breakdown['risk'] = this.ruleEngineConfig.programmatic.scoreWeights.risk.low;
       factors.push('Low risk');
     } else if (goal.riskLevel === 'medium') {
       score += this.ruleEngineConfig.programmatic.scoreWeights.risk.medium;
+      breakdown['risk'] = this.ruleEngineConfig.programmatic.scoreWeights.risk.medium;
       factors.push('Medium risk');
     } else {
       score += this.ruleEngineConfig.programmatic.scoreWeights.risk.high;
+      breakdown['risk'] = this.ruleEngineConfig.programmatic.scoreWeights.risk.high;
       factors.push('High risk penalty');
     }
 
     // Factor 3: Dependencies
     if (!goal.dependencies || goal.dependencies.length === 0) {
       score += this.ruleEngineConfig.programmatic.scoreWeights.noDependencies;
+      breakdown['dependencies'] = this.ruleEngineConfig.programmatic.scoreWeights.noDependencies;
       factors.push('No dependencies');
     }
 
     // Factor 4: Estimated effort
     if (goal.estimatedEffort && goal.estimatedEffort <= this.ruleEngineConfig.programmatic.quickWinHours) {
       score += this.ruleEngineConfig.programmatic.scoreWeights.quickWin;
+      breakdown['effort'] = this.ruleEngineConfig.programmatic.scoreWeights.quickWin;
       factors.push(`Quick win (≤${this.ruleEngineConfig.programmatic.quickWinHours} hours)`);
     }
 
@@ -439,147 +484,85 @@ export class Agent extends BaseElement implements IElement {
     const successRate = previousDecisions.length / Math.max(this.state.decisions.length, 1);
     if (successRate > this.ruleEngineConfig.programmatic.successRateThreshold) {
       score += this.ruleEngineConfig.programmatic.scoreWeights.successBonus;
+      breakdown['successRate'] = this.ruleEngineConfig.programmatic.scoreWeights.successBonus;
       factors.push(`High success rate (${(successRate * 100).toFixed(0)}%)`);
     }
 
-    // Determine action based on score
-    let action: string;
-    let confidence: number;
-
-    if (score >= this.ruleEngineConfig.programmatic.actionThresholds.executeImmediately) {
-      action = this.ruleEngineConfig.actions.executeImmediately;
-      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.executeImmediately;
-    } else if (score >= this.ruleEngineConfig.programmatic.actionThresholds.proceed) {
-      action = this.ruleEngineConfig.actions.proceedWithGoal;
-      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.proceed;
-    } else if (score >= this.ruleEngineConfig.programmatic.actionThresholds.schedule) {
-      action = this.ruleEngineConfig.actions.scheduleForLater;
-      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.schedule;
-    } else {
-      action = this.ruleEngineConfig.actions.reviewAndRevise;
-      confidence = this.ruleEngineConfig.programmatic.confidenceLevels.review;
-    }
-
-    return {
-      action,
-      reasoning: `Score: ${score}. Factors: ${factors.join(', ')}`,
-      confidence
-    };
-  }
-
-  /**
-   * Assess risk for a decision
-   */
-  private assessRisk(
-    decision: { action: string; reasoning: string; confidence: number },
-    goal: AgentGoal,
-    context: Record<string, any>
-  ): AgentDecision['riskAssessment'] {
-    const factors: string[] = [];
-    let riskScore = 0;
-
-    // Check for immediate execution with high risk
-    if (decision.action === 'execute_immediately' && goal.riskLevel === 'high') {
-      factors.push('Immediate execution of high-risk goal');
-      riskScore += 30;
-    }
-
-    // Check for low confidence decisions
-    if (decision.confidence < 0.6) {
-      factors.push('Low decision confidence');
-      riskScore += 20;
-    }
-
-    // Check for complex dependencies
-    if (goal.dependencies && goal.dependencies.length > 3) {
-      factors.push('Complex dependency chain');
-      riskScore += 15;
-    }
-
-    // Check for aggressive risk tolerance with high-risk goal
-    if (this.extensions?.riskTolerance === 'aggressive' && goal.riskLevel === 'high') {
-      factors.push('Aggressive risk tolerance with high-risk goal');
-      riskScore += 25;
-    }
-
-    // Determine risk level
-    let level: 'low' | 'medium' | 'high';
-    const mitigations: string[] = [];
-
-    if (riskScore >= 50) {
-      level = 'high';
-      mitigations.push('Request human approval');
-      mitigations.push('Create backup plan');
-      mitigations.push('Monitor closely');
-    } else if (riskScore >= 25) {
-      level = 'medium';
-      mitigations.push('Add checkpoints');
-      mitigations.push('Review after completion');
-    } else {
-      level = 'low';
-      mitigations.push('Standard monitoring');
-    }
-
-    return {
-      level,
-      factors,
-      mitigations: mitigations.length > 0 ? mitigations : undefined
-    };
-  }
-
-  /**
-   * Calculate Eisenhower quadrant
-   */
-  private calculateEisenhowerQuadrant(importance: number, urgency: number): AgentGoal['eisenhowerQuadrant'] {
-    if (importance >= 7 && urgency >= 7) {
-      return 'do_first';
-    } else if (importance >= 7 && urgency < 7) {
-      return 'schedule';
-    } else if (importance < 7 && urgency >= 7) {
-      return 'delegate';
-    } else {
-      return 'eliminate';
-    }
+    return { score, factors, breakdown };
   }
 
   /**
    * Validate goal for security threats
+   *
+   * IMPORTANT: This is a FIRST LINE OF DEFENSE, not a replacement for LLM judgment.
+   * False positives are acceptable - this flags potential issues for LLM review.
+   *
+   * Think of this like a spam filter: it catches obvious bad content but
+   * the LLM still needs to make final judgment calls.
+   *
+   * @since v2.0.0 - Refactored to return warnings instead of throwing errors
+   * @since v2.0.0 - Made public for use in AgentManager.executeAgent()
    */
-  private validateGoalSecurity(goal: string): { safe: boolean; reason?: string } {
-    // Check for command injection patterns
-    const dangerousPatterns = [
-      /system\s*\(/i,
-      /exec\s*\(/i,
-      /eval\s*\(/i,
-      /require\s*\(/i,
-      /import\s*\(/i,
-      /\$\{.*\}/,
-      /`.*`/,
-      /process\.\w+/i,
-      /child_process/i
-    ];
+  public validateGoalSecurity(goal: string): SecurityValidationResult {
+    const warnings: string[] = [];
+    const flagged: string[] = [];
 
-    for (const pattern of dangerousPatterns) {
+    // CATEGORY 1: Code injection patterns (high confidence)
+    const codeInjectionPatterns: Record<string, RegExp> = {
+      'system() call': /system\s*\(/i,
+      'exec() call': /exec\s*\(/i,
+      'eval() call': /eval\s*\(/i,
+      'require() call': /require\s*\(/i,
+      'dynamic import': /import\s*\(/i,
+      'template literal': /\$\{.*\}/,
+      'backticks': /`.*`/,
+      'process access': /process\.\w+/i,
+      'child_process': /child_process/i
+    };
+
+    for (const [name, pattern] of Object.entries(codeInjectionPatterns)) {
       if (pattern.test(goal)) {
-        return { safe: false, reason: 'Contains potentially dangerous code patterns' };
+        warnings.push(`Possible code injection: ${name}`);
+        flagged.push(name);
       }
     }
 
-    // Check for social engineering attempts
-    const socialEngineeringPatterns = [
-      /password|credential|secret|token|key/i,
-      /hack|exploit|breach|attack/i,
-      /delete\s+all|destroy|wipe|erase\s+everything/i,
-      /steal|theft|rob/i
-    ];
+    // CATEGORY 2: Suspicious keywords (lower confidence - advisory only)
+    const suspiciousKeywords: Record<string, RegExp> = {
+      'credentials': /password|credential|secret|token|api[_-]?key/i,
+      'malicious intent': /hack|exploit|breach|attack/i,
+      'destructive action': /delete\s+all|destroy|wipe|erase\s+everything/i,
+      'theft keywords': /steal|theft|rob/i
+    };
 
-    for (const pattern of socialEngineeringPatterns) {
+    for (const [name, pattern] of Object.entries(suspiciousKeywords)) {
       if (pattern.test(goal)) {
-        return { safe: false, reason: 'Contains potentially harmful intent' };
+        warnings.push(`Suspicious keyword: ${name}`);
+        flagged.push(name);
       }
     }
 
-    return { safe: true };
+    // Return warnings but don't block - let LLM decide
+    return {
+      safe: warnings.length === 0,
+      warnings: warnings.length > 0 ? warnings : undefined,
+      flagged: flagged.length > 0 ? flagged : undefined
+    };
+  }
+
+  /**
+   * Commit persisted state version after successful save.
+   *
+   * This Symbol-keyed method provides runtime privacy - it can only be called
+   * by code that has access to the COMMIT_PERSISTED_VERSION symbol (i.e., AgentManager).
+   * External code cannot call this method without the Symbol.
+   *
+   * @param version - The new version number to set
+   * @see Issue #24 - Optimistic locking implementation
+   * @see Issue #123 - Option C pattern: version increments only on successful save
+   */
+  public [COMMIT_PERSISTED_VERSION](version: number): void {
+    this.state.stateVersion = version;
   }
 
   /**
@@ -594,7 +577,7 @@ export class Agent extends BaseElement implements IElement {
    */
   public updateContext(key: string, value: any): void {
     const sanitizedKey = sanitizeInput(key, 50);
-    
+
     // Validate context size
     const contextStr = JSON.stringify({ ...this.state.context, [sanitizedKey]: value });
     if (contextStr.length > AGENT_LIMITS.MAX_CONTEXT_LENGTH) {
@@ -602,6 +585,7 @@ export class Agent extends BaseElement implements IElement {
     }
 
     this.state.context[sanitizedKey] = value;
+    // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
     this.markDirty();
   }
@@ -633,6 +617,7 @@ export class Agent extends BaseElement implements IElement {
       }
     });
 
+    // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
     this.markDirty();
 
@@ -644,7 +629,7 @@ export class Agent extends BaseElement implements IElement {
    * MEDIUM PRIORITY IMPROVEMENT: Prevents circular dependencies between goals
    */
   private detectDependencyCycle(
-    newGoalId: string, 
+    newGoalId: string,
     dependencies: string[]
   ): { hasCycle: boolean; path: string[] } {
     // Build dependency graph including the new goal
@@ -683,10 +668,7 @@ export class Agent extends BaseElement implements IElement {
       }
 
       recursionStack.delete(goalId);
-      // Only pop from path if we're not returning a cycle
-      if (!deps.some(depId => recursionStack.has(depId))) {
-        path.pop();
-      }
+      path.pop();
       return false;
     };
 
@@ -757,7 +739,7 @@ export class Agent extends BaseElement implements IElement {
     let avgDecisionTime = 0;
     let avgFrameworkTime = 0;
     let avgRiskTime = 0;
-    
+
     if (decisionsWithMetrics.length > 0) {
       const totalDecisionTime = decisionsWithMetrics.reduce(
         (sum, d) => sum + (d.performanceMetrics?.decisionTimeMs || 0), 0
@@ -768,7 +750,7 @@ export class Agent extends BaseElement implements IElement {
       const totalRiskTime = decisionsWithMetrics.reduce(
         (sum, d) => sum + (d.performanceMetrics?.riskAssessmentTimeMs || 0), 0
       );
-      
+
       avgDecisionTime = totalDecisionTime / decisionsWithMetrics.length;
       avgFrameworkTime = totalFrameworkTime / decisionsWithMetrics.length;
       avgRiskTime = totalRiskTime / decisionsWithMetrics.length;
@@ -837,11 +819,14 @@ export class Agent extends BaseElement implements IElement {
     });
 
     // Suggestions
-    if (this.state.goals.length === 0) {
+    // Issue #749: Check both v1 runtime goals and v2 metadata goal template
+    const hasV2Goal = 'goal' in this.metadata && !!this.metadata.goal;
+    if (this.state.goals.length === 0 && !hasV2Goal) {
       suggestions.push('Add some goals to make the agent functional');
     }
 
-    if (!this.extensions?.specializations || this.extensions.specializations.length === 0) {
+    // Issue #749: Don't suggest deprecated v1 fields on v2 agents
+    if (!hasV2Goal && (!this.extensions?.specializations || this.extensions.specializations.length === 0)) {
       suggestions.push('Consider adding specializations to improve agent focus');
     }
 
@@ -875,7 +860,7 @@ export class Agent extends BaseElement implements IElement {
   protected override getContent(): string {
     let content = `# ${this.metadata.name}\n\n`;
     content += `${this.metadata.description}\n\n`;
-    
+
     if (this.state.goals.length > 0) {
       content += `## Current Goals\n\n`;
       this.state.goals.forEach(goal => {
@@ -889,7 +874,7 @@ export class Agent extends BaseElement implements IElement {
         content += '\n';
       });
     }
-    
+
     if (this.state.context && Object.keys(this.state.context).length > 0) {
       content += `## Context\n\n`;
       for (const [key, value] of Object.entries(this.state.context)) {
@@ -897,7 +882,7 @@ export class Agent extends BaseElement implements IElement {
       }
       content += '\n';
     }
-    
+
     return content;
   }
 
@@ -912,13 +897,13 @@ export class Agent extends BaseElement implements IElement {
       ...originalExtensions,
       state: this.state
     };
-    
+
     // Use base class serialize which now outputs markdown
     const result = super.serialize();
-    
+
     // Restore original extensions
     this.extensions = originalExtensions;
-    
+
     return result;
   }
 
@@ -928,7 +913,7 @@ export class Agent extends BaseElement implements IElement {
   public override deserialize(data: string): void {
     const validationResult = UnicodeValidator.normalize(data);
     const parsed = JSON.parse(validationResult.normalizedContent);
-    
+
     // Deserialize base properties
     super.deserialize(JSON.stringify({
       id: parsed.id,
@@ -970,6 +955,10 @@ export class Agent extends BaseElement implements IElement {
       }
 
       this.state = parsed.state;
+
+      // Reconstruct EvictingQueue from deserialized decisions
+      this._decisionHistory = new EvictingQueue<AgentDecision>(AGENT_LIMITS.MAX_DECISION_HISTORY);
+      this._decisionHistory.reset(this.state.decisions || []);
     }
 
     this.isDirtyState = false;
@@ -980,10 +969,11 @@ export class Agent extends BaseElement implements IElement {
    */
   public override async activate(): Promise<void> {
     await super.activate();
-    
+
     // Update session tracking
     this.state.sessionCount++;
     this.state.lastActive = new Date();
+    // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
 
     // Log activation
@@ -1024,12 +1014,12 @@ export class Agent extends BaseElement implements IElement {
    * LOW PRIORITY IMPROVEMENT: Goal template system for common patterns
    */
   public addGoalFromTemplate(
-    templateId: string, 
+    templateId: string,
     customFields: Record<string, any>
   ): AgentGoal {
     // Apply template to get goal data
     const goalData = applyGoalTemplate(templateId, customFields);
-    
+
     // Create goal using the template data
     return this.addGoal(goalData);
   }
@@ -1063,13 +1053,13 @@ export class Agent extends BaseElement implements IElement {
       ...this.ruleEngineConfig,
       ...config
     });
-    
+
     // Update extensions
     this.extensions = {
       ...this.extensions,
       ruleEngineConfig: this.ruleEngineConfig
     };
-    
+
     this.markDirty();
   }
 

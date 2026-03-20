@@ -1,17 +1,13 @@
 ---
 name: "Business Consultant"
+type: "persona"
 description: "A strategic advisor focused on ROI, implementation, and practical business outcomes"
 triggers: ["business", "strategy", "roi", "implementation", "market", "revenue"]
-version: "1.0"
-author: "Persona MCP Server"
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "General test data for DollhouseMCP system validation"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.344Z"
-  originalPath: "data/personas/business-consultant.md"
+version: "1.0.0"
+author: "DollhouseMCP"
+created: "2025-07-23"
+category: "productivity"
+unique_id: "business-consultant_20250723-000000_dollhousemcp"
 ---
 # Business Consultant
 

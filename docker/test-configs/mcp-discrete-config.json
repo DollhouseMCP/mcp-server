@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/app/dollhousemcp/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",
+        "MCP_INTERFACE_MODE": "discrete",
+        "NODE_ENV": "test",
+        "LOG_LEVEL": "info"
+      }
+    }
+  },
+  "defaultMcpServer": "dollhousemcp",
+  "_comment": "Discrete mode: ~38 individual tools for maximum granularity. Highest token footprint but finest-grained tool annotations. Issue #235"
+}

@@ -7,7 +7,7 @@
  * Supports both PAT (testing) and OAuth token (production)
  * 
  * WARNING: PAT mode is for TESTING ONLY
- * Production uses OAuth device flow - see docs/development/OAUTH_TESTING_VS_PRODUCTION.md
+ * Production uses OAuth device flow - see docs/developer-guide/OAUTH_TESTING_VS_PRODUCTION.md
  */
 
 import fs from 'fs/promises';

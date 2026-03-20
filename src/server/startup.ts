@@ -1,18 +1,43 @@
 /**
  * Server startup utilities including migration
+ *
+ * ARCHITECTURE NOTES - Memory Auto-Load Implementation:
+ *
+ * There are two valid architectural approaches for memory auto-load:
+ *
+ * 1. MemoryManager.loadAndActivateAutoLoadMemories() (CURRENT IMPLEMENTATION)
+ *    - Auto-load logic lives in MemoryManager
+ *    - Called directly from Container.preparePortfolio()
+ *    - Follows DI pattern: managers own all operations for their element type
+ *    - Pros: Better encapsulation, clearer ownership, no duplicated responsibility
+ *    - Used by: Container.preparePortfolio() (current production approach)
+ *
+ * 2. ServerStartup.initializeAutoLoadMemories() (ALTERNATIVE APPROACH)
+ *    - Auto-load orchestrated by ServerStartup
+ *    - ServerStartup delegates to MemoryManager for actual operations
+ *    - Useful for: Complex startup sequences with multiple coordinated steps
+ *    - Pros: Centralizes startup concerns, easier to add cross-cutting features
+ *    - Used by: This class (kept for future use and alternative workflows)
+ *
+ * Both approaches are valid and maintained. Choose based on your needs:
+ * - Use MemoryManager directly for simple, focused auto-load
+ * - Use ServerStartup for complex orchestration with multiple startup phases
+ *
+ * See docs/architecture/memory-autoload-architectures.md for detailed comparison.
  */
 
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
+import { FileLockManager } from '../security/fileLockManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
-import { logger } from '../utils/logger.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
 import { VERSION } from '../constants/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { AutoLoadError } from '../errors/AutoLoadError.js';
+import { logger } from '../utils/logger.js';
 
 export interface StartupOptions {
   skipMigration?: boolean;
@@ -22,10 +47,25 @@ export interface StartupOptions {
 export class ServerStartup {
   private portfolioManager: PortfolioManager;
   private migrationManager: MigrationManager;
-  
-  constructor() {
-    this.portfolioManager = PortfolioManager.getInstance();
-    this.migrationManager = new MigrationManager(this.portfolioManager);
+  private fileLockManager: FileLockManager;
+  private memoryManager: MemoryManager;
+  private configManager: ConfigManager;
+  private operationalTelemetry: OperationalTelemetry;
+
+  constructor(
+    portfolioManager: PortfolioManager,
+    fileLockManager: FileLockManager,
+    configManager: ConfigManager,
+    migrationManager: MigrationManager,
+    memoryManager: MemoryManager,
+    operationalTelemetry: OperationalTelemetry
+  ) {
+    this.portfolioManager = portfolioManager;
+    this.fileLockManager = fileLockManager;
+    this.configManager = configManager;
+    this.migrationManager = migrationManager;
+    this.memoryManager = memoryManager;
+    this.operationalTelemetry = operationalTelemetry;
   }
   
   /**
@@ -73,7 +113,7 @@ export class ServerStartup {
       }
     });
 
-    // Issue #1430: Load and report auto-load memories
+    // Initialize auto-load memories
     await this.initializeAutoLoadMemories();
   }
 
@@ -133,6 +173,11 @@ export class ServerStartup {
         }
         return { skip: true, breakLoop: false, skippedCount: 0, estimatedTokens: 0, warnings: 0 };
       }
+
+      // FIX #1430: Activate the memory so it's available for use
+      logger.info(`[ServerStartup] 🔄 Activating memory: ${memoryName}...`);
+      await memory.activate();
+      logger.info(`[ServerStartup] ✅ Memory activated: ${memoryName}`);
 
       // FIX: DMCP-SEC-006 - Audit log each loaded memory
       SecurityMonitor.logSecurityEvent({
@@ -276,10 +321,9 @@ export class ServerStartup {
         return;
       }
 
-      // Check if auto-load is enabled in config
-      const configManager = ConfigManager.getInstance();
-      await configManager.initialize();
-      const config = configManager.getConfig();
+      // Check if auto-load is enabled in config (DI: use this.configManager)
+      await this.configManager.initialize();
+      const config = this.configManager.getConfig();
 
       if (!config.autoLoad.enabled) {
         logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
@@ -293,16 +337,21 @@ export class ServerStartup {
         return;
       }
 
-      const memoryManager = new MemoryManager();
+      // DI: use this.memoryManager instead of new MemoryManager()
+      const memoryManager = this.memoryManager;
 
       // Issue #1430: Install seed memories before loading auto-load memories
       // This ensures baseline knowledge is available on first run
+      logger.info('[ServerStartup] 🌱 Installing seed memories...');
       await memoryManager.installSeedMemories();
+      logger.info('[ServerStartup] ✅ Seed installation complete');
 
+      logger.info('[ServerStartup] 🔍 Fetching auto-load memories...');
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
+      logger.info(`[ServerStartup] 📋 Auto-load memories found: ${autoLoadMemories.length}`);
 
       if (autoLoadMemories.length === 0) {
-        logger.debug('[ServerStartup] No auto-load memories configured');
+        logger.warn('[ServerStartup] ⚠️  No auto-load memories configured - baseline knowledge may not be available');
         return;
       }
 
@@ -416,10 +465,10 @@ export class ServerStartup {
         emergencyDisabled
       };
 
-      await OperationalTelemetry.recordAutoLoadMetrics(metrics);
+      await this.operationalTelemetry.recordAutoLoadMetrics(metrics);
     }
   }
-  
+
   /**
    * Get migration status without performing migration
    */
@@ -432,5 +481,19 @@ export class ServerStartup {
    */
   getPersonasDir(): string {
     return this.portfolioManager.getElementDir(ElementType.PERSONA);
+  }
+
+  /**
+   * Dispose of resources and cleanup
+   * Cleans up managers and telemetry to prevent open handles
+   */
+  async dispose(): Promise<void> {
+    // Dispose MemoryManager (cleans up file watchers)
+    this.memoryManager.dispose();
+
+    // Shutdown telemetry (flushes PostHog events)
+    await this.operationalTelemetry.shutdown();
+
+    logger.debug('[ServerStartup] Disposed and cleaned up resources');
   }
 }

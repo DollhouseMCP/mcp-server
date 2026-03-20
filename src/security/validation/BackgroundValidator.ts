@@ -92,13 +92,21 @@ export interface SanitizedPattern {
  *
  * This service runs outside the LLM request path to validate UNTRUSTED
  * memory entries and update their trust levels based on security analysis.
+ *
+ * REFACTOR NOTE:
+ * Converted to full DI architecture. Removed singleton export.
+ * PatternExtractor is now injected as a dependency instead of static calls.
  */
 export class BackgroundValidator {
   private readonly config: BackgroundValidatorConfig;
   private intervalHandle?: NodeJS.Timeout;
   private isProcessing: boolean = false;
 
-  constructor(config?: Partial<BackgroundValidatorConfig>) {
+  constructor(
+    private readonly patternExtractor: PatternExtractor,
+    private readonly memoryManager: any, // MemoryManager - using any to avoid circular import
+    config?: Partial<BackgroundValidatorConfig>
+  ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     logger.info('BackgroundValidator initialized', {
       enabled: this.config.enabled,
@@ -194,20 +202,28 @@ export class BackgroundValidator {
   /**
    * Find all memories that have UNTRUSTED entries
    *
-   * FIX #1320: Now uses Memory.findByTrustLevel() API
+   * DI REFACTOR: Use injected MemoryManager instead of static Memory methods
    * Loads memories from filesystem and filters by trust level
    */
   private async findMemoriesWithUntrustedEntries(): Promise<Memory[]> {
-    // FIX #1320: Use new Memory query API to find untrusted entries
-    const { Memory } = await import('../../elements/memories/Memory.js');
+    // Load all memories using the injected MemoryManager
+    const allMemories = await this.memoryManager.list();
 
-    // Fetch multiple batches worth of memories to ensure we have work to do
+    // Filter to only memories with UNTRUSTED entries
+    const untrustedMemories: Memory[] = [];
     const limit = this.config.batchSize * 10;
 
-    const untrustedMemories = await Memory.findByTrustLevel(
-      TRUST_LEVELS.UNTRUSTED,
-      { limit }
-    );
+    for (const memory of allMemories) {
+      const hasUntrustedEntries = memory.getEntriesByTrustLevel(TRUST_LEVELS.UNTRUSTED).length > 0;
+      if (hasUntrustedEntries) {
+        untrustedMemories.push(memory);
+
+        // Apply limit
+        if (untrustedMemories.length >= limit) {
+          break;
+        }
+      }
+    }
 
     logger.debug('Found memories with untrusted entries', {
       count: untrustedMemories.length,
@@ -268,9 +284,9 @@ export class BackgroundValidator {
         updatedCount,
       });
 
-      // FIX #1320: Save memory using new instance method
+      // DI REFACTOR: Use injected MemoryManager to save
       try {
-        await memory.save();
+        await this.memoryManager.save(memory);
         logger.debug('Memory saved successfully', {
           memoryId: memory.id
         });
@@ -327,7 +343,7 @@ export class BackgroundValidator {
       });
 
       // Phase 1: Extract patterns and create sanitized content
-      const extractionResult = PatternExtractor.extractPatterns(
+      const extractionResult = this.patternExtractor.extractPatterns(
         entry.content,
         validationResult
       );
@@ -390,10 +406,13 @@ export class BackgroundValidator {
       batchSize: this.config.batchSize,
     };
   }
-}
 
-/**
- * Singleton instance for global use
- * Can be configured via environment variables or config file
- */
-export const backgroundValidator = new BackgroundValidator();
+  /**
+   * Dispose of the validator and clean up resources
+   * Implements cleanup for proper DI lifecycle management
+   */
+  async dispose(): Promise<void> {
+    this.stop();
+    logger.debug('BackgroundValidator disposed');
+  }
+}

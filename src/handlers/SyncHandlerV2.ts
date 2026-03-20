@@ -1,14 +1,18 @@
 /**
  * Portfolio sync handler for the sync_portfolio MCP tool
  * Manages bi-directional synchronization between local portfolio and GitHub
- * This V2 version works with the actual PortfolioSyncManager implementation
+ *
+ * Uses dependency injection for all services:
+ * - PortfolioSyncManager for sync operations
+ * - ConfigManager for configuration
+ * - PersonaIndicatorService for persona indicator formatting
  */
 
 import { PortfolioSyncManager, SyncOperation, SyncResult } from '../portfolio/PortfolioSyncManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { ElementType } from '../portfolio/PortfolioManager.js';
-import { logger } from '../utils/logger.js';
+import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 
 export interface SyncOperationOptions {
   operation: 'list-remote' | 'download' | 'upload' | 'compare' | 'bulk-download' | 'bulk-upload';
@@ -27,21 +31,21 @@ export interface SyncOperationOptions {
 }
 
 export class SyncHandler {
-  private syncManager: PortfolioSyncManager;
-  private configManager: ConfigManager;
-  
-  constructor() {
-    this.syncManager = new PortfolioSyncManager();
-    this.configManager = ConfigManager.getInstance();
-  }
+  constructor(
+    private readonly syncManager: PortfolioSyncManager,
+    private readonly configManager: ConfigManager,
+    private readonly indicatorService: PersonaIndicatorService
+  ) {}
   
   /**
    * Handle portfolio sync operations
    */
-  async handleSyncOperation(options: SyncOperationOptions, indicator: string = '') {
+  async handleSyncOperation(options: SyncOperationOptions) {
+    const indicator = this.indicatorService.getPersonaIndicator();
+
     try {
       await this.configManager.initialize();
-      
+
       // Check if sync is enabled (allow list-remote and compare even when disabled)
       const syncEnabled = this.configManager.getSetting('sync.enabled');
       const readOnlyOperations = ['list-remote', 'compare'];

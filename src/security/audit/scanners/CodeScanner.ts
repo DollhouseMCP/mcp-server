@@ -5,8 +5,8 @@
 
 import type { SecurityScanner, SecurityFinding, ScanContext, SecurityRule } from '../types.js';
 import { SecurityRules } from '../rules/SecurityRules.js';
-import fs from 'fs/promises';
-import path from 'path';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { glob } from 'glob';
 
 interface CodeScannerConfig {
@@ -61,7 +61,7 @@ export class CodeScanner implements SecurityScanner {
         const content = await fs.readFile(file, 'utf-8');
         const fileFindings = await this.scanFile(file, content, context);
         findings.push(...fileFindings);
-      } catch (error) {
+      } catch {
         // Skip files that can't be read
         continue;
       }
@@ -75,8 +75,12 @@ export class CodeScanner implements SecurityScanner {
    */
   private async getFilesToScan(projectRoot: string): Promise<string[]> {
     const patterns = ['**/*.ts', '**/*.js', '**/*.jsx', '**/*.tsx', '**/*.json', '**/*.yml', '**/*.yaml'];
-    const ignore = this.config.exclude || ['node_modules/**', 'dist/**', 'coverage/**'];
-    
+    const ignore = this.config.exclude || [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/coverage/**'
+    ];
+
     const files: string[] = [];
     for (const pattern of patterns) {
       const matches = await glob(pattern, {
@@ -86,7 +90,7 @@ export class CodeScanner implements SecurityScanner {
       });
       files.push(...matches);
     }
-    
+
     return files;
   }
 

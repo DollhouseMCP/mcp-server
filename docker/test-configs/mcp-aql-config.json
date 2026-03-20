@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/app/dollhousemcp/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",
+        "DOLLHOUSE_MODE": "mcp-aql",
+        "NODE_ENV": "test",
+        "LOG_LEVEL": "info"
+      }
+    }
+  },
+  "defaultMcpServer": "dollhousemcp",
+  "_comment": "MCP-AQL focused configuration for Docker integration tests (Issue #230)"
+}

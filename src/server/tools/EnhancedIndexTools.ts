@@ -8,9 +8,9 @@
  * - Uses configuration for default values instead of hardcoded numbers
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
-import { IndexConfigManager } from '../../portfolio/config/IndexConfig.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import { IndexConfiguration } from '../../portfolio/config/IndexConfig.js';
+import type { EnhancedIndexHandler } from '../../handlers/EnhancedIndexHandler.js';
 
 // Tool argument interfaces
 interface FindSimilarElementsArgs {
@@ -34,9 +34,10 @@ interface SearchByVerbArgs {
 // Tool handler function type
 type ToolHandler<T> = (args: T) => Promise<any>;
 
-export function getEnhancedIndexTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
-  // FIX: Get configuration for default values
-  const config = IndexConfigManager.getInstance().getConfig();
+export function getEnhancedIndexTools(
+  server: EnhancedIndexHandler,
+  config: IndexConfiguration
+): Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> {
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler<any> }> = [
     {
       tool: {

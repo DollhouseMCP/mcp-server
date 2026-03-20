@@ -26,8 +26,6 @@ parameters:
     description: "Minimum severity to report"
     default: "info"
     enum: ["error", "warning", "info", "style"]
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

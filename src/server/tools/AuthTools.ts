@@ -2,10 +2,10 @@
  * Authentication-related tool definitions and handlers
  */
 
-import { ToolDefinition } from './ToolRegistry.js';
-import { IToolHandler } from '../types.js';
+import { ToolDefinition } from '../../handlers/types/ToolTypes.js';
+import type { GitHubAuthHandler } from '../../handlers/GitHubAuthHandler.js';
 
-export function getAuthTools(server: IToolHandler): Array<{ tool: ToolDefinition; handler: any }> {
+export function getAuthTools(server: GitHubAuthHandler): Array<{ tool: ToolDefinition; handler: any }> {
   return [
     {
       tool: {

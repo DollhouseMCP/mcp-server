@@ -30,8 +30,6 @@ parameters:
     type: "boolean"
     description: "Verify claims and cross-reference"
     default: true
-_dollhouseMCPTest: true
-_testMetadata:
   suite: "bundled-test-data"
   purpose: "General test data for DollhouseMCP system validation"
   created: "2025-08-20"

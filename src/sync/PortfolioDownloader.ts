@@ -26,10 +26,10 @@ export class PortfolioDownloader {
     repository: string
   ): Promise<ElementData> {
     try {
-      logger.info('Downloading element from GitHub', { 
-        path: elementPath, 
-        username, 
-        repository 
+      logger.info('Downloading element from GitHub', {
+        path: elementPath,
+        username,
+        repository
       });
 
       // Fetch the file content from GitHub

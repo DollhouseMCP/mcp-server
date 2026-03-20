@@ -1,20 +1,22 @@
 /**
  * Comprehensive Performance Benchmarking Suite for DollhouseMCP Indexing System
- * 
+ *
  * Benchmarks:
  * - Search response times under various loads
  * - Memory usage patterns with large datasets
  * - Cache performance and hit rates
  * - Concurrent operation performance
  * - Index building and rebuilding times
+ *
+ * Note: Some metrics are collected but not yet used in reporting.
+ * These are kept for future dashboard/analytics implementation.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 
 import { UnifiedIndexManager, UnifiedSearchOptions } from '../portfolio/UnifiedIndexManager.js';
 import { PortfolioIndexManager } from '../portfolio/PortfolioIndexManager.js';
-import { CollectionIndexCache } from '../cache/CollectionIndexCache.js';
+import { DollhouseContainer } from '../di/Container.js';
 import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
-import { GitHubClient } from '../collection/GitHubClient.js';
-import { APICache } from '../cache/APICache.js';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
@@ -49,10 +51,12 @@ export class IndexPerformanceBenchmark {
   private unifiedIndexManager: UnifiedIndexManager;
   private performanceMonitor: PerformanceMonitor;
   private benchmarkResults: BenchmarkResult[] = [];
+  private container: DollhouseContainer;
 
   constructor() {
-    this.unifiedIndexManager = UnifiedIndexManager.getInstance();
-    this.performanceMonitor = PerformanceMonitor.getInstance();
+    this.container = new DollhouseContainer();
+    this.unifiedIndexManager = this.container.resolve('UnifiedIndexManager');
+    this.performanceMonitor = this.container.resolve('PerformanceMonitor');
   }
 
   /**
@@ -414,7 +418,7 @@ export class IndexPerformanceBenchmark {
     const endTime = Date.now();
     const memoryAfter = process.memoryUsage().heapUsed;
 
-    const localStats = await PortfolioIndexManager.getInstance().getStats();
+    const localStats = await this.container.resolve<PortfolioIndexManager>('PortfolioIndexManager').getStats();
 
     return {
       name: 'Index Building',

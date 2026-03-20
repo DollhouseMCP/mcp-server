@@ -2,52 +2,54 @@
 name: "Task Manager"
 description: "Goal-oriented agent for managing tasks, priorities, and project execution"
 type: "agent"
-version: "1.0.0"
+version: "2.0.0"
 author: "DollhouseMCP"
 created: "2025-07-23"
 category: "productivity"
 tags: ["tasks", "project-management", "planning", "execution", "productivity"]
-goals:
-  primary: "Ensure efficient task completion and project success"
-  secondary:
-    - "Optimize resource allocation"
-    - "Minimize blockers and delays"
-    - "Maintain team productivity"
-    - "Track progress and metrics"
-decision_framework:
-  type: "eisenhower-matrix"
-  importance_factors:
-    - "business_value"
-    - "strategic_alignment"
-    - "dependency_count"
-    - "risk_mitigation"
-  urgency_factors:
-    - "deadline_proximity"
-    - "blocker_status"
-    - "resource_availability"
-    - "external_dependencies"
-state:
-  persistent: true
-  retention: "30 days"
-  tracking:
-    - "active_tasks"
-    - "completed_tasks"
-    - "blocked_items"
-    - "resource_allocation"
-    - "velocity_metrics"
-risk_thresholds:
-  max_concurrent_tasks: 10
-  max_task_age_days: 90
-  min_progress_rate: 0.1
-  resource_utilization_cap: 0.9
-_dollhouseMCPTest: true
-_testMetadata:
-  suite: "bundled-test-data"
-  purpose: "Workflow integration testing"
-  created: "2025-08-20"
-  version: "1.0.0"
-  migrated: "2025-08-20T23:47:24.341Z"
-  originalPath: "data/agents/task-manager.md"
+
+# v2.0: Goal template configuration
+goal:
+  template: "Manage {task_scope} tasks with priority on {focus_area} and report {report_type}"
+  parameters:
+    - name: task_scope
+      type: string
+      required: true
+      description: "Scope of tasks to manage (e.g., 'sprint', 'project', 'team')"
+    - name: focus_area
+      type: string
+      required: false
+      description: "Priority focus: deadlines, blockers, quality, or velocity"
+      default: "deadlines"
+    - name: report_type
+      type: string
+      required: false
+      description: "Report format: summary, detailed, or dashboard"
+      default: "summary"
+  successCriteria:
+    - "All tasks categorized by priority (Eisenhower Matrix)"
+    - "Blockers identified and escalation recommendations provided"
+    - "Resource allocation optimized"
+    - "Progress metrics calculated"
+    - "Actionable next steps defined"
+
+# v2.0: Elements to activate
+activates:
+  personas:
+    - business-consultant
+  skills:
+    - data-analysis
+  memories:
+    - task-history
+
+# v2.0: Tools this agent uses
+tools:
+  allowed:
+    - read_file
+    - write_file
+    - list_directory
+    - get_element
+
 ---
 # Task Manager Agent
 

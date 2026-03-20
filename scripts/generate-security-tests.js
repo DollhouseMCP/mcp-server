@@ -19,12 +19,14 @@ if (!toolName) {
 const testTemplate = `import { describe, test, expect } from '@jest/globals';
 import { SecurityTestFramework } from '../framework/SecurityTestFramework.js';
 import { DollhouseMCPServer } from '../../../src/index.js';
+import { DollhouseContainer } from '../../../src/di/Container.js';
 
 describe('${toolName} Security Tests', () => {
   let server: DollhouseMCPServer;
-  
+
   beforeAll(() => {
-    server = new DollhouseMCPServer();
+    const container = new DollhouseContainer();
+    server = new DollhouseMCPServer(container);
   });
   
   describe('Input Validation', () => {

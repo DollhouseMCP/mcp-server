@@ -14,8 +14,8 @@ export class ConfigWizardCheck {
   private configManager: ConfigManager;
   private currentVersion: string;
 
-  constructor() {
-    this.configManager = ConfigManager.getInstance();
+  constructor(configManager: ConfigManager) {
+    this.configManager = configManager;
     this.currentVersion = this.getCurrentVersion();
   }
   

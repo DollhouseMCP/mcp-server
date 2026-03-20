@@ -7,12 +7,19 @@
 
 import { ConfigManager } from '../src/config/ConfigManager.js';
 import { ConfigWizard } from '../src/config/ConfigWizard.js';
+import { FileOperationsService } from '../src/services/FileOperationsService.js';
+import { FileLockManager } from '../src/security/fileLockManager.js';
 import chalk from 'chalk';
+import os from 'os';
 
 async function main() {
   try {
+    // Initialize dependencies
+    const fileLockManager = new FileLockManager();
+    const fileOperations = new FileOperationsService(fileLockManager);
+
     // Initialize config manager
-    const configManager = ConfigManager.getInstance();
+    const configManager = new ConfigManager(fileOperations, os);
     await configManager.initialize();
 
     // Create and run wizard

@@ -295,7 +295,7 @@ function generateSummary(results) {
     console.log('');
     console.log('Test your setup:');
     console.log('  npm test');
-    console.log('  node test/qa/oauth-pat-test.mjs');
+    console.log('  node tests/qa/oauth-pat-test.mjs');
     
   } else if (hasValidToken && !hasAllScopes) {
     printStatus('warning', 'PAT is valid but missing required scopes');

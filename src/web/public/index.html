@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DollhouseMCP Portfolio</title>
+  <meta name="description" content="Browse your local DollhouseMCP portfolio elements">
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="page-noise" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="header-brand">
+      <h1 class="site-title">DollhouseMCP Portfolio</h1>
+      <p class="site-tagline">Your local AI elements</p>
+    </div>
+    <div class="header-right">
+      <div class="site-stats" id="stats" aria-live="polite"></div>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">☾</span>
+        <span class="sr-only" id="theme-toggle-label">Switch to dark mode</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="site-main">
+
+    <div class="browse-controls">
+      <div class="search-wrapper">
+        <label for="search-input" class="sr-only">Search elements</label>
+        <input
+          type="search"
+          id="search-input"
+          class="search-input"
+          placeholder="Search by name, description, author, or tag… (press / to focus)"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+      <div class="type-filter-row">
+        <fieldset class="type-filters" id="type-filters"><legend class="sr-only">Filter by element type</legend></fieldset>
+        <!-- Portfolio is the default view — no collection toggle needed -->
+      </div>
+      <fieldset class="topic-filters" id="topic-filters" hidden><legend class="sr-only">Filter by topic</legend></fieldset>
+    </div>
+
+    <div class="results-bar">
+      <span class="results-count" id="results-count" aria-live="polite"></span>
+      <output class="sr-only" id="results-announcer" aria-live="polite" aria-atomic="true"></output>
+      <fieldset class="source-toggle" id="source-toggle">
+        <legend class="sr-only">Filter by source</legend>
+        <button class="source-btn active" data-source="all"        aria-pressed="true">All</button>
+        <button class="source-btn"        data-source="collection" aria-pressed="false">Collection</button>
+        <button class="source-btn"        data-source="portfolio"  aria-pressed="false">Portfolio</button>
+      </fieldset>
+      <label for="sort-select" class="sr-only">Sort by</label>
+      <select id="sort-select" class="sort-select" aria-label="Sort elements">
+        <option value="name-asc">Name A–Z</option>
+        <option value="name-desc">Name Z–A</option>
+        <option value="date-desc" selected>Newest first</option>
+        <option value="date-asc">Oldest first</option>
+        <option value="type-asc">By type</option>
+      </select>
+      <fieldset class="view-toggle" id="view-toggle">
+        <legend class="sr-only">View mode</legend>
+        <button class="view-btn active" data-view="grid"   aria-pressed="true">Cards</button>
+        <button class="view-btn"        data-view="list"   aria-pressed="false">List</button>
+        <button class="view-btn"        data-view="detail" aria-pressed="false">Detail</button>
+      </fieldset>
+    </div>
+
+    <ul class="elements-grid" id="elements-grid"></ul>
+
+    <nav class="pagination" id="pagination" hidden aria-label="Page navigation">
+      <button class="pagination-btn" id="btn-prev-page">‹ Prev</button>
+      <span class="pagination-info" id="page-info"></span>
+      <button class="pagination-btn" id="btn-next-page">Next ›</button>
+    </nav>
+
+  </main>
+
+  <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
+    <div class="modal-overlay" id="modal-overlay"></div>
+    <div class="modal-dialog">
+      <header class="modal-header">
+        <div class="modal-heading">
+          <h2 class="modal-title" id="modal-title">Loading…</h2>
+          <span class="modal-type"></span>
+        </div>
+        <div class="modal-meta">
+          <span class="modal-author"></span>
+          <span class="modal-version"></span>
+          <span class="modal-date"></span>
+          <span class="modal-source source-badge"></span>
+        </div>
+        <button class="modal-close" id="modal-close" aria-label="Close element detail">&#x2715;</button>
+      </header>
+      <div class="modal-toolbar" id="modal-toolbar">
+        <button class="modal-action-btn" id="btn-render">⇄ Raw</button>
+        <button class="modal-action-btn" id="btn-copy">⎘ Copy</button>
+        <button class="modal-action-btn" id="btn-download">⤓ Download</button>
+        <a class="modal-action-btn" id="btn-github" target="_blank" rel="noopener noreferrer">↗ GitHub</a>
+        <a class="modal-action-btn modal-action-btn--submit" id="btn-submit" target="_blank" rel="noopener noreferrer" style="display:none">↑ Submit</a>
+        <div class="modal-nav" id="modal-nav">
+          <button class="modal-nav-btn" id="btn-prev-element">&#8249;<span class="sr-only"> Previous element</span></button>
+          <span class="modal-nav-count" id="modal-nav-count"></span>
+          <button class="modal-nav-btn" id="btn-next-element">&#8250;<span class="sr-only"> Next element</span></button>
+        </div>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </dialog>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <a href="https://github.com/DollhouseMCP/collection" class="footer-link">GitHub Repository</a>
+      <a href="./collection-index.json" class="footer-link">JSON API</a>
+      <a href="https://dollhousemcp.com" class="footer-link">DollhouseMCP</a>
+      <span class="footer-updated" id="footer-updated"></span>
+    </div>
+  </footer>
+
+  <!-- Markdown rendering (same libs as Merview) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"
+          integrity="sha384-zbcZAIxlvJtNE3Dp5nxLXdXtXyxwOdnILY1TDPVmKFhl4r4nSUG1r8bcFXGVa4Te"
+          crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
+          integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"
+          integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"
+          integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu"
+          crossorigin="anonymous"></script>
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"
+        integrity="sha512-0aPQyyeZrWj9sCA46UlmWgKOP0mUipLQ6OZXu8l4IcAmD2u31EPEy9VcIMvl7SoAaKe8bLXZhYoMaE/in+gcgA=="
+        crossorigin="anonymous"
+        id="hljs-theme-light">
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+        integrity="sha512-rO+olRTkcf304DQBxSWxln8JXCzTHlKnIdnMUwYvQa9/Jd4cQaNkItIUj6Z4nvW1dqK0SKXLbn9h4KwZTNtAyw=="
+        crossorigin="anonymous"
+        id="hljs-theme-dark" disabled>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -3,17 +3,12 @@
  */
 
 export interface IToolHandler {
-  // Persona tools (legacy - will call element tools internally)
+  // Persona tools (legacy - retained for backward compatibility)
+  // Issue #281: Removed activatePersona, getActivePersona, deactivatePersona, getPersonaDetails, createPersona
+  // Use activateElement, getActiveElements, deactivateElement, getElementDetails, createElement with 'persona' type instead
   listPersonas(): Promise<any>;
-  activatePersona(persona: string): Promise<any>;
-  getActivePersona(): Promise<any>;
-  deactivatePersona(): Promise<any>;
-  getPersonaDetails(persona: string): Promise<any>;
   reloadPersonas(): Promise<any>;
-  createPersona(name: string, description: string, category: string, instructions: string, triggers?: string): Promise<any>;
-  editPersona(persona: string, field: string, value: string): Promise<any>;
-  validatePersona(persona: string): Promise<any>;
-  
+
   // Element tools (generic for all element types)
   listElements(type: string): Promise<any>;
   activateElement(name: string, type: string): Promise<any>;
@@ -22,13 +17,13 @@ export interface IToolHandler {
   getElementDetails(name: string, type: string): Promise<any>;
   reloadElements(type: string): Promise<any>;
   createElement(args: {name: string; type: string; description: string; content?: string; metadata?: Record<string, any>}): Promise<any>;
-  editElement(args: {name: string; type: string; field: string; value: any}): Promise<any>;
+  editElement(args: {name: string; type: string; input: Record<string, unknown>}): Promise<any>;
   validateElement(args: {name: string; type: string; strict?: boolean}): Promise<any>;
   deleteElement(args: {name: string; type: string; deleteData?: boolean}): Promise<any>;
   
   // Element-specific tools
   renderTemplate(name: string, variables: Record<string, any>): Promise<any>;
-  executeAgent(name: string, goal: string): Promise<any>;
+  executeAgent(name: string, parameters: Record<string, any>): Promise<any>;
   
   // Collection tools
   browseCollection(section?: string, type?: string): Promise<any>;

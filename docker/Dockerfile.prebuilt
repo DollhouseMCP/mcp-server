@@ -26,10 +26,11 @@ RUN groupadd -g 1001 nodejs && \
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files and local workspace packages
 COPY package*.json ./
+COPY packages/ ./packages/
 
-# Install only production dependencies
+# Install only production dependencies (includes local @dollhousemcp/safety)
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy pre-built application (dist/ must exist locally)

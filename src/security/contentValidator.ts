@@ -12,7 +12,7 @@ import { SecurityMonitor } from './securityMonitor.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
-import { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
+import type { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
 
 // FIX: SonarCloud typescript:S4323 - Extract union type to type alias for maintainability
 export type SecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -35,9 +35,29 @@ export interface ContentValidatorOptions {
    * @default SECURITY_LIMITS.MAX_CONTENT_LENGTH
    */
   maxLength?: number;
+  /**
+   * Element type context for context-aware pattern matching.
+   * Skills may legitimately contain code patterns (eval, exec, require)
+   * that would be blocked in other contexts.
+   * @since Issue #456
+   */
+  contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
 }
 
 export class ContentValidator {
+  private static telemetryResolver?: () => SecurityTelemetry | undefined;
+
+  public static configureTelemetryResolver(resolver: () => SecurityTelemetry | undefined): void {
+    this.telemetryResolver = resolver;
+  }
+
+  private static getTelemetry(): SecurityTelemetry | undefined {
+    try {
+      return this.telemetryResolver ? this.telemetryResolver() : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   /**
    * Pattern-based detection system for prompt injection attacks.
    * 
@@ -105,6 +125,20 @@ export class ContentValidator {
     { pattern: /\.\.\/\.\.\/\.\.\//g, severity: 'high', description: 'Path traversal attempt' },
     { pattern: /\/etc\/passwd/gi, severity: 'high', description: 'Sensitive file access' },
     { pattern: /\/\.ssh\//gi, severity: 'high', description: 'SSH key access attempt' },
+
+    // HTML/XSS patterns — defense-in-depth for community-sourced content
+    // DOMPurify on the client is the primary defense; these catch threats at ingest
+    { pattern: /<script[\s>]/gi, severity: 'critical', description: 'HTML script injection' },
+    { pattern: /<\/script>/gi, severity: 'critical', description: 'HTML script injection' },
+    { pattern: /<iframe[\s>]/gi, severity: 'critical', description: 'HTML iframe injection' },
+    { pattern: /<object[\s>]/gi, severity: 'high', description: 'HTML object injection' },
+    { pattern: /<embed[\s>]/gi, severity: 'high', description: 'HTML embed injection' },
+    { pattern: /\bon\w+=\s*["']/gi, severity: 'critical', description: 'HTML event handler injection' },
+    { pattern: /javascript\s*:/gi, severity: 'critical', description: 'JavaScript protocol injection' },
+    // Entity-encoded variants: &#106;avascript, &#x6a;avascript, &#106;&#97;vascript, etc.
+    { pattern: /&#x?[0-9a-f]+;?\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t/gi, severity: 'critical', description: 'Encoded JavaScript protocol injection' },
+    // Fully/partially entity-encoded: detects &#...script pattern (covers multi-entity encoding)
+    { pattern: /(?:&#x?[0-9a-f]+;?\s*){2,}s\s*c\s*r\s*i\s*p\s*t/gi, severity: 'critical', description: 'Encoded JavaScript protocol injection' },
   ];
 
   // Malicious YAML patterns
@@ -211,6 +245,46 @@ export class ContentValidator {
   ];
 
   /**
+   * Content contexts where code execution patterns are legitimate and should
+   * not trigger security blocks. Skills contain exemplar code; templates contain
+   * code snippets that are rendered, never executed; agent definitions describe
+   * technical workflows that may reference code. Prompt injection, credential,
+   * and path traversal patterns remain active for ALL contexts.
+   * @since Issue #456
+   */
+  private static readonly CODE_EXEMPT_CONTEXTS = new Set<ContentValidatorOptions['contentContext']>([
+    'skill',    // Exemplar code patterns the LLM should follow
+    'template', // Code snippets rendered into output, never executed
+    'agent',    // Technical workflow definitions — without this, agents would need
+                // to pull in a skill or template just to reference code, adding
+                // coupling without security value. Agent definitions are authored
+                // content read as LLM context, same as skills and templates.
+  ]);
+
+  /**
+   * Pattern descriptions that are exempt for CODE_EXEMPT_CONTEXTS.
+   * These patterns match legitimate code documentation, not threats.
+   * @since Issue #456
+   */
+  private static readonly CODE_EXECUTION_PATTERNS = new Set([
+    'Code evaluation',
+    'Code execution',
+    'System command execution',
+    'Subprocess execution',
+  ]);
+
+  /**
+   * HTML/XSS pattern descriptions exempt for template context.
+   * Templates use <template>, <style>, <script> as section delimiters.
+   * @since Issue #803
+   */
+  private static readonly HTML_SECTION_PATTERNS = new Set([
+    'HTML script injection',
+    'HTML object injection',
+    'HTML embed injection',
+  ]);
+
+  /**
    * Handles Unicode validation and threat detection
    * REFACTOR: Extracted from validateAndSanitize() to reduce cognitive complexity
    * Returns normalized content and Unicode severity without aborting early
@@ -241,7 +315,7 @@ export class ContentValidator {
           details: `Unicode attack detected: ${unicodeResult.detectedIssues.join(', ')}`,
         });
 
-        SecurityTelemetry.recordBlockedAttack(
+        ContentValidator.getTelemetry()?.recordBlockedAttack(
           'UNICODE_ATTACK',
           unicodeResult.detectedIssues.join(', '),
           unicodeResult.severity.toUpperCase() as 'HIGH' | 'CRITICAL',
@@ -262,12 +336,15 @@ export class ContentValidator {
    * @param normalizedContent - Normalized content to apply replacements to
    * @param detectedPatterns - Array to accumulate detected pattern descriptions
    * @param currentSeverity - Current highest severity level
+   * @param maxLength - Maximum allowed content length for regex validation
    */
   private static checkInjectionPatterns(
     originalContent: string,
     normalizedContent: string,
     detectedPatterns: string[],
-    currentSeverity: SecuritySeverity
+    currentSeverity: SecuritySeverity,
+    maxLength: number,
+    contentContext?: ContentValidatorOptions['contentContext']
   ): {
     sanitized: string;
     highestSeverity: SecuritySeverity;
@@ -276,9 +353,17 @@ export class ContentValidator {
     let highestSeverity = currentSeverity;
 
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
+      // Fix #456: Skip code execution patterns for element types that legitimately contain code
+      if (contentContext && this.CODE_EXEMPT_CONTEXTS.has(contentContext) && this.CODE_EXECUTION_PATTERNS.has(description)) {
+        continue;
+      }
+      // Fix #803: Skip HTML section tag patterns for templates (use <script>/<style> as section delimiters)
+      if (contentContext === 'template' && this.HTML_SECTION_PATTERNS.has(description)) {
+        continue;
+      }
       // Check pattern on original content (before normalization) to catch encoded attacks
       if (RegexValidator.validate(originalContent, pattern, {
-        maxLength: 50000,
+        maxLength,
         rejectDangerousPatterns: false,
         logEvents: false
       })) {
@@ -298,7 +383,7 @@ export class ContentValidator {
         });
 
         // Record in telemetry
-        SecurityTelemetry.recordBlockedAttack(
+        ContentValidator.getTelemetry()?.recordBlockedAttack(
           'CONTENT_INJECTION',
           description,
           severity.toUpperCase() as 'HIGH' | 'CRITICAL',
@@ -318,12 +403,22 @@ export class ContentValidator {
    * Validates and sanitizes persona content for security threats
    * FIX #1269: Added options to support large memory content
    * REFACTOR: Reduced cognitive complexity by extracting helper methods
+   *
+   * SECURITY FIX (DMCP-SEC-004): Length checks now performed on NORMALIZED content
+   * to prevent bypass attacks using Unicode combining characters or zero-width chars.
+   * A pre-check with generous multiplier prevents DoS from huge payloads.
    */
   static validateAndSanitize(content: string, options: ContentValidatorOptions = {}): ContentValidationResult {
-    // Length validation before pattern matching (unless explicitly skipped for memories)
+    // Determine max length for validation
+    const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+
+    // SECURITY FIX (DMCP-SEC-004): Two-phase length validation
+    // Phase 1: DoS prevention pre-check on raw content (generous 2x multiplier)
+    // This prevents huge payloads from hitting the normalization code path
+    // while still allowing legitimate content with some Unicode overhead
+    const DOS_PREVENTION_MULTIPLIER = 2;
     if (!options.skipSizeCheck) {
-      const maxLength = options.maxLength || SECURITY_LIMITS.MAX_CONTENT_LENGTH;
-      if (content.length > maxLength) {
+      if (content.length > maxLength * DOS_PREVENTION_MULTIPLIER) {
         throw new SecurityError(
           `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
         );
@@ -335,13 +430,26 @@ export class ContentValidator {
     // Handle Unicode validation (normalizes content but doesn't abort)
     const unicodeCheck = this.handleUnicodeValidation(content, detectedPatterns);
 
+    // SECURITY FIX (DMCP-SEC-004): Phase 2 - Check length on NORMALIZED content
+    // This prevents bypass attacks using combining characters or zero-width chars
+    // that would inflate raw length but collapse after normalization
+    if (!options.skipSizeCheck) {
+      if (unicodeCheck.sanitized.length > maxLength) {
+        throw new SecurityError(
+          `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
+        );
+      }
+    }
+
     // Check for injection patterns on ORIGINAL content (to catch encoded attacks)
     // but apply replacements to NORMALIZED content (to preserve normalization)
     const injectionCheck = this.checkInjectionPatterns(
       content,
       unicodeCheck.sanitized,
       detectedPatterns,
-      unicodeCheck.highestSeverity
+      unicodeCheck.highestSeverity,
+      maxLength,
+      options.contentContext
     );
 
     // Use highest severity from either Unicode or injection checks
@@ -405,7 +513,7 @@ export class ContentValidator {
         });
 
         // Record in telemetry
-        SecurityTelemetry.recordBlockedAttack(
+        ContentValidator.getTelemetry()?.recordBlockedAttack(
           'YAML_BOMB',
           `YAML bomb pattern: ${pattern.source}`,
           'CRITICAL',

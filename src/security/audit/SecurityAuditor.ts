@@ -20,17 +20,24 @@ import { ConsoleReporter } from './reporters/ConsoleReporter.js';
 import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
 import { shouldSuppress } from './config/suppressions.js';
-import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
-import path from 'path';
-import fs from 'fs/promises';
+import { ErrorHandler } from '../../utils/ErrorHandler.js';
+import * as path from 'path';
+import { IFileOperationsService } from '../../services/FileOperationsService.js';
 
 export class SecurityAuditor {
   private config: SecurityAuditConfig;
   private scanners: SecurityScanner[] = [];
   private suppressions: Map<string, Set<string>> = new Map();
+  private readonly fileOperations: IFileOperationsService;
+  private logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
 
-  constructor(config: SecurityAuditConfig) {
+  addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): void {
+    this.logListener = fn;
+  }
+
+  constructor(config: SecurityAuditConfig, fileOperations: IFileOperationsService) {
     this.config = config;
+    this.fileOperations = fileOperations;
     this.initializeScanners();
     this.loadSuppressions();
   }
@@ -81,6 +88,7 @@ export class SecurityAuditor {
     const scannedFilesSet = new Set<string>();
 
     logger.info(`SecurityAuditor: Starting security audit of ${projectRoot}`);
+    this.logListener?.('info', 'Start security audit', { projectRoot });
 
     // Run all enabled scanners
     for (const scanner of this.scanners) {
@@ -106,6 +114,23 @@ export class SecurityAuditor {
 
     // Log audit completion
     logger.info(`SecurityAuditor: Audit completed: ${result.summary.total} findings in ${duration}ms`);
+
+    // Notify listener per finding
+    for (const finding of allFindings) {
+      const findingLevel = finding.severity === 'critical' || finding.severity === 'high' ? 'error'
+        : finding.severity === 'medium' ? 'warn' : 'info';
+      this.logListener?.(findingLevel, finding.message, {
+        ruleId: finding.ruleId,
+        severity: finding.severity,
+        file: finding.file,
+        line: finding.line,
+      });
+    }
+    this.logListener?.('info', 'Complete security audit', {
+      total: result.summary.total,
+      duration,
+      bySeverity: result.summary.bySeverity,
+    });
 
     // Generate reports
     await this.generateReports(result);
@@ -238,24 +263,31 @@ export class SecurityAuditor {
     for (const format of this.config.reporting.formats) {
       try {
         switch (format) {
-          case 'console':
+          case 'console': {
             const consoleReporter = new ConsoleReporter(result);
             // Console reporter output is meant to be shown directly to user
             // Using console.log here is intentional for formatting
             console.log(consoleReporter.generate());
             break;
-            
-          case 'markdown':
+          }
+
+          case 'markdown': {
             const markdownReporter = new MarkdownReporter(result);
             const mdReport = markdownReporter.generate() as string;
-            await fs.writeFile('security-audit-report.md', mdReport);
+            await this.fileOperations.writeFile('security-audit-report.md', mdReport, {
+              source: 'SecurityAuditor.generateReports'
+            });
             break;
-            
-          case 'json':
+          }
+
+          case 'json': {
             const jsonReporter = new JsonReporter(result);
             const jsonReport = JSON.stringify(jsonReporter.generate(), null, 2);
-            await fs.writeFile('security-audit-report.json', jsonReport);
+            await this.fileOperations.writeFile('security-audit-report.json', jsonReport, {
+              source: 'SecurityAuditor.generateReports'
+            });
             break;
+          }
             
           // SARIF format would be implemented similarly
         }
@@ -291,17 +323,19 @@ export class SecurityAuditor {
   /**
    * Get default configuration
    */
-  static getDefaultConfig(): SecurityAuditConfig {
+  static async getDefaultConfig(fileOperations: IFileOperationsService): Promise<SecurityAuditConfig> {
     // Load suppressions from file if it exists
     let customSuppressions: any[] = [];
+    const ops = fileOperations;
+
     try {
-      const fs = require('fs');
-      const path = require('path');
       const projectRoot = process.cwd();
       const suppressionsPath = path.join(projectRoot, 'src', 'security', 'audit', 'config', 'security-suppressions.json');
 
-      if (fs.existsSync(suppressionsPath)) {
-        const suppressionsContent = fs.readFileSync(suppressionsPath, 'utf-8');
+      if (await ops.exists(suppressionsPath)) {
+        const suppressionsContent = await ops.readFile(suppressionsPath, {
+          source: 'SecurityAuditor.getDefaultConfig'
+        });
         const suppressionsData = JSON.parse(suppressionsContent);
         // Convert relative paths to patterns for matching
         customSuppressions = (suppressionsData.suppressions || []).map((s: any) => ({
@@ -310,7 +344,7 @@ export class SecurityAuditor {
           file: s.file?.includes('/') ? `**/${s.file}` : s.file
         }));
       }
-    } catch (error) {
+    } catch {
       // Suppressions file doesn't exist or is invalid - that's OK
     }
 
@@ -320,7 +354,7 @@ export class SecurityAuditor {
         code: {
           enabled: true,
           rules: ['OWASP-Top-10', 'CWE-Top-25', 'DollhouseMCP-Security'],
-          exclude: ['node_modules/**', 'dist/**', 'coverage/**']
+          exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**']
         },
         dependencies: {
           enabled: true,

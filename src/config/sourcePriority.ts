@@ -304,9 +304,15 @@ export async function saveSourcePriorityConfig(config: SourcePriorityConfig): Pr
     throw new Error(`Invalid source priority configuration: ${validation.errors.join(', ')}`);
   }
 
-  // Dynamic import to avoid circular dependency (ESM-compatible)
+  // Dynamic imports to avoid circular dependency (ESM-compatible)
   const { ConfigManager } = await import('./ConfigManager.js');
-  const configManager = ConfigManager.getInstance();
+  const { FileOperationsService } = await import('../services/FileOperationsService.js');
+  const { FileLockManager } = await import('../security/fileLockManager.js');
+  const os = await import('os');
+
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+  const configManager = new ConfigManager(fileOperations, os);
 
   // Save to config file using ConfigManager
   await configManager.updateSetting('source_priority', config);

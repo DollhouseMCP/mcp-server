@@ -4,6 +4,8 @@ name: Extended Node Compatibility
 on:
   push:
     branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
   workflow_dispatch:
@@ -14,8 +16,9 @@ permissions:
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
+  PORTFOLIO_REPOSITORY_NAME: dollhouse-portfolio
   TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
-  TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
+  # TEST_GITHUB_TOKEN removed - not used in workflow steps, causes PR fork issues
 
 jobs:
   extended-compatibility:
@@ -47,18 +50,18 @@ jobs:
           echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
           echo "NODE_OPTIONS: $NODE_OPTIONS"
           echo "CI: $CI"
-          
+
           # Verify TEST_PERSONAS_DIR is set
           if [ -z "$TEST_PERSONAS_DIR" ]; then
             echo "❌ TEST_PERSONAS_DIR is not set!"
             exit 1
           fi
-          
+
           # Display workspace info for debugging
           echo "GitHub workspace: ${{ github.workspace }}"
           echo "Runner OS: ${{ runner.os }}"
           echo "Current directory: $(pwd)"
-          
+
           echo "✅ Environment validation passed"
 
       - name: Setup Node.js ${{ matrix.node-version }}

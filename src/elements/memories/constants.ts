@@ -34,9 +34,11 @@ export const MEMORY_CONSTANTS = {
   MAX_METADATA_VALUE_LENGTH: 200,      // Maximum metadata value length
 
   // Retention defaults
-  DEFAULT_RETENTION_DAYS: 30,          // Default retention period
+  // Memories are PERMANENT by default. Use retentionDays only when you
+  // explicitly need expiring data (temporary caches, session context, etc.)
+  DEFAULT_RETENTION_DAYS: 999999,      // Permanent by default (~2739 years)
   MIN_RETENTION_DAYS: 1,               // Minimum retention period
-  MAX_RETENTION_DAYS: 365,             // Maximum retention period
+  MAX_RETENTION_DAYS: 999999,          // Allows permanent retention
 
   // Search limits
   DEFAULT_SEARCH_LIMIT: 100,           // Default search result limit
@@ -92,6 +94,25 @@ export const MEMORY_CONSTANTS = {
 export type PrivacyLevel = typeof MEMORY_CONSTANTS.PRIVACY_LEVELS[number];
 export type StorageBackend = typeof MEMORY_CONSTANTS.SUPPORTED_STORAGE_BACKENDS[number];
 
+/**
+ * Trust Levels for Memory Security Architecture (Issue #1314, #1320, #1321)
+ *
+ * UNTRUSTED: Default - all content starts as untrusted until validated
+ * VALIDATED: Content has passed security validation (no dangerous patterns)
+ * TRUSTED: Manually marked as trusted by user (highest trust)
+ * FLAGGED: Contains dangerous patterns, sanitized display required
+ * QUARANTINED: Content failed validation, isolated from normal use
+ */
+export const TRUST_LEVELS = {
+  UNTRUSTED: 'untrusted',
+  VALIDATED: 'validated',
+  TRUSTED: 'trusted',
+  FLAGGED: 'flagged',
+  QUARANTINED: 'quarantined'
+} as const;
+
+export type TrustLevel = typeof TRUST_LEVELS[keyof typeof TRUST_LEVELS];
+
 // Security event types for memory operations
 export const MEMORY_SECURITY_EVENTS = {
   MEMORY_CREATED: 'MEMORY_CREATED',
@@ -118,14 +139,3 @@ export const MEMORY_SECURITY_EVENTS = {
   SEED_MEMORY_INSTALLED: 'SEED_MEMORY_INSTALLED',
   SEED_MEMORY_INSTALLATION_FAILED: 'SEED_MEMORY_INSTALLATION_FAILED',
 } as const;
-
-// Trust level for memory content - FIX #1269, #1314
-export const TRUST_LEVELS = {
-  UNTRUSTED: 'untrusted',    // Default - all content starts as untrusted
-  VALIDATED: 'validated',    // Content has passed security validation
-  TRUSTED: 'trusted',        // Manually marked as trusted by user
-  FLAGGED: 'flagged',        // Contains dangerous patterns, sanitized display
-  QUARANTINED: 'quarantined' // Content failed validation, isolated
-} as const;
-
-export type TrustLevel = typeof TRUST_LEVELS[keyof typeof TRUST_LEVELS];

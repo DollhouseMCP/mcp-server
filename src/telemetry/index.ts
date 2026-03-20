@@ -10,3 +10,5 @@
 
 export * from './types.js';
 export { OperationalTelemetry } from './OperationalTelemetry.js';
+export { StartupTimer } from './StartupTimer.js';
+export type { PhaseEntry, StartupReport } from './StartupTimer.js';

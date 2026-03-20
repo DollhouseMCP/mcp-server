@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "node",
+      "args": ["/app/dollhousemcp/dist/index.js"],
+      "env": {
+        "DOLLHOUSE_PORTFOLIO_DIR": "/app/portfolio",
+        "DOLLHOUSE_CACHE_DIR": "/app/cache",
+        "MCP_AQL_MODE": "crude",
+        "NODE_ENV": "test",
+        "LOG_LEVEL": "info"
+      }
+    }
+  },
+  "defaultMcpServer": "dollhousemcp",
+  "_comment": "ALL tools mode: classic discrete tools + MCP-AQL CRUDE endpoints. Tests tool preference behavior where LLM chooses between classic and MCP-AQL approaches. No DOLLHOUSE_MODE set (uses default). Issue #235"
+}

@@ -1,0 +1,46 @@
+# Source code (dist/ has the built output)
+src/
+packages/
+
+# Tests
+tests/
+test-archive/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+coverage/
+
+# Development tooling
+.github/
+.githooks/
+.claude/
+.dollhousemcp/
+docker/
+scripts/
+benchmarks/
+
+# Documentation (not needed at runtime)
+docs/
+*.md
+!README.md
+
+# Config and dev files
+.gitignore
+.gitattributes
+.eslintrc*
+.prettierrc*
+tsconfig.json
+jest.config.*
+.env*
+*.log
+
+# Temp and test artifacts
+temp/
+tmp/
+
+# Node modules dev dependencies (should use npm ci --omit=dev)
+node_modules/
+
+# Build artifacts
+*.mcpb

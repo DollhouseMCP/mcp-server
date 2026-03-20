@@ -22,7 +22,6 @@
  * but before final success confirmation, creating a window where malicious content could persist.
  */
 
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { GitHubClient } from './GitHubClient.js';
 import { IElementMetadata } from '../types/elements/IElement.js';
@@ -38,8 +37,10 @@ import {
   ElementSource,
   getSourceDisplayName
 } from '../config/sourcePriority.js';
+import { createSafeObject, FORBIDDEN_KEYS } from '../utils/securityUtils.js';
 import { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
 import { logger } from '../utils/logger.js';
+import { IFileOperationsService } from '../services/FileOperationsService.js';
 
 /**
  * Result of an element installation operation
@@ -90,11 +91,29 @@ export class ElementInstaller {
   private readonly sourcePriorityConfig: SourcePriorityConfig;
   private readonly unifiedIndexManager: UnifiedIndexManager;
 
-  constructor(githubClient: GitHubClient) {
+  // File operations service for secure file I/O
+  private readonly fileOperations: IFileOperationsService;
+
+  constructor(
+    githubClient: GitHubClient,
+    options: {
+      portfolioManager: PortfolioManager;
+      unifiedIndexManager: UnifiedIndexManager;
+      fileOperations?: IFileOperationsService;
+    }
+  ) {
     this.githubClient = githubClient;
-    this.portfolioManager = PortfolioManager.getInstance();
+    if (!options?.portfolioManager) {
+      throw new Error('ElementInstaller requires a PortfolioManager instance');
+    }
+    if (!options?.unifiedIndexManager) {
+      throw new Error('ElementInstaller requires a UnifiedIndexManager instance');
+    }
+    this.portfolioManager = options.portfolioManager;
+    this.unifiedIndexManager = options.unifiedIndexManager;
     this.sourcePriorityConfig = getSourcePriorityConfig();
-    this.unifiedIndexManager = UnifiedIndexManager.getInstance();
+    // Initialize file operations service
+    this.fileOperations = options.fileOperations!;
   }
 
   /**
@@ -520,7 +539,12 @@ export class ElementInstaller {
 
       try {
         const elementDir = this.portfolioManager.getElementDir(elementType);
-        const files = await fs.readdir(elementDir).catch(() => []);
+        let files: string[];
+        try {
+          files = await this.fileOperations.listDirectory(elementDir);
+        } catch {
+          files = [];
+        }
 
         // Check if any file matches the element name
         return files.some(file => {
@@ -632,7 +656,7 @@ export class ElementInstaller {
         throw error;
       }
 
-      const metadata = parsed.data as IElementMetadata;
+      const metadata = this.sanitizeMetadata(parsed.data as IElementMetadata);
 
       // SECURITY: Validate metadata
       const metadataValidation = ContentValidator.validateMetadata(metadata);
@@ -820,7 +844,7 @@ export class ElementInstaller {
 
     // SECURITY: Use secure YAML parser to prevent YAML bombs and injection
     const parsed = this.parseSecureYaml(sanitizedContent);
-    const metadata = parsed.data as IElementMetadata;
+    const metadata = this.sanitizeMetadata(parsed.data as IElementMetadata);
 
     // SECURITY: Additional metadata validation for injection attacks
     this.validateMetadataSecurity(metadata);
@@ -831,6 +855,23 @@ export class ElementInstaller {
     }
 
     return { sanitizedContent, metadata };
+  }
+
+  /**
+   * Remove prototype-pollution keys from metadata objects.
+   */
+  private sanitizeMetadata(metadata: IElementMetadata): IElementMetadata {
+    const safeMetadata = createSafeObject() as IElementMetadata;
+
+    for (const [key, value] of Object.entries(metadata)) {
+      if (FORBIDDEN_KEYS.includes(key as any)) {
+        logger.warn('Removed forbidden metadata key during installation', { key });
+        continue;
+      }
+      (safeMetadata as any)[key] = value;
+    }
+
+    return safeMetadata;
   }
 
   /**
@@ -904,17 +945,16 @@ export class ElementInstaller {
    * @private
    */
   private async checkFileExists(localPath: string, filename: string): Promise<InstallResult | null> {
-    try {
-      await fs.access(localPath);
+    const exists = await this.fileOperations.exists(localPath);
+    if (exists) {
       return {
         success: false,
         message: `AI customization element already exists: ${filename}\n\nThe element has already been installed.`,
         alreadyExists: true
       };
-    } catch {
-      // File doesn't exist, proceed with installation
-      return null;
     }
+    // File doesn't exist, proceed with installation
+    return null;
   }
 
   /**
@@ -955,20 +995,24 @@ export class ElementInstaller {
     try {
       // SECURITY: Write to temporary file first
       // If this fails, no files are left on disk
-      await fs.writeFile(tempFile, content, 'utf-8');
+      await this.fileOperations.writeFile(tempFile, content, {
+        source: 'ElementInstaller.atomicWriteFile'
+      });
 
       // SECURITY: Atomic rename operation
       // On most filesystems, rename is atomic - the file appears with complete content
       // or doesn't appear at all. This prevents partial file corruption.
-      await fs.rename(tempFile, destination);
+      await this.fileOperations.renameFile(tempFile, destination);
 
     } catch (error) {
       // SECURITY: Guaranteed cleanup of temporary file on ANY failure
       // This ensures no temporary files are left behind even if the
       // rename operation fails after successful write
       try {
-        await fs.unlink(tempFile);
-      } catch (cleanupError) {
+        await this.fileOperations.deleteFile(tempFile, undefined, {
+          source: 'ElementInstaller.atomicWriteFile.cleanup'
+        });
+      } catch {
         // Ignore cleanup errors - the file may not exist if writeFile failed
         // The original error is more important to propagate
       }

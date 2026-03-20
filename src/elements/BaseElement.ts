@@ -22,6 +22,7 @@ import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { MetadataService } from '../services/MetadataService.js';
 
 /**
  * Normalizes version strings to full semver format (X.Y.Z)
@@ -65,6 +66,20 @@ export abstract class BaseElement implements IElement {
   // Metadata
   public metadata: IElementMetadata;
   
+  // Dual-field semantic architecture (v2.0)
+  // All element types inherit these; subclasses may override with richer behavior.
+  // - instructions: behavioral directives (command voice, imperatives to follow)
+  // - content: reference material (informational data to draw from)
+  // Declared as accessor pairs so subclasses (e.g., Memory) can override with custom getters.
+  protected _instructions: string = '';
+  protected _content: string = '';
+
+  public get instructions(): string { return this._instructions; }
+  public set instructions(value: string) { this._instructions = value; }
+
+  public get content(): string { return this._content; }
+  public set content(value: string) { this._content = value; }
+
   // Features
   public references?: Reference[];
   public extensions?: Record<string, any>;
@@ -77,37 +92,40 @@ export abstract class BaseElement implements IElement {
   // Constants
   private readonly MAX_FEEDBACK_HISTORY = 100;
   
-  constructor(type: ElementType, metadata: Partial<IElementMetadata> = {}) {
+  constructor(
+    type: ElementType,
+    metadata: Partial<IElementMetadata> = {},
+    metadataService: MetadataService  // Required injection for DI
+  ) {
+    // Normalize common metadata via service (skip type-specific defaults)
+    const normalized = metadataService.normalizeMetadata(metadata, type, {
+      skipTypeDefaults: true  // Let element-specific classes handle their own defaults
+    });
+
     this.type = type;
-    this.id = metadata.name ? this.generateId(metadata.name) : uuidv4();
-    this.version = metadata.version || '1.0.0';
-    
-    // Initialize metadata with defaults
-    // FIX #1124: Build metadata object with known fields first
+    this.id = metadata.name ? this.generateId(normalized.name) : uuidv4();
+    this.version = normalized.version || '1.0.0';  // Guaranteed by normalizeMetadata, but add fallback for type safety
+
+    // Spread normalized common metadata
     const baseMetadata: any = {
-      name: metadata.name || 'Unnamed Element',
-      description: metadata.description || '',
-      author: metadata.author,
-      version: this.version,
-      created: metadata.created || new Date().toISOString(),
-      modified: metadata.modified || new Date().toISOString(),
-      tags: metadata.tags || [],
-      dependencies: metadata.dependencies || [],
-      custom: metadata.custom || {}
+      ...normalized,
+      type: this.type  // Ensure type field is set correctly
     };
 
-    // Selectively preserve additional string array fields like triggers
-    // This avoids spreading non-serializable objects that break YAML serialization
+    // Preserve element-specific fields that MetadataService doesn't handle
+    // These are passed through unchanged via the spread operator in MetadataService
+
+    // Preserve triggers (Persona/Memory-specific)
     if ('triggers' in metadata && Array.isArray((metadata as any).triggers)) {
       baseMetadata.triggers = (metadata as any).triggers;
     }
 
-    // FIX #1430: Preserve autoLoad and priority fields for Memory elements
-    // These fields control automatic loading of baseline memories
-    if ('autoLoad' in metadata && typeof (metadata as any).autoLoad === 'boolean') {
+    // FIX #1430: Preserve Memory-specific metadata fields (autoLoad, priority)
+    // These are defined in MemoryMetadata but need to be preserved in baseMetadata
+    if ('autoLoad' in metadata) {
       baseMetadata.autoLoad = (metadata as any).autoLoad;
     }
-    if ('priority' in metadata && typeof (metadata as any).priority === 'number') {
+    if ('priority' in metadata) {
       baseMetadata.priority = (metadata as any).priority;
     }
 
@@ -295,10 +313,8 @@ export abstract class BaseElement implements IElement {
       };
     }
     
-    // Remove undefined/null values
-    const cleanFrontmatter = Object.fromEntries(
-      Object.entries(frontmatter).filter(([_, value]) => value !== undefined && value !== null)
-    );
+    // Remove undefined/null values recursively
+    const cleanFrontmatter = this.deepCleanObject(frontmatter);
     
     // Use js-yaml for secure YAML generation
     // This prevents YAML injection attacks and handles special characters properly
@@ -342,7 +358,36 @@ export abstract class BaseElement implements IElement {
    * Subclasses should override this to provide their specific content.
    */
   protected getContent?(): string;
-  
+
+  /**
+   * Recursively remove undefined and null values from an object.
+   * This ensures YAML serialization doesn't fail on undefined values.
+   */
+  private deepCleanObject(obj: any): any {
+    if (obj === null || obj === undefined) {
+      return undefined;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj
+        .map(item => this.deepCleanObject(item))
+        .filter(item => item !== undefined);
+    }
+
+    if (typeof obj === 'object') {
+      const cleaned: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const cleanedValue = this.deepCleanObject(value);
+        if (cleanedValue !== undefined) {
+          cleaned[key] = cleanedValue;
+        }
+      }
+      return cleaned;
+    }
+
+    return obj;
+  }
+
   /**
    * Default deserialization from JSON.
    * Subclasses can override for custom formats.
@@ -540,7 +585,14 @@ export abstract class BaseElement implements IElement {
   public getStatus(): ElementStatus {
     return this._status;
   }
-  
+
+  /**
+   * Status property getter for convenient access.
+   */
+  public get status(): ElementStatus {
+    return this._status;
+  }
+
   /**
    * Default lifecycle methods - subclasses should override as needed.
    */

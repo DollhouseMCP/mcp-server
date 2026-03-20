@@ -4,18 +4,21 @@
 
 import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
-import { VALID_CATEGORIES } from '../config/constants.js';
+// VALID_CATEGORIES import removed — categories are deprecated (see constants.ts)
 import { RegexValidator } from './regexValidator.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../utils/errorCodes.js';
 
 // Pre-compiled regex patterns for better performance
 // These patterns are used repeatedly and benefit from pre-compilation
+// eslint-disable-next-line no-control-regex -- Intentionally matching control chars for sanitization
 const CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/g; // NOSONAR - Removing control characters for security
 const HTML_DANGEROUS_REGEX = /[<>'"&]/g;
 const SHELL_METACHAR_REGEX = /[;&|`$()!\\~*?{}]/g;
 const SHELL_METACHAR_DISPLAY_REGEX = /[;&|`$()]/g; // Core shell metacharacters for display sanitization
-const RTL_ZEROWIDTH_REGEX = /[\u202E\uFEFF]/g;
+// Enhanced to include all common zero-width and directional override characters
+// eslint-disable-next-line no-misleading-character-class -- Intentionally using Unicode characters for zero-width sanitization
+const RTL_ZEROWIDTH_REGEX = /[\u200B\u200C\u200D\u2060\u202E\uFEFF]/g;
 const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
 const VALID_COLLECTION_PATH_REGEX = /^[a-zA-Z0-9\/\-_.]*$/;
 const IPV4_REGEX = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
@@ -24,9 +27,6 @@ const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
 const OCTAL_IP_REGEX = /^0[0-7]{8,11}$/;
 const FILENAME_DANGEROUS_REGEX = /[\/\\:*?"<>|]/g;
 const FILENAME_LEADING_DOTS_REGEX = /^\.+/;
-// Regex to trim leading/trailing slashes (e.g., "/path/" -> "path")
-const PATH_NORMALIZE_REGEX = /(^\/{1,100})|(\/{1,100}$)/g;
-const PATH_MULTIPLE_SLASHES_REGEX = /\/{1,100}/g;
 const URL_PLUS_DECODE_REGEX = /\+/g;
 
 /**
@@ -180,7 +180,7 @@ export class MCPInputValidator {
       try {
         const idnNormalized = new URL(`http://${hostname}`).hostname;
         hostname = idnNormalized;
-      } catch (idnError) {
+      } catch {
         // If IDN conversion fails, reject the URL for security
         throw ErrorHandler.createError('Invalid hostname: IDN conversion failed - potentially malicious domain name', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_URL);
       }
@@ -293,7 +293,7 @@ export class MCPInputValidator {
     const ipv4Match = hostname.match(IPV4_REGEX);
     
     if (ipv4Match) {
-      const [, a, b, c, d] = ipv4Match.map(Number);
+      const [, a, b] = ipv4Match.map(Number);
       
       // 10.0.0.0/8
       if (a === 10) return true;
@@ -474,16 +474,10 @@ export function validateCategory(category: string): string {
   }
   
   if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, { maxLength: 50 })) {
-    throw ErrorHandler.createError('Invalid category format. Use alphabetic characters, hyphens, and underscores only.', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
+    throw ErrorHandler.createError('Invalid category format. Must start with a letter, followed by letters, digits, hyphens, or underscores (max 21 chars). Example: "code-analysis".', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
-  const normalized = category.toLowerCase();
-  
-  if (!VALID_CATEGORIES.includes(normalized)) {
-    throw ErrorHandler.createError(`Invalid category. Must be one of: ${VALID_CATEGORIES.join(', ')}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
-  }
-  
-  return normalized;
+  return category.toLowerCase();
 }
 
 /**
