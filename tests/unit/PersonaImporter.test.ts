@@ -55,8 +55,43 @@ describe('PersonaImporter Basic Tests', () => {
       expect(result.persona?.metadata.name).toBe("Test Import Persona");
       expect(result.filename).toBe('test-import.md');
     });
+
+    it('should preserve instructions during export/import round-trip (#917)', async () => {
+      const exportedWithInstructions: ExportedPersona = {
+        ...mockExportedPersona,
+        instructions: 'You ARE a cybersecurity expert. ALWAYS consider threat models.',
+        metadata: {
+          ...mockExportedPersona.metadata,
+          unique_id: 'instructions-roundtrip_20250711-120000_test-author'
+        }
+      };
+
+      const jsonString = JSON.stringify(exportedWithInstructions);
+      const result = await importer.importPersona(jsonString, new Map(), false);
+
+      expect(result.success).toBe(true);
+      expect(result.persona?.instructions).toBe('You ARE a cybersecurity expert. ALWAYS consider threat models.');
+      expect(result.persona?.metadata.instructions).toBe('You ARE a cybersecurity expert. ALWAYS consider threat models.');
+    });
+
+    it('should handle export data without instructions (#917 backward compat)', async () => {
+      const exportedWithoutInstructions: ExportedPersona = {
+        ...mockExportedPersona,
+        // No instructions field — old export format
+        metadata: {
+          ...mockExportedPersona.metadata,
+          unique_id: 'no-instructions_20250711-120000_test-author'
+        }
+      };
+
+      const jsonString = JSON.stringify(exportedWithoutInstructions);
+      const result = await importer.importPersona(jsonString, new Map(), false);
+
+      expect(result.success).toBe(true);
+      expect(result.persona?.instructions).toBe('');
+    });
   });
-  
+
   describe('Base64 Import', () => {
     it('should successfully import from base64', async () => {
       const base64 = Buffer.from(JSON.stringify(mockExportedPersona)).toString('base64');

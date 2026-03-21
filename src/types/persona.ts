@@ -17,6 +17,7 @@ export interface PersonaMetadata extends IElementMetadata {
   created_date?: string;
   content_flags?: string[];
   revenue_split?: string;
+  instructions?: string;  // v2 dual-field: behavioral directives passed through metadata during import
 }
 
 export interface Persona extends IElement {

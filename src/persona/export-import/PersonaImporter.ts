@@ -264,7 +264,7 @@ export class PersonaImporter {
       // Instructions are placed on metadata so PersonaManager.createElement() picks them up
       // via the v2 format path (instructions from metadata, body as content).
       if (exportData.instructions) {
-        (metadata as any).instructions = exportData.instructions;
+        metadata.instructions = exportData.instructions;
       }
 
       // Create persona object
