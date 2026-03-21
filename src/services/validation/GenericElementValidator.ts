@@ -100,6 +100,19 @@ export class GenericElementValidator implements ElementValidator {
       warnings.push(...contentResult.warnings);
     }
 
+    // Fix #908: Validate instructions field — previously only content was checked,
+    // allowing injection payloads in instructions to reach disk unscanned.
+    if (record.instructions !== undefined && !options?.skipContentValidation) {
+      const instrResult = await this.validateContent(
+        record.instructions,
+        options?.maxContentLength
+      );
+      if (!instrResult.isValid) {
+        errors.push(...instrResult.errors);
+      }
+      warnings.push(...instrResult.warnings);
+    }
+
     // Validate triggers if present
     if (record.triggers !== undefined) {
       const triggerResult = this.validateTriggers(
@@ -194,6 +207,18 @@ export class GenericElementValidator implements ElementValidator {
         errors.push(...contentResult.errors);
       }
       warnings.push(...contentResult.warnings);
+    }
+
+    // Fix #908: Validate instructions on edit path (same gap as validateCreate)
+    if (changeRecord.instructions !== undefined && !options?.skipContentValidation) {
+      const instrResult = await this.validateContent(
+        changeRecord.instructions,
+        options?.maxContentLength
+      );
+      if (!instrResult.isValid) {
+        errors.push(...instrResult.errors);
+      }
+      warnings.push(...instrResult.warnings);
     }
 
     if (changeRecord.triggers !== undefined) {

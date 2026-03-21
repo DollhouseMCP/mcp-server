@@ -24,6 +24,9 @@ import { logger } from '../../utils/logger.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { ContentValidator } from '../../security/contentValidator.js';
+import { SecurityError } from '../../security/errors.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import * as path from 'path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
@@ -488,6 +491,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       await this.createBackupBeforeSave(absolutePath);
 
       const content = await this.serializeElement(element);
+
+      // Fix #908: Validate serialized content before writing (symmetric with read path).
+      // Read path validates via SecureYamlParser.parse() → ContentValidator; write path
+      // must apply the same checks to prevent saving content that would fail to load.
+      this.validateSerializedContent(content);
+
       await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
 
       if (this.afterSave) {
@@ -496,6 +505,47 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     });
 
     logger.info(`${this.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
+  }
+
+  /**
+   * Validate serialized element content before writing to disk.
+   * Fix #908: Mirrors the read-path validation from SecureYamlParser.parse()
+   * to ensure write → read symmetry. Content that fails this check would also
+   * fail to load, so rejecting it on write prevents permanently broken elements.
+   */
+  private validateSerializedContent(content: string): void {
+    // Extract frontmatter if present
+    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+
+    if (frontmatterMatch) {
+      const yamlContent = frontmatterMatch[1];
+      const bodyContent = content.substring(frontmatterMatch[0].length);
+
+      // YAML bomb detection (same as read path).
+      // Only run on YAML under the size limit — validateYamlContent() includes its
+      // own 64KB size check, but we intentionally don't enforce size on the write path
+      // (the serializer may produce large frontmatter for elements with long instructions).
+      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
+        if (!ContentValidator.validateYamlContent(yamlContent)) {
+          throw new SecurityError(
+            'Serialized content contains malicious YAML patterns — write blocked',
+            'critical'
+          );
+        }
+      }
+
+      // Body content validation with element type context
+      const contentContext = BaseElementManager.ELEMENT_TYPE_TO_CONTEXT[this.elementType];
+      const bodyValidation = ContentValidator.validateAndSanitize(bodyContent, {
+        contentContext,
+      });
+      if (!bodyValidation.isValid && bodyValidation.severity === 'critical') {
+        throw new SecurityError(
+          `Critical security threat detected in serialized body content: ${bodyValidation.detectedPatterns?.join(', ')}`,
+          'critical'
+        );
+      }
+    }
   }
 
   /**
