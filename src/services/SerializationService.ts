@@ -277,6 +277,9 @@ export const METADATA_FIELD_ORDER: readonly string[] = [
   'unique_id',
 ];
 
+// Pre-created Set for O(1) lookup in orderMetadataFields (avoids allocation per call)
+const METADATA_FIELD_ORDER_SET = new Set(METADATA_FIELD_ORDER);
+
 /**
  * Reorder an object's keys according to METADATA_FIELD_ORDER.
  * Keys not in the order list appear after all ordered keys, sorted alphabetically.
@@ -290,8 +293,7 @@ export function orderMetadataFields(metadata: Record<string, unknown>): Record<s
     }
   }
   // Then: add remaining fields alphabetically
-  const orderSet = new Set(METADATA_FIELD_ORDER);
-  const remaining = Object.keys(metadata).filter(k => !orderSet.has(k)).sort();
+  const remaining = Object.keys(metadata).filter(k => !METADATA_FIELD_ORDER_SET.has(k)).sort();
   for (const key of remaining) {
     ordered[key] = metadata[key];
   }
