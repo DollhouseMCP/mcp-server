@@ -485,8 +485,9 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const body = element.content || this.buildDefaultBody(element);
     return this.serializationService.createFrontmatter(frontmatter, body, {
       method: 'manual',
-      schema: 'core',  // Changed from 'failsafe' to support numbers/booleans
-      cleanMetadata: false,  // Keep all fields
+      schema: 'json',  // Fix #914: standardize on JSON schema across all managers
+      cleanMetadata: true,  // Fix #913: standardize across all managers
+      cleaningStrategy: 'remove-both',
       sortKeys: true,
       lineWidth: 100,
       skipInvalid: false  // Don't skip invalid - we want to catch errors

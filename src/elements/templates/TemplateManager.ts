@@ -231,7 +231,7 @@ export class TemplateManager extends BaseElementManager<Template> {
           };
 
           return this.serializationService.dumpYaml(yamlData, {
-            schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+            schema: 'json',  // Fix #914: standardize on JSON schema across all managers
             noRefs: true,
             sortKeys: true,
             skipInvalid: true
@@ -244,9 +244,9 @@ export class TemplateManager extends BaseElementManager<Template> {
             template.content,
             {
               method: 'manual',
-              schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+              schema: 'json',  // Fix #914: standardize on JSON schema across all managers
               cleanMetadata: true,
-              cleaningStrategy: 'remove-undefined'
+              cleaningStrategy: 'remove-both'  // Fix #913: standardize across all managers
             }
           );
         }
@@ -351,9 +351,9 @@ export class TemplateManager extends BaseElementManager<Template> {
       template.content || this.buildDefaultBody(template),
       {
         method: 'manual',
-        schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+        schema: 'json',  // Fix #914: standardize on JSON schema across all managers
         cleanMetadata: true,
-        cleaningStrategy: 'remove-undefined',
+        cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
         sortKeys: true,
         lineWidth: 80,
         skipInvalid: true

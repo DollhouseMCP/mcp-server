@@ -282,7 +282,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     return this.serializationService.createFrontmatter(metadata, body, {
       method: 'matter',
       cleanMetadata: true,
-      cleaningStrategy: 'remove-undefined',
+      cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
       schema: 'json'  // Fix #914: failsafe corrupts booleans/numbers to strings
     });
   }
