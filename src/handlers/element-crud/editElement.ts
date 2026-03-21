@@ -384,6 +384,10 @@ function mergeEnsembleElements(
  *
  * @returns An error string if validation fails, or null on success
  */
+function isEnsembleElementInput(value: unknown): value is EnsembleElementInput {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function applyEnsembleElementsUpdate(
   elementsInput: unknown,
   element: unknown,
@@ -394,9 +398,11 @@ function applyEnsembleElementsUpdate(
   if (!validated.success) {
     return `Invalid 'elements' format: ${validated.error}`;
   }
-  const existingElements = (element as any).metadata?.elements || [];
-  const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
-    ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
+  const elementRecord = element as Record<string, unknown>;
+  const metadata = elementRecord.metadata as Record<string, unknown> | undefined;
+  const rawElements = metadata?.elements;
+  const existingTyped: EnsembleElementInput[] = Array.isArray(rawElements)
+    ? rawElements.filter(isEnsembleElementInput).map(e => ({ ...e }))
     : [];
   const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
   collectionWarnings.push(...mergeResult.warnings);
