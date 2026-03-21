@@ -187,7 +187,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       };
 
       return this.serializationService.dumpYaml(data, {
-        schema: 'failsafe',
+        schema: 'json',  // Fix #914: failsafe corrupts booleans/numbers to strings
         noRefs: true,
         skipInvalid: true
       });
@@ -283,7 +283,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       method: 'matter',
       cleanMetadata: true,
       cleaningStrategy: 'remove-undefined',
-      schema: 'failsafe'
+      schema: 'json'  // Fix #914: failsafe corrupts booleans/numbers to strings
     });
   }
 

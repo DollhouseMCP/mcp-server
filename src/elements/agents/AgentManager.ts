@@ -1684,7 +1684,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const serializedState = this.prepareStateForSerialization(state);
 
       const yamlContent = this.serializationService.dumpYaml(serializedState, {
-        schema: 'failsafe',
+        schema: 'json',  // Fix #914: failsafe corrupts booleans/numbers in agent state
         noRefs: true,
         sortKeys: true
       });
