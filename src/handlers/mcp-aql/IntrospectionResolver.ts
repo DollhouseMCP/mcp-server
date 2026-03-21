@@ -572,7 +572,7 @@ You are a thorough code reviewer who prioritizes security.`,
     syntaxNotes: [
       'File extension: .md',
       'metadata.elements is REQUIRED: array of { name, type, role }',
-      'role values: "primary" or "supporting"',
+      'role values: "primary", "support", "override", "monitor", "core"',
       'type must be a valid ElementType: persona, skill, template, agent, memory',
       'Referenced elements must exist in the portfolio',
       'At least one element required; elements validated at creation time',
@@ -584,7 +584,7 @@ description: Security analysis ensemble
 metadata:
   elements:
     - { name: security-analyst, type: persona, role: primary }
-    - { name: threat-modeling, type: skill, role: supporting }
+    - { name: threat-modeling, type: skill, role: support }
 ---`,
     fullExample: `---
 name: security-team
@@ -595,8 +595,8 @@ author: team-lead
 metadata:
   elements:
     - { name: security-analyst, type: persona, role: primary }
-    - { name: threat-modeling, type: skill, role: supporting }
-    - { name: penetration-testing, type: skill, role: supporting }
+    - { name: threat-modeling, type: skill, role: support }
+    - { name: penetration-testing, type: skill, role: support }
 ---
 Coordinates security analysis across multiple domains.
 The security-analyst persona provides the behavioral foundation,
@@ -760,7 +760,7 @@ const OPERATION_EXAMPLES: Record<string, string[]> = {
     '{ operation: "create_element", elementType: "agent", params: { element_name: "CodeReviewer", description: "Reviews code for quality and security issues", goal: { template: "Review the code at {path} for {focus_area}", parameters: [{ name: "path", type: "string", required: true, description: "File or directory to review" }, { name: "focus_area", type: "string", required: false, description: "security | quality | performance", default: "quality" }], successCriteria: ["All issues documented", "Severity ratings assigned", "Fixes suggested"] }, activates: { skills: ["code-review"], personas: ["security-analyst"] }, tools: { allowed: ["read_file", "list_directory"] }, systemPrompt: "You are a thorough code reviewer. Be specific about line numbers and provide concrete fix suggestions." } }',
 
     // ENSEMBLE — elements array with name, type, role.
-    '{ operation: "create_element", elementType: "ensemble", params: { element_name: "SecurityTeam", description: "Security analysis ensemble — combines analyst persona with threat modeling and pen testing skills", content: "Coordinates security analysis across multiple domains.", metadata: { elements: [{ name: "security-analyst", type: "persona", role: "primary" }, { name: "threat-modeling", type: "skill", role: "supporting" }, { name: "penetration-testing", type: "skill", role: "supporting" }] } } }',
+    '{ operation: "create_element", elementType: "ensemble", params: { element_name: "SecurityTeam", description: "Security analysis ensemble — combines analyst persona with threat modeling and pen testing skills", content: "Coordinates security analysis across multiple domains.", metadata: { elements: [{ name: "security-analyst", type: "persona", role: "primary" }, { name: "threat-modeling", type: "skill", role: "support" }, { name: "penetration-testing", type: "skill", role: "support" }] } } }',
 
     // MEMORY — content creates initial entry, tags for categorization, retentionDays for expiry.
     '{ operation: "create_element", elementType: "memory", params: { element_name: "ProjectContext", description: "Architecture decisions and project context", content: "Using PostgreSQL over MongoDB — decided 2026-03-11 for ACID compliance requirements.", metadata: { tags: ["architecture", "database"], retentionDays: 365 } } }',

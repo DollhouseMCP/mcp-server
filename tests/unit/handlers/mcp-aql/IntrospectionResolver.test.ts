@@ -1036,7 +1036,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({ query: 'format', name: 'ensemble' });
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
-        expect(notes.some(n => n.includes('primary') && n.includes('supporting'))).toBe(true);
+        expect(notes.some(n => n.includes('primary') && n.includes('support'))).toBe(true);
       });
     });
 
