@@ -177,7 +177,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
     'gatekeeper',
     // Skill-specific
     'triggers', 'domain', 'domains', 'category', 'examples', 'prerequisites',
-    'content', 'usage', 'capabilities'
+    'content', 'instructions', 'usage', 'capabilities'
   ]),
   [ElementType.TEMPLATE]: new Set([
     // Common metadata
@@ -186,7 +186,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
     'gatekeeper',
     // Template-specific
     'variables', 'template', 'category', 'outputFormat', 'output_format',
-    'content', 'format', 'schema'
+    'content', 'instructions', 'format', 'schema'
   ]),
   [ElementType.AGENT]: new Set([
     // Common metadata
@@ -211,7 +211,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
     // Gatekeeper policy (all element types)
     'gatekeeper',
     // Memory-specific
-    'id', 'entries', 'retentionPolicy', 'retention_policy', 'maxEntries',
+    'id', 'entries', 'instructions', 'retentionPolicy', 'retention_policy', 'maxEntries',
     'max_entries', 'category', 'scope'
   ]),
   [ElementType.ENSEMBLE]: new Set([
@@ -220,7 +220,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
     // Gatekeeper policy (all element types)
     'gatekeeper',
     // Ensemble-specific - NOTE: 'elements' is correct, NOT 'members'
-    'elements', 'activationStrategy', 'activation_strategy',
+    'elements', 'instructions', 'activationStrategy', 'activation_strategy',
     'conflictResolution', 'conflict_resolution',
     'contextSharing', 'context_sharing',
     'resourceLimits', 'resource_limits',
@@ -336,6 +336,12 @@ export function validateGatekeeperPolicy(
  * @param metadata - The metadata object to check
  * @returns Array of warnings for unknown properties
  */
+// Fields handled by dedicated branches in editElement, not metadata routing.
+// These should not trigger "unknown property" warnings since they ARE processed.
+const SPECIAL_ROUTE_FIELDS = new Set([
+  'instructions', 'content', 'elements', 'metadata', 'entries', 'version'
+]);
+
 export function detectUnknownMetadataProperties(
   elementType: ElementType,
   metadata: Record<string, unknown> | undefined
@@ -354,6 +360,12 @@ export function detectUnknownMetadataProperties(
   for (const key of Object.keys(metadata)) {
     // Skip if it's a known property
     if (knownProperties.has(key)) {
+      continue;
+    }
+
+    // Skip special route fields — these are handled by dedicated code paths
+    // in editElement (not metadata routing), so warning is misleading
+    if (SPECIAL_ROUTE_FIELDS.has(key)) {
       continue;
     }
 

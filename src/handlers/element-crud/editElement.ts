@@ -612,12 +612,44 @@ export async function editElement(
       }
       (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
     } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
-      // Merge nested metadata with security options
-      updateObj.metadata = deepMerge(
-        (updateObj.metadata || {}) as Record<string, unknown>,
-        value as Record<string, unknown>,
-        MERGE_OPTIONS
-      );
+      const metaValue = value as Record<string, unknown>;
+
+      // If metadata.elements is provided for an ensemble, extract and route through
+      // the ensemble elements handler for proper validation/normalization/merge.
+      // Without this, metadata.elements bypasses validateAndNormalizeEnsembleElements().
+      if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
+        const validated = validateAndNormalizeEnsembleElements(metaValue.elements);
+        if (!validated.success) {
+          return error(`Invalid 'elements' format: ${validated.error}`);
+        }
+        const existingElements = (element as any).metadata?.elements || [];
+        const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
+          ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
+          : [];
+        const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
+        collectionWarnings.push(...mergeResult.warnings);
+        if (!updateObj.metadata) {
+          updateObj.metadata = {};
+        }
+        (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+
+        // Remove elements from metadata value before deep merge to avoid double-processing
+        const { elements: _extracted, ...restMetadata } = metaValue;
+        if (Object.keys(restMetadata).length > 0) {
+          updateObj.metadata = deepMerge(
+            updateObj.metadata as Record<string, unknown>,
+            restMetadata,
+            MERGE_OPTIONS
+          );
+        }
+      } else {
+        // Merge nested metadata with security options
+        updateObj.metadata = deepMerge(
+          (updateObj.metadata || {}) as Record<string, unknown>,
+          metaValue,
+          MERGE_OPTIONS
+        );
+      }
     } else if (key === 'instructions' && typeof value === 'string') {
       // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
       const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
