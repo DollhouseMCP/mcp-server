@@ -179,6 +179,46 @@ describe('MemoryManager', () => {
       const entries = await reloaded.search({});
       expect(entries.some(entry => entry.content === 'Updated entry')).toBe(true);
     });
+
+    it('should preserve instructions through save/load round-trip (#918)', async () => {
+      const memory = new Memory({
+        name: 'Guided Memory',
+        description: 'A memory with behavioral instructions'
+      }, metadataService);
+      memory.instructions = 'Always summarize entries in bullet points. Prioritize recent information.';
+      await memory.addEntry('First data point', ['research']);
+
+      await manager.save(memory, 'guided-memory.yaml');
+
+      // Clear cache to force a real file read
+      manager.clearCache();
+
+      const loaded = await manager.load('guided-memory.yaml');
+      expect(loaded.instructions).toBe('Always summarize entries in bullet points. Prioritize recent information.');
+      expect(loaded.metadata.name).toBe('Guided Memory');
+
+      const loadedEntries = await loaded.search({});
+      expect(loadedEntries).toHaveLength(1);
+      expect(loadedEntries[0].content).toBe('First data point');
+    });
+
+    it('should include format_version in serialized output (#912/#918)', async () => {
+      const memory = new Memory({
+        name: 'Versioned Memory',
+        description: 'Tests format marker'
+      }, metadataService);
+      await memory.addEntry('test entry', []);
+
+      // Access serializeElement directly to check output
+      const serialized = await (manager as any).serializeElement(memory);
+      expect(serialized).toContain('format_version: v2');
+
+      // After load, format_version should be stripped from runtime metadata
+      await manager.save(memory, 'versioned-memory.yaml');
+      manager.clearCache();
+      const loaded = await manager.load('versioned-memory.yaml');
+      expect((loaded.metadata as any).format_version).toBeUndefined();
+    });
   });
   
   describe('list', () => {

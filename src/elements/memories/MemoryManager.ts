@@ -28,6 +28,8 @@ import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { ContentValidator } from '../../security/contentValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { MemoryType } from './types.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
@@ -283,6 +285,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Create memory instance
       const memory = new Memory(metadata, this.metadataService);
+
+      // Fix #918: Read instructions from root-level YAML (where serializeElement writes them).
+      // Previously instructions were written to root but never read back — silent data loss.
+      const rootInstructions = parsed.data?.instructions;
+      if (rootInstructions && typeof rootInstructions === 'string') {
+        memory.instructions = rootInstructions;
+      }
+
+      // Strip format_version from runtime metadata (Fix #912)
+      delete (memory.metadata as any).format_version;
 
       // Load saved entries if present
       // Memory files have entries as a top-level key in the YAML
@@ -585,6 +597,40 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.fileOperations.createDirectory(path.dirname(fullPath));
 
       const yamlContent = await this.serializeElement(element);
+
+      // Fix #916/#918: Size enforcement on Memory's custom save path
+      // (BaseElementManager.save() has this but Memory overrides it entirely)
+      if (yamlContent.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+        SecurityMonitor.logSecurityEvent({
+          type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
+          severity: 'HIGH',
+          source: 'MemoryManager.save.sizeEnforcement',
+          details: `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
+          metadata: { contentLength: yamlContent.length, limit: SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES }
+        });
+        throw new Error(
+          `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
+        );
+      }
+
+      // Fix #908/#918: YAML bomb detection on Memory's custom save path
+      const validationStart = Date.now();
+      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
+        if (!ContentValidator.validateYamlContent(yamlContent)) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_INJECTION_ATTEMPT',
+            severity: 'CRITICAL',
+            source: 'MemoryManager.save.yamlBombDetection',
+            details: 'Serialized memory contains malicious YAML patterns — write blocked',
+            metadata: { contentLength: yamlContent.length }
+          });
+          throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
+        }
+      }
+      const validationMs = Date.now() - validationStart;
+      if (validationMs > 50) {
+        logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
+      }
 
       // CRITICAL FIX: Use FileOperationsService for atomic file write
       // Previously: await fs.writeFile(fullPath, yamlContent, 'utf-8');
@@ -1711,6 +1757,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Issue #755: Serialize type as singular and persist unique_id
     const metadata = { ...element.metadata };
     metadata.type = toSingularLabel(ElementType.MEMORY) as any;
+    (metadata as any).format_version = 'v2';  // Fix #912/#918: Explicit format marker
     (metadata as any).unique_id = element.id;
     const payload: Record<string, unknown> = {
       metadata,
