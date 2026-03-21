@@ -958,7 +958,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
         description: 'Element type',
         sources: ['input.element_type', 'input.elementType', 'params.element_type'],
       },
-      input: { type: 'object', required: true, description: 'Nested object with fields to update (deep-merged with existing element). Common fields (all types): instructions, content, description, tags, triggers, category, gatekeeper. Agent fields: goal, activates, tools, systemPrompt (or system_prompt), autonomy, resilience. Gatekeeper: { allow?, confirm?, deny?, scopeRestrictions?: { allowedTypes?, blockedTypes? } } — dynamic security policy that takes effect when the element is active. Snake_case keys are auto-normalized to camelCase.' },
+      input: { type: 'object', required: true, description: 'Nested object with fields to update (deep-merged with existing element). Common fields (all types): instructions, content, description, tags, triggers, category, gatekeeper. Agent fields: goal, activates, tools, systemPrompt (or system_prompt), autonomy, resilience. Ensemble fields: elements (array of { element_name, element_type, role, priority?, activation? } — merges by name; use _remove: true to remove). Gatekeeper: { allow?, confirm?, deny?, scopeRestrictions?: { allowedTypes?, blockedTypes? } } — dynamic security policy that takes effect when the element is active. Snake_case keys are auto-normalized to camelCase.' },
     },
     returns: { name: 'Element', kind: 'object', description: 'Updated element with deep-merged changes applied' },
     examples: [
@@ -967,6 +967,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       '{ operation: "edit_element", element_type: "skill", params: { element_name: "MySkill", input: { content: "Updated domain reference material.", metadata: { triggers: ["code", "review"] } } } }',
       '{ operation: "edit_element", element_type: "agent", params: { element_name: "MyAgent", input: { gatekeeper: { allow: ["read_*"], confirm: ["execute_agent"], deny: ["delete_element"] } } } }',
       '{ operation: "edit_element", element_type: "agent", params: { element_name: "MyAgent", input: { autonomy: { riskTolerance: "conservative", maxAutonomousSteps: 5 }, resilience: { onExecutionFailure: "retry", maxRetries: 3 } } } }',
+      '{ operation: "edit_element", element_type: "ensemble", params: { element_name: "MyEnsemble", input: { elements: [{ element_name: "new-skill", element_type: "skill", role: "support" }] } } }',
     ],
   },
   upgrade_element: {
