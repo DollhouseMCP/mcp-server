@@ -69,7 +69,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private metadataService: MetadataService;
-  private serializationService: SerializationService;
+  private readonly serializationService: SerializationService;
 
   constructor(
     portfolioManager: PortfolioManager,
