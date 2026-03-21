@@ -378,6 +378,36 @@ function mergeEnsembleElements(
 }
 
 /**
+ * Validate, normalize, and merge ensemble elements into the update object.
+ * Extracted to avoid duplication between the top-level `elements` key handler
+ * and the `metadata.elements` key handler (Claude review).
+ *
+ * @returns An error string if validation fails, or null on success
+ */
+function applyEnsembleElementsUpdate(
+  elementsInput: unknown,
+  element: unknown,
+  updateObj: Record<string, unknown>,
+  collectionWarnings: string[]
+): string | null {
+  const validated = validateAndNormalizeEnsembleElements(elementsInput);
+  if (!validated.success) {
+    return `Invalid 'elements' format: ${validated.error}`;
+  }
+  const existingElements = (element as any).metadata?.elements || [];
+  const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
+    ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
+    : [];
+  const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
+  collectionWarnings.push(...mergeResult.warnings);
+  if (!updateObj.metadata) {
+    updateObj.metadata = {};
+  }
+  (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+  return null;
+}
+
+/**
  * Sync ensemble elements from metadata after an update.
  *
  * Ensembles store their element references in metadata.elements,
@@ -596,42 +626,16 @@ export async function editElement(
       (updateObj.metadata as Record<string, unknown>)[key] = value;
     } else if (key === 'elements' && normalizedType === ElementType.ENSEMBLE) {
       // Issue #658: Validate and normalize elements input (array or dict format)
-      const validated = validateAndNormalizeEnsembleElements(value);
-      if (!validated.success) {
-        return error(`Invalid 'elements' format: ${validated.error}`);
-      }
-      // Merge with existing elements (upsert-by-name) instead of replacing
-      const existingElements = (element as any).metadata?.elements || [];
-      const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
-        ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
-        : [];
-      const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
-      collectionWarnings.push(...mergeResult.warnings);
-      if (!updateObj.metadata) {
-        updateObj.metadata = {};
-      }
-      (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+      const elemError = applyEnsembleElementsUpdate(value, element, updateObj, collectionWarnings);
+      if (elemError) return error(elemError);
     } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
       const metaValue = value as Record<string, unknown>;
 
       // If metadata.elements is provided for an ensemble, extract and route through
       // the ensemble elements handler for proper validation/normalization/merge.
-      // Without this, metadata.elements bypasses validateAndNormalizeEnsembleElements().
       if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
-        const validated = validateAndNormalizeEnsembleElements(metaValue.elements);
-        if (!validated.success) {
-          return error(`Invalid 'elements' format: ${validated.error}`);
-        }
-        const existingElements = (element as any).metadata?.elements || [];
-        const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
-          ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
-          : [];
-        const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
-        collectionWarnings.push(...mergeResult.warnings);
-        if (!updateObj.metadata) {
-          updateObj.metadata = {};
-        }
-        (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+        const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
+        if (elemError) return error(elemError);
 
         // Remove elements from metadata value before deep merge to avoid double-processing
         const { elements: _extracted, ...restMetadata } = metaValue;
