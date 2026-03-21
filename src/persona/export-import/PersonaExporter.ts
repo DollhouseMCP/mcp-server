@@ -8,6 +8,7 @@ import { MAX_PERSONA_SIZE } from '../../constants/limits.js';
 
 export interface ExportedPersona {
   metadata: any;
+  instructions?: string;  // Fix #917: Behavioral directives — previously omitted, causing silent data loss
   content: string;
   filename: string;
   exportedAt: string;
@@ -47,6 +48,7 @@ export class PersonaExporter {
     
     return {
       metadata: persona.metadata,
+      instructions: persona.instructions,  // Fix #917: Preserve behavioral directives on export
       content: persona.content,
       filename: persona.filename,
       exportedAt: new Date().toISOString(),
