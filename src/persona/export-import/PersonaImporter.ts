@@ -260,12 +260,20 @@ export class PersonaImporter {
         };
       }
 
+      // Fix #917: Restore instructions from export data so they survive the round-trip.
+      // Instructions are placed on metadata so PersonaManager.createElement() picks them up
+      // via the v2 format path (instructions from metadata, body as content).
+      if (exportData.instructions) {
+        (metadata as any).instructions = exportData.instructions;
+      }
+
       // Create persona object
       const persona: Persona = {
         id: metadata.unique_id!,
         type: 'persona' as any, // ElementType.PERSONA
         version: metadata.version || '1.0',
         metadata,
+        instructions: exportData.instructions || '',  // Fix #917: Preserve instructions
         content: sanitizedContent,
         filename,
         unique_id: metadata.unique_id!
