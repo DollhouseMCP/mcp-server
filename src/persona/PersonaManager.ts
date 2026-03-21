@@ -1485,6 +1485,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       // instructions field. Setting instructions to the description triggers the v2 path
       // in createElement(), keeping bodyText as content (document body).
       if (!elementMetadata.instructions && result.persona.content) {
+        // Prefer description (concise behavioral summary) over name (just a label).
+        // name is guaranteed to exist (validated by PersonaImporter.validateAndEnrichMetadata).
         elementMetadata.instructions = elementMetadata.description || elementMetadata.name;
       }
 
