@@ -601,16 +601,35 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Fix #916/#918: Size enforcement on Memory's custom save path
       // (BaseElementManager.save() has this but Memory overrides it entirely)
       if (yamlContent.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+        SecurityMonitor.logSecurityEvent({
+          type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
+          severity: 'HIGH',
+          source: 'MemoryManager.save.sizeEnforcement',
+          details: `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
+          metadata: { contentLength: yamlContent.length, limit: SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES }
+        });
         throw new Error(
           `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
         );
       }
 
       // Fix #908/#918: YAML bomb detection on Memory's custom save path
+      const validationStart = Date.now();
       if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
         if (!ContentValidator.validateYamlContent(yamlContent)) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_INJECTION_ATTEMPT',
+            severity: 'CRITICAL',
+            source: 'MemoryManager.save.yamlBombDetection',
+            details: 'Serialized memory contains malicious YAML patterns — write blocked',
+            metadata: { contentLength: yamlContent.length }
+          });
           throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
         }
+      }
+      const validationMs = Date.now() - validationStart;
+      if (validationMs > 50) {
+        logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
       }
 
       // CRITICAL FIX: Use FileOperationsService for atomic file write
