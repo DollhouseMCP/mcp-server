@@ -514,28 +514,33 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * fail to load, so rejecting it on write prevents permanently broken elements.
    */
   private validateSerializedContent(content: string): void {
-    // Extract frontmatter if present
-    const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    // Extract frontmatter if present (SonarCloud S6594: use RegExp.exec)
+    const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n---/;
+    const frontmatterMatch = frontmatterRegex.exec(content);
 
     if (frontmatterMatch) {
       const yamlContent = frontmatterMatch[1];
       const bodyContent = content.substring(frontmatterMatch[0].length);
 
-      // YAML bomb detection (same as read path: SecureYamlParser.parse() step 4).
-      // Only run on YAML under MAX_YAML_LENGTH (64KB) — validateYamlContent()
-      // includes its own size check, and we intentionally skip size enforcement on
-      // the write path because the serializer may produce large frontmatter for
-      // elements with long instructions (the read path handles size rejection).
+      // YAML bomb detection (mirrors SecureYamlParser.parse() step 4).
+      // Only run when YAML is under MAX_YAML_LENGTH (64KB) — the same limit
+      // used by the read path in SecureYamlParser.parse(). validateYamlContent()
+      // includes its own size check internally, and we intentionally skip size
+      // enforcement on the write path because the serializer may produce large
+      // frontmatter for elements with long instructions. The read path will
+      // reject oversized YAML on the next load if needed.
       if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
         if (!ContentValidator.validateYamlContent(yamlContent)) {
           SecurityMonitor.logSecurityEvent({
             type: 'YAML_INJECTION_ATTEMPT',
             severity: 'CRITICAL',
             source: `${this.constructor.name}.validateSerializedContent`,
-            details: `Malicious YAML pattern detected in serialized output for ${this.getElementLabel()}`
+            details: `Malicious YAML pattern detected in serialized output for ${this.getElementLabel()}`,
+            metadata: { yamlLength: yamlContent.length }
           });
           throw new SecurityError(
-            `Serialized ${this.getElementLabel()} contains malicious YAML patterns — write blocked`,
+            `Serialized ${this.getElementLabel()} contains malicious YAML patterns — write blocked. ` +
+            `Review the element's metadata and instructions for suspicious anchor/alias patterns.`,
             'critical'
           );
         }
