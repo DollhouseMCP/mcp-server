@@ -1479,6 +1479,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     if (result.success && result.persona) {
       // Convert legacy PersonaMetadata to PersonaElementMetadata
       const elementMetadata = this.toPersonaElementMetadata(result.persona.metadata);
+
+      // Fix #906: For v1 format imports (no instructions in frontmatter), the markdown
+      // body must stay as the document body below '---', not be stuffed into the YAML
+      // instructions field. Setting instructions to the description triggers the v2 path
+      // in createElement(), keeping bodyText as content (document body).
+      if (!elementMetadata.instructions && result.persona.content) {
+        // Prefer description (concise behavioral summary) over name (just a label).
+        // name is guaranteed to exist (validated by PersonaImporter.validateAndEnrichMetadata).
+        elementMetadata.instructions = elementMetadata.description || elementMetadata.name;
+      }
+
       const personaToSave = this.createElement(elementMetadata, result.persona.content);
       personaToSave.filename = result.persona.filename ?? personaToSave.filename;
       personaToSave.unique_id = result.persona.unique_id;

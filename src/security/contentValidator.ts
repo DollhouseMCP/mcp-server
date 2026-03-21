@@ -528,7 +528,10 @@ export class ContentValidator {
     // SECURITY FIX #364: Count anchor/alias ratio for amplification detection
     // SECURITY FIX #1298: Use configurable threshold for easier tuning
     const anchorMatches = yamlContent.match(/&\w+/g) || [];
-    const aliasMatches = yamlContent.match(/\*\w+/g) || [];
+    // Fix #906: Use negative lookbehind to exclude markdown bold (**word**) from
+    // matching as YAML aliases. Without this, markdown bold inside YAML strings
+    // triggers false-positive amplification detection.
+    const aliasMatches = yamlContent.match(/(?<!\*)\*\w+/g) || [];
     const amplificationRatio = anchorMatches.length > 0 ? aliasMatches.length / anchorMatches.length : 0;
 
     if (amplificationRatio > SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD) {

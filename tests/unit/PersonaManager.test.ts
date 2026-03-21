@@ -522,6 +522,46 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(saveSpy).toHaveBeenCalled();
     });
 
+    it('should handle v1 import with bold markdown without YAML corruption (#906)', async () => {
+      // v1 format: no instructions in metadata, markdown body with **bold** patterns
+      const v1PersonaWithBold: Persona = {
+        metadata: {
+          name: 'Enterprise Decision Maker',
+          description: 'A synthetic survey respondent for market research',
+          unique_id: 'enterprise-dm_20250711-120000_tester',
+          author: 'tester'
+        },
+        instructions: '',  // v1 has no instructions
+        content: '# Enterprise Decision Maker\n\nYou are a **highly experienced** executive with **deep expertise** in **enterprise procurement** and **vendor evaluation**. You have **strong opinions** about **value propositions** and **ROI frameworks**.',
+        filename: 'enterprise-decision-maker.md',
+        unique_id: 'enterprise-dm_20250711-120000_tester',
+        id: 'enterprise-dm_20250711-120000_tester',
+        version: '1.0.0',
+        type: 'persona' as any
+      };
+
+      mockPersonaImporter.importPersona.mockResolvedValue({
+        success: true,
+        message: 'Imported successfully',
+        persona: v1PersonaWithBold,
+        filename: v1PersonaWithBold.filename
+      });
+
+      const result = await personaManager.importPersona('source-data', false);
+
+      expect(result.success).toBe(true);
+      // Fix #906: The markdown body must be in content (document body), not instructions
+      // If instructions were stuffed with the markdown body, YAML serialization would
+      // trigger false-positive amplification detection from **bold** patterns
+      const saved = result.persona;
+      expect(saved).toBeDefined();
+      // Instructions should be the description (v1→v2 import path), not the full body
+      expect(saved!.instructions).toBe('A synthetic survey respondent for market research');
+      // Content (body below ---) should contain the markdown with bold
+      expect(saved!.content).toContain('**highly experienced**');
+      expect(saved!.content).toContain('**enterprise procurement**');
+    });
+
     it('should handle missing importer', async () => {
       (personaManager as any).personaImporter = undefined;
 
