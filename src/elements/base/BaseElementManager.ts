@@ -521,14 +521,21 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       const yamlContent = frontmatterMatch[1];
       const bodyContent = content.substring(frontmatterMatch[0].length);
 
-      // YAML bomb detection (same as read path).
-      // Only run on YAML under the size limit — validateYamlContent() includes its
-      // own 64KB size check, but we intentionally don't enforce size on the write path
-      // (the serializer may produce large frontmatter for elements with long instructions).
+      // YAML bomb detection (same as read path: SecureYamlParser.parse() step 4).
+      // Only run on YAML under MAX_YAML_LENGTH (64KB) — validateYamlContent()
+      // includes its own size check, and we intentionally skip size enforcement on
+      // the write path because the serializer may produce large frontmatter for
+      // elements with long instructions (the read path handles size rejection).
       if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
         if (!ContentValidator.validateYamlContent(yamlContent)) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_INJECTION_ATTEMPT',
+            severity: 'CRITICAL',
+            source: `${this.constructor.name}.validateSerializedContent`,
+            details: `Malicious YAML pattern detected in serialized output for ${this.getElementLabel()}`
+          });
           throw new SecurityError(
-            'Serialized content contains malicious YAML patterns — write blocked',
+            `Serialized ${this.getElementLabel()} contains malicious YAML patterns — write blocked`,
             'critical'
           );
         }
