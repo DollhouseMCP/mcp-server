@@ -400,6 +400,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns New Ensemble instance
    */
   protected override createElement(metadata: EnsembleMetadata, _content: string): Ensemble {
+    delete (metadata as any).format_version;  // Fix #912: Strip marker from runtime metadata
     const ensemble = new Ensemble(metadata, metadata.elements, this.metadataService);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
@@ -426,6 +427,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const frontmatter: any = {
       name: metadata.name,
       type: toSingularLabel(ElementType.ENSEMBLE),
+      format_version: 'v2',  // Fix #912: Explicit format marker
       unique_id: element.id,
       description: metadata.description,
       version: metadata.version,

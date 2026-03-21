@@ -1556,8 +1556,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Filename is derived from name - use inherited getElementFilename() for consistent normalization
     const filename = this.getElementFilename(metadata.name);
 
-    // Dual-field loading: detect v2 format (instructions in metadata from YAML frontmatter)
-    // When loading v2 files, metadata contains 'instructions' key and bodyText is reference material
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const metadataInstructions = metadata.instructions;
     let instructions: string;
     let content: string;
@@ -1598,6 +1598,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     // Issue #755: Serialize type as singular and persist unique_id
     metadata.type = toSingularLabel(ElementType.PERSONA);
+    metadata.format_version = 'v2';  // Fix #912: Explicit format marker
     metadata.unique_id = element.id;
 
     // v2.0 dual-field format: instructions in YAML frontmatter

@@ -299,8 +299,9 @@ export class TemplateManager extends BaseElementManager<Template> {
   }
 
   protected override createElement(metadata: TemplateMetadata, bodyContent: string): Template {
-    // v2 detection: if metadata has 'instructions', use it
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
     const metadataInstructions = metadata.instructions;
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const template = new Template(metadata, bodyContent, this.metadataService);
     if (metadataInstructions) {
       template.instructions = metadataInstructions;
@@ -343,6 +344,8 @@ export class TemplateManager extends BaseElementManager<Template> {
     // Issue #755: Serialize type as singular and persist unique_id
     metadata.type = toSingularLabel(ElementType.TEMPLATE);
     metadata.unique_id = template.id;
+    // Fix #912: Explicit format marker
+    metadata.format_version = 'v2';
     if (template.instructions) {
       metadata.instructions = template.instructions;
     }

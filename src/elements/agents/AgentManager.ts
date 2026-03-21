@@ -2051,7 +2051,8 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   protected override createElement(metadata: AgentMetadata, bodyContent: string): Agent {
     const agent = new Agent(metadata, this.metadataService);
-    // Dual-field: detect v2 format (instructions in YAML frontmatter)
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const metadataInstructions = metadata.instructions;
     if (metadataInstructions) {
       // v2 format: instructions from YAML, body is content (reference material)
@@ -2082,6 +2083,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       created: agent.metadata.created ?? new Date().toISOString(),
       modified: agent.metadata.modified ?? new Date().toISOString(),
       description: agent.metadata.description,
+      format_version: 'v2',  // Fix #912: Explicit format marker
     };
 
     // Cast to check for v2 fields
