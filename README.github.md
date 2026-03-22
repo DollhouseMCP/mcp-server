@@ -368,7 +368,25 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ---
 
-### Method 1: Local Installation (Recommended)
+### Claude Code
+
+**All projects** (recommended):
+```bash
+claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+```
+
+**Current project only:**
+```bash
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+```
+
+Start a new conversation and ask: *"List all available Dollhouse personas"*
+
+---
+
+### Claude Desktop
+
+#### Method 1: Local Installation (Recommended)
 
 Create a dedicated folder for your MCP servers and install there:
 
@@ -403,7 +421,7 @@ Add to your config file:
 
 ---
 
-### Method 2: Always Latest with npx
+#### Method 2: Always Latest with npx
 
 No installation needed! Configure Claude Desktop to always use the latest version:
 
@@ -422,7 +440,7 @@ No installation needed! Configure Claude Desktop to always use the latest versio
 
 ---
 
-### Method 3: Global Installation
+#### Method 3: Global Installation
 
 ```bash
 # Install globally (may require sudo/admin)
