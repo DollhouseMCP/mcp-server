@@ -400,6 +400,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns New Ensemble instance
    */
   protected override createElement(metadata: EnsembleMetadata, _content: string): Ensemble {
+    delete (metadata as any).format_version;  // Fix #912: Strip marker from runtime metadata
     const ensemble = new Ensemble(metadata, metadata.elements, this.metadataService);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
@@ -426,6 +427,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const frontmatter: any = {
       name: metadata.name,
       type: toSingularLabel(ElementType.ENSEMBLE),
+      format_version: 'v2',  // Fix #912: Explicit format marker
       unique_id: element.id,
       description: metadata.description,
       version: metadata.version,
@@ -485,8 +487,9 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const body = element.content || this.buildDefaultBody(element);
     return this.serializationService.createFrontmatter(frontmatter, body, {
       method: 'manual',
-      schema: 'core',  // Changed from 'failsafe' to support numbers/booleans
-      cleanMetadata: false,  // Keep all fields
+      schema: 'json',  // Fix #914: standardize on JSON schema across all managers
+      cleanMetadata: true,  // Fix #913: standardize across all managers
+      cleaningStrategy: 'remove-both',
       sortKeys: true,
       lineWidth: 100,
       skipInvalid: false  // Don't skip invalid - we want to catch errors

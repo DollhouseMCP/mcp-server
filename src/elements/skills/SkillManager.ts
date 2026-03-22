@@ -187,7 +187,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       };
 
       return this.serializationService.dumpYaml(data, {
-        schema: 'failsafe',
+        schema: 'json',  // Fix #914: failsafe corrupts booleans/numbers to strings
         noRefs: true,
         skipInvalid: true
       });
@@ -239,12 +239,14 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Dual-field: detects v2 format (instructions in YAML frontmatter) vs v1 (body = instructions).
    */
   protected createElement(metadata: SkillMetadata, bodyContent: string): Skill {
-    // v2 detection: if metadata has 'instructions', body is content (reference material)
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
+    const isV2 = (metadata as any).format_version === 'v2' || !!metadata.instructions;
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const metadataInstructions = metadata.instructions;
     let instructions: string;
     let content: string;
 
-    if (metadataInstructions) {
+    if (isV2 && metadataInstructions) {
       // v2 format: instructions from YAML, body is reference content
       instructions = metadataInstructions;
       content = bodyContent;
@@ -271,6 +273,8 @@ export class SkillManager extends BaseElementManager<Skill> {
     if (element.version) {
       metadata.version = element.version;
     }
+    // Fix #912: Explicit format marker replaces fragile instructions-presence detection
+    metadata.format_version = 'v2';
     // Write instructions to YAML frontmatter (v2.0 dual-field format)
     if (element.instructions) {
       metadata.instructions = element.instructions;
@@ -282,8 +286,8 @@ export class SkillManager extends BaseElementManager<Skill> {
     return this.serializationService.createFrontmatter(metadata, body, {
       method: 'matter',
       cleanMetadata: true,
-      cleaningStrategy: 'remove-undefined',
-      schema: 'failsafe'
+      cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
+      schema: 'json'  // Fix #914: failsafe corrupts booleans/numbers to strings
     });
   }
 

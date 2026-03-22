@@ -248,6 +248,58 @@ export interface AutoParsedResult {
  * - Format detection
  * - Security validation
  */
+/**
+ * Fix #910: Canonical metadata field order for deterministic YAML output.
+ * Fields are ordered: identity → format → content → type-specific → infrastructure.
+ * Fields not listed appear after all listed fields, sorted alphabetically.
+ */
+export const METADATA_FIELD_ORDER: readonly string[] = [
+  // Identity
+  'name', 'type', 'format_version', 'version', 'description',
+  // Attribution
+  'author', 'created', 'modified', 'category',
+  // Content fields
+  'instructions',
+  // Classification
+  'tags', 'triggers',
+  // Agent-specific (ordered by importance)
+  'goal', 'activates', 'tools', 'systemPrompt', 'autonomy', 'resilience',
+  // Ensemble-specific
+  'elements', 'activationStrategy', 'conflictResolution', 'contextSharing',
+  'resourceLimits', 'allowNested', 'maxNestingDepth',
+  // Template-specific
+  'variables', 'outputFormat', 'output_format',
+  // Memory-specific
+  'autoLoad', 'priority', 'retention', 'retentionPolicy',
+  // Security
+  'gatekeeper',
+  // Infrastructure (always last)
+  'unique_id',
+];
+
+// Pre-created Set for O(1) lookup in orderMetadataFields (avoids allocation per call)
+const METADATA_FIELD_ORDER_SET = new Set(METADATA_FIELD_ORDER);
+
+/**
+ * Reorder an object's keys according to METADATA_FIELD_ORDER.
+ * Keys not in the order list appear after all ordered keys, sorted alphabetically.
+ */
+export function orderMetadataFields(metadata: Record<string, unknown>): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  // First: add fields in canonical order
+  for (const key of METADATA_FIELD_ORDER) {
+    if (key in metadata) {
+      ordered[key] = metadata[key];
+    }
+  }
+  // Then: add remaining fields alphabetically
+  const remaining = Object.keys(metadata).filter(k => !METADATA_FIELD_ORDER_SET.has(k)).sort((a, b) => a.localeCompare(b));
+  for (const key of remaining) {
+    ordered[key] = metadata[key];
+  }
+  return ordered;
+}
+
 export class SerializationService {
   // Default limits
   private static readonly DEFAULT_MAX_YAML_SIZE = 64 * 1024; // 64KB
@@ -565,9 +617,12 @@ export class SerializationService {
     } = options;
 
     // Clean metadata if requested
-    const processedMetadata = cleanMetadata
+    let processedMetadata = cleanMetadata
       ? this.cleanMetadata(metadata, { strategy: cleaningStrategy })
       : metadata;
+
+    // Fix #910: Apply canonical field ordering instead of alphabetical sort
+    processedMetadata = orderMetadataFields(processedMetadata);
 
     if (method === 'matter') {
       // Use matter.stringify() (SkillManager pattern)
@@ -576,7 +631,7 @@ export class SerializationService {
       // Manual construction (other managers)
       const yamlString = this.dumpYaml(processedMetadata, {
         schema,
-        sortKeys,
+        sortKeys: false,  // Fix #910: field order is now canonical, not alphabetical
         skipInvalid,
         noRefs
       });

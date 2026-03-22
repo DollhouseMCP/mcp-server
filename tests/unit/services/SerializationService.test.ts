@@ -604,6 +604,32 @@ description: Pure YAML
         expect(yaml).toContain('version: 1.0.0');
       });
 
+      it('should preserve booleans and numbers with JSON schema (#914)', () => {
+        const data = {
+          name: 'test-skill',
+          ai_generated: true,
+          learningEnabled: false,
+          priority: 80,
+          version: '1.0.0'
+        };
+
+        const yaml = service.dumpYaml(data, { schema: 'json' });
+
+        // Booleans must be actual YAML booleans, not quoted strings
+        expect(yaml).toContain('ai_generated: true');
+        expect(yaml).toContain('learningEnabled: false');
+        expect(yaml).toContain('priority: 80');
+        // Verify they don't get quoted (the old failsafe bug)
+        expect(yaml).not.toContain("ai_generated: 'true'");
+        expect(yaml).not.toContain('ai_generated: "true"');
+
+        // Round-trip: parse the YAML back and verify types are preserved
+        const parsed = service.parsePureYaml(yaml, { schema: 'core' });
+        expect(parsed.ai_generated).toBe(true);
+        expect(parsed.learningEnabled).toBe(false);
+        expect(parsed.priority).toBe(80);
+      });
+
       it('should dump nested objects', () => {
         const data = {
           name: 'test',
