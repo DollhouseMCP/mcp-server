@@ -711,14 +711,10 @@ export async function editElement(
   // BaseElement constructor runs normalizeMetadata on create/load, but the edit path
   // modifies metadata in-place. This ensures essential defaults survive edits.
   if (element.metadata) {
-    if (element.metadata.description === undefined || element.metadata.description === null) {
-      element.metadata.description = '';
-    }
-    if (!element.metadata.tags) {
-      (element.metadata as any).tags = [];
-    }
+    element.metadata.description ??= '';
+    element.metadata.tags ??= [];
     // Update modified timestamp
-    (element.metadata as any).modified = new Date().toISOString();
+    element.metadata.modified = new Date().toISOString();
   }
 
   // Handle version updates
