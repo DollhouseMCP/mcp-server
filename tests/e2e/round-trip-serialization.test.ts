@@ -280,6 +280,41 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       expect(file).toContain('Ñoño');
       expect(file).toContain('Über');
     });
+
+    it('RTL text (Arabic/Hebrew) survives round-trip', async () => {
+      const result = await server.createElement({
+        name: 'RT-RTL',
+        type: ElementType.PERSONA,
+        description: 'RTL text round-trip test',
+        instructions: 'Arabic: مرحبا بالعالم Hebrew: שלום עולם Mixed: Hello مرحبا world.',
+      });
+      expect(result.content[0].text).toContain('✅');
+
+      const file = await findElementFile('personas', 'rt-rtl');
+      expect(file).toContain('مرحبا بالعالم');
+      expect(file).toContain('שלום עולם');
+    });
+
+    it('combining characters survive round-trip', async () => {
+      // é as e + combining acute accent (U+0301), ñ as n + combining tilde (U+0303)
+      const combining_e = 'e\u0301';  // é via combining
+      const combining_n = 'n\u0303';  // ñ via combining
+      const instructions = `Caf${combining_e} au lait. A${combining_n}o nuevo.`;
+
+      const result = await server.createElement({
+        name: 'RT-Combining',
+        type: ElementType.PERSONA,
+        description: 'Combining character test',
+        instructions,
+      });
+      expect(result.content[0].text).toContain('✅');
+
+      const file = await findElementFile('personas', 'rt-combining');
+      // Unicode normalization (NFC) may compose combining chars into precomposed forms
+      // (e + \u0301 → é). Either form is acceptable — the content must not be lost.
+      expect(file).toMatch(/Caf[eé\u0301]+ au lait/);
+      expect(file).toMatch(/A[nñ\u0303]+o nuevo/);
+    });
   });
 
   // ========================================================================
