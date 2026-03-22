@@ -2,13 +2,13 @@
 
 DollhouseMCP works with any MCP-compatible AI client. Pick your platform below.
 
-> **v2.0.0-rc.3**: DollhouseMCP v2 is currently a release candidate. Use `@rc` when installing via npm/npx (e.g., `@dollhousemcp/mcp-server@rc`). The Desktop Extension (.mcpb) always installs the latest release. When v2 reaches GA, the `@rc` tag will no longer be needed.
+> **v2.0.0-rc.2**: DollhouseMCP v2 is currently a release candidate. Use `@rc` when installing via npm/npx (e.g., `@dollhousemcp/mcp-server@rc`). The Desktop Extension (.mcpb) always installs the latest release. When v2 reaches GA, the `@rc` tag will no longer be needed.
 
 ---
 
 ## Claude Desktop (One-Click Install)
 
-Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.3) (`.mcpb` file) and open it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
+Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.2) (`.mcpb` file) and open it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
 
 The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mcpb) — a portable package containing the server and all dependencies. Node.js ships with Claude Desktop, so DollhouseMCP works out-of-the-box.
 
@@ -16,12 +16,6 @@ The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mc
 
 ## Claude Code
 
-**All projects** (recommended):
-```bash
-claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
-```
-
-**Current project only:**
 ```bash
 claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
