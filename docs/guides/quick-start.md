@@ -2,11 +2,13 @@
 
 DollhouseMCP works with any MCP-compatible AI client. Pick your platform below.
 
+> **v2.0.0-rc.1**: DollhouseMCP v2 is currently a release candidate. Use `@rc` when installing via npm/npx (e.g., `@dollhousemcp/mcp-server@rc`). The Desktop Extension (.mcpb) always installs the latest release. When v2 reaches GA, the `@rc` tag will no longer be needed.
+
 ---
 
 ## Claude Desktop (One-Click Install)
 
-Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/latest) (`.mcpb` file) and open it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
+Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.1) (`.mcpb` file) and open it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
 
 The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mcpb) — a portable package containing the server and all dependencies. Node.js ships with Claude Desktop, so DollhouseMCP works out-of-the-box.
 
@@ -15,7 +17,7 @@ The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mc
 ## Claude Code
 
 ```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
 That's it. Start a new conversation and ask: "List all available Dollhouse personas"
@@ -35,7 +37,7 @@ Add to your config file:
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -54,7 +56,7 @@ Add to `.cursor/mcp.json` in your project directory (or `~/.cursor/mcp.json` for
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -73,7 +75,7 @@ Add to `~/.codeium/windsurf/mcp_config.json` (macOS/Linux) or `%USERPROFILE%\.co
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -92,7 +94,7 @@ Add to `.vscode/mcp.json` in your workspace:
   "servers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -111,7 +113,7 @@ Click the MCP Servers icon in Cline's top navigation > Configure > Advanced MCP 
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -132,7 +134,7 @@ mcpServers:
     command: npx
     args:
       - "-y"
-      - "@dollhousemcp/mcp-server"
+      - "@dollhousemcp/mcp-server@rc"
 ```
 
 Continue also accepts JSON files — you can drop a Claude Desktop or Cursor config file into `.continue/mcpServers/` and it will pick it up automatically.
@@ -144,7 +146,7 @@ Continue also accepts JSON files — you can drop a Claude Desktop or Cursor con
 One command:
 
 ```bash
-gemini mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
+gemini mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
 Or add to `~/.gemini/settings.json` (user-level) or `.gemini/settings.json` (project-level):
@@ -154,7 +156,7 @@ Or add to `~/.gemini/settings.json` (user-level) or `.gemini/settings.json` (pro
   "mcpServers": {
     "dollhousemcp": {
       "command": "npx",
-      "args": ["-y", "@dollhousemcp/mcp-server"]
+      "args": ["-y", "@dollhousemcp/mcp-server@rc"]
     }
   }
 }
@@ -169,7 +171,7 @@ Or add to `~/.gemini/settings.json` (user-level) or `.gemini/settings.json` (pro
 One command:
 
 ```bash
-codex mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
+codex mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
 Or add to `~/.codex/config.toml` (user-level) or `.codex/config.toml` (project-level, trusted projects only):
@@ -177,7 +179,7 @@ Or add to `~/.codex/config.toml` (user-level) or `.codex/config.toml` (project-l
 ```toml
 [mcp_servers.dollhousemcp]
 command = "npx"
-args = ["-y", "@dollhousemcp/mcp-server"]
+args = ["-y", "@dollhousemcp/mcp-server@rc"]
 ```
 
 > **Note**: Codex uses TOML format, not JSON.
@@ -234,7 +236,7 @@ If your client doesn't support `npx`, install locally:
 
 ```bash
 mkdir -p ~/mcp-servers && cd ~/mcp-servers
-npm install @dollhousemcp/mcp-server
+npm install @dollhousemcp/mcp-server@rc
 ```
 
 Then point your client at:
