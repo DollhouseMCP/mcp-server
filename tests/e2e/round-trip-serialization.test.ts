@@ -20,9 +20,30 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import { ElementType } from '../../src/portfolio/types.js';
 
-// Skip in CI unless explicitly enabled
-const shouldSkip = process.env.CI && process.env.DOLLHOUSE_RUN_FULL_E2E !== 'true';
-const describeOrSkip = shouldSkip ? describe.skip : describe;
+// Run locally always; in CI only when DOLLHOUSE_RUN_FULL_E2E=true
+const shouldRun = process.env.DOLLHOUSE_RUN_FULL_E2E === 'true' || process.env.CI === undefined;
+const describeOrSkip = shouldRun ? describe : describe.skip;
+
+// ========================================================================
+// Pure helpers (no test closure needed — outer scope per SonarCloud S7721)
+// ========================================================================
+
+/** Normalize a string to alphanumeric lowercase for flexible slug matching */
+function toSlug(name: string): string {
+  return name.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
+}
+
+/** Check if a filename matches a slug (alphanumeric comparison) */
+function matchesSlug(filename: string, slug: string): boolean {
+  return toSlug(filename).includes(slug);
+}
+
+/** Search a flat directory for a file matching the slug */
+async function findInDir(dir: string, slug: string): Promise<string | null> {
+  const files = await fs.readdir(dir);
+  const match = files.find(f => matchesSlug(f, slug));
+  return match ? path.join(dir, match) : null;
+}
 
 describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
   let server: any;
@@ -56,26 +77,6 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
     }
   });
-
-  // ========================================================================
-  // Helper: read raw file from portfolio
-  // ========================================================================
-  /** Normalize a string to alphanumeric lowercase for flexible slug matching */
-  function toSlug(name: string): string {
-    return name.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
-  }
-
-  /** Check if a filename matches a slug (alphanumeric comparison) */
-  function matchesSlug(filename: string, slug: string): boolean {
-    return toSlug(filename).includes(slug);
-  }
-
-  /** Search a flat directory for a file matching the slug */
-  async function findInDir(dir: string, slug: string): Promise<string | null> {
-    const files = await fs.readdir(dir);
-    const match = files.find(f => matchesSlug(f, slug));
-    return match ? path.join(dir, match) : null;
-  }
 
   /**
    * Find and read an element file by searching the type directory for a file
