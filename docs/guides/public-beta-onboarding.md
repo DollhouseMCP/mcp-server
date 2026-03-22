@@ -35,7 +35,7 @@ That's it. Claude Code handles the rest.
 
 ### Claude Desktop
 
-**One-click**: Download the [Desktop Extension (.mcpb)](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.1) and open it.
+**One-click**: Download the [Desktop Extension (.mcpb)](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.2) and open it.
 
 **Manual config** — add this to your Claude Desktop configuration file:
 

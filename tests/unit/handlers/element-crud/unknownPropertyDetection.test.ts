@@ -378,4 +378,55 @@ describe('Unknown Metadata Property Detection', () => {
       expect(result.match(/•/g)?.length).toBe(2);
     });
   });
+
+  describe('Special route fields should not warn (PR #1615)', () => {
+    it('should not warn about instructions for templates', () => {
+      const metadata = { name: 'test', instructions: 'Do something' };
+      const warnings = detectUnknownMetadataProperties(ElementType.TEMPLATE, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about instructions for skills', () => {
+      const metadata = { name: 'test', instructions: 'Do something' };
+      const warnings = detectUnknownMetadataProperties(ElementType.SKILL, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about instructions for memories', () => {
+      const metadata = { name: 'test', instructions: 'Do something' };
+      const warnings = detectUnknownMetadataProperties(ElementType.MEMORY, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about instructions for ensembles', () => {
+      const metadata = { name: 'test', instructions: 'Do something' };
+      const warnings = detectUnknownMetadataProperties(ElementType.ENSEMBLE, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about metadata key on any element type', () => {
+      const metadata = { name: 'test', metadata: { nested: true } };
+      const warnings = detectUnknownMetadataProperties(ElementType.PERSONA, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about content key on any element type', () => {
+      const metadata = { name: 'test', content: 'body text' };
+      const warnings = detectUnknownMetadataProperties(ElementType.AGENT, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should not warn about version key on any element type', () => {
+      const metadata = { name: 'test', version: '2.0.0' };
+      const warnings = detectUnknownMetadataProperties(ElementType.ENSEMBLE, metadata);
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('should still warn about genuinely unknown properties', () => {
+      const metadata = { name: 'test', instructions: 'ok', totallyFake: 'bad' };
+      const warnings = detectUnknownMetadataProperties(ElementType.TEMPLATE, metadata);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].property).toBe('totallyFake');
+    });
+  });
 });

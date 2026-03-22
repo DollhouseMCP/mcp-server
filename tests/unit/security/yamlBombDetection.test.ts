@@ -185,6 +185,24 @@ describe('YAML Bomb Detection', () => {
       
       expect(amplificationDetected).toBe(false);
     });
+
+    it('should not false-positive on markdown bold patterns in YAML strings (#906)', () => {
+      // Markdown bold (**word**) should not be counted as YAML aliases
+      const yamlWithMarkdownBold = `
+        name: Enterprise Persona
+        description: "A persona with **bold text** and **more bold** and **even more** and **another** and **fifth** and **sixth** and **seventh**"
+        instructions: "You are a **highly skilled** analyst with **deep expertise** in **multiple domains**"
+      `;
+
+      const result = ContentValidator.validateYamlContent(yamlWithMarkdownBold);
+      expect(result).toBe(true);
+
+      const calls = logSecurityEventSpy.mock.calls;
+      const amplificationDetected = calls.some(call =>
+        call[0].source === 'yaml_amplification_detection'
+      );
+      expect(amplificationDetected).toBe(false);
+    });
   });
 
   describe('Complex YAML Bomb Patterns', () => {

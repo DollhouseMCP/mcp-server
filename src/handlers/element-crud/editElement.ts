@@ -378,6 +378,42 @@ function mergeEnsembleElements(
 }
 
 /**
+ * Validate, normalize, and merge ensemble elements into the update object.
+ * Extracted to avoid duplication between the top-level `elements` key handler
+ * and the `metadata.elements` key handler (Claude review).
+ *
+ * @returns An error string if validation fails, or null on success
+ */
+function isEnsembleElementInput(value: unknown): value is EnsembleElementInput {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function applyEnsembleElementsUpdate(
+  elementsInput: unknown,
+  element: unknown,
+  updateObj: Record<string, unknown>,
+  collectionWarnings: string[]
+): string | null {
+  const validated = validateAndNormalizeEnsembleElements(elementsInput);
+  if (!validated.success) {
+    return `Invalid 'elements' format: ${validated.error}`;
+  }
+  const elementRecord = element as Record<string, unknown>;
+  const metadata = elementRecord.metadata as Record<string, unknown> | undefined;
+  const rawElements = metadata?.elements;
+  const existingTyped: EnsembleElementInput[] = Array.isArray(rawElements)
+    ? rawElements.filter(isEnsembleElementInput).map(e => ({ ...e }))
+    : [];
+  const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
+  collectionWarnings.push(...mergeResult.warnings);
+  if (!updateObj.metadata) {
+    updateObj.metadata = {};
+  }
+  (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+  return null;
+}
+
+/**
  * Sync ensemble elements from metadata after an update.
  *
  * Ensembles store their element references in metadata.elements,
@@ -596,28 +632,34 @@ export async function editElement(
       (updateObj.metadata as Record<string, unknown>)[key] = value;
     } else if (key === 'elements' && normalizedType === ElementType.ENSEMBLE) {
       // Issue #658: Validate and normalize elements input (array or dict format)
-      const validated = validateAndNormalizeEnsembleElements(value);
-      if (!validated.success) {
-        return error(`Invalid 'elements' format: ${validated.error}`);
-      }
-      // Merge with existing elements (upsert-by-name) instead of replacing
-      const existingElements = (element as any).metadata?.elements || [];
-      const existingTyped: EnsembleElementInput[] = Array.isArray(existingElements)
-        ? existingElements.map((e: unknown) => (typeof e === 'object' && e !== null ? { ...e } as EnsembleElementInput : {} as EnsembleElementInput))
-        : [];
-      const mergeResult = mergeEnsembleElements(existingTyped, validated.elements);
-      collectionWarnings.push(...mergeResult.warnings);
-      if (!updateObj.metadata) {
-        updateObj.metadata = {};
-      }
-      (updateObj.metadata as Record<string, unknown>).elements = mergeResult.elements;
+      const elemError = applyEnsembleElementsUpdate(value, element, updateObj, collectionWarnings);
+      if (elemError) return error(elemError);
     } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
-      // Merge nested metadata with security options
-      updateObj.metadata = deepMerge(
-        (updateObj.metadata || {}) as Record<string, unknown>,
-        value as Record<string, unknown>,
-        MERGE_OPTIONS
-      );
+      const metaValue = value as Record<string, unknown>;
+
+      // If metadata.elements is provided for an ensemble, extract and route through
+      // the ensemble elements handler for proper validation/normalization/merge.
+      if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
+        const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
+        if (elemError) return error(elemError);
+
+        // Remove elements from metadata value before deep merge to avoid double-processing
+        const { elements: _extracted, ...restMetadata } = metaValue;
+        if (Object.keys(restMetadata).length > 0) {
+          updateObj.metadata = deepMerge(
+            updateObj.metadata as Record<string, unknown>,
+            restMetadata,
+            MERGE_OPTIONS
+          );
+        }
+      } else {
+        // Merge nested metadata with security options
+        updateObj.metadata = deepMerge(
+          (updateObj.metadata || {}) as Record<string, unknown>,
+          metaValue,
+          MERGE_OPTIONS
+        );
+      }
     } else if (key === 'instructions' && typeof value === 'string') {
       // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
       const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
@@ -705,6 +747,16 @@ export async function editElement(
     if (resolutionResult) {
       resolutionWarningText = formatElementResolutionWarnings(resolutionResult);
     }
+  }
+
+  // Fix #911: Normalize metadata after merge to ensure structural consistency.
+  // BaseElement constructor runs normalizeMetadata on create/load, but the edit path
+  // modifies metadata in-place. This ensures essential defaults survive edits.
+  if (element.metadata) {
+    element.metadata.description ??= '';
+    element.metadata.tags ??= [];
+    // Update modified timestamp
+    element.metadata.modified = new Date().toISOString();
   }
 
   // Handle version updates

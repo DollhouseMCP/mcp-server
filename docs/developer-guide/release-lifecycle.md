@@ -68,7 +68,7 @@ Pre-release versions use a channel name and iteration number:
 2.0.0-alpha.feature-oauth.1    # Feature-specific alpha
 2.0.0-alpha.fix-42.1           # Fix-specific alpha
 2.0.0-beta.3                   # Integration beta
-2.0.0-rc.1                     # Release candidate
+2.0.0-rc.2                     # Release candidate
 2.0.0                          # Stable release
 ```
 
@@ -77,7 +77,7 @@ Pre-release versions use a channel name and iteration number:
 SemVer defines a strict sort order. Pre-release versions always sort below their stable counterpart:
 
 ```
-2.0.0-alpha.1 < 2.0.0-alpha.2 < 2.0.0-beta.1 < 2.0.0-beta.2 < 2.0.0-rc.1 < 2.0.0
+2.0.0-alpha.1 < 2.0.0-alpha.2 < 2.0.0-beta.1 < 2.0.0-beta.2 < 2.0.0-rc.2 < 2.0.0
 ```
 
 This means users requesting `^2.0.0` will never accidentally receive a pre-release version.
@@ -149,7 +149,7 @@ gitGraph
     commit id: "beta.2" tag: "v2.0.0-beta.2"
     branch release/2.0
     checkout release/2.0
-    commit id: "rc.1" tag: "v2.0.0-rc.1"
+    commit id: "rc.1" tag: "v2.0.0-rc.2"
     commit id: "rc fix"
     commit id: "rc.2" tag: "v2.0.0-rc.2"
     checkout main
@@ -189,7 +189,7 @@ gitGraph
     branch release/2.0
     checkout release/2.0
     commit id: "freeze" type: HIGHLIGHT
-    commit id: "bug fix 1" tag: "v2.0.0-rc.1"
+    commit id: "bug fix 1" tag: "v2.0.0-rc.2"
     checkout develop
     commit id: "2.1 feature 1"
     commit id: "2.1 feature 2"
@@ -269,7 +269,7 @@ sequenceDiagram
     D->>R: Create release branch
 
     R->>npm: npm publish --tag next
-    Note over npm: 2.0.0-rc.1
+    Note over npm: 2.0.0-rc.2
 
     Note over D: 2.1.0 development continues
     D->>D: New features for next version
@@ -331,7 +331,7 @@ graph LR
         V201B2["2.0.0-beta.2"]
         V201B1["2.0.0-beta.1"]
         V201RC2
-        V201RC1["2.0.0-rc.1"]
+        V201RC1["2.0.0-rc.2"]
         V142["1.4.2"]
     end
 
@@ -349,7 +349,7 @@ npm run build
 npm publish --tag beta
 
 # Release candidate (from release/*)
-npm version 2.0.0-rc.1 --no-git-tag-version
+npm version 2.0.0-rc.2 --no-git-tag-version
 npm run build
 npm publish --tag next
 
@@ -403,7 +403,7 @@ Every build includes the commit hash for traceability.
 |--------|----------------|---------|
 | main | `X.Y.Z` | `2.0.0` |
 | develop | `X.Y.Z-beta.N+HASH` | `2.0.0-beta.3+b96ef61` |
-| release/* | `X.Y.Z-rc.N+HASH` | `2.0.0-rc.1+819d41e` |
+| release/* | `X.Y.Z-rc.N+HASH` | `2.0.0-rc.2+819d41e` |
 | feature/* | `X.Y.Z-alpha.BRANCH.N+HASH` | `2.0.0-alpha.feature-oauth.1+a1b1822` |
 | fix/* | `X.Y.Z-alpha.BRANCH.N+HASH` | `2.0.0-alpha.fix-42.1+579aea9` |
 
@@ -447,7 +447,7 @@ git checkout develop
 git checkout -b release/2.0
 
 # 2. Update version and publish RC
-npm version 2.0.0-rc.1 --no-git-tag-version
+npm version 2.0.0-rc.2 --no-git-tag-version
 npm run build
 npm publish --tag next
 
@@ -515,7 +515,7 @@ git checkout develop
 git checkout -b release/2.0
 
 # Publish first RC
-npm version 2.0.0-rc.1 --no-git-tag-version
+npm version 2.0.0-rc.2 --no-git-tag-version
 npm run build
 npm publish --tag next
 

@@ -339,6 +339,18 @@ export class SecureYamlParser {
       throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
     }
 
+    // Fix #908: YAML bomb detection — previously skipped, allowing bomb payloads
+    // through MCP-AQL create dispatcher and web routes that use parseRawYaml().
+    if (!ContentValidator.validateYamlContent(yamlContent)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_INJECTION_ATTEMPT',
+        severity: 'CRITICAL',
+        source: 'SecureYamlParser.parseRawYaml',
+        details: 'Malicious YAML pattern detected in raw YAML content'
+      });
+      throw new SecurityError('Malicious YAML content detected', 'critical');
+    }
+
     // Parse with safe schema
     const parsed = yaml.load(yamlContent, {
       schema: this.SAFE_SCHEMA,  // CORE_SCHEMA - safe basic types only

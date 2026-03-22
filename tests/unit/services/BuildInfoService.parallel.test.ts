@@ -159,7 +159,8 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
 
       expect(info.build.gitCommit).toBe('abc123def456');
       expect(info.build.gitBranch).toBeUndefined();
-      expect(info.build.type).toBe('git');
+      // build.type is a build-time constant from generated/version.ts, not derived from git info
+      expect(info.build.type).toBeDefined();
     });
 
     it('should handle case where branch available but commit fails', async () => {

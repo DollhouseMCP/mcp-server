@@ -29,6 +29,7 @@ import { ValidationRegistry } from '../services/validation/ValidationRegistry.js
 import { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../services/validation/ValidationService.js';
 import { MetadataService } from '../services/MetadataService.js';
+import { SerializationService } from '../services/SerializationService.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
 
@@ -68,6 +69,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private metadataService: MetadataService;
+  private readonly serializationService: SerializationService;
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -91,6 +93,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();
     this.metadataService = metadataService;
+    this.serializationService = new SerializationService();
     this.initializePathValidator();
   }
 
@@ -1479,6 +1482,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     if (result.success && result.persona) {
       // Convert legacy PersonaMetadata to PersonaElementMetadata
       const elementMetadata = this.toPersonaElementMetadata(result.persona.metadata);
+
+      // Fix #906: For v1 format imports (no instructions in frontmatter), the markdown
+      // body must stay as the document body below '---', not be stuffed into the YAML
+      // instructions field. Setting instructions to the description triggers the v2 path
+      // in createElement(), keeping bodyText as content (document body).
+      if (!elementMetadata.instructions && result.persona.content) {
+        // Prefer description (concise behavioral summary) over name (just a label).
+        // name is guaranteed to exist (validated by PersonaImporter.validateAndEnrichMetadata).
+        elementMetadata.instructions = elementMetadata.description || elementMetadata.name;
+      }
+
       const personaToSave = this.createElement(elementMetadata, result.persona.content);
       personaToSave.filename = result.persona.filename ?? personaToSave.filename;
       personaToSave.unique_id = result.persona.unique_id;
@@ -1542,8 +1556,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Filename is derived from name - use inherited getElementFilename() for consistent normalization
     const filename = this.getElementFilename(metadata.name);
 
-    // Dual-field loading: detect v2 format (instructions in metadata from YAML frontmatter)
-    // When loading v2 files, metadata contains 'instructions' key and bodyText is reference material
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const metadataInstructions = metadata.instructions;
     let instructions: string;
     let content: string;
@@ -1579,111 +1593,42 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   protected async serializeElement(element: PersonaElement): Promise<string> {
-    const metadata = element.metadata;
-    // Issue #755: Serialize type as singular and persist unique_id
-    (metadata as any).type = toSingularLabel(ElementType.PERSONA);
-    (metadata as any).unique_id = element.id;
-    const name = element.metadata.name;
-    const instructions = element.instructions;
+    // Fix #909: Use spread copy to avoid mutating live element metadata in-place
+    const metadata: Record<string, any> = { ...element.metadata };
 
-    // Build entries for YAML frontmatter: metadata + instructions field
-    const frontmatterEntries: [string, any][] = Object.entries(metadata);
-    // Add instructions to YAML frontmatter (v2.0 dual-field format)
-    if (instructions) {
-      frontmatterEntries.push(['instructions', instructions]);
+    // Issue #755: Serialize type as singular and persist unique_id
+    metadata.type = toSingularLabel(ElementType.PERSONA);
+    metadata.format_version = 'v2';  // Fix #912: Explicit format marker
+    metadata.unique_id = element.id;
+
+    // v2.0 dual-field format: instructions in YAML frontmatter
+    if (element.instructions) {
+      metadata.instructions = element.instructions;
     }
 
-    const frontmatter = frontmatterEntries
-      .filter(([key, value]) => {
-        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-          logger.warn(`Blocked potential prototype pollution attempt with key: ${key}`);
-          return false;
-        }
-        if (value === null || value === undefined) {
-          logger.warn(`Skipping null/undefined value for key: ${key}`);
-          return false;
-        }
-        return true;
-      })
-      .map(([key, value]) => {
-        if (Array.isArray(value)) {
-          // Format arrays properly in YAML
-          if (value.length === 0) {
-            return `${key}: []`;
-          }
-          // SECURITY: Quote all array string elements to prevent type confusion
-          return `${key}:\n${value.map(v => {
-            if (typeof v === 'string') {
-              // Always quote string array elements to prevent YAML interpretation
-              return `  - ${JSON.stringify(v)}`;
-            } else if (v === null || v === undefined) {
-              // Skip null/undefined array elements
-              return null;
-            } else {
-              return `  - ${v}`;
-            }
-          }).filter(v => v !== null).join('\n')}`;
-        } else if (typeof value === 'string') {
-          // Fields that must always be quoted to preserve type
-          const alwaysQuoteFields = [
-            'version',      // Prevent 1.0 -> 1
-            'price',        // Prevent 10.99 -> float
-            'revenue_split', // Prevent fraction interpretation
-            'postal_code',   // Prevent octal interpretation
-            'user_id',      // Prevent number conversion
-            'unique_id'     // Preserve exact format
-          ];
-
-          // YAML special values that become boolean/null/float
-          const yamlSpecialValues = /^(true|false|yes|no|on|off|null|~|\.inf|\.nan|-\.inf)$/i;
-
-          // Patterns that indicate string needs quoting
-          const needsQuoting =
-            alwaysQuoteFields.includes(key) ||
-            yamlSpecialValues.test(value) ||           // YAML keywords
-            /^[\d+\-.]/.test(value) ||                 // Starts with number-like
-            /^0[0-7]+$/.test(value) ||                 // Octal numbers
-            /^0x[0-9a-fA-F]+$/.test(value) ||         // Hexadecimal
-            /^[+-]?\d*\.?\d+([eE][+-]?\d+)?$/.test(value) || // Scientific notation
-            /(^\s)|(\s$)/.test(value) ||                   // Leading/trailing whitespace
-            /[:#@!&*\|>[\]{}]/.test(value) ||         // Special YAML characters
-            value === '' ||                             // Empty string
-            value.includes('\n') ||                    // Multiline
-            value.includes('"');                       // Contains quotes
-
-          if (needsQuoting) {
-            return `${key}: ${JSON.stringify(value)}`;
-          }
-          return `${key}: ${value}`;
-        } else if (typeof value === 'number') {
-          // CRITICAL: Reject special float values that break logic
-          if (!Number.isFinite(value)) {
-            logger.warn(`Rejected non-finite number for ${key}: ${value}`);
-            return `${key}: 0`; // Safe default
-          }
-          if (Number.isNaN(value)) {
-            logger.warn(`Rejected NaN for ${key}`);
-            return `${key}: 0`; // Safe default
-          }
-          return `${key}: ${value}`;
-        } else if (typeof value === 'boolean') {
-          // Explicit boolean values
-          return `${key}: ${value}`;
-        } else {
-          // Other types - stringify for safety
-          return `${key}: ${JSON.stringify(value)}`;
-        }
-      })
-      .join('\n');
-
-    // v2.0 format: instructions in YAML frontmatter, content as markdown body
+    // Build body: content (reference material) below '---', with name heading
+    const name = element.metadata.name;
     const bodyContent = element.content || '';
     const description = (element.metadata.description ?? '').trim();
-    const personaContent = bodyContent.trim()
-      ? `---\n${frontmatter}\n---\n\n# ${name}\n\n${bodyContent}`
-      : description
-        ? `---\n${frontmatter}\n---\n\n# ${name}\n\n${description}`
-        : `---\n${frontmatter}\n---\n\n# ${name}`;
+
+    let body: string;
+    if (bodyContent.trim()) {
+      body = `# ${name}\n\n${bodyContent}`;
+    } else if (description) {
+      body = `# ${name}\n\n${description}`;
+    } else {
+      body = `# ${name}`;
+    }
+
+    // Fix #909: Use SerializationService instead of manual YAML construction.
+    // JSON schema preserves booleans and numbers; remove-both cleans null/undefined.
+    const personaContent = this.serializationService.createFrontmatter(metadata, body, {
+      method: 'manual',
+      schema: 'json',
+      cleanMetadata: true,
+      cleaningStrategy: 'remove-both',
+      sortKeys: true
+    });
 
     validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
 

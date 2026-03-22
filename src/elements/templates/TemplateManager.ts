@@ -231,7 +231,7 @@ export class TemplateManager extends BaseElementManager<Template> {
           };
 
           return this.serializationService.dumpYaml(yamlData, {
-            schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+            schema: 'json',  // Fix #914: standardize on JSON schema across all managers
             noRefs: true,
             sortKeys: true,
             skipInvalid: true
@@ -244,9 +244,9 @@ export class TemplateManager extends BaseElementManager<Template> {
             template.content,
             {
               method: 'manual',
-              schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+              schema: 'json',  // Fix #914: standardize on JSON schema across all managers
               cleanMetadata: true,
-              cleaningStrategy: 'remove-undefined'
+              cleaningStrategy: 'remove-both'  // Fix #913: standardize across all managers
             }
           );
         }
@@ -299,8 +299,9 @@ export class TemplateManager extends BaseElementManager<Template> {
   }
 
   protected override createElement(metadata: TemplateMetadata, bodyContent: string): Template {
-    // v2 detection: if metadata has 'instructions', use it
+    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
     const metadataInstructions = metadata.instructions;
+    delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const template = new Template(metadata, bodyContent, this.metadataService);
     if (metadataInstructions) {
       template.instructions = metadataInstructions;
@@ -343,6 +344,8 @@ export class TemplateManager extends BaseElementManager<Template> {
     // Issue #755: Serialize type as singular and persist unique_id
     metadata.type = toSingularLabel(ElementType.TEMPLATE);
     metadata.unique_id = template.id;
+    // Fix #912: Explicit format marker
+    metadata.format_version = 'v2';
     if (template.instructions) {
       metadata.instructions = template.instructions;
     }
@@ -351,9 +354,9 @@ export class TemplateManager extends BaseElementManager<Template> {
       template.content || this.buildDefaultBody(template),
       {
         method: 'manual',
-        schema: 'default',  // TemplateManager uses DEFAULT_SCHEMA for type preservation
+        schema: 'json',  // Fix #914: standardize on JSON schema across all managers
         cleanMetadata: true,
-        cleaningStrategy: 'remove-undefined',
+        cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
         sortKeys: true,
         lineWidth: 80,
         skipInvalid: true
