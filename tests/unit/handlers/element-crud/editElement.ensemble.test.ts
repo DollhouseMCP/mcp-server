@@ -524,4 +524,78 @@ describe('editElement - ensemble elements (Issue #658)', () => {
       expect(mockContext.ensembleManager.save).not.toHaveBeenCalled();
     });
   });
+
+  describe('metadata.elements pathway (PR #1615)', () => {
+    it('should accept elements via input.metadata.elements', async () => {
+      const existing = createMockEnsemble('MetaTest', [
+        { element_name: 'existing-skill', element_type: 'skill', role: 'primary', priority: 50, activation: 'always' }
+      ]);
+
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+      mockContext.ensembleManager.save = jest.fn().mockResolvedValue(undefined);
+
+      const result = await editElement(mockContext, {
+        name: 'MetaTest',
+        type: ElementType.ENSEMBLE,
+        input: {
+          metadata: {
+            elements: [
+              { element_name: 'new-skill', element_type: 'skill', role: 'support', priority: 30, activation: 'always' }
+            ]
+          }
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      // Both existing and new elements should be present
+      const savedElement = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
+      const savedElements = savedElement.metadata.elements;
+      expect(savedElements).toHaveLength(2);
+      expect(savedElements.map((e: any) => e.element_name).sort()).toEqual(['existing-skill', 'new-skill']);
+    });
+
+    it('should validate elements even when nested in metadata', async () => {
+      const existing = createMockEnsemble('MetaTest', []);
+
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+
+      const result = await editElement(mockContext, {
+        name: 'MetaTest',
+        type: ElementType.ENSEMBLE,
+        input: {
+          metadata: {
+            elements: 'not-an-array'
+          }
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('Invalid');
+    });
+
+    it('should merge other metadata fields alongside elements', async () => {
+      const existing = createMockEnsemble('MetaTest', []);
+
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([existing]);
+      mockContext.ensembleManager.save = jest.fn().mockResolvedValue(undefined);
+
+      const result = await editElement(mockContext, {
+        name: 'MetaTest',
+        type: ElementType.ENSEMBLE,
+        input: {
+          metadata: {
+            elements: [
+              { element_name: 'a-skill', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' }
+            ],
+            activationStrategy: 'sequential'
+          }
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const savedElement = (mockContext.ensembleManager.save as jest.Mock).mock.calls[0][0];
+      expect(savedElement.metadata.activationStrategy).toBe('sequential');
+      expect(savedElement.metadata.elements).toHaveLength(1);
+    });
+  });
 });
