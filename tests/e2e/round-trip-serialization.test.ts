@@ -174,7 +174,10 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
         const result = await server.createElement(def);
         expect(result.content[0].text).toContain('✅');
 
-        // Memory uses YAML (no frontmatter), others use markdown with frontmatter
+        // Memory elements use pure YAML format (not markdown with frontmatter).
+        // MemoryManager has its own serialization path that produces a YAML document
+        // with metadata, entries, and stats as top-level keys — no '---' delimiters.
+        // Memory round-trip fidelity is tested separately in MemoryManager.test.ts.
         if (key === 'memory') return;
 
         const file = await findElementFile(def.type, def.name);
@@ -572,6 +575,47 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       expect(file).toContain('Line 1:');
       expect(file).toContain('Line 250:');
       expect(file).toContain('Line 500:');
+    }, 30000);  // Extended timeout for large content serialization in CI
+
+    it('empty metadata does not break element creation', async () => {
+      // Explicit empty metadata object — should use defaults, not crash
+      const resultEmpty = await server.createElement({
+        name: 'RT-Empty-Meta',
+        type: ElementType.PERSONA,
+        description: 'Empty metadata test',
+        instructions: 'You are a persona created with empty metadata.',
+        metadata: {},
+      });
+      expect(resultEmpty.content[0].text).toContain('✅');
+
+      const file = await findElementFile('personas', 'rt-empty-meta');
+      // Should have defaults filled in (version, author, etc.)
+      expect(file).toContain('name: RT-Empty-Meta');
+      expect(file).toMatch(/version:/);
+      expect(file).toContain('format_version: v2');
+    });
+
+    it('undefined optional metadata fields do not corrupt output', async () => {
+      // Create with explicitly undefined optional fields
+      const result = await server.createElement({
+        name: 'RT-Undef-Fields',
+        type: ElementType.SKILL,
+        description: 'Undefined fields test',
+        instructions: 'Test instructions for undefined fields verification.',
+        content: 'Reference material for undefined fields test.',
+        metadata: {
+          tags: undefined,
+          author: undefined,
+          category: undefined,
+        },
+      });
+      expect(result.content[0].text).toContain('✅');
+
+      const file = await findElementFile('skills', 'rt-undef-fields');
+      expect(file).toContain('name: RT-Undef-Fields');
+      // undefined fields should be cleaned or defaulted, not serialized as 'undefined'
+      expect(file).not.toContain(': undefined');
+      expect(file).not.toContain("'undefined'");
     });
 
     it('deeply nested metadata objects survive round-trip', async () => {
