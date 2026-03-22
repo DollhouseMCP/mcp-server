@@ -27,11 +27,27 @@ interface PatternAnalysis {
 }
 
 export class RegexValidator {
-  // Default limits based on pattern complexity
+  // Content length limits based on regex pattern complexity.
+  //
+  // Complexity tiers:
+  //   low    — no quantifiers (literal matches, anchored patterns). O(n) linear scan.
+  //            500KB at ~0.1ms. Safe at any content size.
+  //   medium — 1-3 simple quantifiers (e.g. /test.*end/, /\s+\w+/). Still O(n) linear
+  //            because there's no nesting or overlapping alternation. 500KB at ~1-5ms.
+  //            Same limit as low because the performance difference is negligible on
+  //            modern hardware — both complete well under the 50ms slow-pattern threshold.
+  //   high   — nested quantifiers, overlapping alternation, or unbounded lookahead.
+  //            These can exhibit O(2^n) exponential backtracking (ReDoS). Even 1KB can
+  //            hang for seconds. Capped at 1KB as a hard safety boundary.
+  //
+  // Low and medium share the same limit (matching MAX_CONTENT_LENGTH) because the
+  // complexity classification is retained for monitoring and logging — slow pattern
+  // warnings (see elapsed > 50ms check) use it to diagnose performance issues
+  // without restricting legitimate content sizes.
   private static readonly COMPLEXITY_LIMITS = {
-    low: 100000,    // 100KB for simple patterns
-    medium: 10000,  // 10KB for moderate patterns
-    high: 1000      // 1KB for complex patterns
+    low: 500000,    // 500KB — no quantifiers, O(n)
+    medium: 500000, // 500KB — simple quantifiers, O(n)
+    high: 1000      // 1KB  — complex patterns, O(2^n) risk
   };
 
   /**
