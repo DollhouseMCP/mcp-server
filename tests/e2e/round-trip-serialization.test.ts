@@ -312,8 +312,9 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       const file = await findElementFile('personas', 'rt-combining');
       // Unicode normalization (NFC) may compose combining chars into precomposed forms
       // (e + \u0301 → é). Either form is acceptable — the content must not be lost.
-      expect(file).toMatch(/Caf[eé\u0301]+ au lait/);
-      expect(file).toMatch(/A[nñ\u0303]+o nuevo/);
+      // Use alternation instead of character class to avoid S5868 (combined chars in [])
+      expect(file).toMatch(/Caf(?:é|e\u0301) au lait/);
+      expect(file).toMatch(/A(?:ñ|n\u0303)o nuevo/);
     });
   });
 
