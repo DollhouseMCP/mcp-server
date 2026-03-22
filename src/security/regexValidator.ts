@@ -29,9 +29,9 @@ interface PatternAnalysis {
 export class RegexValidator {
   // Default limits based on pattern complexity
   private static readonly COMPLEXITY_LIMITS = {
-    low: 100000,    // 100KB for simple patterns
-    medium: 10000,  // 10KB for moderate patterns
-    high: 1000      // 1KB for complex patterns
+    low: 500000,    // 500KB for simple patterns (matches MAX_CONTENT_LENGTH)
+    medium: 500000, // 500KB for moderate patterns (simple quantifiers, linear time)
+    high: 1000      // 1KB for complex patterns (ReDoS risk)
   };
 
   /**

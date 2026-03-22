@@ -147,11 +147,11 @@ describe('RegexValidator', () => {
     test('assigns correct complexity levels', () => {
       const low = RegexValidator.analyzePattern(/test/);
       expect(low.complexity).toBe('low');
-      expect(low.maxSafeLength).toBe(100000);
-      
+      expect(low.maxSafeLength).toBe(500000);
+
       const medium = RegexValidator.analyzePattern(/test.*end/);
       expect(medium.complexity).toBe('medium');
-      expect(medium.maxSafeLength).toBe(10000);
+      expect(medium.maxSafeLength).toBe(500000);
       
       const high = RegexValidator.analyzePattern(/(a+)+b/); // codeql[js/redos]: Intentionally dangerous for testing
       expect(high.complexity).toBe('high');
