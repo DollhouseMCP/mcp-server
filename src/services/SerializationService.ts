@@ -611,7 +611,7 @@ export class SerializationService {
       cleanMetadata = false,
       cleaningStrategy = 'remove-undefined',
       schema = 'failsafe',
-      sortKeys = true,
+      sortKeys: _sortKeys = true,
       skipInvalid = true,
       noRefs = true
     } = options;

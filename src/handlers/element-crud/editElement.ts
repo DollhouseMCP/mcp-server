@@ -562,6 +562,18 @@ export async function editElement(
     normalizedType,
     input as Record<string, unknown>
   );
+
+  // Also validate nested metadata sub-object (the top-level 'metadata' key is
+  // skipped by detectUnknownMetadataProperties as a special route field, so
+  // dangerous/unknown properties inside it would go unchecked otherwise)
+  if (input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)) {
+    const nestedWarnings = detectUnknownMetadataProperties(
+      normalizedType,
+      input.metadata as Record<string, unknown>
+    );
+    unknownPropertyWarnings.push(...nestedWarnings);
+  }
+
   const warningText = formatUnknownPropertyWarnings(unknownPropertyWarnings);
 
   if (unknownPropertyWarnings.length > 0) {
