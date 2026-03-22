@@ -749,6 +749,16 @@ export async function editElement(
     }
   }
 
+  // Fix #911: Normalize metadata after merge to ensure structural consistency.
+  // BaseElement constructor runs normalizeMetadata on create/load, but the edit path
+  // modifies metadata in-place. This ensures essential defaults survive edits.
+  if (element.metadata) {
+    element.metadata.description ??= '';
+    element.metadata.tags ??= [];
+    // Update modified timestamp
+    element.metadata.modified = new Date().toISOString();
+  }
+
   // Handle version updates
   if (input.version !== undefined) {
     const update = updateVersionExplicit(element, String(input.version));

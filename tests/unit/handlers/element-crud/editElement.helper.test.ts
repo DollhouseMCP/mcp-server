@@ -364,6 +364,65 @@ describe('editElement helper', () => {
     });
   });
 
+  describe('post-edit metadata normalization (#911)', () => {
+    it('should default description to empty string when null after edit', async () => {
+      const element = createMockElement('test-skill', { description: null });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: { author: 'new-author' },
+      });
+
+      expect(element.metadata.description).toBe('');
+    });
+
+    it('should default tags to empty array when undefined after edit', async () => {
+      const element = createMockElement('test-skill', { tags: undefined });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: { author: 'new-author' },
+      });
+
+      expect(element.metadata.tags).toEqual([]);
+    });
+
+    it('should update modified timestamp on edit', async () => {
+      const element = createMockElement('test-skill', { modified: '2020-01-01T00:00:00.000Z' });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: { author: 'new-author' },
+      });
+
+      expect(element.metadata.modified).not.toBe('2020-01-01T00:00:00.000Z');
+      expect(element.metadata.modified).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('should preserve existing description and tags when present', async () => {
+      const element = createMockElement('test-skill', {
+        description: 'Existing description',
+        tags: ['tag1', 'tag2'],
+      });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: { author: 'new-author' },
+      });
+
+      expect(element.metadata.description).toBe('Existing description');
+      expect(element.metadata.tags).toEqual(['tag1', 'tag2']);
+    });
+  });
+
   describe('version handling', () => {
     it('should auto-increment version when editing metadata without explicit version', async () => {
       const element = createMockElement('test-skill', { version: '1.0.0' });
