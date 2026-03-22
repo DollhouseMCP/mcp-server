@@ -293,7 +293,7 @@ export function orderMetadataFields(metadata: Record<string, unknown>): Record<s
     }
   }
   // Then: add remaining fields alphabetically
-  const remaining = Object.keys(metadata).filter(k => !METADATA_FIELD_ORDER_SET.has(k)).sort();
+  const remaining = Object.keys(metadata).filter(k => !METADATA_FIELD_ORDER_SET.has(k)).sort((a, b) => a.localeCompare(b));
   for (const key of remaining) {
     ordered[key] = metadata[key];
   }
