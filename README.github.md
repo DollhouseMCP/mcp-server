@@ -370,11 +370,13 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ### Claude Code
 
+All projects (recommended):
 ```bash
-# All projects (recommended)
 claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+```
 
-# Current project only
+Current project only:
+```bash
 claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 

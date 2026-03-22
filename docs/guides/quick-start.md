@@ -16,11 +16,13 @@ The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mc
 
 ## Claude Code
 
+All projects (recommended):
 ```bash
-# All projects (recommended)
 claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+```
 
-# Current project only
+Current project only:
+```bash
 claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
