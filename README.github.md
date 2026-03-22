@@ -368,6 +368,18 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ---
 
+### Claude Code
+
+```bash
+# All projects (recommended)
+claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+
+# Current project only
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+```
+
+---
+
 ### Method 1: Local Installation (Recommended)
 
 Create a dedicated folder for your MCP servers and install there:

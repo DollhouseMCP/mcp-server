@@ -65,6 +65,10 @@ Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mc
 **Claude Code** (one command):
 
 ```bash
+# All projects (recommended)
+claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+
+# Current project only
 claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
 ```
 
