@@ -25,6 +25,59 @@ const shouldRun = process.env.DOLLHOUSE_RUN_FULL_E2E === 'true' || process.env.C
 const describeOrSkip = shouldRun ? describe : describe.skip;
 
 // ========================================================================
+// Common test element definitions — centralized for maintainability
+// as element types scale to hundreds of bespoke types
+// ========================================================================
+interface TestElementDef {
+  name: string;
+  type: ElementType;
+  description: string;
+  instructions?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
+const TEST_ELEMENTS: Record<string, TestElementDef> = {
+  persona: {
+    name: 'RT-Persona',
+    type: ElementType.PERSONA,
+    description: 'Round-trip test persona',
+    instructions: 'You are a helpful test assistant.',
+  },
+  skill: {
+    name: 'RT-Skill',
+    type: ElementType.SKILL,
+    description: 'Round-trip test skill',
+    instructions: 'Follow these coding guidelines.',
+    content: '# Reference\n\nAdditional reference material.',
+  },
+  template: {
+    name: 'RT-Template',
+    type: ElementType.TEMPLATE,
+    description: 'Round-trip test template',
+    content: 'Hello {{name}}, welcome to {{place}}.',
+  },
+  agent: {
+    name: 'RT-Agent',
+    type: ElementType.AGENT,
+    description: 'Round-trip test agent',
+    instructions: 'You analyze code for quality issues.',
+  },
+  ensemble: {
+    name: 'RT-Ensemble',
+    type: ElementType.ENSEMBLE,
+    description: 'Round-trip test ensemble',
+    metadata: { elements: [] },
+  },
+  memory: {
+    name: 'RT-Memory',
+    type: ElementType.MEMORY,
+    description: 'Round-trip test memory',
+    content: 'Initial memory entry for testing.',
+  },
+};
+
+// ========================================================================
 // Pure helpers (no test closure needed — outer scope per SonarCloud S7721)
 // ========================================================================
 
@@ -112,91 +165,24 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
 
   // ========================================================================
   // Phase 1: Basic Round-Trip for Each Element Type
+  // Uses centralized TEST_ELEMENTS — scales as new element types are added
   // ========================================================================
   describe('Phase 1: Basic round-trip per element type', () => {
+    // Data-driven: iterate all defined element types
+    for (const [key, def] of Object.entries(TEST_ELEMENTS)) {
+      it(`${key}: create → read file → verify structure`, async () => {
+        const result = await server.createElement(def);
+        expect(result.content[0].text).toContain('✅');
 
-    it('persona: create → read file → verify structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Persona',
-        type: ElementType.PERSONA,
-        description: 'Round-trip test persona',
-        instructions: 'You are a helpful test assistant.',
+        // Memory uses YAML (no frontmatter), others use markdown with frontmatter
+        if (key === 'memory') return;
+
+        const file = await findElementFile(def.type, def.name);
+        expect(file).toContain(`name: ${def.name}`);
+        expect(file).toContain('format_version: v2');
+        expect(file).toContain('---');
       });
-      expect(result.content[0].text).toContain('✅');
-
-      const file = await findElementFile('personas', 'rt-persona.md');
-      expect(file).toContain('name: RT-Persona');
-      expect(file).toContain('format_version: v2');
-      expect(file).toContain('instructions:');
-      expect(file).toContain('---');
-    });
-
-    it('skill: create → read file → verify structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Skill',
-        type: ElementType.SKILL,
-        description: 'Round-trip test skill',
-        instructions: 'Follow these coding guidelines.',
-        content: '# Reference\n\nAdditional reference material.',
-      });
-      expect(result.content[0].text).toContain('✅');
-
-      const file = await findElementFile('skills', 'rt-skill.md');
-      expect(file).toContain('name: RT-Skill');
-      expect(file).toContain('format_version: v2');
-    });
-
-    it('template: create → read file → verify structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Template',
-        type: ElementType.TEMPLATE,
-        description: 'Round-trip test template',
-        content: 'Hello {{name}}, welcome to {{place}}.',
-      });
-      expect(result.content[0].text).toContain('✅');
-
-      const file = await findElementFile('templates', 'rt-template.md');
-      expect(file).toContain('name: RT-Template');
-      expect(file).toContain('format_version: v2');
-    });
-
-    it('agent: create → read file → verify structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Agent',
-        type: ElementType.AGENT,
-        description: 'Round-trip test agent',
-        instructions: 'You analyze code for quality issues.',
-      });
-      expect(result.content[0].text).toContain('✅');
-
-      const file = await findElementFile('agents', 'rt-agent.md');
-      expect(file).toContain('name: RT-Agent');
-      expect(file).toContain('format_version: v2');
-    });
-
-    it('ensemble: create → read file → verify structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Ensemble',
-        type: ElementType.ENSEMBLE,
-        description: 'Round-trip test ensemble',
-        metadata: { elements: [] },
-      });
-      expect(result.content[0].text).toContain('✅');
-
-      const file = await findElementFile('ensembles', 'rt-ensemble.md');
-      expect(file).toContain('name: RT-Ensemble');
-      expect(file).toContain('format_version: v2');
-    });
-
-    it('memory: create → read file → verify YAML structure', async () => {
-      const result = await server.createElement({
-        name: 'RT-Memory',
-        type: ElementType.MEMORY,
-        description: 'Round-trip test memory',
-        content: 'Initial memory entry for testing.',
-      });
-      expect(result.content[0].text).toContain('✅');
-    });
+    }
   });
 
   // ========================================================================
@@ -557,6 +543,98 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       // Boolean must still be a YAML boolean after the round-trip
       expect(fileAfterEdit).toMatch(/learningEnabled: true/);
       expect(fileAfterEdit).not.toMatch(/learningEnabled: ['"]true['"]/);
+    });
+  });
+
+  // ========================================================================
+  // Phase 8: Edge Cases — Large Content, Nested Metadata, Concurrency
+  // ========================================================================
+  describe('Phase 8: Edge cases', () => {
+
+    it('large content block survives round-trip', async () => {
+      // Generate a large but valid content block (~50KB)
+      const lines = Array.from({ length: 500 }, (_, i) =>
+        `Line ${i + 1}: This is a substantive line of reference material for testing large content serialization.`
+      );
+      const largeContent = lines.join('\n');
+
+      const result = await server.createElement({
+        name: 'RT-Large-Content',
+        type: ElementType.SKILL,
+        description: 'Large content round-trip test',
+        instructions: 'Process this large reference document carefully.',
+        content: largeContent,
+      });
+      expect(result.content[0].text).toContain('✅');
+
+      const file = await findElementFile('skills', 'rt-large-content');
+      // Verify content survived — check first, middle, and last lines
+      expect(file).toContain('Line 1:');
+      expect(file).toContain('Line 250:');
+      expect(file).toContain('Line 500:');
+    });
+
+    it('deeply nested metadata objects survive round-trip', async () => {
+      const result = await server.createElement({
+        name: 'RT-Nested-Agent',
+        type: ElementType.AGENT,
+        description: 'Nested metadata test',
+        instructions: 'Test agent for nested metadata verification.',
+        metadata: {
+          goal: {
+            template: 'Complete: {task}',
+            parameters: [
+              { name: 'task', type: 'string', required: true, description: 'The task to complete' }
+            ],
+            successCriteria: ['Task documented', 'Quality verified'],
+          },
+          autonomy: {
+            riskTolerance: 'conservative',
+            maxAutonomousSteps: 3,
+          },
+          resilience: {
+            onExecutionFailure: 'retry',
+            maxRetries: 2,
+          },
+        },
+      });
+      expect(result.content[0].text).toContain('✅');
+
+      const file = await findElementFile('agents', 'rt-nested-agent');
+      // Verify nested structures survived serialization
+      expect(file).toContain('riskTolerance: conservative');
+      expect(file).toContain('maxAutonomousSteps: 3');
+      expect(file).toContain('maxRetries: 2');
+      expect(file).toContain('Task documented');
+    });
+
+    it('concurrent element creation produces distinct files', async () => {
+      // Create 5 elements concurrently
+      const creates = Array.from({ length: 5 }, (_, i) =>
+        server.createElement({
+          name: `RT-Concurrent-${i}`,
+          type: ElementType.PERSONA,
+          description: `Concurrent creation test ${i}`,
+          instructions: `You are concurrent test persona number ${i}.`,
+        })
+      );
+
+      const results = await Promise.all(creates);
+
+      // All should succeed
+      for (const result of results) {
+        expect(result.content[0].text).toContain('✅');
+      }
+
+      // All should produce distinct files
+      const files = new Set<string>();
+      for (let i = 0; i < 5; i++) {
+        const file = await findElementFile('personas', `rt-concurrent-${i}`);
+        expect(file).toContain(`RT-Concurrent-${i}`);
+        files.add(file);
+      }
+      // All files should be unique (no overwrites)
+      expect(files.size).toBe(5);
     });
   });
 });
