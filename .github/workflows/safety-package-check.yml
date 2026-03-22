@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check if safety package needs publishing
+        shell: bash
         run: |
           LOCAL_VERSION=$(node -e "console.log(require('./packages/safety/package.json').version)")
           echo "Local safety version: $LOCAL_VERSION"
