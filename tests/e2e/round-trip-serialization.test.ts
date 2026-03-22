@@ -71,10 +71,10 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
     if (tempPortfolioDir) {
       await fs.rm(tempPortfolioDir, { recursive: true, force: true });
     }
-    if (originalPortfolioDir !== undefined) {
-      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
-    } else {
+    if (originalPortfolioDir === undefined) {
       delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+    } else {
+      process.env.DOLLHOUSE_PORTFOLIO_DIR = originalPortfolioDir;
     }
   });
 
