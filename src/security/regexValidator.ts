@@ -42,8 +42,8 @@ export class RegexValidator {
   //
   // Low and medium share the same limit (matching MAX_CONTENT_LENGTH) because the
   // complexity classification is retained for monitoring and logging — slow pattern
-  // warnings at line 99 use it to diagnose performance issues without restricting
-  // legitimate content sizes.
+  // warnings (see elapsed > 50ms check) use it to diagnose performance issues
+  // without restricting legitimate content sizes.
   private static readonly COMPLEXITY_LIMITS = {
     low: 500000,    // 500KB — no quantifiers, O(n)
     medium: 500000, // 500KB — simple quantifiers, O(n)

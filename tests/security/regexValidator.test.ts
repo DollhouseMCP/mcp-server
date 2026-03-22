@@ -288,11 +288,26 @@ describe('RegexValidator', () => {
       const usernamePattern = /^[a-zA-Z0-9_]{3,20}$/;
       const analysis = RegexValidator.analyzePattern(usernamePattern);
       expect(analysis.maxSafeLength).toBeGreaterThanOrEqual(20);
-      
+
       // Complex validation pattern
       const complexPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[!@#$%]).{8,}$/;
       const complexAnalysis = RegexValidator.analyzePattern(complexPattern);
       expect(complexAnalysis.maxSafeLength).toBeLessThan(10000);
+    });
+
+    test('accepts large skill content with medium complexity security patterns', () => {
+      // Real-world scenario: a detailed QA review skill (~13KB) with structured
+      // checklists, scoring rubrics, and multi-section instructions was rejected
+      // by the previous 10KB medium complexity limit. Security scan patterns like
+      // /curl\s+[^\s]+\.(com|net|org|io|dev)/gi have simple quantifiers (medium
+      // complexity) but are linear time — no reason to reject legitimate content.
+      const largeSkillContent = '# QA Review Skill\n\n'.repeat(500) +
+        'Detailed checklist item with instructions.\n'.repeat(200);
+      expect(largeSkillContent.length).toBeGreaterThan(13000);
+
+      // Medium complexity pattern (has quantifiers but no nesting)
+      const securityPattern = /curl\s+[^\s]+\.(com|net|org|io|dev)/gi;
+      expect(() => RegexValidator.validate(largeSkillContent, securityPattern)).not.toThrow();
     });
   });
 });
