@@ -1,0 +1,41 @@
+---
+name: Safety Package Version Check
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'packages/safety/src/**'
+      - 'packages/safety/package.json'
+
+permissions:
+  contents: read
+
+jobs:
+  check-safety-version:
+    name: Safety Package Version Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if safety package needs publishing
+        run: |
+          LOCAL_VERSION=$(node -e "console.log(require('./packages/safety/package.json').version)")
+          echo "Local safety version: $LOCAL_VERSION"
+
+          NPM_VERSION=$(npm view @dollhousemcp/safety version 2>/dev/null || echo "not-published")
+          echo "Published safety version: $NPM_VERSION"
+
+          if [ "$LOCAL_VERSION" = "$NPM_VERSION" ]; then
+            echo ""
+            echo "::error::Safety package source changed but version ($LOCAL_VERSION) matches what's on npm."
+            echo "::error::Bump the version in packages/safety/package.json and publish before merging:"
+            echo "::error::  cd packages/safety"
+            echo "::error::  npm version patch"
+            echo "::error::  npm publish --access public"
+            exit 1
+          else
+            echo "✅ Safety package version ($LOCAL_VERSION) differs from npm ($NPM_VERSION) — ready to publish or already published."
+          fi
