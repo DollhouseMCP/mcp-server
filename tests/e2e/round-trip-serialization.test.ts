@@ -15,14 +15,14 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
-import * as path from 'path';
-import * as fs from 'fs/promises';
-import * as os from 'os';
+import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import { ElementType } from '../../src/portfolio/types.js';
 
 // Skip in CI unless explicitly enabled
-const shouldRun = process.env.DOLLHOUSE_RUN_FULL_E2E === 'true' || !process.env.CI;
-const describeOrSkip = shouldRun ? describe : describe.skip;
+const shouldSkip = process.env.CI && process.env.DOLLHOUSE_RUN_FULL_E2E !== 'true';
+const describeOrSkip = shouldSkip ? describe.skip : describe;
 
 describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
   let server: any;
@@ -60,41 +60,53 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
   // ========================================================================
   // Helper: read raw file from portfolio
   // ========================================================================
+  /** Normalize a string to alphanumeric lowercase for flexible slug matching */
+  function toSlug(name: string): string {
+    return name.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
+  }
+
+  /** Check if a filename matches a slug (alphanumeric comparison) */
+  function matchesSlug(filename: string, slug: string): boolean {
+    return toSlug(filename).includes(slug);
+  }
+
+  /** Search a flat directory for a file matching the slug */
+  async function findInDir(dir: string, slug: string): Promise<string | null> {
+    const files = await fs.readdir(dir);
+    const match = files.find(f => matchesSlug(f, slug));
+    return match ? path.join(dir, match) : null;
+  }
+
   /**
    * Find and read an element file by searching the type directory for a file
-   * whose name contains the element name slug. Handles different filename
-   * normalization strategies across managers.
+   * whose name contains the element name slug.
    */
   async function findElementFile(type: string, nameSlug: string): Promise<string> {
     const pluralType = type.endsWith('s') ? type : `${type}s`;
     const typeDir = path.join(tempPortfolioDir, pluralType);
-    // Normalize slug: lowercase, collapse to alphanumeric for flexible matching
-    const slugChars = nameSlug.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const slug = toSlug(nameSlug);
 
-    // For memories, check date subdirectories
+    // For memories, also check date subdirectories
     if (pluralType === 'memories') {
       const entries = await fs.readdir(typeDir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.isDirectory()) {
-          const subFiles = await fs.readdir(path.join(typeDir, entry.name));
-          const match = subFiles.find(f => f.replace(/[^a-z0-9]/g, '').includes(slugChars));
-          if (match) {
-            return fs.readFile(path.join(typeDir, entry.name, match), 'utf-8');
-          }
-        }
-        if (entry.isFile() && entry.name.replace(/[^a-z0-9]/g, '').includes(slugChars)) {
-          return fs.readFile(path.join(typeDir, entry.name), 'utf-8');
+          const found = await findInDir(path.join(typeDir, entry.name), slug);
+          if (found) return fs.readFile(found, 'utf-8');
         }
       }
+      // Also check root-level memory files
+      const rootMatch = await findInDir(typeDir, slug);
+      if (rootMatch) return fs.readFile(rootMatch, 'utf-8');
       throw new Error(`No memory file found matching '${nameSlug}' in ${typeDir}`);
     }
 
-    const files = await fs.readdir(typeDir);
-    const match = files.find(f => f.replace(/[^a-z0-9]/g, '').includes(slugChars));
-    if (!match) {
+    const found = await findInDir(typeDir, slug);
+    if (!found) {
+      const files = await fs.readdir(typeDir);
       throw new Error(`No file found matching '${nameSlug}' in ${typeDir}. Available: ${files.join(', ')}`);
     }
-    return fs.readFile(path.join(typeDir, match), 'utf-8');
+    return fs.readFile(found, 'utf-8');
   }
 
   // ========================================================================
@@ -417,7 +429,7 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
 
       // Extract field names from frontmatter (between --- delimiters)
       const extractFieldOrder = (content: string) => {
-        const match = content.match(/^---\n([\s\S]*?)\n---/);
+        const match = /^---\n([\s\S]*?)\n---/.exec(content);
         if (!match) return [];
         return match[1].split('\n')
           .filter(l => /^\w/.test(l))
@@ -489,9 +501,9 @@ describeOrSkip('Round-Trip Serialization Regression (#920)', () => {
       // Strip fields that change between saves (timestamps, auto-incremented version)
       const stripVolatile = (content: string) =>
         content
-          .replace(/^description:.*$/gm, '')
-          .replace(/^modified:.*$/gm, '')
-          .replace(/^version:.*$/gm, '');
+          .replaceAll(/^description:.*$/gm, '')
+          .replaceAll(/^modified:.*$/gm, '')
+          .replaceAll(/^version:.*$/gm, '');
 
       expect(stripVolatile(fileAfterEdit)).toBe(stripVolatile(fileAfterCreate));
     });
