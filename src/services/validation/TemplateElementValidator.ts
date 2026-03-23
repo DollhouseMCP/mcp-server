@@ -13,6 +13,7 @@ import { ValidationResult, ValidatorHelpers } from './ElementValidator.js';
 import { ValidationService } from './ValidationService.js';
 import { TriggerValidationService } from './TriggerValidationService.js';
 import { MetadataService } from '../MetadataService.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 const VALID_OUTPUT_FORMATS = ['text', 'markdown', 'json', 'yaml', 'html', 'xml'];
 const VARIABLE_PLACEHOLDER_REGEX = /\{\{[^}]+\}\}/g;
@@ -97,7 +98,7 @@ export class TemplateElementValidator extends GenericElementValidator {
     }
 
     const sanitized = this.validationService.validateAndSanitizeInput(format, {
-      maxLength: 20,
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       allowSpaces: false
     });
 

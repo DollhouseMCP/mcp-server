@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
+import { SECURITY_LIMITS } from './constants.js';
 
 export class PathValidator {
   private static ALLOWED_DIRECTORIES: string[] = [];
@@ -145,7 +146,7 @@ export class PathValidator {
     }
 
     // Validate filename format (alphanumeric, dash, underscore, dot)
-    if (!RegexValidator.validate(filename, /^[a-zA-Z0-9\-_.]+$/i, { maxLength: 255 })) {
+    if (!RegexValidator.validate(filename, /^[a-zA-Z0-9\-_.]+$/i, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
       throw new Error(`Invalid filename format: ${filename}`);
     }
   }

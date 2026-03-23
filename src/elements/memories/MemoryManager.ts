@@ -1898,7 +1898,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // SECURITY FIX: Validate BEFORE sanitization to prevent bypass attacks
     const nameInput = metadataSource.name || 'Unnamed Memory';
     const nameResult = this.validationService.validateAndSanitizeInput(nameInput, {
-      maxLength: 100,
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
     if (!nameResult.isValid) {
@@ -1909,7 +1909,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     let sanitizedDescription = '';
     if (metadataSource.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadataSource.description, {
-        maxLength: 500,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });

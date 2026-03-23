@@ -23,6 +23,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 export class TemplateManager extends BaseElementManager<Template> {
   private triggerValidationService: TriggerValidationService;
@@ -115,7 +116,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     // Get sanitized name for file operations (validator already validated)
     const nameInput = data.name || 'new-template';
     const nameResult = this.validationService.validateAndSanitizeInput(nameInput, {
-      maxLength: 100,
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
     const sanitizedName = nameResult.sanitizedValue!;
