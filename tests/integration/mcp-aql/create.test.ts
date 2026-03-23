@@ -732,4 +732,29 @@ metadata:
       }
     });
   });
+
+  describe('large content creation', () => {
+    it('should accept skill with 13KB+ content through full pipeline', async () => {
+      // Regression test: 13KB+ skills were rejected by the regex validator's
+      // 10KB medium complexity limit before it was raised to 500KB.
+      // This tests the full create path, not just RegexValidator in isolation.
+      const largeContent = '# QA Review Skill\n\n' +
+        '## Checklist\n\n' +
+        Array.from({ length: 200 }, (_, i) =>
+          `### Item ${i + 1}\n\n- Verify correctness\n- Check formatting\n- Review structure\n`
+        ).join('\n');
+      expect(largeContent.length).toBeGreaterThan(13000);
+
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'large-content-skill',
+          element_type: 'skills',
+          description: 'A skill with 13KB+ content for regression testing',
+          content: largeContent,
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+  });
 });
