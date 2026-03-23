@@ -42,7 +42,7 @@ for (const enumValue of Object.values(ElementType)) {
   }
 }
 
-function normalizeMCPAQLElementType(value: string): ElementType | undefined {
+export function normalizeMCPAQLElementType(value: string): ElementType | undefined {
   return MCPAQL_TYPE_MAP[value.trim().toLowerCase()];
 }
 

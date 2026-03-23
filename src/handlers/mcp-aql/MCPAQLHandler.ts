@@ -43,6 +43,7 @@ import {
   BatchResult,
   BatchOperationResult,
   isBatchRequest,
+  normalizeMCPAQLElementType,
 } from './types.js';
 import { logger } from '../../utils/logger.js';
 import { isSearchMatch } from '../../utils/searchUtils.js';
@@ -2245,7 +2246,13 @@ export class MCPAQLHandler {
           'operation',
           'the operation name to confirm (e.g. "create_element")'
         );
-        const elementType = params.element_type as string | undefined;
+        // Issue #1636: Normalize element_type to match the MCP-AQL singular form
+        // used by the enforce path. Without this, scoped confirmations stored as
+        // "create_element:skills" never match enforce lookups for "create_element:skill".
+        const rawElementType = params.element_type as string | undefined;
+        const elementType = rawElementType
+          ? normalizeMCPAQLElementType(rawElementType) ?? rawElementType
+          : undefined;
 
         // Issue #748: Build human-readable summary of what's being confirmed
         const summary = this.buildOperationSummary(operation, elementType, params);
