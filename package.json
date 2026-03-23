@@ -172,7 +172,7 @@
   "devDependencies": {
     "@eslint/js": "^9.38.0",
     "@jest/globals": "^30.2.0",
-    "@modelcontextprotocol/inspector": "^0.20.0",
+    "@modelcontextprotocol/inspector": "^0.21.1",
     "@types/archiver": "^7.0.0",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
