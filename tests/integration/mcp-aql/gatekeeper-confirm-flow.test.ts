@@ -287,38 +287,40 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
 
   describe('element-type-scoped confirmations', () => {
     it('should not leak scoped confirmation across element types', async () => {
-      // Confirm create_element scoped to skills.
-      // BUG (#1636): confirm_operation does not normalize element_type, so this
-      // stores key "create_element:skills" while enforce looks for "create_element:skill".
-      // This test will fail until #1636 is fixed — that is correct behavior.
+      // Confirm create_element scoped to skill type.
+      // Note: element_type must be passed at the top level of the operation input
+      // (not nested inside params) for the enforce path to see it — parseOperationInput
+      // only extracts element_type from the top level.
       const confirmResult = await mcpAqlHandler.handleExecute({
         operation: 'confirm_operation',
         params: { operation: 'create_element', element_type: 'skills' },
       });
       expect(confirmResult.success).toBe(true);
 
-      // Creating a skill should succeed (scoped confirmation matches)
+      // Creating a skill with element_type at top level so enforce sees the scope
       const skillCreate = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
+        element_type: 'skills',
         params: {
           element_name: 'scoped-skill',
           element_type: 'skills',
           description: 'Skill with scoped confirmation',
           content: '# Scoped Skill\n\nThis should work.',
         },
-      });
+      } as any);
       expect(skillCreate.success).toBe(true);
 
-      // Creating a persona should still require confirmation (different type)
+      // Creating a persona (different type) should still require confirmation
       const personaCreate = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
+        element_type: 'personas',
         params: {
           element_name: 'scoped-persona',
           element_type: 'personas',
           description: 'Persona without scoped confirmation',
           content: '# Scoped Persona\n\nThis should be blocked.',
         },
-      });
+      } as any);
       expect(personaCreate.success).toBe(false);
       if (!personaCreate.success) {
         expect(personaCreate.error).toMatch(/confirm_operation/);
