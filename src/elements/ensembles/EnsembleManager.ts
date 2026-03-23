@@ -44,7 +44,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
-import { VALIDATION_PATTERNS } from '../../security/constants.js';
+import { VALIDATION_PATTERNS, SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
 // Issue #83: Centralized active element limits (configurable via env vars)
@@ -108,7 +108,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // REFACTORED: Use validateMetadataField for field-aware error messages (#365)
     const nameResult = this.validationService.validateMetadataField('name', data.name, {
       required: true,
-      maxLength: 100
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH
     });
     if (!nameResult.isValid) {
       throw new Error(`Validation failed: ${nameResult.errors?.join(', ')}`);
@@ -124,7 +124,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (data.description) {
       const descResult = this.validationService.validateMetadataField('description', data.description, {
         required: false,
-        maxLength: 500,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         pattern: VALIDATION_PATTERNS.SAFE_DESCRIPTION
       });
       if (!descResult.isValid) {
@@ -136,7 +136,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // REFACTORED: Use ValidationService for activation strategy (support both snake_case and camelCase)
     const activationStrategyRaw = data.activation_strategy || data.activationStrategy || ENSEMBLE_DEFAULTS.ACTIVATION_STRATEGY;
     const activationStrategyResult = this.validationService.validateAndSanitizeInput(String(activationStrategyRaw), {
-      maxLength: 20,
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       allowSpaces: false
     });
     if (!activationStrategyResult.isValid) {
@@ -152,7 +152,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // REFACTORED: Use ValidationService for conflict resolution strategy
     const conflictResolutionRaw = data.conflict_resolution || data.conflictResolution || ENSEMBLE_DEFAULTS.CONFLICT_RESOLUTION;
     const conflictResolutionResult = this.validationService.validateAndSanitizeInput(String(conflictResolutionRaw), {
-      maxLength: 20,
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       allowSpaces: false
     });
     if (!conflictResolutionResult.isValid) {
@@ -177,7 +177,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     const contextSharingResult = this.validationService.validateAndSanitizeInput(contextSharingValue, {
-      maxLength: 20,
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       allowSpaces: false
     });
     if (!contextSharingResult.isValid) {
@@ -221,7 +221,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       const elementNameResult = this.validationService.validateAndSanitizeInput(
         String(rawElementName),
-        { maxLength: 100, allowSpaces: true }
+        { maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH, allowSpaces: true }
       );
       if (!elementNameResult.isValid) {
         throw new Error(`Invalid element name at index ${index}: ${elementNameResult.errors?.join(', ')}`);
@@ -237,7 +237,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       const elementTypeResult = this.validationService.validateAndSanitizeInput(
         String(rawElementType),
-        { maxLength: 50, allowSpaces: false }
+        { maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH, allowSpaces: false }
       );
       if (!elementTypeResult.isValid) {
         throw new Error(`Invalid element type at index ${index}: ${elementTypeResult.errors?.join(', ')}`);
@@ -247,7 +247,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       // REFACTORED: Use ValidationService for element role
       const elementRoleResult = this.validationService.validateAndSanitizeInput(
         String(elem.role || ENSEMBLE_DEFAULTS.ELEMENT_ROLE),
-        { maxLength: 20, allowSpaces: false }
+        { maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH, allowSpaces: false }
       );
       if (!elementRoleResult.isValid) {
         throw new Error(`Invalid element role at index ${index}: ${elementRoleResult.errors?.join(', ')}`);
@@ -262,7 +262,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       // REFACTORED: Use ValidationService for element activation
       const elementActivationResult = this.validationService.validateAndSanitizeInput(
         String(elem.activation || 'always'),
-        { maxLength: 20, allowSpaces: false }
+        { maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH, allowSpaces: false }
       );
       if (!elementActivationResult.isValid) {
         throw new Error(`Invalid element activation at index ${index}: ${elementActivationResult.errors?.join(', ')}`);
@@ -306,7 +306,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         const validatedDependencies: string[] = [];
         for (const dep of elem.dependencies.slice(0, ENSEMBLE_LIMITS.MAX_DEPENDENCIES)) {
           const depResult = this.validationService.validateAndSanitizeInput(String(dep), {
-            maxLength: 100,
+            maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
             allowSpaces: true
           });
           if (!depResult.isValid) {
@@ -321,7 +321,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       let purpose: string | undefined;
       if (elem.purpose) {
         const purposeResult = this.validationService.validateAndSanitizeInput(String(elem.purpose), {
-          maxLength: 500,
+          maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
           allowSpaces: true,
           fieldType: 'description'  // Allow full description punctuation (commas, em-dashes, etc.)
         });
@@ -360,7 +360,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (Array.isArray(data.tags)) {
       for (const tag of data.tags) {
         const tagResult = this.validationService.validateAndSanitizeInput(String(tag), {
-          maxLength: 50,
+          maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
           allowSpaces: true
         });
         if (!tagResult.isValid) {
