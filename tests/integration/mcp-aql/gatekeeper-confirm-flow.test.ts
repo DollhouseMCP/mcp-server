@@ -10,6 +10,8 @@
  * 5. Single-use confirmations are consumed after one use
  * 6. Deny policies block even after confirmation
  * 7. revokeAllConfirmations resets state
+ * 8. Element-type-scoped confirmations don't leak across types
+ * 9. Confirming an already-approved operation returns informative response
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
@@ -53,9 +55,10 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
         },
       });
 
-      // Should fail with confirmation guidance
+      // Should fail with structured confirmation guidance
       expect(result.success).toBe(false);
       if (!result.success) {
+        expect(result.error).toMatch(/Approval needed/);
         expect(result.error).toMatch(/confirm_operation/);
         expect(result.error).toMatch(/create_element/);
       }
@@ -282,12 +285,69 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
     });
   });
 
+  describe('element-type-scoped confirmations', () => {
+    it('should not leak scoped confirmation across element types', async () => {
+      // Confirm create_element scoped to skills.
+      // BUG (#1636): confirm_operation does not normalize element_type, so this
+      // stores key "create_element:skills" while enforce looks for "create_element:skill".
+      // This test will fail until #1636 is fixed — that is correct behavior.
+      const confirmResult = await mcpAqlHandler.handleExecute({
+        operation: 'confirm_operation',
+        params: { operation: 'create_element', element_type: 'skills' },
+      });
+      expect(confirmResult.success).toBe(true);
+
+      // Creating a skill should succeed (scoped confirmation matches)
+      const skillCreate = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'scoped-skill',
+          element_type: 'skills',
+          description: 'Skill with scoped confirmation',
+          content: '# Scoped Skill\n\nThis should work.',
+        },
+      });
+      expect(skillCreate.success).toBe(true);
+
+      // Creating a persona should still require confirmation (different type)
+      const personaCreate = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'scoped-persona',
+          element_type: 'personas',
+          description: 'Persona without scoped confirmation',
+          content: '# Scoped Persona\n\nThis should be blocked.',
+        },
+      });
+      expect(personaCreate.success).toBe(false);
+      if (!personaCreate.success) {
+        expect(personaCreate.error).toMatch(/confirm_operation/);
+      }
+    });
+  });
+
+  describe('confirming already-approved operations', () => {
+    it('should return informative response for auto-approved operation', async () => {
+      // list_elements is AUTO_APPROVE — confirming it should say no confirmation needed
+      const confirmResult = await mcpAqlHandler.handleExecute({
+        operation: 'confirm_operation',
+        params: { operation: 'list_elements' },
+      });
+      expect(confirmResult.success).toBe(true);
+      if (confirmResult.success) {
+        const data = confirmResult.data as any;
+        expect(data.confirmed).toBe(true);
+        expect(data.message).toMatch(/already approved/i);
+      }
+    });
+  });
+
   describe('auto-approved operations need no confirmation', () => {
     it('should allow list_elements without any confirmation', async () => {
       // list_elements is AUTO_APPROVE — should succeed with no confirmations
       const result = await mcpAqlHandler.handleRead({
         operation: 'list_elements',
-        element_type: 'persona',
+        element_type: 'personas',
         params: {},
       });
       expect(result.success).toBe(true);
