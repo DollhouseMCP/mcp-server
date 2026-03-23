@@ -1,5 +1,6 @@
 import * as child_process from 'child_process';
 import { RegexValidator } from './regexValidator.js';
+import { SECURITY_LIMITS } from './constants.js';
 
 const ALLOWED_COMMANDS: Record<string, string[]> = {
   // SECURITY FIX: Added 'clone' command to git allowlist
@@ -28,7 +29,7 @@ export class CommandValidator {
 
   private static isSafeArgument(arg: string): boolean {
     // Allow alphanumeric, dash, underscore, dot, and forward slash
-    return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_.\/]+$/, { maxLength: 1000 });
+    return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_./]+$/, { maxLength: SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH });
   }
 
   static async secureExec(command: string, args: string[], options?: child_process.SpawnOptions): Promise<string> {

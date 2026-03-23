@@ -213,9 +213,9 @@ function validateFieldValue(
   }
 
   // Determine max length based on field type, using system constants
-  const maxLength = fieldType === 'name' ? 100 :
-                    fieldType === 'description' ? 500 :
-                    fieldType === 'content' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH : 1000;
+  const maxLength = fieldType === 'name' ? SECURITY_LIMITS.MAX_NAME_LENGTH :
+                    fieldType === 'description' ? SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH :
+                    fieldType === 'content' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH : SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
 
   const result = validationService.validateAndSanitizeInput(value, {
     maxLength,

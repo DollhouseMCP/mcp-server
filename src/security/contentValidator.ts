@@ -613,8 +613,8 @@ export class ContentValidator {
 
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
       // These are trusted internal patterns, so we disable ReDoS rejection
-      if (RegexValidator.validate(normalizedYaml, pattern, { 
-        maxLength: 10000,
+      if (RegexValidator.validate(normalizedYaml, pattern, {
+        maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         rejectDangerousPatterns: false,
         logEvents: false  // Don't log our own security patterns as dangerous
       })) {

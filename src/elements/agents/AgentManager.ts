@@ -65,6 +65,7 @@ import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -234,7 +235,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const sanitizedDescription = sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, 500);
       // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
       // while still detecting prompt injection attacks
-      const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: 50_000, contentContext: 'agent' });
+      const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' });
       const sanitizedInstructions = contentValidation.sanitizedContent || '';
 
       if (!this.validateElementName(sanitizedName)) {
@@ -269,7 +270,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       if (referenceContent) {
         const contentValidationResult = ContentValidator.validateAndSanitize(
           String(referenceContent),
-          { maxLength: 50_000, contentContext: 'agent' }
+          { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
         );
         agent.content = contentValidationResult.sanitizedContent || '';
       }
@@ -514,7 +515,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (content !== undefined) {
       // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
       // while still detecting prompt injection attacks
-      const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: 50_000, contentContext: 'agent' });
+      const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' });
       agent.extensions = {
         ...agent.extensions,
         instructions: contentValidation.sanitizedContent || ''
@@ -1790,7 +1791,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // REFACTORED: Use ValidationService for name validation
     if (metadata.name) {
       const nameResult = this.validationService.validateAndSanitizeInput(metadata.name, {
-        maxLength: 100,
+        maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
         allowSpaces: true
       });
       if (!nameResult.isValid) {
@@ -1803,7 +1804,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: 500,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
@@ -1818,7 +1819,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const validatedSpecializations: string[] = [];
       for (const value of metadata.specializations) {
         const result = this.validationService.validateAndSanitizeInput(String(value), {
-          maxLength: 50,
+          maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
           allowSpaces: true
         });
         if (!result.isValid) {

@@ -15,6 +15,7 @@ import { ValidationService } from './ValidationService.js';
 import { TriggerValidationService } from './TriggerValidationService.js';
 import { MetadataService } from '../MetadataService.js';
 import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 const VALID_STORAGE_BACKENDS = ['file', 'memory', 'sqlite', 'hybrid'];
 const VALID_RETENTION_PATTERNS = /^(\d+)([dDwWmMyY])$/; // e.g., "30d", "1y", "6m"
@@ -122,7 +123,7 @@ export class MemoryElementValidator extends GenericElementValidator {
     }
 
     const sanitized = this.validationService.validateAndSanitizeInput(backend, {
-      maxLength: 20,
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
       allowSpaces: false
     });
 

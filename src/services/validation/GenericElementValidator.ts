@@ -392,7 +392,7 @@ export class GenericElementValidator implements ElementValidator {
     }
 
     const result = this.validationService.validateAndSanitizeInput(name, {
-      maxLength: 100,
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true,
       fieldType: 'name'
     });
@@ -428,7 +428,7 @@ export class GenericElementValidator implements ElementValidator {
     }
 
     const result = this.validationService.validateAndSanitizeInput(description, {
-      maxLength: 500,
+      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
       allowSpaces: true,
       fieldType: 'description'
     });

@@ -137,6 +137,40 @@ name: !!python/object/apply:subprocess.call
       });
     });
 
+    describe('large content validation (hardcoded 10KB limit fix)', () => {
+      it('should accept safe YAML content over 10KB', () => {
+        // Regression test: a hardcoded maxLength: 10000 in validateYamlContent
+        // was overriding the complexity-based limits, blocking any element whose
+        // YAML frontmatter exceeded 10KB. Real skills (e.g. QA review checklists)
+        // can easily exceed this. The limit should be SECURITY_LIMITS.MAX_CONTENT_LENGTH
+        // (500KB), which processes in ~1-5ms for the low/medium complexity patterns
+        // used in MALICIOUS_YAML_PATTERNS.
+        const largeYaml = [
+          'name: "Large QA Skill"',
+          'description: "A detailed QA review checklist"',
+          'tags: [qa, review, checklist]',
+          ...Array.from({ length: 300 }, (_, i) =>
+            `item_${i}: "Checklist item ${i} with detailed verification instructions"`
+          ),
+        ].join('\n');
+        expect(largeYaml.length).toBeGreaterThan(13000);
+        expect(ContentValidator.validateYamlContent(largeYaml)).toBe(true);
+      });
+
+      it('should still block malicious patterns in large YAML', () => {
+        // Ensure raising the limit doesn't weaken security scanning
+        const largeMaliciousYaml = [
+          'name: "Innocent Skill"',
+          ...Array.from({ length: 300 }, (_, i) =>
+            `field_${i}: "padding content to push YAML well past the old 10KB limit"`
+          ),
+          'payload: !!python/object/apply:subprocess.call',
+        ].join('\n');
+        expect(largeMaliciousYaml.length).toBeGreaterThan(10000);
+        expect(ContentValidator.validateYamlContent(largeMaliciousYaml)).toBe(false);
+      });
+    });
+
     // SECURITY FIX #1298: Tests for YAML bomb amplification detection
     // Tightened threshold from 10:1 to 5:1 for better protection
     describe('YAML bomb amplification detection', () => {

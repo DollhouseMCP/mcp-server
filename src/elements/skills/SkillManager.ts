@@ -22,6 +22,7 @@ import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 // Validation constants for skill triggers
 const MAX_TRIGGER_LENGTH = 50;
@@ -79,7 +80,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Get sanitized values for file operations (validator already validated, we just need sanitized values)
     const nameInput = data.name || 'new-skill';
     const nameResult = this.validationService.validateAndSanitizeInput(nameInput, {
-      maxLength: 100,
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
     const sanitizedName = nameResult.sanitizedValue!;

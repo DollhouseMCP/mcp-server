@@ -8,10 +8,11 @@
  * regex operations in the codebase to prevent catastrophic backtracking.
  */
 
+import { SECURITY_LIMITS } from './constants.js';
+
 // Constants for timeouts and limits (Reviewer recommendation: Extract constants)
 const REGEX_TIMEOUT_MS = 100;          // Default timeout for user input regex
-// FIX: Removed SYSTEM_TIMEOUT_MS - unused variable (reserved for future use)
-const MAX_INPUT_LENGTH = 10000;        // Maximum input length to process
+const MAX_INPUT_LENGTH = SECURITY_LIMITS.MAX_REGEX_INPUT_LENGTH;
 const MAX_PATTERN_CACHE_SIZE = 1000;   // Maximum patterns to cache
 const RATE_LIMIT_RESET_MS = 60000;     // Reset rate limits every minute
 

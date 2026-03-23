@@ -473,7 +473,7 @@ export function validateCategory(category: string): string {
     throw ErrorHandler.createError('Category must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
-  if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, { maxLength: 50 })) {
+  if (!RegexValidator.validate(category, VALIDATION_PATTERNS.SAFE_CATEGORY, { maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH })) {
     throw ErrorHandler.createError('Invalid category format. Must start with a letter, followed by letters, digits, hyphens, or underscores (max 21 chars). Example: "code-analysis".', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_CATEGORY);
   }
   
