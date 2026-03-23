@@ -29,7 +29,7 @@ export class CommandValidator {
 
   private static isSafeArgument(arg: string): boolean {
     // Allow alphanumeric, dash, underscore, dot, and forward slash
-    return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_.\/]+$/, { maxLength: SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH });
+    return RegexValidator.validate(arg, /^[a-zA-Z0-9\-_./]+$/, { maxLength: SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH });
   }
 
   static async secureExec(command: string, args: string[], options?: child_process.SpawnOptions): Promise<string> {

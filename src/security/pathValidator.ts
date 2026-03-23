@@ -146,7 +146,7 @@ export class PathValidator {
     }
 
     // Validate filename format (alphanumeric, dash, underscore, dot)
-    if (!RegexValidator.validate(filename, /^[a-zA-Z0-9\-_.]+$/i, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
+    if (!RegexValidator.validate(filename, /^[a-zA-Z0-9_.-]+$/i, { maxLength: SECURITY_LIMITS.MAX_FILENAME_LENGTH })) {
       throw new Error(`Invalid filename format: ${filename}`);
     }
   }
