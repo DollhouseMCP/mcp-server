@@ -17,6 +17,7 @@ import {
   convertLegacyToMCPAQL,
   parseOperationInput,
   InputFormatMetrics,
+  normalizeMCPAQLElementType,
 } from '../../../../src/handlers/mcp-aql/types.js';
 
 describe('Silent JSON Fallback (Issue #205)', () => {
@@ -350,5 +351,41 @@ describe('Silent JSON Fallback (Issue #205)', () => {
       // Second snapshot should reflect new count
       expect(metrics2.proper).toBe(2);
     });
+  });
+});
+
+describe('normalizeMCPAQLElementType (Issue #1636)', () => {
+  it('should normalize plural forms to MCP-AQL singular', () => {
+    expect(normalizeMCPAQLElementType('personas')).toBe('persona');
+    expect(normalizeMCPAQLElementType('skills')).toBe('skill');
+    expect(normalizeMCPAQLElementType('templates')).toBe('template');
+    expect(normalizeMCPAQLElementType('agents')).toBe('agent');
+    expect(normalizeMCPAQLElementType('memories')).toBe('memory');
+    expect(normalizeMCPAQLElementType('ensembles')).toBe('ensemble');
+  });
+
+  it('should accept singular forms unchanged', () => {
+    expect(normalizeMCPAQLElementType('persona')).toBe('persona');
+    expect(normalizeMCPAQLElementType('skill')).toBe('skill');
+    expect(normalizeMCPAQLElementType('template')).toBe('template');
+    expect(normalizeMCPAQLElementType('agent')).toBe('agent');
+    expect(normalizeMCPAQLElementType('memory')).toBe('memory');
+    expect(normalizeMCPAQLElementType('ensemble')).toBe('ensemble');
+  });
+
+  it('should be case-insensitive', () => {
+    expect(normalizeMCPAQLElementType('SKILLS')).toBe('skill');
+    expect(normalizeMCPAQLElementType('Persona')).toBe('persona');
+    expect(normalizeMCPAQLElementType('MEMORIES')).toBe('memory');
+  });
+
+  it('should trim whitespace', () => {
+    expect(normalizeMCPAQLElementType('  skills  ')).toBe('skill');
+  });
+
+  it('should return undefined for invalid types', () => {
+    expect(normalizeMCPAQLElementType('invalid')).toBeUndefined();
+    expect(normalizeMCPAQLElementType('')).toBeUndefined();
+    expect(normalizeMCPAQLElementType('foo')).toBeUndefined();
   });
 });
