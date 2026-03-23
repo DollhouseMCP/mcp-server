@@ -302,13 +302,19 @@ The `SecureYamlParser` class provides safe YAML deserialization for markdown fil
 
 ### 4.6 DoS Protection
 
-**Source file:** `src/security/dosProtection.ts`
+**Source files:** `src/security/dosProtection.ts`, `src/security/regexValidator.ts`
 
 The `SafeRegex` class provides ReDoS protection:
 - Configurable execution timeouts (default 100ms for user input)
-- Maximum input length enforcement (default 10,000 characters)
 - Pattern caching with size limits (max 1,000 cached patterns)
 - Rate limiting with automatic reset
+
+The `RegexValidator` class adds complexity-aware content length limits:
+- **Low complexity** (no quantifiers, O(n)): 500KB — matches MAX_CONTENT_LENGTH
+- **Medium complexity** (1-3 simple quantifiers, O(n)): 500KB — linear time, safe at any content size
+- **High complexity** (nested quantifiers, O(2^n) ReDoS risk): 1KB hard cap
+- Patterns exceeding 50ms execution are logged as slow for monitoring
+- Complexity classification is retained for diagnostics even when low/medium share the same limit
 
 ### 4.7 Field Validator
 

@@ -732,4 +732,33 @@ metadata:
       }
     });
   });
+
+  describe('large content creation', () => {
+    it('should accept skill with 13KB+ content through full pipeline', async () => {
+      // Regression test: A production QA review skill (~13KB) with structured
+      // checklists and scoring rubrics was silently rejected when the regex
+      // validator's medium complexity limit was 10KB. The limit was raised to
+      // 500KB (matching MAX_CONTENT_LENGTH) since medium complexity patterns
+      // use simple quantifiers with O(n) linear time — no ReDoS risk.
+      // This tests the full create path through MCPAQLHandler, not just
+      // RegexValidator in isolation, to catch pipeline-level regressions.
+      const largeContent = '# QA Review Skill\n\n' +
+        '## Checklist\n\n' +
+        Array.from({ length: 200 }, (_, i) =>
+          `### Item ${i + 1}\n\n- Verify correctness\n- Check formatting\n- Review structure\n`
+        ).join('\n');
+      expect(largeContent.length).toBeGreaterThan(13000);
+
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'large-content-skill',
+          element_type: 'skills',
+          description: 'A skill with 13KB+ content for regression testing',
+          content: largeContent,
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+  });
 });
