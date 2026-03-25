@@ -29,7 +29,7 @@ export interface PolicyEvaluationContext {
   evaluatedElements: Array<{
     type: string;
     name: string;
-    matched?: 'allowPatterns' | 'denyPatterns';
+    matched?: 'allowPatterns' | 'confirmPatterns' | 'denyPatterns';
     matchedPattern?: string;
     matchedTarget?: string;
   }>;
@@ -37,8 +37,9 @@ export interface PolicyEvaluationContext {
 }
 
 export interface CliToolPolicyResult {
-  behavior: 'allow' | 'deny' | 'evaluate';
+  behavior: 'allow' | 'deny' | 'evaluate' | 'confirm';
   message?: string;
+  confirmSource?: string;
   policyContext?: PolicyEvaluationContext;
 }
 
@@ -519,8 +520,9 @@ export function getStaticPolicyData() {
 /**
  * Evaluate a CLI tool call against active element gatekeeper policies.
  *
- * Three-step evaluation per element (Issue #625 Phase 2):
+ * Four-step evaluation per element (Issue #625 Phase 2, Issue #1660):
  * 1. denyPatterns (highest priority) — first match = immediate deny
+ * 1.5. confirmPatterns — first match = immediate confirm (requires approval)
  * 2. allowPatterns — if element defines them, record whether tool matched
  * 3. After all elements: if any had allowPatterns but tool wasn't allowed by any = deny
  *
@@ -561,9 +563,11 @@ export function evaluateCliToolPolicy(
   for (const element of activeElements) {
     const restrictions = element.metadata?.gatekeeper?.externalRestrictions;
     const denyPatterns = restrictions?.denyPatterns;
+    const confirmPatterns = restrictions?.confirmPatterns;
     const allowPatterns = restrictions?.allowPatterns;
 
     const hasRestrictions = (Array.isArray(denyPatterns) && denyPatterns.length > 0)
+      || (Array.isArray(confirmPatterns) && confirmPatterns.length > 0)
       || (Array.isArray(allowPatterns) && allowPatterns.length > 0);
 
     if (!hasRestrictions) {
@@ -589,6 +593,31 @@ export function evaluateCliToolPolicy(
             return {
               behavior: 'deny',
               message: `Denied by ${element.type} '${element.name}' policy: pattern '${pattern}' matches '${target}'`,
+              policyContext: { evaluatedElements, decisionChain },
+            };
+          }
+        }
+      }
+    }
+
+    // Step 1.5: Check confirmPatterns (requires approval — Issue #1660)
+    if (Array.isArray(confirmPatterns) && confirmPatterns.length > 0) {
+      for (const pattern of confirmPatterns) {
+        if (typeof pattern !== 'string') continue;
+        for (const target of matchTargets) {
+          if (matchesPattern(target, pattern)) {
+            evaluatedElements.push({
+              type: element.type,
+              name: element.name,
+              matched: 'confirmPatterns',
+              matchedPattern: pattern,
+              matchedTarget: target,
+            });
+            decisionChain.push(`CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matches '${target}'`);
+            return {
+              behavior: 'confirm' as const,
+              message: `Requires approval: ${element.type} '${element.name}' policy requires confirmation for pattern '${pattern}'`,
+              confirmSource: `${element.type}:${element.name}`,
               policyContext: { evaluatedElements, decisionChain },
             };
           }

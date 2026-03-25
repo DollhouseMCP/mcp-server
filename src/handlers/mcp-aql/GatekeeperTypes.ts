@@ -130,6 +130,10 @@ export interface ElementGatekeeperPolicy {
     description: string;
     /** Patterns to deny for external tool operations */
     denyPatterns?: string[];
+    /** Patterns requiring human approval before execution (Issue #1660).
+     *  Evaluated after denyPatterns, before allowPatterns.
+     *  Deny always takes precedence over confirm. */
+    confirmPatterns?: string[];
     /** When defined, only tools matching at least one pattern are permitted (allowlist mode).
      *  Deny always takes precedence over allow. Across elements, allows are unioned. */
     allowPatterns?: string[];
