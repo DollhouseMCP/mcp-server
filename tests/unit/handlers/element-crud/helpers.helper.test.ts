@@ -506,5 +506,62 @@ describe('element-crud helpers', () => {
       expect(warnings[0].property).toBe('gatekeeper');
       expect(warnings[0].message).toContain('must be an object');
     });
+
+    it('should return warnings for confirm/deny pattern overlap (Issue #1660)', () => {
+      const warnings = validateGatekeeperPolicy({
+        gatekeeper: {
+          externalRestrictions: {
+            description: 'Test',
+            denyPatterns: ['Bash:git push*'],
+            confirmPatterns: ['Bash:git push*'],
+          },
+        },
+      });
+      expect(warnings.some(w => w.message.includes('deny takes precedence over confirm'))).toBe(true);
+    });
+
+    it('should return pattern syntax warnings for missing prefix (Issue #1664)', () => {
+      const warnings = validateGatekeeperPolicy({
+        gatekeeper: {
+          externalRestrictions: {
+            description: 'Test',
+            denyPatterns: ['rm -rf /'],
+          },
+        },
+      });
+      expect(warnings.some(w => w.message.includes('no tool prefix'))).toBe(true);
+    });
+
+    it('should return pattern syntax warnings for regex syntax (Issue #1664)', () => {
+      const warnings = validateGatekeeperPolicy({
+        gatekeeper: {
+          externalRestrictions: {
+            description: 'Test',
+            allowPatterns: ['Bash:git (push|pull)'],
+          },
+        },
+      });
+      expect(warnings.some(w => w.message.includes('regex syntax'))).toBe(true);
+    });
+
+    it('should not return syntax warnings for well-formed patterns', () => {
+      const warnings = validateGatekeeperPolicy({
+        gatekeeper: {
+          externalRestrictions: {
+            description: 'Test',
+            denyPatterns: ['Bash:rm -rf*'],
+            confirmPatterns: ['Bash:git push*'],
+            allowPatterns: ['Bash:git *', 'Bash:npm *', 'Edit:src/*'],
+          },
+        },
+      });
+      // May have allow/deny conflicts, but no syntax warnings
+      const syntaxWarnings = warnings.filter(w =>
+        w.message.includes('no tool prefix') ||
+        w.message.includes('regex syntax') ||
+        w.message.includes('matches everything')
+      );
+      expect(syntaxWarnings).toHaveLength(0);
+    });
   });
 });

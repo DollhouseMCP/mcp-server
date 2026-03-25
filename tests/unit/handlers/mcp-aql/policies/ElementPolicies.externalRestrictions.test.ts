@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from '@jest/globals';
-import { parseElementPolicy } from '../../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
+import { parseElementPolicy, analyzePatternSyntax } from '../../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
 import { MAX_GLOB_PATTERN_LENGTH } from '../../../../../src/utils/patternMatcher.js';
 
 describe('parseElementPolicy — externalRestrictions (Phase 2)', () => {
@@ -324,6 +324,99 @@ describe('parseElementPolicy — externalRestrictions (Phase 2)', () => {
       };
       const policy = parseElementPolicy(metadata);
       expect(policy!.externalRestrictions!.approvalPolicy).toBeUndefined();
+    });
+  });
+
+  describe('analyzePatternSyntax (Issue #1664)', () => {
+    it('should return no warnings for well-formed patterns', () => {
+      const warnings = analyzePatternSyntax(
+        ['Bash:git *', 'Bash:npm test', 'Edit:src/*'],
+        'allowPatterns'
+      );
+      expect(warnings).toEqual([]);
+    });
+
+    it('should warn about bare wildcard', () => {
+      const warnings = analyzePatternSyntax(['*'], 'allowPatterns');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('matches everything');
+    });
+
+    it('should warn about missing tool prefix', () => {
+      const warnings = analyzePatternSyntax(['rm -rf *'], 'denyPatterns');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('no tool prefix');
+    });
+
+    it('should warn about unknown tool prefix', () => {
+      const warnings = analyzePatternSyntax(['FooBar:something'], 'allowPatterns');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('unknown tool prefix');
+      expect(warnings[0]).toContain('FooBar');
+    });
+
+    it('should not warn about mcp_ prefixed patterns', () => {
+      const warnings = analyzePatternSyntax(['mcp_dollhouse:*'], 'allowPatterns');
+      // Should still warn about overly broad but NOT about unknown prefix
+      const prefixWarnings = warnings.filter(w => w.includes('unknown tool prefix'));
+      expect(prefixWarnings).toHaveLength(0);
+    });
+
+    it('should warn about overly broad ToolName:* patterns', () => {
+      const warnings = analyzePatternSyntax(['Bash:*'], 'allowPatterns');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('matches ALL Bash operations');
+    });
+
+    it('should warn about regex syntax in patterns', () => {
+      const warnings = analyzePatternSyntax(['Bash:git (push|pull)'], 'denyPatterns');
+      expect(warnings.some(w => w.includes('regex syntax'))).toBe(true);
+    });
+
+    it('should warn about leading/trailing whitespace', () => {
+      const warnings = analyzePatternSyntax([' Bash:git push '], 'confirmPatterns');
+      expect(warnings.some(w => w.includes('whitespace'))).toBe(true);
+    });
+
+    it('should detect multiple issues in a single pattern', () => {
+      // Pattern with both whitespace and regex syntax
+      const warnings = analyzePatternSyntax([' Bash:git (push) '], 'denyPatterns');
+      expect(warnings.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should check all patterns in the array', () => {
+      const warnings = analyzePatternSyntax(
+        ['rm -rf *', 'FooBar:test', 'Bash:good*'],
+        'denyPatterns'
+      );
+      // rm -rf * has no prefix, FooBar has unknown prefix, Bash:good* is fine
+      expect(warnings.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should accept all known tool prefixes without warning', () => {
+      const patterns = [
+        'Bash:test', 'Edit:file.ts', 'Write:file.ts', 'Read:file.ts',
+        'Glob:*.ts', 'Grep:pattern', 'WebFetch:url', 'WebSearch:query',
+        'NotebookEdit:cell',
+      ];
+      const warnings = analyzePatternSyntax(patterns, 'allowPatterns');
+      const prefixWarnings = warnings.filter(w => w.includes('unknown tool prefix'));
+      expect(prefixWarnings).toHaveLength(0);
+    });
+
+    it('should not warn about wildcards in the command portion', () => {
+      const warnings = analyzePatternSyntax(['Bash:git push*'], 'confirmPatterns');
+      expect(warnings).toEqual([]);
+    });
+
+    it('should warn about square brackets as regex syntax', () => {
+      const warnings = analyzePatternSyntax(['Bash:git [status|log]'], 'allowPatterns');
+      expect(warnings.some(w => w.includes('regex syntax'))).toBe(true);
+    });
+
+    it('should warn about backslash as regex syntax', () => {
+      const warnings = analyzePatternSyntax(['Bash:git push\\.force'], 'denyPatterns');
+      expect(warnings.some(w => w.includes('regex syntax'))).toBe(true);
     });
   });
 });
