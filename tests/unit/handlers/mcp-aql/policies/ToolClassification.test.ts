@@ -1015,4 +1015,182 @@ describe('ToolClassification', () => {
       expect(result.behavior).toBe('deny');
     });
   });
+
+  describe('evaluateCliToolPolicy — debug logging (Issue #1662)', () => {
+    let logSpy: ReturnType<typeof jest.spyOn>;
+
+    beforeEach(async () => {
+      const loggerModule = await import('../../../../../src/utils/logger.js');
+      logSpy = jest.spyOn(loggerModule.logger, 'debug').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+    });
+
+    it('should log when no active elements are present', () => {
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, []);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no active elements')
+      );
+    });
+
+    it('should log match targets and element count at evaluation start', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'test-ensemble',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/Evaluating Bash against 1 elements.*matchTargets/)
+      );
+    });
+
+    it('should log when an element has no externalRestrictions', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'bare-persona',
+        metadata: {},
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'ls' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("persona 'bare-persona': no externalRestrictions")
+      );
+    });
+
+    it('should log pattern counts per element', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'policy-ensemble',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm *'],
+              confirmPatterns: ['Bash:git push*'],
+              allowPatterns: ['Bash:git *', 'Bash:npm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/deny: 1, confirm: 1, allow: 2 patterns/)
+      );
+    });
+
+    it('should log on denyPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'safety',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:git push --force*'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git push --force origin main' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*skill 'safety'.*denyPattern/)
+      );
+    });
+
+    it('should log on confirmPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'auto-dollhouse',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+              allowPatterns: ['Bash:gh *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'gh pr merge 42 --admin --merge' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/CONFIRM:.*ensemble 'auto-dollhouse'.*confirmPattern/)
+      );
+    });
+
+    it('should log on allowPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'dev',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:npm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'npm test' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/ALLOW:.*persona 'dev'.*allowPattern/)
+      );
+    });
+
+    it('should log when tool is denied by allowlist miss', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'restrictive',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'curl http://example.com' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*not in any allowlist/)
+      );
+    });
+
+    it('should log fall-through with allowlist match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'standard',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git log' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('matched allowlist, fall through to default')
+      );
+    });
+
+    it('should log fall-through when no allowPatterns defined', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'open',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm -rf *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no allowPatterns defined, fall through to default')
+      );
+    });
+  });
 });

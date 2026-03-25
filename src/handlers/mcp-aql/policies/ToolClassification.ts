@@ -11,6 +11,7 @@
  */
 
 import { matchesPattern } from '../../../utils/patternMatcher.js';
+import { logger } from '../../../utils/logger.js';
 import type { ActiveElement } from './ElementPolicies.js';
 import type { RiskAssessment } from '../GatekeeperTypes.js';
 
@@ -547,6 +548,7 @@ export function evaluateCliToolPolicy(
 
   if (!activeElements.length) {
     decisionChain.push('No active elements — fall through to default');
+    logger.debug(`[CliPolicy] ${toolName}: no active elements, fall through to default`);
     return {
       behavior: 'evaluate',
       policyContext: { evaluatedElements, decisionChain },
@@ -555,6 +557,7 @@ export function evaluateCliToolPolicy(
 
   // Build the strings to match against patterns
   const matchTargets = buildMatchTargets(toolName, toolInput);
+  logger.debug(`[CliPolicy] Evaluating ${toolName} against ${activeElements.length} elements, matchTargets: [${matchTargets.join(', ')}]`);
 
   let anyElementHasAllowPatterns = false;
   let toolAllowedByAnyElement = false;
@@ -573,8 +576,11 @@ export function evaluateCliToolPolicy(
     if (!hasRestrictions) {
       evaluatedElements.push({ type: element.type, name: element.name });
       decisionChain.push(`${element.type} '${element.name}': no externalRestrictions`);
+      logger.debug(`[CliPolicy] ${element.type} '${element.name}': no externalRestrictions, skipping`);
       continue;
     }
+
+    logger.debug(`[CliPolicy] ${element.type} '${element.name}': evaluating (deny: ${Array.isArray(denyPatterns) ? denyPatterns.length : 0}, confirm: ${Array.isArray(confirmPatterns) ? confirmPatterns.length : 0}, allow: ${Array.isArray(allowPatterns) ? allowPatterns.length : 0} patterns)`);
 
     // Step 1: Check denyPatterns (highest priority)
     if (Array.isArray(denyPatterns)) {
@@ -590,6 +596,7 @@ export function evaluateCliToolPolicy(
               matchedTarget: target,
             });
             decisionChain.push(`DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matches '${target}'`);
+            logger.debug(`[CliPolicy] DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matched '${target}'`);
             return {
               behavior: 'deny',
               message: `Denied by ${element.type} '${element.name}' policy: pattern '${pattern}' matches '${target}'`,
@@ -614,6 +621,7 @@ export function evaluateCliToolPolicy(
               matchedTarget: target,
             });
             decisionChain.push(`CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matches '${target}'`);
+            logger.debug(`[CliPolicy] CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matched '${target}'`);
             return {
               behavior: 'confirm' as const,
               message: `Requires approval: ${element.type} '${element.name}' policy requires confirmation for pattern '${pattern}'`,
@@ -643,6 +651,7 @@ export function evaluateCliToolPolicy(
               matchedTarget: target,
             });
             decisionChain.push(`${element.type} '${element.name}': allowPattern '${pattern}' matches '${target}'`);
+            logger.debug(`[CliPolicy] ALLOW: ${element.type} '${element.name}' allowPattern '${pattern}' matched '${target}'`);
             toolAllowedByAnyElement = true;
             matchedAllow = true;
             break;
@@ -665,6 +674,7 @@ export function evaluateCliToolPolicy(
   if (anyElementHasAllowPatterns && !toolAllowedByAnyElement) {
     const restrictors = elementsWithAllowPatterns.join(', ');
     decisionChain.push(`DENY: tool not in any element allowlist (restricted by: ${restrictors})`);
+    logger.debug(`[CliPolicy] DENY: ${toolName} not in any allowlist (restricted by: ${restrictors})`);
     return {
       behavior: 'deny',
       message: `Tool '${toolName}' not permitted by allowlists defined in: ${restrictors}. Either deactivate these elements or add allowPatterns to match this tool.`,
@@ -674,8 +684,10 @@ export function evaluateCliToolPolicy(
 
   if (anyElementHasAllowPatterns) {
     decisionChain.push('Tool matched allowlist — fall through to default');
+    logger.debug(`[CliPolicy] ${toolName}: matched allowlist, fall through to default`);
   } else {
     decisionChain.push('No allowPatterns defined — fall through to default (Phase 1 behavior)');
+    logger.debug(`[CliPolicy] ${toolName}: no allowPatterns defined, fall through to default`);
   }
 
   return {
