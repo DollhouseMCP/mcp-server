@@ -988,6 +988,7 @@ export class MCPAQLHandler {
       }
       const durationMs = performance.now() - startTime;
       this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
+      logger.debug(`[MCP-AQL] ${endpoint} ${operation}${elementType ? `:${elementType}` : ''} (${durationMs.toFixed(1)}ms)`);
       return this.success(data, startTime);
     } catch (error) {
       // Catch all errors and return as OperationFailure
