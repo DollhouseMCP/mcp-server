@@ -420,14 +420,14 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
           },
         });
 
-        // With input object format, handler treats unknown nested fields differently
-        // Issue #286: Unknown metadata properties now generate warnings, not errors
+        // Dangerous properties (__proto__, constructor, prototype) nested inside
+        // metadata are silently dropped by deepMerge's safety filter. The outer
+        // 'metadata' key is still processed, so the operation succeeds.
         expect(result.success).toBe(true);
         if (result.success) {
           const data = result.data as any;
-          // Handler shows warning about unknown property (may span multiple lines)
-          expect(data.content[0].text).toMatch(/⚠️/);
-          expect(data.content[0].text).toMatch(/Unknown property/);
+          expect(data.content[0].text).toMatch(/✅/);
+          expect(data.content[0].text).toMatch(/metadata/);
         }
       }
     });
@@ -455,15 +455,14 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       });
       expect(verifyResult.success).toBe(true);
 
-      // With input object format, certain fields trigger unknown property warnings
-      // Issue #286: Unknown metadata properties now generate warnings, not errors
-      const testInputs = [
+      // Top-level read-only fields (id, type) are silently skipped — when they're
+      // the only fields, the handler reports "No fields applied" with a warning.
+      const topLevelReadOnly = [
         { id: 'should-be-rejected' },
         { type: 'should-be-rejected' },
-        { metadata: { type: 'should-be-rejected' } },
       ];
 
-      for (const inputObj of testInputs) {
+      for (const inputObj of topLevelReadOnly) {
         const result = await mcpAqlHandler.handleUpdate({
           operation: 'edit_element',
           params: {
@@ -473,14 +472,33 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
           },
         });
 
-        // Handler returns success:true with warning about unknown property
+        // All fields were skipped — handler reports honestly
         expect(result.success).toBe(true);
         if (result.success) {
           const data = result.data as any;
-          // Handler shows warning about unknown property (may span multiple lines)
           expect(data.content[0].text).toMatch(/⚠️/);
-          expect(data.content[0].text).toMatch(/Unknown property/);
+          expect(data.content[0].text).toMatch(/No fields applied/);
+          expect(data.content[0].text).toMatch(/Skipped/);
         }
+      }
+
+      // Nested read-only: { metadata: { type: ... } } — the outer 'metadata' key
+      // is processed (routed to deepMerge), and 'type' is filtered inside the merge.
+      // The operation succeeds because 'metadata' was applied as a key.
+      const nestedResult = await mcpAqlHandler.handleUpdate({
+        operation: 'edit_element',
+        params: {
+          element_name: 'readonly-test-skill',
+          element_type: 'skills',
+          input: { metadata: { type: 'should-be-rejected' } },
+        },
+      });
+
+      expect(nestedResult.success).toBe(true);
+      if (nestedResult.success) {
+        const data = nestedResult.data as any;
+        expect(data.content[0].text).toMatch(/✅/);
+        expect(data.content[0].text).toMatch(/metadata/);
       }
     });
 

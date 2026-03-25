@@ -620,6 +620,8 @@ export async function editElement(
   const updateObj: Record<string, unknown> = {};
   const unrecognizedFieldWarnings: string[] = [];
   const collectionWarnings: string[] = [];
+  const appliedFields: string[] = [];
+  const skippedFields: string[] = [];
 
   // Fields handled by dedicated branches (not metadata routing)
   const specialRouteFields = new Set(['instructions', 'content', 'elements', 'metadata', 'entries', 'version']);
@@ -627,12 +629,14 @@ export async function editElement(
   for (const [key, value] of Object.entries(input)) {
     // Skip dangerous properties
     if (DANGEROUS_PROPERTIES.includes(key)) {
+      skippedFields.push(key);
       continue;
     }
 
     // Skip read-only fields
     if (READ_ONLY_FIELDS.has(key)) {
       logger.warn(`[editElement] Skipping read-only field: ${key}`);
+      skippedFields.push(key);
       continue;
     }
 
@@ -642,10 +646,12 @@ export async function editElement(
         updateObj.metadata = {};
       }
       (updateObj.metadata as Record<string, unknown>)[key] = value;
+      appliedFields.push(key);
     } else if (key === 'elements' && normalizedType === ElementType.ENSEMBLE) {
       // Issue #658: Validate and normalize elements input (array or dict format)
       const elemError = applyEnsembleElementsUpdate(value, element, updateObj, collectionWarnings);
       if (elemError) return error(elemError);
+      appliedFields.push(key);
     } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
       const metaValue = value as Record<string, unknown>;
 
@@ -672,6 +678,7 @@ export async function editElement(
           MERGE_OPTIONS
         );
       }
+      appliedFields.push(key);
     } else if (key === 'instructions' && typeof value === 'string') {
       // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
       const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
@@ -695,6 +702,7 @@ export async function editElement(
         }
         (element as any).extensions.instructions = sanitizedInstructions;
       }
+      appliedFields.push(key);
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
       const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
@@ -711,6 +719,7 @@ export async function editElement(
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
       (element as any).content = sanitizedContent;
+      appliedFields.push(key);
     } else if (!specialRouteFields.has(key)) {
       // Issue #565: Field not in type-specific metadata set and not a special route —
       // still route to updateObj for backward compat, but warn that it may not persist
@@ -723,6 +732,7 @@ export async function editElement(
         elementName: name,
         field: key,
       });
+      appliedFields.push(key);
     }
   }
 
@@ -797,7 +807,18 @@ export async function editElement(
 
   const label = getElementTypeLabel(normalizedType);
   const displayName = element.metadata?.name || name;
-  const updatedFields = Object.keys(input).join(', ');
+  const updatedFields = appliedFields.join(', ');
+
+  // Issue #1656: If all fields were silently skipped, report honestly
+  if (appliedFields.length === 0 && skippedFields.length > 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: `⚠️ No fields applied to ${label} '${displayName}'. ` +
+          `Skipped: ${skippedFields.join(', ')} (dangerous or read-only fields are not editable).`
+      }]
+    };
+  }
 
   // Issue #565: Include warnings for unrecognized fields in response
   let unrecognizedWarningText = '';
@@ -821,10 +842,15 @@ export async function editElement(
     collectionWarningText = lines.join('\n');
   }
 
+  // Issue #1656: Report skipped fields so LLMs don't assume they were applied
+  const skippedText = skippedFields.length > 0
+    ? `\n⚠️ Skipped: ${skippedFields.join(', ')} (dangerous or read-only)`
+    : '';
+
   return {
     content: [{
       type: 'text',
-      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${updatedFields}`
+      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${updatedFields}${skippedText}`
     }]
   };
 }
