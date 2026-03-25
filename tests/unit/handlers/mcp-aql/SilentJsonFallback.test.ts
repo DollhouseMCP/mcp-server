@@ -16,6 +16,7 @@ import {
   isLegacyToolFormat,
   convertLegacyToMCPAQL,
   parseOperationInput,
+  describeInvalidInput,
   InputFormatMetrics,
   normalizeMCPAQLElementType,
 } from '../../../../src/handlers/mcp-aql/types.js';
@@ -387,5 +388,51 @@ describe('normalizeMCPAQLElementType (Issue #1636)', () => {
     expect(normalizeMCPAQLElementType('invalid')).toBeUndefined();
     expect(normalizeMCPAQLElementType('')).toBeUndefined();
     expect(normalizeMCPAQLElementType('foo')).toBeUndefined();
+  });
+});
+
+describe('describeInvalidInput (Issue #1656)', () => {
+  it('should describe null input', () => {
+    expect(describeInvalidInput(null)).toBe('Received: null');
+  });
+
+  it('should describe undefined input', () => {
+    expect(describeInvalidInput(undefined)).toBe('Received: undefined');
+  });
+
+  it('should describe array input with batch hint', () => {
+    const result = describeInvalidInput([{ operation: 'addEntry' }, { operation: 'addEntry' }]);
+    expect(result).toContain('array with 2 items');
+    expect(result).toContain('operations');
+  });
+
+  it('should describe non-object input', () => {
+    expect(describeInvalidInput('some string')).toBe('Received: string');
+    expect(describeInvalidInput(42)).toBe('Received: number');
+    expect(describeInvalidInput(true)).toBe('Received: boolean');
+  });
+
+  it('should describe object missing operation field', () => {
+    const result = describeInvalidInput({ params: { element_name: 'test' } });
+    expect(result).toContain('params');
+    expect(result).toContain('missing "operation" field');
+  });
+
+  it('should describe object with non-string operation', () => {
+    const result = describeInvalidInput({ operation: 123, params: {} });
+    expect(result).toContain('operation');
+    expect(result).toContain('number, expected string');
+  });
+
+  it('should describe empty object', () => {
+    const result = describeInvalidInput({});
+    expect(result).toContain('missing "operation" field');
+  });
+
+  it('should truncate keys for large objects', () => {
+    const largeObj: Record<string, unknown> = {};
+    for (let i = 0; i < 15; i++) largeObj[`key${i}`] = i;
+    const result = describeInvalidInput(largeObj);
+    expect(result).toContain('15 keys total');
   });
 });

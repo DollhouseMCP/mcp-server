@@ -620,21 +620,37 @@ export async function editElement(
   const updateObj: Record<string, unknown> = {};
   const unrecognizedFieldWarnings: string[] = [];
   const collectionWarnings: string[] = [];
+  const appliedFields: string[] = [];
+  const skippedFields: string[] = [];
 
   // Fields handled by dedicated branches (not metadata routing)
   const specialRouteFields = new Set(['instructions', 'content', 'elements', 'metadata', 'entries', 'version']);
 
+  // Content context map shared by instructions and content validation branches
+  const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
+    [ElementType.AGENT]: 'agent',
+    [ElementType.SKILL]: 'skill',
+    [ElementType.TEMPLATE]: 'template',
+    [ElementType.PERSONA]: 'persona',
+    [ElementType.MEMORY]: 'memory',
+  };
+
   for (const [key, value] of Object.entries(input)) {
     // Skip dangerous properties
     if (DANGEROUS_PROPERTIES.includes(key)) {
+      skippedFields.push(key);
       continue;
     }
 
     // Skip read-only fields
     if (READ_ONLY_FIELDS.has(key)) {
       logger.warn(`[editElement] Skipping read-only field: ${key}`);
+      skippedFields.push(key);
       continue;
     }
+
+    // Every branch below applies the field — track once at the end
+    let fieldApplied = true;
 
     // Map known metadata fields automatically (type-specific)
     if (metadataFields.has(key) && !specialRouteFields.has(key)) {
@@ -674,13 +690,6 @@ export async function editElement(
       }
     } else if (key === 'instructions' && typeof value === 'string') {
       // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
-      const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
-        [ElementType.AGENT]: 'agent',
-        [ElementType.SKILL]: 'skill',
-        [ElementType.TEMPLATE]: 'template',
-        [ElementType.PERSONA]: 'persona',
-        [ElementType.MEMORY]: 'memory',
-      };
       const contentValidation = ContentValidator.validateAndSanitize(value, {
         maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         contentContext: contentContextMap[normalizedType]
@@ -697,13 +706,6 @@ export async function editElement(
       }
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
-      const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
-        [ElementType.AGENT]: 'agent',
-        [ElementType.SKILL]: 'skill',
-        [ElementType.TEMPLATE]: 'template',
-        [ElementType.PERSONA]: 'persona',
-        [ElementType.MEMORY]: 'memory',
-      };
       const contentValidation = ContentValidator.validateAndSanitize(value, {
         maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         contentContext: contentContextMap[normalizedType]
@@ -723,6 +725,12 @@ export async function editElement(
         elementName: name,
         field: key,
       });
+    } else {
+      fieldApplied = false;
+    }
+
+    if (fieldApplied) {
+      appliedFields.push(key);
     }
   }
 
@@ -797,7 +805,18 @@ export async function editElement(
 
   const label = getElementTypeLabel(normalizedType);
   const displayName = element.metadata?.name || name;
-  const updatedFields = Object.keys(input).join(', ');
+  const updatedFields = appliedFields.join(', ');
+
+  // Issue #1656: If all fields were silently skipped, report honestly
+  if (appliedFields.length === 0 && skippedFields.length > 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: `⚠️ No fields applied to ${label} '${displayName}'. ` +
+          `Skipped: ${skippedFields.join(', ')} (dangerous or read-only fields are not editable).`
+      }]
+    };
+  }
 
   // Issue #565: Include warnings for unrecognized fields in response
   let unrecognizedWarningText = '';
@@ -821,10 +840,15 @@ export async function editElement(
     collectionWarningText = lines.join('\n');
   }
 
+  // Issue #1656: Report skipped fields so LLMs don't assume they were applied
+  const skippedText = skippedFields.length > 0
+    ? `\n⚠️ Skipped: ${skippedFields.join(', ')} (dangerous or read-only)`
+    : '';
+
   return {
     content: [{
       type: 'text',
-      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${updatedFields}`
+      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${updatedFields}${skippedText}`
     }]
   };
 }

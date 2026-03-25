@@ -39,6 +39,7 @@ import {
   OperationFailure,
   ResponseMeta,
   parseOperationInput,
+  describeInvalidInput,
   BatchRequest,
   BatchResult,
   BatchOperationResult,
@@ -789,6 +790,7 @@ export class MCPAQLHandler {
       if (!parsedInput) {
         return this.failure(
           'Invalid input: expected OperationInput with "operation" and optional "params". ' +
+          describeInvalidInput(input) + '. ' +
           'Use format: { operation: "list_elements", params: { type: "personas" } }',
           startTime
         );
