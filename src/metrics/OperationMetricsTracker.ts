@@ -26,7 +26,7 @@ export class OperationMetricsTracker {
     this.totalOps++;
     if (!success) this.failedOps++;
 
-    // Ring buffer for durations
+    // Bounded duration history (evicts oldest when full)
     this.durations.push(durationMs);
     if (this.durations.length > DURATION_RING_SIZE) {
       this.durations.shift();
@@ -60,7 +60,7 @@ export class OperationMetricsTracker {
     }
     const sorted = [...durations].sort((a, b) => a - b);
     const sum = sorted.reduce((s, v) => s + v, 0);
-    const pct = (p: number) => sorted[Math.min(Math.floor(sorted.length * p), sorted.length - 1)];
+    const pct = (p: number) => sorted[Math.min(Math.ceil(sorted.length * p) - 1, sorted.length - 1)];
     return {
       count: sorted.length,
       sum,

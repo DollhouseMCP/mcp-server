@@ -1917,7 +1917,7 @@ export class MCPAQLHandler {
    * @returns Search results with matched elements and relevance info
    */
   private async handleSearchElements(input: OperationInput): Promise<unknown> {
-    const searchStart = Date.now();
+    const searchStart = performance.now();
     const memoryBefore = process.memoryUsage().heapUsed;
     const { elementType, params } = input;
     const p = params as Record<string, unknown>;
@@ -2006,7 +2006,7 @@ export class MCPAQLHandler {
     // Record search metrics via PerformanceMonitor
     this.handlers.performanceMonitor?.recordSearch({
       query,
-      duration: Date.now() - searchStart,
+      duration: performance.now() - searchStart,
       resultCount: allResults.length,
       sources: elementTypes,
       cacheHit: false,
@@ -3056,7 +3056,13 @@ export class MCPAQLHandler {
     params: Record<string, unknown>
   ): unknown {
     if (!this.handlers.metricsSink) {
-      throw new Error('MemoryMetricsSink not available — metrics query requires metrics sink');
+      return {
+        _type: 'MetricQueryResult',
+        snapshots: [],
+        total: 0,
+        hasMore: false,
+        message: 'Metrics collection is not enabled. Set DOLLHOUSE_METRICS_ENABLED=true to activate.',
+      };
     }
 
     switch (method) {

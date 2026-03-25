@@ -20,7 +20,7 @@ interface PerformanceStats {
 }
 
 export class DefaultElementProviderCollector implements IMetricCollector {
-  readonly name = 'DefaultElementProviderCollector';
+  readonly name = 'element-provider';
   readonly description = 'Buffer pool metrics from DefaultElementProvider.';
 
   private readonly statsFn: () => PerformanceStats;

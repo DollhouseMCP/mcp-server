@@ -3,7 +3,7 @@
  *
  * Mounts on the existing Express app to provide:
  * - GET /api/logs       — JSON query (delegates to MemoryLogSink)
- * - GET /api/logs/stream — SSE real-time stream with per-client filtering
+ * - GET /api/logs/stream — SSE real-time stream (supports server-side filtering via query params)
  * - GET /api/logs/stats  — Queue sizes and capacities
  */
 
@@ -54,10 +54,12 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
       options['correlationId'] = req.query['correlationId'];
     }
     if (typeof req.query['limit'] === 'string') {
-      options['limit'] = parseInt(req.query['limit'], 10);
+      const parsed = parseInt(req.query['limit'], 10);
+      if (!isNaN(parsed)) options['limit'] = parsed;
     }
     if (typeof req.query['offset'] === 'string') {
-      options['offset'] = parseInt(req.query['offset'], 10);
+      const parsed = parseInt(req.query['offset'], 10);
+      if (!isNaN(parsed)) options['offset'] = parsed;
     }
     if (typeof req.query['since'] === 'string' && req.query['since']) {
       options['since'] = req.query['since'];
@@ -96,8 +98,9 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
     const client: SSEClient = { res, filter };
     clients.add(client);
 
-    // Backfill recent history (oldest-first for chronological order)
-    const history = memorySink.query({ category: 'all', limit: 5000 });
+    // Backfill recent history (oldest-first for chronological order).
+    // Capped at 500 entries to avoid blocking the event loop on connect.
+    const history = memorySink.query({ category: 'all', limit: 500 });
     const entries = history.entries.slice().reverse();
     for (const entry of entries) {
       if (matchesFilter(entry, filter)) {
@@ -105,7 +108,13 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
       }
     }
 
+    // Keep-alive heartbeat — prevents proxies from closing idle connections
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 30_000);
+
     req.on('close', () => {
+      clearInterval(heartbeat);
       clients.delete(client);
     });
   });

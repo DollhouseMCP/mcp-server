@@ -380,7 +380,7 @@
     row.style.height = ROW_HEIGHT + 'px';
     row.dataset.entryId = entry.id;
     row.dataset.visibleIndex = visibleIndex;
-    row.className = 'log-entry level-' + entry.level + (isSelected ? ' selected' : '');
+    row.className = 'log-entry level-' + escapeHtml(entry.level) + (isSelected ? ' selected' : '');
     row.innerHTML = renderCompactEntry(entry, isSelected);
   }
 
@@ -394,8 +394,8 @@
       : '<span class="log-corr-badge empty"></span>';
     return checkbox +
       '<span class="log-time">' + time + '</span>' +
-      '<span class="log-level ' + entry.level + '">' + entry.level + '</span>' +
-      '<span class="log-category">' + entry.category + '</span>' +
+      '<span class="log-level ' + escapeHtml(entry.level) + '">' + escapeHtml(entry.level) + '</span>' +
+      '<span class="log-category">' + escapeHtml(entry.category) + '</span>' +
       corrBadge +
       '<span class="log-source">' + src + '</span>' +
       '<span class="log-message">' + msg + '</span>';
@@ -414,8 +414,8 @@
     let html = '';
     html += detailField('Timestamp', entry.timestamp);
     html += detailField('ID', entry.id);
-    html += detailField('Category', entry.category);
-    html += detailField('Level', '<span class="log-level ' + entry.level + '">' + entry.level + '</span>');
+    html += detailField('Category', escapeHtml(entry.category));
+    html += detailField('Level', '<span class="log-level ' + escapeHtml(entry.level) + '">' + escapeHtml(entry.level) + '</span>');
     html += detailField('Source', escapeHtml(entry.source || ''));
     html += detailField('Message', escapeHtml(entry.message || ''));
 

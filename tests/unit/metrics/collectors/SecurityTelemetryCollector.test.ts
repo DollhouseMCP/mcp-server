@@ -71,23 +71,23 @@ describe('SecurityTelemetryCollector', () => {
   });
 
   // -------------------------------------------------------------------------
-  // blocked_24h gauge
+  // blocked_total gauge
   // -------------------------------------------------------------------------
 
-  describe('blocked_24h gauge', () => {
-    test('emits security.telemetry.blocked_24h as a gauge', () => {
-      const entry = findByName(collector.collect(), 'security.telemetry.blocked_24h');
+  describe('blocked_total gauge', () => {
+    test('emits security.telemetry.blocked_total as a gauge', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.blocked_total');
       expect(entry).toBeDefined();
       expect(entry?.type).toBe('gauge');
     });
 
-    test('blocked_24h value equals totalBlockedAttempts from getMetrics()', () => {
-      const entry = findByName(collector.collect(), 'security.telemetry.blocked_24h');
+    test('blocked_total value equals totalBlockedAttempts from getMetrics()', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.blocked_total');
       expect(entry?.value).toBe(100);
     });
 
-    test('blocked_24h source is SecurityTelemetry', () => {
-      const entry = findByName(collector.collect(), 'security.telemetry.blocked_24h');
+    test('blocked_total source is SecurityTelemetry', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.blocked_total');
       expect(entry?.source).toBe('SecurityTelemetry');
     });
   });
@@ -202,14 +202,30 @@ describe('SecurityTelemetryCollector', () => {
       expect(entry?.type).toBe('gauge');
     });
 
-    test('attacks_per_hour value reflects the current clock hour slot', () => {
-      // The collector reads attacksPerHour[currentHour]. Our mock produces index*2,
-      // so slot N = N*2. We derive the expected value the same way.
-      const currentHour = new Date().getHours();
-      const expectedValue = currentHour * 2;
-
+    test('attacks_per_hour value reads index 0 (current hour) from the array', () => {
+      // The collector reads attacksPerHour[0] — the current hour slot.
+      // Our mock produces [0, 2, 4, ...], so index 0 = 0.
       const entry = findByName(collector.collect(), 'security.telemetry.attacks_per_hour');
-      expect(entry?.value).toBe(expectedValue);
+      expect(entry?.value).toBe(0);
+    });
+
+    test('attacks_per_hour reflects a non-zero current hour value', () => {
+      // Build a mock where index 0 has a meaningful value
+      const customCollector = new SecurityTelemetryCollector({
+        getMetrics: () => ({
+          totalBlockedAttempts: 10,
+          uniqueAttackVectors: 1,
+          criticalAttacksBlocked: 0,
+          highSeverityBlocked: 0,
+          mediumSeverityBlocked: 0,
+          lowSeverityBlocked: 0,
+          attacksPerHour: [42, ...new Array(23).fill(0)],
+          topAttackVectors: [],
+          lastUpdated: new Date().toISOString(),
+        }),
+      } as never);
+      const entry = findByName(customCollector.collect(), 'security.telemetry.attacks_per_hour');
+      expect(entry?.value).toBe(42);
     });
 
     test('attacks_per_hour source is SecurityTelemetry', () => {

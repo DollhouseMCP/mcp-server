@@ -91,8 +91,8 @@ export class LRUCacheCollector implements IMetricCollector {
             value: stats.memoryUsageMB,
           },
         );
-      } catch (err) {
-        console.warn(`[LRUCacheCollector] Failed to collect stats for cache "${name}":`, err);
+      } catch (_err) {
+        // Silently skip this cache — MetricsManager logs collector-level errors
       }
     }
 

@@ -418,8 +418,6 @@ describe('buildLogManagerConfig', () => {
       DOLLHOUSE_LOG_MAX_ENTRY_SIZE: 8192,
       DOLLHOUSE_LOG_IMMEDIATE_FLUSH_RATE: 25,
       DOLLHOUSE_LOG_FILE_MAX_SIZE: 52428800,
-      DOLLHOUSE_LOG_VIEWER: true,
-      DOLLHOUSE_LOG_VIEWER_PORT: 9200,
       LOG_LEVEL: 'warn' as const,
     };
 
@@ -439,8 +437,6 @@ describe('buildLogManagerConfig', () => {
     expect(config.maxEntrySize).toBe(8192);
     expect(config.immediateFlushRate).toBe(25);
     expect(config.fileMaxSize).toBe(52428800);
-    expect(config.viewerEnabled).toBe(true);
-    expect(config.viewerPort).toBe(9200);
     expect(config.logLevel).toBe('warn');
   });
 });

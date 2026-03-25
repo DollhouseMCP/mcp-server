@@ -412,17 +412,7 @@ export class DollhouseContainer {
       });
       manager.registerSink(memorySink);
 
-      // Register as named service for Phase 5's MCP query tool
       this.register('MemoryLogSink', () => memorySink);
-
-      // Standalone SSELogSink removed — replaced by unified web console.
-      // Log deprecation warning if the old env var is set.
-      if (config.viewerEnabled) {
-        logger.info(
-          '[Container] DOLLHOUSE_LOG_VIEWER/DOLLHOUSE_LOG_VIEWER_PORT are deprecated. ' +
-          'Use the management console at port 3939 instead (DOLLHOUSE_WEB_CONSOLE=true).'
-        );
-      }
 
       // Startup marker — first entry in every server session
       manager.log({
@@ -444,15 +434,17 @@ export class DollhouseContainer {
     });
 
     // METRICS COLLECTION
+    // MemoryMetricsSink is registered separately (not as a side effect inside
+    // MetricsManager's factory) so it's available in the container regardless
+    // of MetricsManager resolution order.
     const metricsConfig = buildMetricsManagerConfig(env);
     if (metricsConfig.enabled) {
+      const memoryMetricsSink = new MemoryMetricsSink(metricsConfig.memorySnapshotCapacity);
+      this.register('MemoryMetricsSink', () => memoryMetricsSink);
+
       this.register('MetricsManager', () => {
         const manager = new MetricsManager(metricsConfig, logger);
-
-        const memoryMetricsSink = new MemoryMetricsSink(metricsConfig.memorySnapshotCapacity);
         manager.registerSink(memoryMetricsSink);
-        this.register('MemoryMetricsSink', () => memoryMetricsSink);
-
         return manager;
       });
     }

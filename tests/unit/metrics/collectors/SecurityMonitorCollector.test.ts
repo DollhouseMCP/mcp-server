@@ -89,9 +89,9 @@ describe('SecurityMonitorCollector', () => {
     test('emits one gauge per severity level from eventsBySeverity', () => {
       const collector = new SecurityMonitorCollector(makeMockReportFn());
       const entries = collector.collect();
-      const bySevertiy = findByName(entries, 'security.monitor.events_by_severity');
+      const bySeverity = findByName(entries, 'security.monitor.events_by_severity');
       // CRITICAL, HIGH, MEDIUM, LOW = 4
-      expect(bySevertiy).toHaveLength(4);
+      expect(bySeverity).toHaveLength(4);
     });
 
     test('each events_by_severity entry is a gauge', () => {

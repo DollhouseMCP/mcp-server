@@ -34,6 +34,12 @@ export interface TokenValidationResult {
  */
 export class TokenManager {
   private static tokenLoggedOnce = false;
+
+  /** Reset static flags for test isolation. */
+  static resetStaticState(): void {
+    TokenManager.tokenLoggedOnce = false;
+  }
+
   private static readonly GITHUB_TOKEN_PATTERNS = {
     // More flexible patterns - accept any content after the prefix
     PERSONAL_ACCESS_TOKEN: /^ghp_.+$/,      // Personal access tokens

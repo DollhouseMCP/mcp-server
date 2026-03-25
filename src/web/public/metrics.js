@@ -633,8 +633,8 @@
 
   function statBox(label, value) {
     return '<div class="metrics-stat">' +
-      '<div class="metrics-stat-value">' + value + '</div>' +
-      '<div class="metrics-stat-label">' + label + '</div>' +
+      '<div class="metrics-stat-value">' + escapeHtml(String(value)) + '</div>' +
+      '<div class="metrics-stat-label">' + escapeHtml(String(label)) + '</div>' +
       '</div>';
   }
 

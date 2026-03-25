@@ -8,7 +8,7 @@ import type { IMetricCollector, MetricEntry } from '../types.js';
 import { OperationMetricsTracker } from '../OperationMetricsTracker.js';
 
 export class OperationMetricsCollector implements IMetricCollector {
-  readonly name = 'OperationMetricsCollector';
+  readonly name = 'operation-metrics';
   readonly description = 'MCP-AQL operation counts, durations, and endpoint breakdown.';
 
   constructor(private readonly tracker: OperationMetricsTracker) {}

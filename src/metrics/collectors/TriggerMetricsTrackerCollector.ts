@@ -8,7 +8,7 @@ import type { IMetricCollector, MetricEntry } from '../types.js';
 import type { TriggerMetricsTracker } from '../../portfolio/enhanced-index/TriggerMetricsTracker.js';
 
 export class TriggerMetricsTrackerCollector implements IMetricCollector {
-  readonly name = 'TriggerMetricsTrackerCollector';
+  readonly name = 'trigger-metrics';
   readonly description = 'Pending trigger metric count from TriggerMetricsTracker.';
 
   constructor(private readonly tracker: TriggerMetricsTracker) {}

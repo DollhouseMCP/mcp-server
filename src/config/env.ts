@@ -106,6 +106,8 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_RETENTION_DAYS: z.coerce.number().default(30),
   DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS: z.coerce.number().default(7),
   DOLLHOUSE_LOG_FLUSH_INTERVAL_MS: z.coerce.number().default(5000),
+  // Buffer raised to 2000 to support the web console log viewer — the higher capacity
+  // reduces flush frequency and keeps more entries available for SSE backfill on connect.
   DOLLHOUSE_LOG_BUFFER_SIZE: z.coerce.number().default(2000),
   DOLLHOUSE_LOG_MEMORY_CAPACITY: z.coerce.number().default(5000),
   DOLLHOUSE_LOG_MEMORY_APP_CAPACITY: z.coerce.number().default(10000),
@@ -117,8 +119,6 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_FILE_MAX_SIZE: z.coerce.number().default(104857600),
   DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES: z.coerce.number().default(0),
   DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY: z.coerce.number().default(100),
-  DOLLHOUSE_LOG_VIEWER: z.coerce.boolean().default(false),
-  DOLLHOUSE_LOG_VIEWER_PORT: z.coerce.number().default(9100),
 
   // ============================================================================
   // Web Console Configuration

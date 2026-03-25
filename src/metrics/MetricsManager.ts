@@ -148,9 +148,12 @@ export class MetricsManager {
       );
     }
 
-    // Freeze snapshot deeply
+    // Freeze snapshot deeply (including nested histogram value objects)
     Object.freeze(snapshot.metrics);
     for (const entry of snapshot.metrics) {
+      if (entry.value !== null && typeof entry.value === 'object') {
+        Object.freeze(entry.value);
+      }
       Object.freeze(entry);
     }
     Object.freeze(snapshot.errors);

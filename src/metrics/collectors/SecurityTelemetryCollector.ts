@@ -20,16 +20,16 @@ export class SecurityTelemetryCollector implements IMetricCollector {
     try {
       const m = this.telemetry.getMetrics();
 
-      const currentHour = new Date().getHours();
-      const attacksThisHour = (m.attacksPerHour as number[])[currentHour] ?? 0;
+      // attacksPerHour is a 24-element array indexed by hours-ago (0 = current hour)
+      const attacksThisHour = Array.isArray(m.attacksPerHour) ? (m.attacksPerHour[0] ?? 0) : 0;
 
       const entries: MetricEntry[] = [
         {
           type: 'gauge' as const,
-          name: 'security.telemetry.blocked_24h',
+          name: 'security.telemetry.blocked_total',
           source: SOURCE,
           unit: 'count' as const,
-          description: 'Total blocked attack attempts in the last 24 hours',
+          description: 'Total blocked attack attempts since process start',
           value: m.totalBlockedAttempts,
         },
         {

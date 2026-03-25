@@ -48,18 +48,23 @@ export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRout
       options['latest'] = req.query['latest'] !== 'false';
     }
     if (typeof req.query['limit'] === 'string') {
-      options['limit'] = parseInt(req.query['limit'], 10);
+      const parsed = parseInt(req.query['limit'], 10);
+      if (!isNaN(parsed)) options['limit'] = parsed;
     }
     if (typeof req.query['offset'] === 'string') {
-      options['offset'] = parseInt(req.query['offset'], 10);
+      const parsed = parseInt(req.query['offset'], 10);
+      if (!isNaN(parsed)) options['offset'] = parsed;
     }
 
     const result = metricsSink.query(options);
     res.json(result);
   });
 
-  // GET /api/metrics/stream — SSE endpoint
-  router.get('/metrics/stream', (_req: Request, res: Response) => {
+  // GET /api/metrics/stream — SSE endpoint for real-time metric snapshots.
+  // Currently unused by the built-in web console (which polls /api/metrics).
+  // Retained for third-party consumers (Prometheus, Grafana agent, custom dashboards)
+  // that benefit from push-based metric delivery.
+  router.get('/metrics/stream', (req: Request, res: Response) => {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -70,7 +75,13 @@ export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRout
     const client: SSEClient = { res };
     clients.add(client);
 
-    _req.on('close', () => {
+    // Keep-alive heartbeat — prevents proxies from closing idle connections
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 30_000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
       clients.delete(client);
     });
   });

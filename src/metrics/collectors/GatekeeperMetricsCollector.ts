@@ -8,7 +8,7 @@ import type { IMetricCollector, MetricEntry } from '../types.js';
 import type { GatekeeperMetricsTracker } from '../GatekeeperMetricsTracker.js';
 
 export class GatekeeperMetricsCollector implements IMetricCollector {
-  readonly name = 'GatekeeperMetricsCollector';
+  readonly name = 'gatekeeper-metrics';
   readonly description = 'Gatekeeper policy enforcement: allowed/denied/confirmed, policy sources, permission levels.';
 
   constructor(private readonly tracker: GatekeeperMetricsTracker) {}
@@ -44,10 +44,10 @@ export class GatekeeperMetricsCollector implements IMetricCollector {
         },
         {
           type: 'counter' as const,
-          name: 'gatekeeper.confirmations_pending_total',
+          name: 'gatekeeper.confirmations_requested_total',
           source: 'GatekeeperMetricsTracker',
           unit: 'operations' as const,
-          description: 'Operations requiring user confirmation.',
+          description: 'Total operations that requested user confirmation.',
           value: m.confirmationsPending,
         },
       ];

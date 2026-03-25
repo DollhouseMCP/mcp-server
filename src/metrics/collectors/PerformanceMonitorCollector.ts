@@ -23,7 +23,7 @@ export class PerformanceMonitorCollector implements IMetricCollector {
 
       const searchTimes: number[] = metrics.searchTimes ?? [];
       const histCount = searchTimes.length;
-      const histSum = searchStats.averageTime * histCount;
+      const histSum = searchTimes.reduce((s, v) => s + v, 0);
 
       const entries: MetricEntry[] = [
         {

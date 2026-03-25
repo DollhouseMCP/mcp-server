@@ -8,7 +8,7 @@ import type { IMetricCollector, MetricEntry } from '../types.js';
 import type { FileLockManager } from '../../security/fileLockManager.js';
 
 export class FileLockManagerCollector implements IMetricCollector {
-  readonly name = 'FileLockManagerCollector';
+  readonly name = 'file-lock';
   readonly description = 'Metrics from the FileLockManager: requests, active locks, timeouts, and concurrent waits.';
 
   constructor(private readonly lockManager: FileLockManager) {}

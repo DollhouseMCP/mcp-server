@@ -49,6 +49,11 @@ export class LRUCache<T> {
     return () => { LRUCache.logListener = undefined; };
   }
 
+  /** Reset static flags for test isolation. */
+  static resetStaticState(): void {
+    LRUCache.hasLoggedInit = false;
+  }
+
   private readonly name: string;
   private readonly maxSize: number;
   private readonly maxMemoryBytes: number;
@@ -86,7 +91,7 @@ export class LRUCache<T> {
     this.onSet = options.onSet;
     this.sizeEstimationMode = options.sizeEstimationMode || 'fast';
 
-    // FIX: DMCP-SEC-006 - Audit cache initialization (log once per server lifetime)
+    // FIX: DMCP-SEC-006 - Audit cache initialization (logs only for the first cache constructed)
     if (!LRUCache.hasLoggedInit) {
       SecurityMonitor.logSecurityEvent({
         type: 'PORTFOLIO_INITIALIZATION',

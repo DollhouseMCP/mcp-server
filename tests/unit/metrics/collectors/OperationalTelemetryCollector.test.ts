@@ -58,10 +58,10 @@ describe('OperationalTelemetryCollector', () => {
   });
 
   describe('metric unit', () => {
-    test('unit is count', () => {
+    test('unit is none (boolean flag)', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
       const metrics = collector.collect() as MetricEntry[];
-      expect(metrics[0].unit).toBe('count');
+      expect(metrics[0].unit).toBe('none');
     });
   });
 
