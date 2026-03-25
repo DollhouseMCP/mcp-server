@@ -29,6 +29,7 @@ interface ElementPolicyEntry {
   type: string;
   name: string;
   allow_patterns: string[];
+  confirm_patterns: string[];
   deny_patterns: string[];
 }
 
@@ -100,6 +101,7 @@ export class PolicyExportService {
   private buildElementPolicies(activeElements: Array<{ type: string; name: string; metadata: Record<string, unknown> }>) {
     const elements: ElementPolicyEntry[] = [];
     const combinedAllow: string[] = [];
+    const combinedConfirm: string[] = [];
     const combinedDeny: string[] = [];
     let ensembleName: string | undefined;
 
@@ -114,6 +116,9 @@ export class PolicyExportService {
       const allowPatterns = Array.isArray(external?.allowPatterns)
         ? (external.allowPatterns as unknown[]).filter((p): p is string => typeof p === 'string')
         : [];
+      const confirmPatterns = Array.isArray(external?.confirmPatterns)
+        ? (external.confirmPatterns as unknown[]).filter((p): p is string => typeof p === 'string')
+        : [];
       const denyPatterns = Array.isArray(external?.denyPatterns)
         ? (external.denyPatterns as unknown[]).filter((p): p is string => typeof p === 'string')
         : [];
@@ -122,10 +127,12 @@ export class PolicyExportService {
         type: element.type,
         name: element.name,
         allow_patterns: allowPatterns,
+        confirm_patterns: confirmPatterns,
         deny_patterns: denyPatterns,
       });
 
       combinedAllow.push(...allowPatterns);
+      combinedConfirm.push(...confirmPatterns);
       combinedDeny.push(...denyPatterns);
     }
 
@@ -134,6 +141,7 @@ export class PolicyExportService {
       ...(ensembleName ? { ensemble_name: ensembleName } : {}),
       elements,
       combined_allow_patterns: [...new Set(combinedAllow)],
+      combined_confirm_patterns: [...new Set(combinedConfirm)],
       combined_deny_patterns: [...new Set(combinedDeny)],
     };
   }
