@@ -164,6 +164,7 @@ describe('PolicyExportService', () => {
       expect(policy.element_policies.active_element_count).toBe(0);
       expect(policy.element_policies.elements).toEqual([]);
       expect(policy.element_policies.combined_allow_patterns).toEqual([]);
+      expect(policy.element_policies.combined_confirm_patterns).toEqual([]);
       expect(policy.element_policies.combined_deny_patterns).toEqual([]);
       expect(policy.element_policies.ensemble_name).toBeUndefined();
     });
@@ -192,9 +193,11 @@ describe('PolicyExportService', () => {
         type: 'skill',
         name: 'code-review',
         allow_patterns: ['git *', 'gh *'],
+        confirm_patterns: [],
         deny_patterns: ['rm -rf *'],
       });
       expect(policy.element_policies.combined_allow_patterns).toEqual(['git *', 'gh *']);
+      expect(policy.element_policies.combined_confirm_patterns).toEqual([]);
       expect(policy.element_policies.combined_deny_patterns).toEqual(['rm -rf *']);
     });
 
@@ -229,6 +232,7 @@ describe('PolicyExportService', () => {
 
       const policy = await readPolicyFile();
       expect(policy.element_policies.combined_allow_patterns).toEqual(['git *', 'npm test*']);
+      expect(policy.element_policies.combined_confirm_patterns).toEqual([]);
       expect(policy.element_policies.combined_deny_patterns).toEqual(['rm -rf *']);
     });
 
@@ -243,6 +247,7 @@ describe('PolicyExportService', () => {
       const policy = await readPolicyFile();
       expect(policy.element_policies.active_element_count).toBe(1);
       expect(policy.element_policies.elements[0].allow_patterns).toEqual([]);
+      expect(policy.element_policies.elements[0].confirm_patterns).toEqual([]);
       expect(policy.element_policies.elements[0].deny_patterns).toEqual([]);
     });
 
@@ -265,6 +270,7 @@ describe('PolicyExportService', () => {
 
       const policy = await readPolicyFile();
       expect(policy.element_policies.elements[0].allow_patterns).toEqual(['valid *', 'also valid']);
+      expect(policy.element_policies.elements[0].confirm_patterns).toEqual([]);
       expect(policy.element_policies.elements[0].deny_patterns).toEqual(['rm -rf *']);
     });
   });

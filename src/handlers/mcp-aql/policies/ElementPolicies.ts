@@ -322,8 +322,10 @@ export function parseElementPolicy(
       throw new Error('Invalid gatekeeper policy: externalRestrictions.description is required and must be a non-empty string');
     }
     const denyPatterns = validateStringArray(er.denyPatterns, 'externalRestrictions.denyPatterns');
+    const confirmPatterns = validateStringArray(er.confirmPatterns, 'externalRestrictions.confirmPatterns');
     const allowPatterns = validateStringArray(er.allowPatterns, 'externalRestrictions.allowPatterns');
     if (denyPatterns) validatePatternStrings(denyPatterns, 'externalRestrictions.denyPatterns');
+    if (confirmPatterns) validatePatternStrings(confirmPatterns, 'externalRestrictions.confirmPatterns');
     if (allowPatterns) validatePatternStrings(allowPatterns, 'externalRestrictions.allowPatterns');
     // Validate approvalPolicy (Issue #625 Phase 3)
     let approvalPolicy: CliApprovalPolicy | undefined = undefined;
@@ -375,6 +377,7 @@ export function parseElementPolicy(
     externalRestrictions = {
       description: er.description as string,
       denyPatterns,
+      confirmPatterns,
       allowPatterns,
       approvalPolicy,
     };

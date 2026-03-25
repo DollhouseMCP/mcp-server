@@ -2659,6 +2659,55 @@ export class MCPAQLHandler {
           };
         }
 
+        // Stage 2.1: Pattern-based approval (confirmPatterns — Issue #1660)
+        if (elementDecision.behavior === 'confirm') {
+          const risk = assessRisk(toolName, toolInput, classification);
+          const policySource = elementDecision.confirmSource || 'unknown';
+
+          const approvalRateStatus = this.cliApprovalLimiter.checkLimit();
+          if (!approvalRateStatus.allowed) {
+            return this.buildRateLimitDeny(
+              'cli_approval', toolName, approvalRateStatus,
+              classification.riskLevel, classification.reason,
+            );
+          }
+          this.cliApprovalLimiter.consumeToken();
+
+          const approvalPolicy = resolveCliApprovalPolicy(activeElements);
+          const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
+          const requestId = this.gatekeeper.createCliApprovalRequest(
+            toolName,
+            toolInput,
+            classification.riskLevel,
+            risk.score,
+            risk.irreversible,
+            elementDecision.message || `Confirmation required by element policy`,
+            policySource,
+            ttlMs,
+          );
+
+          return {
+            behavior: 'deny',
+            message: `Requires human approval. Request ID: ${requestId}. Call approve_cli_permission to authorize.`,
+            classification: {
+              riskLevel: classification.riskLevel,
+              reason: classification.reason,
+              stage: 'approval_required',
+              riskScore: risk.score,
+              irreversible: risk.irreversible,
+            },
+            approvalRequest: {
+              requestId,
+              toolName,
+              riskLevel: classification.riskLevel,
+              riskScore: risk.score,
+              irreversible: risk.irreversible,
+              reason: elementDecision.message || 'Confirmation required by element policy',
+            },
+            policyContext: elementDecision.policyContext,
+          };
+        }
+
         // Stage 2.5: Check existing CLI approval (Issue #625 Phase 3)
         const existingApproval = this.gatekeeper.checkCliApproval(toolName, toolInput);
         if (existingApproval) {
