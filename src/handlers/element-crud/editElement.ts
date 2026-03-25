@@ -626,6 +626,15 @@ export async function editElement(
   // Fields handled by dedicated branches (not metadata routing)
   const specialRouteFields = new Set(['instructions', 'content', 'elements', 'metadata', 'entries', 'version']);
 
+  // Content context map shared by instructions and content validation branches
+  const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
+    [ElementType.AGENT]: 'agent',
+    [ElementType.SKILL]: 'skill',
+    [ElementType.TEMPLATE]: 'template',
+    [ElementType.PERSONA]: 'persona',
+    [ElementType.MEMORY]: 'memory',
+  };
+
   for (const [key, value] of Object.entries(input)) {
     // Skip dangerous properties
     if (DANGEROUS_PROPERTIES.includes(key)) {
@@ -640,18 +649,19 @@ export async function editElement(
       continue;
     }
 
+    // Every branch below applies the field — track once at the end
+    let fieldApplied = true;
+
     // Map known metadata fields automatically (type-specific)
     if (metadataFields.has(key) && !specialRouteFields.has(key)) {
       if (!updateObj.metadata) {
         updateObj.metadata = {};
       }
       (updateObj.metadata as Record<string, unknown>)[key] = value;
-      appliedFields.push(key);
     } else if (key === 'elements' && normalizedType === ElementType.ENSEMBLE) {
       // Issue #658: Validate and normalize elements input (array or dict format)
       const elemError = applyEnsembleElementsUpdate(value, element, updateObj, collectionWarnings);
       if (elemError) return error(elemError);
-      appliedFields.push(key);
     } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
       const metaValue = value as Record<string, unknown>;
 
@@ -678,16 +688,8 @@ export async function editElement(
           MERGE_OPTIONS
         );
       }
-      appliedFields.push(key);
     } else if (key === 'instructions' && typeof value === 'string') {
       // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
-      const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
-        [ElementType.AGENT]: 'agent',
-        [ElementType.SKILL]: 'skill',
-        [ElementType.TEMPLATE]: 'template',
-        [ElementType.PERSONA]: 'persona',
-        [ElementType.MEMORY]: 'memory',
-      };
       const contentValidation = ContentValidator.validateAndSanitize(value, {
         maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         contentContext: contentContextMap[normalizedType]
@@ -702,16 +704,8 @@ export async function editElement(
         }
         (element as any).extensions.instructions = sanitizedInstructions;
       }
-      appliedFields.push(key);
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
-      const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
-        [ElementType.AGENT]: 'agent',
-        [ElementType.SKILL]: 'skill',
-        [ElementType.TEMPLATE]: 'template',
-        [ElementType.PERSONA]: 'persona',
-        [ElementType.MEMORY]: 'memory',
-      };
       const contentValidation = ContentValidator.validateAndSanitize(value, {
         maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         contentContext: contentContextMap[normalizedType]
@@ -719,7 +713,6 @@ export async function editElement(
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
       (element as any).content = sanitizedContent;
-      appliedFields.push(key);
     } else if (!specialRouteFields.has(key)) {
       // Issue #565: Field not in type-specific metadata set and not a special route —
       // still route to updateObj for backward compat, but warn that it may not persist
@@ -732,6 +725,11 @@ export async function editElement(
         elementName: name,
         field: key,
       });
+    } else {
+      fieldApplied = false;
+    }
+
+    if (fieldApplied) {
       appliedFields.push(key);
     }
   }
