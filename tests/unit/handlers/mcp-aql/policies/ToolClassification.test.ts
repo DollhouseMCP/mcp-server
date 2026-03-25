@@ -656,6 +656,185 @@ describe('ToolClassification', () => {
     });
   });
 
+  describe('evaluateCliToolPolicy — confirmPatterns (Issue #1660)', () => {
+    it('should return confirm when command matches confirmPattern', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'auto-dollhouse',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+              allowPatterns: ['Bash:gh *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'gh pr merge 42 --admin --merge' }, elements);
+      expect(result.behavior).toBe('confirm');
+      expect(result.confirmSource).toBe('ensemble:auto-dollhouse');
+      expect(result.message).toContain('requires confirmation');
+    });
+
+    it('should allow commands that match allowPatterns but not confirmPatterns', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'auto-dollhouse',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+              allowPatterns: ['Bash:gh *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'gh pr merge 42 --merge' }, elements);
+      expect(result.behavior).toBe('evaluate');
+      expect(result.confirmSource).toBeUndefined();
+    });
+
+    it('should deny before confirm (deny takes precedence)', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'safety',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:git push --force*'],
+              confirmPatterns: ['Bash:git push*'],
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'git push --force origin main' }, elements);
+      expect(result.behavior).toBe('deny');
+    });
+
+    it('should confirm before allow (confirm takes precedence over allow)', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'cautious',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:npm publish*'],
+              allowPatterns: ['Bash:npm *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'npm publish --access public' }, elements);
+      expect(result.behavior).toBe('confirm');
+      expect(result.confirmSource).toBe('persona:cautious');
+    });
+
+    it('should include confirmPatterns match in policyContext', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'test-ensemble',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'gh pr merge 1 --admin' }, elements);
+      expect(result.behavior).toBe('confirm');
+      expect(result.policyContext).toBeDefined();
+      expect(result.policyContext!.evaluatedElements[0].matched).toBe('confirmPatterns');
+      expect(result.policyContext!.evaluatedElements[0].matchedPattern).toBe('Bash:gh pr merge*--admin*');
+      expect(result.policyContext!.decisionChain.some(s => s.includes('CONFIRM:'))).toBe(true);
+    });
+
+    it('should handle confirmPatterns across multiple elements (first match wins)', () => {
+      const elements: ActiveElement[] = [
+        {
+          type: 'persona', name: 'developer',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'no confirm patterns here',
+                allowPatterns: ['Bash:git *'],
+              },
+            },
+          },
+        },
+        {
+          type: 'ensemble', name: 'safety-net',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'has confirm patterns',
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+        },
+      ];
+      const result = evaluateCliToolPolicy('Bash', { command: 'git push origin feature/test' }, elements);
+      expect(result.behavior).toBe('confirm');
+      expect(result.confirmSource).toBe('ensemble:safety-net');
+    });
+
+    it('should not trigger confirm for non-matching commands', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'merge-guard',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+              allowPatterns: ['Bash:gh *', 'Bash:git *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(result.behavior).toBe('evaluate');
+    });
+
+    it('should handle empty confirmPatterns array gracefully', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'no-confirms',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: [],
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      const result = evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(result.behavior).toBe('evaluate');
+    });
+
+    it('should work with Edit tool patterns', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'config-guard',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Edit:*.env*', 'Edit:*secret*'],
+              allowPatterns: ['Edit:*'],
+            },
+          },
+        },
+      }];
+      const r1 = evaluateCliToolPolicy('Edit', { file_path: '.env.production' }, elements);
+      expect(r1.behavior).toBe('confirm');
+
+      const r2 = evaluateCliToolPolicy('Edit', { file_path: 'src/index.ts' }, elements);
+      expect(r2.behavior).toBe('evaluate');
+    });
+  });
+
   describe('assessRisk', () => {
     it('should return score 0 for safe tools', () => {
       const classification = classifyTool('Read', {});
