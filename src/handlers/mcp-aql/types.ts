@@ -554,6 +554,19 @@ export function parseOperationInput(input: unknown): OperationInput | null {
  *
  * @param input - The raw input that failed to parse
  * @returns Human-readable diagnostic string describing what was received
+ *
+ * @example
+ * describeInvalidInput(null)
+ * // => 'Received: null'
+ *
+ * describeInvalidInput({ params: { element_name: 'x' } })
+ * // => 'Received: { params } (missing "operation" field)'
+ *
+ * describeInvalidInput([{ operation: 'addEntry' }, { operation: 'addEntry' }])
+ * // => 'Received: array with 2 items (use { operations: [...] } for batch calls)'
+ *
+ * describeInvalidInput({ operation: 123, params: {} })
+ * // => 'Received: { operation, params } ("operation" is number, expected string)'
  */
 export function describeInvalidInput(input: unknown): string {
   if (input === null) return 'Received: null';
