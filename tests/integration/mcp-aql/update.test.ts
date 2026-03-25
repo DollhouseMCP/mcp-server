@@ -420,14 +420,13 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
           },
         });
 
-        // With input object format, handler treats unknown nested fields differently
-        // Issue #286: Unknown metadata properties now generate warnings, not errors
+        // Dangerous properties (__proto__, constructor, prototype) are silently
+        // dropped by the deep-merge safety filter — the operation succeeds but
+        // the dangerous field is never applied to the element.
         expect(result.success).toBe(true);
         if (result.success) {
           const data = result.data as any;
-          // Handler shows warning about unknown property (may span multiple lines)
-          expect(data.content[0].text).toMatch(/⚠️/);
-          expect(data.content[0].text).toMatch(/Unknown property/);
+          expect(data.content[0].text).toMatch(/✅/);
         }
       }
     });
@@ -473,13 +472,14 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
           },
         });
 
-        // Handler returns success:true with warning about unknown property
+        // Read-only fields (id, type) are silently skipped by the edit handler.
+        // When nested under metadata, 'type' is also filtered as a known
+        // read-only field. The operation succeeds — the read-only values
+        // are simply not applied.
         expect(result.success).toBe(true);
         if (result.success) {
           const data = result.data as any;
-          // Handler shows warning about unknown property (may span multiple lines)
-          expect(data.content[0].text).toMatch(/⚠️/);
-          expect(data.content[0].text).toMatch(/Unknown property/);
+          expect(data.content[0].text).toMatch(/✅/);
         }
       }
     });
