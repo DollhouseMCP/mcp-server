@@ -5,8 +5,9 @@
  * for the permission_prompt operation.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { classifyTool, evaluateCliToolPolicy, assessRisk } from '../../../../../src/handlers/mcp-aql/policies/ToolClassification.js';
+import { logger } from '../../../../../src/utils/logger.js';
 import type { ActiveElement } from '../../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
 
 describe('ToolClassification', () => {
@@ -1017,11 +1018,10 @@ describe('ToolClassification', () => {
   });
 
   describe('evaluateCliToolPolicy — debug logging (Issue #1662)', () => {
-    let logSpy: ReturnType<typeof jest.spyOn>;
+    let logSpy: ReturnType<typeof jest.spyOn<typeof logger, 'debug'>>;
 
-    beforeEach(async () => {
-      const loggerModule = await import('../../../../../src/utils/logger.js');
-      logSpy = jest.spyOn(loggerModule.logger, 'debug').mockImplementation(() => {});
+    beforeEach(() => {
+      logSpy = jest.spyOn(logger, 'debug').mockImplementation((() => {}) as () => void);
     });
 
     afterEach(() => {
