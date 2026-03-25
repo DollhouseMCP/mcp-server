@@ -546,3 +546,36 @@ export function parseOperationInput(input: unknown): OperationInput | null {
   InputFormatMetrics.record('invalid');
   return null;
 }
+
+/**
+ * Generate a diagnostic summary of invalid input for error messages.
+ * Helps agents and developers understand what was actually received when
+ * parsing fails — especially useful for debugging parallel-call issues (#1656).
+ *
+ * @param input - The raw input that failed to parse
+ * @returns Human-readable diagnostic string describing what was received
+ */
+export function describeInvalidInput(input: unknown): string {
+  if (input === null) return 'Received: null';
+  if (input === undefined) return 'Received: undefined';
+  if (Array.isArray(input)) return `Received: array with ${input.length} items (use { operations: [...] } for batch calls)`;
+  if (typeof input !== 'object') return `Received: ${typeof input}`;
+
+  const obj = input as Record<string, unknown>;
+  const keys = Object.keys(obj);
+
+  // Truncate key list for very large inputs
+  const keyPreview = keys.length > 8
+    ? keys.slice(0, 8).join(', ') + `, ... (${keys.length} keys total)`
+    : keys.join(', ');
+
+  const hints: string[] = [];
+  if (!keys.includes('operation')) {
+    hints.push('missing "operation" field');
+  } else if (typeof obj.operation !== 'string') {
+    hints.push(`"operation" is ${typeof obj.operation}, expected string`);
+  }
+
+  const hintStr = hints.length > 0 ? ` (${hints.join('; ')})` : '';
+  return `Received: { ${keyPreview} }${hintStr}`;
+}

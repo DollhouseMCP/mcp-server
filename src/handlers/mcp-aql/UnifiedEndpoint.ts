@@ -24,7 +24,7 @@
 
 import { MCPAQLHandler } from './MCPAQLHandler.js';
 import { getRoute, CRUDEndpoint } from './OperationRouter.js';
-import { OperationResult, BatchResult, ResponseMeta, isOperationInput, parseOperationInput } from './types.js';
+import { OperationResult, BatchResult, ResponseMeta, isOperationInput, parseOperationInput, describeInvalidInput } from './types.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
@@ -70,7 +70,8 @@ export class UnifiedEndpoint {
       const parsedInput = parseOperationInput(input);
       if (!parsedInput) {
         return this.failure(
-          'Invalid input: expected OperationInput with operation name and optional params',
+          'Invalid input: expected OperationInput with operation name and optional params. ' +
+          describeInvalidInput(input),
           startTime
         );
       }
