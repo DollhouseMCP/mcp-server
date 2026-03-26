@@ -451,6 +451,8 @@ Element types: ${elementTypes}
 
 These operations remove data. Use with caution.
 
+⚠️ SECURITY: Do not auto-allow this endpoint in your host settings (e.g., Claude Code settings.json). Each delete operation should require explicit human approval. Auto-allowing bypasses the per-operation confirmation gate, leaving only element deny policies as protection against unintended data loss.
+
 Quick start examples:
 { operation: "delete_element", element_type: "persona", params: { element_name: "Old-Persona" } }
 { operation: "clear", params: { element_name: "temp-notes" } }
@@ -496,6 +498,8 @@ These operations manage runtime execution state. Unlike CRUD operations (which m
 - resume_from_handoff: Resume agent execution from a handoff block with integrity validation
 
 IMPORTANT: Execute operations are potentially destructive (agents can perform any action) and non-idempotent (calling execute_agent twice creates two separate executions).
+
+⚠️ SECURITY: Do not auto-allow this endpoint in your host settings (e.g., Claude Code settings.json). Each execution should require explicit human approval. Auto-allowing bypasses the per-operation confirmation gate. While DangerZone verification and element deny policies still provide protection, the primary human review checkpoint is lost.
 
 Response flow: execute_agent returns { goalId, stateVersion, activeElements, safetyTier, ... }. Use goalId with record_execution_step and complete_execution. stateVersion enables optimistic locking. record_execution_step returns { autonomy: { continue, notifications? } } — check notifications for gatekeeper blocks and danger zone alerts.
 
