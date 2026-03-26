@@ -713,7 +713,10 @@ export async function editElement(
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
       (element as any).content = sanitizedContent;
-    } else if (!specialRouteFields.has(key)) {
+    } else if (specialRouteFields.has(key)) {
+      // Special route field — handled elsewhere, skip
+      fieldApplied = false;
+    } else {
       // Issue #565: Field not in type-specific metadata set and not a special route —
       // still route to updateObj for backward compat, but warn that it may not persist
       updateObj[key] = value;
@@ -725,8 +728,6 @@ export async function editElement(
         elementName: name,
         field: key,
       });
-    } else {
-      fieldApplied = false;
     }
 
     if (fieldApplied) {
