@@ -9,6 +9,7 @@ on:
     #   - "src/**/*.tsx"
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
+  workflow_dispatch:  # Allow manual runs on fork PRs by maintainers
 
 jobs:
   claude-review:

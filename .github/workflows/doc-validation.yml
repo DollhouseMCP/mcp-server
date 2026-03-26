@@ -11,6 +11,7 @@ on:
       - "src/di/Container.ts"
       - "src/config/**"
       - "src/security/**"
+  workflow_dispatch:  # Allow manual runs on fork PRs by maintainers
 
 jobs:
   doc-validation:
