@@ -517,10 +517,11 @@ function analyzeOnePattern(
   }
 
   // Check for regex syntax that won't work in glob
-  const regexMatch = REGEX_SYNTAX_PATTERN.exec(pattern);
-  if (regexMatch) {
+  const regexMatches = pattern.match(new RegExp(REGEX_SYNTAX_PATTERN.source, 'g'));
+  if (regexMatches) {
+    const uniqueChars = [...new Set(regexMatches)].join(', ');
     warnings.push(
-      `${fieldName} pattern '${pattern}' contains regex syntax '${regexMatch[0]}' — ` +
+      `${fieldName} pattern '${pattern}' contains regex syntax '${uniqueChars}' — ` +
       `only glob wildcards (* and ?) are supported`
     );
   }
