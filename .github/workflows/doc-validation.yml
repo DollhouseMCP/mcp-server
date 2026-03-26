@@ -11,11 +11,15 @@ on:
       - "src/di/Container.ts"
       - "src/config/**"
       - "src/security/**"
+  workflow_dispatch:  # Allow manual runs on fork PRs by maintainers
 
 jobs:
   doc-validation:
-    # Skip Dependabot PRs since they don't have access to secrets (CLAUDE_CODE_OAUTH_TOKEN)
-    if: github.actor != 'dependabot[bot]'
+    # Skip Dependabot PRs and fork PRs since they don't have access to secrets (CLAUDE_CODE_OAUTH_TOKEN)
+    # Fork PRs: github.event.pull_request.head.repo.full_name differs from base repo
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     runs-on: ubuntu-latest
     permissions:

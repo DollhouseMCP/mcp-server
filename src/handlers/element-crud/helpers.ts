@@ -14,7 +14,7 @@ import {
   ALL_ELEMENT_TYPES,
   formatElementTypesList as sharedFormatElementTypesList,
 } from '../../utils/elementTypeNormalization.js';
-import { parseElementPolicy } from '../mcp-aql/policies/ElementPolicies.js';
+import { parseElementPolicy, analyzePatternSyntax } from '../mcp-aql/policies/ElementPolicies.js';
 import { findPatternConflicts } from '../../utils/patternMatcher.js';
 
 export function findElementFlexibly<T extends { metadata?: { name?: string } }>(
@@ -306,7 +306,7 @@ export function validateGatekeeperPolicy(
 
     // Issue #625 Phase 2: Detect allow/deny pattern conflicts
     if (policy?.externalRestrictions) {
-      const { allowPatterns, denyPatterns } = policy.externalRestrictions;
+      const { allowPatterns, denyPatterns, confirmPatterns } = policy.externalRestrictions;
       if (allowPatterns?.length && denyPatterns?.length) {
         const conflicts = findPatternConflicts(denyPatterns, allowPatterns);
         for (const conflict of conflicts) {
@@ -314,6 +314,35 @@ export function validateGatekeeperPolicy(
             property: 'gatekeeper.externalRestrictions',
             message: `Pattern conflict (deny takes precedence): ${conflict}`,
           });
+        }
+      }
+
+      // Issue #1660: Detect confirm/deny pattern conflicts
+      if (confirmPatterns?.length && denyPatterns?.length) {
+        const conflicts = findPatternConflicts(denyPatterns, confirmPatterns);
+        for (const conflict of conflicts) {
+          warnings.push({
+            property: 'gatekeeper.externalRestrictions',
+            message: `Pattern conflict (deny takes precedence over confirm): ${conflict}`,
+          });
+        }
+      }
+
+      // Issue #1664: Enhanced pattern syntax validation
+      const allPatternArrays: [string[] | undefined, string][] = [
+        [denyPatterns, 'denyPatterns'],
+        [confirmPatterns, 'confirmPatterns'],
+        [allowPatterns, 'allowPatterns'],
+      ];
+      for (const [patterns, fieldName] of allPatternArrays) {
+        if (patterns?.length) {
+          const syntaxWarnings = analyzePatternSyntax(patterns, fieldName);
+          for (const warning of syntaxWarnings) {
+            warnings.push({
+              property: 'gatekeeper.externalRestrictions',
+              message: warning,
+            });
+          }
         }
       }
     }

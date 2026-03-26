@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.0.0-rc.6] - 2026-03-26
+
+### 🚀 Auto-Confirm UX Fix
+
+- **fix(gatekeeper): auto-confirm on confirmationPending (#1653)**
+  - Operations that required `confirm_operation` + retry now auto-confirm in a single call
+  - Reduces session startup from ~50 user approvals to ~15
+  - Risk scoring (0-100) on all auto-confirmed operations: DELETE=80, EXECUTE=60, UPDATE=40, CREATE=20
+  - CONFIRM_SINGLE_USE operations log at `warn` level for audit visibility
+  - Safety layers preserved: element deny policies, canBeElevated constraints, safety tier, DangerZone
+
+### ✨ Features
+
+- **feat: debug logging for externalRestrictions pattern evaluation (#1662)**
+  - Debug logs at every decision point in `evaluateCliToolPolicy()` via `[CliPolicy]` prefix
+  - Element type summaries and elapsed timing in decision logs
+  - 12 new tests covering all logging code paths
+
+- **feat: enhanced pattern syntax validation (#1664)**
+  - `analyzePatternSyntax()` warns about missing tool prefixes, overly broad wildcards, regex syntax in glob patterns, unknown tool names, leading/trailing whitespace
+  - Wired into `validateGatekeeperPolicy()` for real-time LLM feedback
+  - Confirm/deny pattern overlap detection
+
+- **feat: security warnings in tool descriptions**
+  - `mcp_aql_delete` and `mcp_aql_execute` descriptions warn against auto-allowing in host settings
+  - Visible to LLMs and users during tool setup
+
+### 🧪 Testing
+
+- **test: permission flow test harness (#1669, #1670)** — 393 tests total:
+  - 27 scenario-based tests (pre-confirmed ops, element overrides, confirmation scoping, Scenario G safety analysis)
+  - 260 programmatic full-matrix tests (every operation × permission level × live gatekeeper enforcement)
+  - 112 cross-platform adapter tests (Claude Code, Gemini CLI, Cursor, Codex CLI, Windsurf, VS Code Copilot, JetBrains Junie)
+
+### 🔧 CI/CD
+
+- **fix(ci): handle fork PR permissions gracefully (#1673)**
+  - Security audit falls back to workflow summary on 403
+  - Claude review and doc validation skip on fork PRs
+  - `workflow_dispatch` triggers for manual runs by maintainers
+
+### 📋 Housekeeping
+
+- Closed 8 stale issues verified as already fixed (#610, #937, #528, #661, #1174, #1404, #1405, #1045)
+- Added insomnolence as collaborator with write access
+
 ## [Unreleased]
 
 ### 🔧 Improvements
