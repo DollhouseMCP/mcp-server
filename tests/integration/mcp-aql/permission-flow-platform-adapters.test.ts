@@ -32,9 +32,7 @@ import {
   getDefaultPermissionLevel,
   getAutoApprovedOperations,
   getOperationsAtLevel,
-  OPERATION_POLICY_OVERRIDES,
 } from '../../../src/handlers/mcp-aql/policies/OperationPolicies.js';
-import { OPERATION_ROUTES } from '../../../src/handlers/mcp-aql/OperationRouter.js';
 
 // ── Platform Response Format Types ──
 
@@ -222,8 +220,9 @@ function toJunieAllowlist(allowPatterns: string[]): JunieAllowlistEntry[] {
     .filter(p => p.startsWith('Bash:'))
     .map(pattern => {
       const command = pattern.slice(5); // Strip 'Bash:' prefix
-      // Convert glob wildcards to regex
-      const regex = `^${command.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`;
+      // Convert glob wildcards to regex: escape special chars, then convert * and ?
+      const escaped = command.replaceAll(/[.+^${}()|[\]\\]/g, String.raw`\$&`);
+      const regex = `^${escaped.replaceAll('*', '.*').replaceAll('?', '.')}$`;
       return { pattern: regex, type: 'regex' as const };
     });
 }
