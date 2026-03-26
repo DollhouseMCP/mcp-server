@@ -5,8 +5,9 @@
  * for the permission_prompt operation.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { classifyTool, evaluateCliToolPolicy, assessRisk } from '../../../../../src/handlers/mcp-aql/policies/ToolClassification.js';
+import { logger } from '../../../../../src/utils/logger.js';
 import type { ActiveElement } from '../../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
 
 describe('ToolClassification', () => {
@@ -1013,6 +1014,226 @@ describe('ToolClassification', () => {
       // Multiple control chars embedded: BEL(\x07), BS(\x08), ESC(\x1B)
       const result = evaluateCliToolPolicy('Bash', { command: 'rm\x07\x08\x1B -rf /tmp' }, elements);
       expect(result.behavior).toBe('deny');
+    });
+  });
+
+  describe('evaluateCliToolPolicy — debug logging (Issue #1662)', () => {
+    let logSpy: ReturnType<typeof jest.spyOn<typeof logger, 'debug'>>;
+
+    beforeEach(() => {
+      logSpy = jest.spyOn(logger, 'debug').mockImplementation((() => {}) as () => void);
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+    });
+
+    it('should log when no active elements are present', () => {
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, []);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no active elements')
+      );
+    });
+
+    it('should log match targets, element count, and type summary at evaluation start', () => {
+      const elements: ActiveElement[] = [
+        {
+          type: 'persona', name: 'dev',
+          metadata: {},
+        },
+        {
+          type: 'ensemble', name: 'test-ensemble',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'test',
+                allowPatterns: ['Bash:git *'],
+              },
+            },
+          },
+        },
+      ];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/Evaluating Bash against 2 elements \(1 persona, 1 ensemble\).*matchTargets/)
+      );
+    });
+
+    it('should log when an element has no externalRestrictions', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'bare-persona',
+        metadata: {},
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'ls' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("persona 'bare-persona': no externalRestrictions")
+      );
+    });
+
+    it('should log pattern counts per element', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'policy-ensemble',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm *'],
+              confirmPatterns: ['Bash:git push*'],
+              allowPatterns: ['Bash:git *', 'Bash:npm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/deny: 1, confirm: 1, allow: 2 patterns/)
+      );
+    });
+
+    it('should log on denyPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'safety',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:git push --force*'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git push --force origin main' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*skill 'safety'.*denyPattern/)
+      );
+    });
+
+    it('should log on confirmPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'auto-dollhouse',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              confirmPatterns: ['Bash:gh pr merge*--admin*'],
+              allowPatterns: ['Bash:gh *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'gh pr merge 42 --admin --merge' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/CONFIRM:.*ensemble 'auto-dollhouse'.*confirmPattern/)
+      );
+    });
+
+    it('should log on allowPattern match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'dev',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:npm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'npm test' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/ALLOW:.*persona 'dev'.*allowPattern/)
+      );
+    });
+
+    it('should log when tool is denied by allowlist miss', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'restrictive',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'curl http://example.com' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*not in any allowlist/)
+      );
+    });
+
+    it('should log fall-through with allowlist match', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'standard',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git log' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('matched allowlist, fall through to default')
+      );
+    });
+
+    it('should log fall-through when no allowPatterns defined', () => {
+      const elements: ActiveElement[] = [{
+        type: 'persona', name: 'open',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm -rf *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no allowPatterns defined, fall through to default')
+      );
+    });
+
+    it('should include timing data in decision log messages', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'timed',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      // The final decision log should include timing like "(0.05ms)"
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/fall through to default \(\d+\.\d+ms\)/)
+      );
+    });
+
+    it('should include timing data on deny decisions', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'safety',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'rm -rf /' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*\(\d+\.\d+ms\)/)
+      );
     });
   });
 });

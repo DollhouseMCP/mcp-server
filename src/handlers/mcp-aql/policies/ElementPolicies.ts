@@ -440,6 +440,124 @@ function validatePatternStrings(
 }
 
 /**
+ * Known CLI tool names used in externalRestrictions patterns.
+ * Patterns should start with one of these followed by ':' to be effective.
+ */
+const KNOWN_TOOL_PREFIXES = new Set([
+  'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep',
+  'WebFetch', 'WebSearch', 'NotebookEdit',
+]);
+
+/**
+ * Regex characters that have no meaning in glob syntax.
+ * Users who include these likely intend regex but the matcher only supports * and ?.
+ */
+const REGEX_SYNTAX_PATTERN = /[|(){}[\]\\+^$]/;
+
+/**
+ * Analyze externalRestrictions patterns for common mistakes and suspicious syntax.
+ *
+ * Returns non-fatal warnings to help LLMs and users write effective patterns.
+ * Does NOT throw — validation errors are handled by {@link validatePatternStrings}.
+ *
+ * Checks performed (Issue #1664):
+ * - Missing tool prefix (pattern doesn't start with ToolName:)
+ * - Overly broad patterns (bare `*` or `ToolName:*`)
+ * - Regex syntax that won't work in glob matching
+ * - Leading/trailing whitespace
+ *
+ * @param patterns - Array of pattern strings to analyze
+ * @param fieldName - Field name for warning messages
+ * @returns Array of warning messages (empty if no issues found)
+ */
+export function analyzePatternSyntax(
+  patterns: string[],
+  fieldName: string
+): string[] {
+  const warnings: string[] = [];
+  for (const pattern of patterns) {
+    analyzeOnePattern(pattern, fieldName, warnings);
+  }
+  return warnings;
+}
+
+/**
+ * Analyze a single pattern string and append any warnings found.
+ * Extracted from {@link analyzePatternSyntax} to reduce cognitive complexity.
+ */
+function analyzeOnePattern(
+  pattern: string,
+  fieldName: string,
+  warnings: string[]
+): void {
+  // Check leading/trailing whitespace
+  if (pattern !== pattern.trim()) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' has leading/trailing whitespace — this may prevent expected matches`
+    );
+  }
+
+  // Check for bare wildcard (matches everything)
+  if (pattern === '*') {
+    warnings.push(
+      `${fieldName} pattern '*' matches everything — this is likely unintentional`
+    );
+    return;
+  }
+
+  // Check for tool prefix and related issues
+  const colonIndex = pattern.indexOf(':');
+  if (colonIndex === -1) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' has no tool prefix (e.g., 'Bash:', 'Edit:'). ` +
+      `Patterns are matched against 'ToolName:input' strings and will not match without a prefix.`
+    );
+  } else {
+    checkToolPrefix(pattern, colonIndex, fieldName, warnings);
+  }
+
+  // Check for regex syntax that won't work in glob
+  const regexChars = new Set<string>();
+  for (const ch of pattern) {
+    if (REGEX_SYNTAX_PATTERN.test(ch)) regexChars.add(ch);
+  }
+  if (regexChars.size > 0) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' contains regex syntax '${[...regexChars].join(', ')}' — ` +
+      `only glob wildcards (* and ?) are supported`
+    );
+  }
+}
+
+/**
+ * Check tool prefix validity and broadness for a pattern that contains ':'.
+ */
+function checkToolPrefix(
+  pattern: string,
+  colonIndex: number,
+  fieldName: string,
+  warnings: string[]
+): void {
+  const prefix = pattern.slice(0, colonIndex);
+  const afterColon = pattern.slice(colonIndex + 1);
+
+  // Check for unknown tool prefix
+  if (!KNOWN_TOOL_PREFIXES.has(prefix) && !prefix.startsWith('mcp_')) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' uses unknown tool prefix '${prefix}'. ` +
+      `Known prefixes: ${[...KNOWN_TOOL_PREFIXES].join(', ')}. MCP tools use 'mcp_' prefix.`
+    );
+  }
+
+  // Check for overly broad ToolName:* pattern
+  if (afterColon === '*') {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' matches ALL ${prefix} operations — verify this is intentional`
+    );
+  }
+}
+
+/**
  * Validate and sanitize a gatekeeper policy during element deserialization.
  *
  * Returns a validated {@link ElementGatekeeperPolicy} if the raw data is
