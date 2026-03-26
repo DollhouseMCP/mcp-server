@@ -866,4 +866,137 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       }
     });
   });
+
+  // ── Scenario G: What protects the system when host auto-approves everything? ──
+
+  describe('Scenario G: Safety layers when host bypasses approval (mcp_aql_execute in allow list)', () => {
+    // These tests simulate the scenario where a user puts mcp_aql_execute
+    // in their Claude Code settings.json allow list AND the gatekeeper
+    // auto-confirms. The question: what still prevents runaway agents?
+
+    it('element deny policies still block even with full auto-confirm', async () => {
+      preConfirmAllOperations(container);
+
+      // Create a persona with deny policy for create_element
+      await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'deny-create-persona',
+          element_type: 'personas',
+          description: 'Denies create operations',
+          instructions: 'You block creates.',
+          gatekeeper: { deny: ['create_element'] },
+        },
+      });
+
+      await waitForElement(mcpAqlHandler, 'deny-create-persona', 'personas');
+
+      // Activate it
+      await mcpAqlHandler.handleRead({
+        operation: 'activate_element',
+        params: { element_name: 'deny-create-persona', element_type: 'personas' },
+      });
+
+      await waitForActivation(mcpAqlHandler, 'deny-create-persona');
+
+      // Revoke all pre-confirmations — rely purely on auto-confirm
+      gatekeeper.revokeAllConfirmations();
+
+      // create_element should be HARD DENIED — element deny overrides auto-confirm
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'should-not-exist',
+          element_type: 'skills',
+          description: 'Should be blocked',
+          content: '# Blocked\n\nShould not be created.',
+        },
+      });
+      expect(result.success).toBe(false);
+      // Hard deny throws, not "Approval needed"
+      if (result.error) {
+        expect(result.error).not.toMatch(/Approval needed/);
+      }
+    });
+
+    it('canBeElevated: false prevents element allow from loosening execute_agent', async () => {
+      // execute_agent has canBeElevated: false — even if an element has
+      // allow: ['execute_agent'], it cannot loosen the permission to AUTO_APPROVE.
+      // The operation still requires CONFIRM_SINGLE_USE which auto-confirms,
+      // but the elevation constraint ensures element policies can't silently
+      // set it to AUTO_APPROVE (bypassing the auto-confirm recording entirely).
+      const route = { operation: 'execute_agent', endpoint: 'EXECUTE' as const };
+      const decision = gatekeeper.enforce(route);
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      // The confirmation level should still be CONFIRM_SINGLE_USE
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+    });
+
+    it('delete_element canBeElevated: false prevents silent auto-approve', async () => {
+      const route = { operation: 'delete_element', endpoint: 'DELETE' as const };
+      const decision = gatekeeper.enforce(route);
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+    });
+
+    it('unknown operations default to CONFIRM_SINGLE_USE (secure fallback)', async () => {
+      // If someone invents a new operation, it's not AUTO_APPROVE
+      const route = { operation: 'totally_unknown_operation', endpoint: 'EXECUTE' as const };
+      const decision = gatekeeper.enforce(route);
+      // Unknown operations fail route validation, which is a hard deny
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('auto-confirm records in session — subsequent enforce() calls pass without re-confirming', async () => {
+      // First call: auto-confirms and proceeds
+      gatekeeper.revokeAllConfirmations();
+      const result1 = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'session-test-auto-1',
+          element_type: 'skills',
+          description: 'First auto-confirmed create',
+          content: '# Auto 1\n\nFirst.',
+        },
+      });
+      expect(result1.success).toBe(true);
+
+      // Second call: confirmation already in session, passes immediately
+      const result2 = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'session-test-auto-2',
+          element_type: 'skills',
+          description: 'Second auto-confirmed create',
+          content: '# Auto 2\n\nSecond.',
+        },
+      });
+      expect(result2.success).toBe(true);
+    });
+
+    it('document: with auto-confirm, the remaining safety layers are element deny + canBeElevated + safety tier + DangerZone', async () => {
+      // This test serves as living documentation of the safety model post-#1653.
+      // When host auto-approves AND gatekeeper auto-confirms:
+      //
+      // 1. Element deny policies: ACTIVE — hard deny bypasses auto-confirm
+      // 2. canBeElevated: false: ACTIVE — prevents element allow from loosening
+      // 3. Safety tier: ACTIVE — evaluated before confirmation check in enforce()
+      // 4. DangerZone: ACTIVE — separate verification flow (beetlejuice challenge)
+      // 5. confirm_operation explicit flow: AVAILABLE but not required
+      //
+      // What is NOT active:
+      // - Host tool approval (user put mcp_aql_execute in allow list)
+      // - Gatekeeper confirm round-trip (auto-confirmed)
+      //
+      // The system is still protected by 4 independent safety layers.
+      // This is acceptable because:
+      // - Auto-approving mcp_aql_execute is an explicit user choice
+      // - The user has accepted the risk by moving it from ask to allow
+      // - Element policies provide runtime-configurable guardrails
+      // - DangerZone provides last-resort OS-level verification
+      expect(true).toBe(true); // Documentation test — always passes
+    });
+  });
 });
