@@ -14,7 +14,6 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
 import { PermissionLevel } from '../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { OPERATION_ROUTES, type CRUDEndpoint } from '../../../src/handlers/mcp-aql/OperationRouter.js';
@@ -28,7 +27,6 @@ import {
 } from '../../../src/handlers/mcp-aql/policies/OperationPolicies.js';
 import {
   createPortfolioTestEnvironment,
-  preConfirmAllOperations,
   type PortfolioTestEnvironment,
 } from '../../helpers/portfolioTestHelper.js';
 
@@ -284,9 +282,9 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     it('overrides should have rationale explaining the deviation', () => {
-      for (const [op, policy] of Object.entries(OPERATION_POLICY_OVERRIDES)) {
+      for (const [, policy] of Object.entries(OPERATION_POLICY_OVERRIDES)) {
         expect(policy.rationale).toBeDefined();
-        expect(policy.rationale!.length).toBeGreaterThan(10);
+        expect(policy.rationale?.length).toBeGreaterThan(10);
       }
     });
 
