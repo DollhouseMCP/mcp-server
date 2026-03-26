@@ -475,61 +475,83 @@ export function analyzePatternSyntax(
   fieldName: string
 ): string[] {
   const warnings: string[] = [];
-
   for (const pattern of patterns) {
-    // Check leading/trailing whitespace
-    if (pattern !== pattern.trim()) {
-      warnings.push(
-        `${fieldName} pattern '${pattern}' has leading/trailing whitespace — this may prevent expected matches`
-      );
-    }
+    analyzeOnePattern(pattern, fieldName, warnings);
+  }
+  return warnings;
+}
 
-    // Check for bare wildcard (matches everything)
-    if (pattern === '*') {
-      warnings.push(
-        `${fieldName} pattern '*' matches everything — this is likely unintentional`
-      );
-      continue;
-    }
-
-    // Check for tool prefix
-    const colonIndex = pattern.indexOf(':');
-    if (colonIndex === -1) {
-      warnings.push(
-        `${fieldName} pattern '${pattern}' has no tool prefix (e.g., 'Bash:', 'Edit:'). ` +
-        `Patterns are matched against 'ToolName:input' strings and will not match without a prefix.`
-      );
-    } else {
-      const prefix = pattern.slice(0, colonIndex);
-      const afterColon = pattern.slice(colonIndex + 1);
-
-      // Check for unknown tool prefix
-      if (!KNOWN_TOOL_PREFIXES.has(prefix) && !prefix.startsWith('mcp_')) {
-        warnings.push(
-          `${fieldName} pattern '${pattern}' uses unknown tool prefix '${prefix}'. ` +
-          `Known prefixes: ${[...KNOWN_TOOL_PREFIXES].join(', ')}. MCP tools use 'mcp_' prefix.`
-        );
-      }
-
-      // Check for overly broad ToolName:* pattern
-      if (afterColon === '*') {
-        warnings.push(
-          `${fieldName} pattern '${pattern}' matches ALL ${prefix} operations — verify this is intentional`
-        );
-      }
-    }
-
-    // Check for regex syntax that won't work in glob
-    if (REGEX_SYNTAX_PATTERN.test(pattern)) {
-      const regexChars = pattern.match(REGEX_SYNTAX_PATTERN);
-      warnings.push(
-        `${fieldName} pattern '${pattern}' contains regex syntax '${regexChars?.[0]}' — ` +
-        `only glob wildcards (* and ?) are supported`
-      );
-    }
+/**
+ * Analyze a single pattern string and append any warnings found.
+ * Extracted from {@link analyzePatternSyntax} to reduce cognitive complexity.
+ */
+function analyzeOnePattern(
+  pattern: string,
+  fieldName: string,
+  warnings: string[]
+): void {
+  // Check leading/trailing whitespace
+  if (pattern !== pattern.trim()) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' has leading/trailing whitespace — this may prevent expected matches`
+    );
   }
 
-  return warnings;
+  // Check for bare wildcard (matches everything)
+  if (pattern === '*') {
+    warnings.push(
+      `${fieldName} pattern '*' matches everything — this is likely unintentional`
+    );
+    return;
+  }
+
+  // Check for tool prefix and related issues
+  const colonIndex = pattern.indexOf(':');
+  if (colonIndex === -1) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' has no tool prefix (e.g., 'Bash:', 'Edit:'). ` +
+      `Patterns are matched against 'ToolName:input' strings and will not match without a prefix.`
+    );
+  } else {
+    checkToolPrefix(pattern, colonIndex, fieldName, warnings);
+  }
+
+  // Check for regex syntax that won't work in glob
+  const regexMatch = REGEX_SYNTAX_PATTERN.exec(pattern);
+  if (regexMatch) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' contains regex syntax '${regexMatch[0]}' — ` +
+      `only glob wildcards (* and ?) are supported`
+    );
+  }
+}
+
+/**
+ * Check tool prefix validity and broadness for a pattern that contains ':'.
+ */
+function checkToolPrefix(
+  pattern: string,
+  colonIndex: number,
+  fieldName: string,
+  warnings: string[]
+): void {
+  const prefix = pattern.slice(0, colonIndex);
+  const afterColon = pattern.slice(colonIndex + 1);
+
+  // Check for unknown tool prefix
+  if (!KNOWN_TOOL_PREFIXES.has(prefix) && !prefix.startsWith('mcp_')) {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' uses unknown tool prefix '${prefix}'. ` +
+      `Known prefixes: ${[...KNOWN_TOOL_PREFIXES].join(', ')}. MCP tools use 'mcp_' prefix.`
+    );
+  }
+
+  // Check for overly broad ToolName:* pattern
+  if (afterColon === '*') {
+    warnings.push(
+      `${fieldName} pattern '${pattern}' matches ALL ${prefix} operations — verify this is intentional`
+    );
+  }
 }
 
 /**

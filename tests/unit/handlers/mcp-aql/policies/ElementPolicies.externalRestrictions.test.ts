@@ -415,7 +415,7 @@ describe('parseElementPolicy — externalRestrictions (Phase 2)', () => {
     });
 
     it('should warn about backslash as regex syntax', () => {
-      const warnings = analyzePatternSyntax(['Bash:git push\\.force'], 'denyPatterns');
+      const warnings = analyzePatternSyntax([String.raw`Bash:git push\.force`], 'denyPatterns');
       expect(warnings.some(w => w.includes('regex syntax'))).toBe(true);
     });
   });
