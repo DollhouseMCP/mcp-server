@@ -227,13 +227,23 @@ jobs:
               report = report.substring(0, MAX_COMMENT_LENGTH - truncationNote.length) + truncationNote;
             }
 
-            // Comment on PR
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: report
-            });
+            // Comment on PR (gracefully handle fork PR permissions)
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: report
+              });
+            } catch (e) {
+              if (e.status === 403) {
+                core.warning('Cannot post PR comment (fork PR — read-only token). Results logged to workflow summary.');
+                core.summary.addRaw(report);
+                await core.summary.write();
+              } else {
+                throw e;
+              }
+            }
 
       - name: Create issues for critical findings
         if: github.event_name == 'schedule' && env.AUDIT_FAILED == 'true'
