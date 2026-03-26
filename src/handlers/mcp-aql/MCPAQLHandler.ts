@@ -843,10 +843,13 @@ export class MCPAQLHandler {
             // Even though no human is prompted, this appears in query_logs
             // so operators can trace what was auto-confirmed and why.
             const summary = this.buildOperationSummary(operation, elementType, params);
-            const scope = elementType ? ' [' + elementType + ']' : '';
-            const riskLabel = riskScore >= 80 ? 'HIGH' : riskScore >= 40 ? 'MODERATE' : 'LOW';
-            const logMessage = '[Gatekeeper] Auto-confirmed (' + riskLabel + ' risk=' + riskScore + '): '
-              + summary + scope + '. Reason: ' + decision.reason;
+            const scope = elementType ? ' ['.concat(elementType, ']') : '';
+            let riskLabel = 'LOW';
+            if (riskScore >= 80) riskLabel = 'HIGH';
+            else if (riskScore >= 40) riskLabel = 'MODERATE';
+            const parts = ['[Gatekeeper] Auto-confirmed (', riskLabel, ' risk=', String(riskScore),
+              '): ', summary, scope, '. Reason: ', decision.reason];
+            const logMessage = parts.join('');
 
             // CONFIRM_SINGLE_USE operations (delete, execute_agent, edit, abort)
             // are higher-risk — log at warn level for visibility in audit trails.
@@ -3123,7 +3126,7 @@ export class MCPAQLHandler {
 
     // Modifier: operations targeting gatekeeper fields (privilege escalation vector)
     if (params && operation === 'edit_element') {
-      const inputObj = (params as Record<string, unknown>).input as Record<string, unknown> | undefined;
+      const inputObj = params.input as Record<string, unknown> | undefined;
       if (inputObj?.gatekeeper !== undefined ||
           (inputObj?.metadata as Record<string, unknown> | undefined)?.gatekeeper !== undefined) {
         score += 10;
