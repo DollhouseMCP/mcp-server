@@ -30,10 +30,13 @@ import {
 
 /**
  * Helper to extract result data from a successful MCP-AQL response.
+ * @param result - MCP-AQL operation result
+ * @returns The typed data payload
  */
-function extractData(result: { success: boolean; data?: unknown }): Record<string, unknown> {
+function extractData<T = Record<string, unknown>>(result: { success: boolean; data?: T }): T {
   expect(result.success).toBe(true);
-  return result.data as Record<string, unknown>;
+  if (!result.data) throw new Error('Expected data in successful result');
+  return result.data;
 }
 
 /**
@@ -84,7 +87,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
   });
 
   afterEach(async () => {
-    await server.dispose();
+    try { await server.dispose(); } catch { /* ignore disposal errors */ }
     await env.cleanup();
   });
 
@@ -631,9 +634,8 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       });
 
       // Should fail because the target operation is denied, not confirmable
-      if (!confirmResult.success) {
-        expect(confirmResult.error).toMatch(/denied by policy|cannot be confirmed/i);
-      }
+      expect(confirmResult.success).toBe(false);
+      expect(confirmResult.error).toMatch(/denied by policy|cannot be confirmed/i);
     });
   });
 

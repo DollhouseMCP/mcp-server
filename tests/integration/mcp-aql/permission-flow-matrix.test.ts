@@ -347,7 +347,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     afterEach(async () => {
-      await server.dispose();
+      try { await server.dispose(); } catch { /* ignore disposal errors */ }
       await env.cleanup();
     });
 
