@@ -1035,21 +1035,27 @@ describe('ToolClassification', () => {
       );
     });
 
-    it('should log match targets and element count at evaluation start', () => {
-      const elements: ActiveElement[] = [{
-        type: 'ensemble', name: 'test-ensemble',
-        metadata: {
-          gatekeeper: {
-            externalRestrictions: {
-              description: 'test',
-              allowPatterns: ['Bash:git *'],
+    it('should log match targets, element count, and type summary at evaluation start', () => {
+      const elements: ActiveElement[] = [
+        {
+          type: 'persona', name: 'dev',
+          metadata: {},
+        },
+        {
+          type: 'ensemble', name: 'test-ensemble',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'test',
+                allowPatterns: ['Bash:git *'],
+              },
             },
           },
         },
-      }];
+      ];
       evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/Evaluating Bash against 1 elements.*matchTargets/)
+        expect.stringMatching(/Evaluating Bash against 2 elements \(1 persona, 1 ensemble\).*matchTargets/)
       );
     });
 
@@ -1190,6 +1196,43 @@ describe('ToolClassification', () => {
       evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('no allowPatterns defined, fall through to default')
+      );
+    });
+
+    it('should include timing data in decision log messages', () => {
+      const elements: ActiveElement[] = [{
+        type: 'ensemble', name: 'timed',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              allowPatterns: ['Bash:git *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'git status' }, elements);
+      // The final decision log should include timing like "(0.05ms)"
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/fall through to default \(\d+\.\d+ms\)/)
+      );
+    });
+
+    it('should include timing data on deny decisions', () => {
+      const elements: ActiveElement[] = [{
+        type: 'skill', name: 'safety',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'test',
+              denyPatterns: ['Bash:rm *'],
+            },
+          },
+        },
+      }];
+      evaluateCliToolPolicy('Bash', { command: 'rm -rf /' }, elements);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/DENY:.*\(\d+\.\d+ms\)/)
       );
     });
   });

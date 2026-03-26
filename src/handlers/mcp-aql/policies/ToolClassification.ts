@@ -546,6 +546,8 @@ export function evaluateCliToolPolicy(
   const evaluatedElements: PolicyEvaluationContext['evaluatedElements'] = [];
   const decisionChain: string[] = [];
 
+  const startTime = performance.now();
+
   if (!activeElements.length) {
     decisionChain.push('No active elements — fall through to default');
     logger.debug(`[CliPolicy] ${toolName}: no active elements, fall through to default`);
@@ -557,7 +559,8 @@ export function evaluateCliToolPolicy(
 
   // Build the strings to match against patterns
   const matchTargets = buildMatchTargets(toolName, toolInput);
-  logger.debug(`[CliPolicy] Evaluating ${toolName} against ${activeElements.length} elements, matchTargets: [${matchTargets.join(', ')}]`);
+  const elementTypeSummary = summarizeElementTypes(activeElements);
+  logger.debug(`[CliPolicy] Evaluating ${toolName} against ${activeElements.length} elements (${elementTypeSummary}), matchTargets: [${matchTargets.join(', ')}]`);
 
   let anyElementHasAllowPatterns = false;
   let toolAllowedByAnyElement = false;
@@ -596,7 +599,7 @@ export function evaluateCliToolPolicy(
               matchedTarget: target,
             });
             decisionChain.push(`DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matches '${target}'`);
-            logger.debug(`[CliPolicy] DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matched '${target}'`);
+            logger.debug(`[CliPolicy] DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matched '${target}' (${elapsed(startTime)})`);
             return {
               behavior: 'deny',
               message: `Denied by ${element.type} '${element.name}' policy: pattern '${pattern}' matches '${target}'`,
@@ -621,7 +624,7 @@ export function evaluateCliToolPolicy(
               matchedTarget: target,
             });
             decisionChain.push(`CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matches '${target}'`);
-            logger.debug(`[CliPolicy] CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matched '${target}'`);
+            logger.debug(`[CliPolicy] CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matched '${target}' (${elapsed(startTime)})`);
             return {
               behavior: 'confirm' as const,
               message: `Requires approval: ${element.type} '${element.name}' policy requires confirmation for pattern '${pattern}'`,
@@ -674,7 +677,7 @@ export function evaluateCliToolPolicy(
   if (anyElementHasAllowPatterns && !toolAllowedByAnyElement) {
     const restrictors = elementsWithAllowPatterns.join(', ');
     decisionChain.push(`DENY: tool not in any element allowlist (restricted by: ${restrictors})`);
-    logger.debug(`[CliPolicy] DENY: ${toolName} not in any allowlist (restricted by: ${restrictors})`);
+    logger.debug(`[CliPolicy] DENY: ${toolName} not in any allowlist (restricted by: ${restrictors}) (${elapsed(startTime)})`);
     return {
       behavior: 'deny',
       message: `Tool '${toolName}' not permitted by allowlists defined in: ${restrictors}. Either deactivate these elements or add allowPatterns to match this tool.`,
@@ -684,16 +687,30 @@ export function evaluateCliToolPolicy(
 
   if (anyElementHasAllowPatterns) {
     decisionChain.push('Tool matched allowlist — fall through to default');
-    logger.debug(`[CliPolicy] ${toolName}: matched allowlist, fall through to default`);
+    logger.debug(`[CliPolicy] ${toolName}: matched allowlist, fall through to default (${elapsed(startTime)})`);
   } else {
     decisionChain.push('No allowPatterns defined — fall through to default (Phase 1 behavior)');
-    logger.debug(`[CliPolicy] ${toolName}: no allowPatterns defined, fall through to default`);
+    logger.debug(`[CliPolicy] ${toolName}: no allowPatterns defined, fall through to default (${elapsed(startTime)})`);
   }
 
   return {
     behavior: 'evaluate',
     policyContext: { evaluatedElements, decisionChain },
   };
+}
+
+/** Format elapsed time since startTime in milliseconds. */
+function elapsed(startTime: number): string {
+  return `${(performance.now() - startTime).toFixed(2)}ms`;
+}
+
+/** Summarize active element types for the entry log (e.g., "3 personas, 2 skills, 1 ensemble"). */
+function summarizeElementTypes(elements: ActiveElement[]): string {
+  const counts = new Map<string, number>();
+  for (const el of elements) {
+    counts.set(el.type, (counts.get(el.type) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([type, count]) => `${count} ${type}${count > 1 ? 's' : ''}`).join(', ');
 }
 
 /**
