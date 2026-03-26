@@ -24,14 +24,33 @@ import { PermissionLevel } from '../../../src/handlers/mcp-aql/GatekeeperTypes.j
 import {
   createPortfolioTestEnvironment,
   preConfirmAllOperations,
-  waitForCacheSettle,
   type PortfolioTestEnvironment,
 } from '../../helpers/portfolioTestHelper.js';
 
+// ── Test Configuration ──
+
+/** Number of elements to create when testing session-scope persistence. */
+const SESSION_PERSISTENCE_COUNT = 3;
+
+/** Maximum time (ms) to wait for an element to become visible after creation. */
+const ELEMENT_POLL_TIMEOUT_MS = 5000;
+
+/** Polling interval (ms) between element visibility checks. */
+const ELEMENT_POLL_INTERVAL_MS = 100;
+
+/** Characters that must never appear in test content (injection prevention). */
+const UNSAFE_CONTENT_PATTERNS = /<script>|{{|`\$\{|eval\(|__proto__/i;
+
+// ── Test Helpers ──
+
 /**
- * Helper to extract result data from a successful MCP-AQL response.
+ * Extract the data payload from a successful MCP-AQL response.
+ * Asserts success and throws if data is missing.
+ *
+ * @typeParam T - Expected shape of the data payload
  * @param result - MCP-AQL operation result
  * @returns The typed data payload
+ * @throws If result is unsuccessful or data is undefined
  */
 function extractData<T = Record<string, unknown>>(result: { success: boolean; data?: T }): T {
   expect(result.success).toBe(true);
@@ -40,7 +59,11 @@ function extractData<T = Record<string, unknown>>(result: { success: boolean; da
 }
 
 /**
- * Helper to extract error from a failed MCP-AQL response.
+ * Extract the error message from a failed MCP-AQL response.
+ * Asserts failure before returning.
+ *
+ * @param result - MCP-AQL operation result
+ * @returns The error string (empty string if undefined)
  */
 function extractError(result: { success: boolean; error?: string }): string {
   expect(result.success).toBe(false);
@@ -48,7 +71,89 @@ function extractError(result: { success: boolean; error?: string }): string {
 }
 
 /**
- * Helper to create a test element (pre-confirms create_element first).
+ * Validate that test content does not contain potentially unsafe patterns.
+ * Guards against accidental injection in test fixtures.
+ *
+ * @param content - The content string to validate
+ * @param context - Description of where this content is used (for error messages)
+ * @throws If unsafe patterns are detected
+ */
+function validateTestContent(content: string, context: string): void {
+  if (UNSAFE_CONTENT_PATTERNS.test(content)) {
+    throw new Error(`Unsafe content detected in ${context}: ${content.slice(0, 100)}`);
+  }
+}
+
+/**
+ * Wait for an element to become visible via get_element after creation.
+ * Uses polling instead of arbitrary delay for deterministic behavior.
+ *
+ * @param handler - MCPAQLHandler instance
+ * @param name - Element name to poll for
+ * @param type - Element type (e.g., 'skills', 'personas')
+ * @param timeoutMs - Maximum time to wait (default: ELEMENT_POLL_TIMEOUT_MS)
+ * @throws If element is not found within the timeout
+ */
+async function waitForElement(
+  handler: MCPAQLHandler,
+  name: string,
+  type: string,
+  timeoutMs: number = ELEMENT_POLL_TIMEOUT_MS
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const result = await handler.handleRead({
+        operation: 'get_element',
+        element_type: type,
+        params: { element_name: name, element_type: type },
+      });
+      if (result.success) return;
+    } catch { /* element not yet visible, keep polling */ }
+    await new Promise(resolve => setTimeout(resolve, ELEMENT_POLL_INTERVAL_MS));
+  }
+  throw new Error(`Element '${name}' (${type}) not found after ${timeoutMs}ms`);
+}
+
+/**
+ * Wait for an element activation to propagate by polling get_active_elements.
+ *
+ * @param handler - MCPAQLHandler instance
+ * @param name - Element name that should appear in active elements
+ * @param timeoutMs - Maximum time to wait (default: ELEMENT_POLL_TIMEOUT_MS)
+ * @throws If element is not active within the timeout
+ */
+async function waitForActivation(
+  handler: MCPAQLHandler,
+  name: string,
+  timeoutMs: number = ELEMENT_POLL_TIMEOUT_MS
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const result = await handler.handleRead({
+        operation: 'get_active_elements',
+        params: {},
+      });
+      if (result.success) {
+        const text = JSON.stringify(result.data);
+        if (text.includes(name)) return;
+      }
+    } catch { /* not yet propagated, keep polling */ }
+    await new Promise(resolve => setTimeout(resolve, ELEMENT_POLL_INTERVAL_MS));
+  }
+  throw new Error(`Element '${name}' not found in active elements after ${timeoutMs}ms`);
+}
+
+/**
+ * Create a test element with pre-confirmed gatekeeper and content validation.
+ * Records a session confirmation for create_element before attempting creation.
+ *
+ * @param handler - MCPAQLHandler instance
+ * @param gatekeeper - Gatekeeper instance for recording confirmations
+ * @param name - Element name to create
+ * @param type - Element type (default: 'skills')
+ * @throws If creation fails or content contains unsafe patterns
  */
 async function createTestElement(
   handler: MCPAQLHandler,
@@ -56,14 +161,19 @@ async function createTestElement(
   name: string,
   type: string = 'skills'
 ): Promise<void> {
+  const content = `# ${name}\n\nTest content for permission flow harness.`;
+  const description = `Test element: ${name}`;
+  validateTestContent(content, `createTestElement(${name})`);
+  validateTestContent(description, `createTestElement(${name}) description`);
+
   gatekeeper.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
   const result = await handler.handleCreate({
     operation: 'create_element',
     params: {
       element_name: name,
       element_type: type,
-      description: `Test element: ${name}`,
-      content: `# ${name}\n\nTest content for permission flow harness.`,
+      description,
+      content,
     },
   });
   expect(result.success).toBe(true);
@@ -136,7 +246,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       gatekeeper.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 
       await createTestElement(mcpAqlHandler, gatekeeper, 'delete-test-skill');
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'delete-test-skill', 'skills');
 
       // Delete should still require confirmation
       const deleteResult = await mcpAqlHandler.handleDelete({
@@ -163,7 +273,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       });
       expect(createResult.success).toBe(true);
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, "pre-confirmed-skill", "skills");
 
       // Edit should work
       const editResult = await mcpAqlHandler.handleUpdate({
@@ -207,7 +317,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'restrictive-persona', 'personas');
 
       // Activate the restrictive persona
       await mcpAqlHandler.handleRead({
@@ -215,7 +325,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         params: { element_name: 'restrictive-persona', element_type: 'personas' },
       });
 
-      await waitForCacheSettle();
+      await waitForActivation(mcpAqlHandler, "restrictive-persona");
 
       // Even with all operations pre-confirmed, the element deny should block
       const createResult = await mcpAqlHandler.handleCreate({
@@ -243,7 +353,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'step-test-agent', 'agents');
 
       const execResult = await mcpAqlHandler.handleExecute({
         operation: 'execute_agent',
@@ -317,7 +427,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'policy-test-ensemble', 'ensembles');
 
       // Activate the ensemble
       await mcpAqlHandler.handleRead({
@@ -325,7 +435,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         params: { element_name: 'policy-test-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForCacheSettle();
+      await waitForActivation(mcpAqlHandler, "policy-test-ensemble");
 
       // git push --force should be denied by element policy
       const denyResult = await mcpAqlHandler.handleRead({
@@ -370,14 +480,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'confirm-test-ensemble', 'ensembles');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'confirm-test-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForCacheSettle();
+      await waitForActivation(mcpAqlHandler, "confirm-test-ensemble");
 
       // gh pr merge should require confirmation
       const confirmResult = await mcpAqlHandler.handleRead({
@@ -428,14 +538,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'restrictive-ensemble', 'ensembles');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'restrictive-ensemble', element_type: 'ensembles' },
       });
 
-      await waitForCacheSettle();
+      await waitForActivation(mcpAqlHandler, "restrictive-ensemble");
 
       // curl should be denied — not in any allowlist
       const result = await mcpAqlHandler.handleRead({
@@ -458,7 +568,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       gatekeeper.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 
       // Multiple creates should all succeed
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= SESSION_PERSISTENCE_COUNT; i++) {
         const result = await mcpAqlHandler.handleCreate({
           operation: 'create_element',
           params: {
@@ -615,14 +725,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'deny-delete-persona', 'personas');
 
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: { element_name: 'deny-delete-persona', element_type: 'personas' },
       });
 
-      await waitForCacheSettle();
+      await waitForActivation(mcpAqlHandler, "deny-delete-persona");
 
       // Revoke pre-confirmations so we test the confirm flow
       gatekeeper.revokeAllConfirmations();
@@ -660,7 +770,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'approval-count-agent', 'agents');
 
       // Revoke all confirmations to test from clean state
       gatekeeper.revokeAllConfirmations();
@@ -707,7 +817,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, "entry-test-memory", "memories");
 
       // Revoke all to test clean state
       gatekeeper.revokeAllConfirmations();
@@ -754,7 +864,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
         },
       });
 
-      await waitForCacheSettle();
+      await waitForElement(mcpAqlHandler, 'step-confirm-agent', 'agents');
 
       const execResult = await mcpAqlHandler.handleExecute({
         operation: 'execute_agent',
