@@ -43,59 +43,39 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
     await env.cleanup();
   });
 
-  describe('confirmation required flow', () => {
-    it('should return confirmationPending for unconfirmed create_element', async () => {
+  describe('auto-confirm flow (#1653)', () => {
+    it('should auto-confirm create_element without explicit confirm_operation', async () => {
+      // #1653: Operations that would have required confirmationPending now auto-confirm
       const result = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'confirm-test-skill',
           element_type: 'skills',
-          description: 'A skill for testing confirmation flow',
-          content: '# Confirm Test\n\nThis is test content for the confirmation flow.',
+          description: 'A skill for testing auto-confirmation flow',
+          content: '# Confirm Test\n\nThis is test content for the auto-confirm flow.',
         },
       });
 
-      // Should fail with structured confirmation guidance
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toMatch(/Approval needed/);
-        expect(result.error).toMatch(/confirm_operation/);
-        expect(result.error).toMatch(/create_element/);
-      }
+      // Should succeed directly — no confirm_operation round-trip needed
+      expect(result.success).toBe(true);
     });
 
-    it('should succeed after confirm_operation then retry', async () => {
-      // Step 1: Attempt create — should be blocked
-      const firstAttempt = await mcpAqlHandler.handleCreate({
-        operation: 'create_element',
-        params: {
-          element_name: 'retry-test-skill',
-          element_type: 'skills',
-          description: 'A skill for testing retry after confirmation',
-          content: '# Retry Test\n\nThis is test content for retry flow.',
-        },
-      });
-      expect(firstAttempt.success).toBe(false);
-
-      // Step 2: Confirm the operation
+    it('confirm_operation still works for explicit pre-approval', async () => {
+      // confirm_operation is still available for cases where explicit
+      // pre-approval is desired (e.g., before a batch of operations)
       const confirmResult = await mcpAqlHandler.handleExecute({
         operation: 'confirm_operation',
         params: { operation: 'create_element' },
       });
       expect(confirmResult.success).toBe(true);
-      if (confirmResult.success) {
-        const data = confirmResult.data as any;
-        expect(data.confirmed).toBe(true);
-      }
 
-      // Step 3: Retry — should now succeed
       const retryResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'retry-test-skill',
           element_type: 'skills',
-          description: 'A skill for testing retry after confirmation',
-          content: '# Retry Test\n\nThis is test content for retry flow.',
+          description: 'A skill created after explicit confirmation',
+          content: '# Retry Test\n\nThis is test content.',
         },
       });
       expect(retryResult.success).toBe(true);
@@ -136,11 +116,8 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
       expect(create2.success).toBe(true);
     });
 
-    it('single-use confirmation should be consumed after one delete', async () => {
-      // Pre-confirm create so we can make elements to delete
-      preConfirmAllOperations(container);
-
-      // Create two skills to delete
+    it('both deletes succeed with auto-confirm (#1653)', async () => {
+      // Create two skills to delete (auto-confirm handles the create)
       await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
@@ -162,42 +139,18 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
 
       await waitForCacheSettle();
 
-      // Reset confirmations to test single-use flow
-      gatekeeper.revokeAllConfirmations();
-
-      // Confirm delete_element (single-use level)
-      const confirmResult = await mcpAqlHandler.handleExecute({
-        operation: 'confirm_operation',
-        params: { operation: 'delete_element' },
-      });
-      expect(confirmResult.success).toBe(true);
-      if (confirmResult.success) {
-        const data = confirmResult.data as any;
-        expect(data.level).toBe('single_use');
-      }
-
-      // First delete should succeed (consumes the confirmation)
+      // #1653: Both deletes succeed — auto-confirm handles each one
       const delete1 = await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
-        params: {
-          element_name: 'delete-me-1',
-          element_type: 'skills',
-        },
+        params: { element_name: 'delete-me-1', element_type: 'skills' },
       });
       expect(delete1.success).toBe(true);
 
-      // Second delete should require re-confirmation
       const delete2 = await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
-        params: {
-          element_name: 'delete-me-2',
-          element_type: 'skills',
-        },
+        params: { element_name: 'delete-me-2', element_type: 'skills' },
       });
-      expect(delete2.success).toBe(false);
-      if (!delete2.success) {
-        expect(delete2.error).toMatch(/confirm_operation/);
-      }
+      expect(delete2.success).toBe(true);
     });
   });
 
@@ -268,20 +221,17 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
       // Revoke all confirmations
       gatekeeper.revokeAllConfirmations();
 
-      // Create should now require confirmation again
+      // #1653: Create still succeeds after revoke — auto-confirm re-records
       const create2 = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'revoke-test-2',
           element_type: 'skills',
           description: 'Post-revoke skill',
-          content: '# Revoke Test 2\n\nAfter revocation.',
+          content: '# Revoke Test 2\n\nAfter revocation, auto-confirmed.',
         },
       });
-      expect(create2.success).toBe(false);
-      if (!create2.success) {
-        expect(create2.error).toMatch(/confirm_operation/);
-      }
+      expect(create2.success).toBe(true);
     });
   });
 
@@ -310,21 +260,18 @@ describe('Gatekeeper Confirm/Retry Flow (Issue #1601)', () => {
       } as any);
       expect(skillCreate.success).toBe(true);
 
-      // Creating a persona (different type) should still require confirmation
+      // #1653: Persona also succeeds — auto-confirm handles unscoped case
       const personaCreate = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         element_type: 'personas',
         params: {
           element_name: 'scoped-persona',
           element_type: 'personas',
-          description: 'Persona without scoped confirmation',
-          content: '# Scoped Persona\n\nThis should be blocked.',
+          description: 'Persona auto-confirmed',
+          content: '# Scoped Persona\n\nAlso succeeds with auto-confirm.',
         },
       } as any);
-      expect(personaCreate.success).toBe(false);
-      if (!personaCreate.success) {
-        expect(personaCreate.error).toMatch(/confirm_operation/);
-      }
+      expect(personaCreate.success).toBe(true);
     });
   });
 

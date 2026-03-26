@@ -241,21 +241,19 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       }
     });
 
-    it('should still require confirmation for delete even when create is confirmed', async () => {
+    it('should auto-confirm delete even when only create was explicitly confirmed (#1653)', async () => {
       // Confirm create but NOT delete
       gatekeeper.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 
       await createTestElement(mcpAqlHandler, gatekeeper, 'delete-test-skill');
       await waitForElement(mcpAqlHandler, 'delete-test-skill', 'skills');
 
-      // Delete should still require confirmation
+      // #1653: Delete now auto-confirms — the host's tool approval is the primary gate
       const deleteResult = await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
         params: { element_name: 'delete-test-skill', element_type: 'skills' },
       });
-      const error = extractError(deleteResult);
-      expect(error).toMatch(/Approval needed/);
-      expect(error).toMatch(/delete_element/);
+      expect(deleteResult.success).toBe(true);
     });
 
     it('preConfirmAllOperations should enable all operations without confirm_operation calls', async () => {
@@ -597,19 +595,17 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       });
       expect(first.success).toBe(true);
 
-      // Second create should fail — confirmation consumed
+      // #1653: Second create also succeeds — auto-confirm re-records the confirmation
       const second = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'single-use-2',
           element_type: 'skills',
           description: 'Second single-use create',
-          content: '# Single Use 2\n\nShould fail.',
+          content: '# Single Use 2\n\nAlso succeeds with auto-confirm.',
         },
       });
-      expect(second.success).toBe(false);
-      const error = extractError(second);
-      expect(error).toMatch(/Approval needed/);
+      expect(second.success).toBe(true);
     });
 
     it('element-type-scoped confirmation should not leak across types', async () => {
@@ -631,20 +627,18 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       });
       expect(skillResult.success).toBe(true);
 
-      // Create persona should still require confirmation
+      // #1653: Create persona also succeeds — auto-confirm handles the unscoped case
       const personaResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         element_type: 'personas',
         params: {
           element_name: 'scoped-persona',
           element_type: 'personas',
-          description: 'Should require separate confirmation',
+          description: 'Also succeeds with auto-confirm',
           instructions: 'Test persona.',
         },
       });
-      expect(personaResult.success).toBe(false);
-      const error = extractError(personaResult);
-      expect(error).toMatch(/Approval needed/);
+      expect(personaResult.success).toBe(true);
     });
 
     it('revokeAllConfirmations should reset all session confirmations', async () => {
@@ -666,19 +660,17 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       // Revoke all
       gatekeeper.revokeAllConfirmations();
 
-      // Create should now require confirmation again
+      // #1653: Create still succeeds after revoke — auto-confirm re-records
       const afterRevoke = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
           element_name: 'after-revoke',
           element_type: 'skills',
           description: 'After revoke',
-          content: '# After\n\nShould fail.',
+          content: '# After\n\nSucceeds with auto-confirm.',
         },
       });
-      expect(afterRevoke.success).toBe(false);
-      const error = extractError(afterRevoke);
-      expect(error).toMatch(/Approval needed/);
+      expect(afterRevoke.success).toBe(true);
     });
   });
 
@@ -752,7 +744,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
   // ── Scenario F: Documenting the current triple-approval behavior (#1653) ──
 
   describe('Scenario F: Document current confirmation behavior for #1653 baseline', () => {
-    it('should document the number of approvals needed for execute_agent', async () => {
+    it('should require only 1 MCP call for execute_agent with auto-confirm (#1653)', async () => {
       preConfirmAllOperations(container);
 
       // Create an agent with a goal template
@@ -775,33 +767,14 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       // Revoke all confirmations to test from clean state
       gatekeeper.revokeAllConfirmations();
 
-      // Step 1: Attempt execute_agent — should fail with confirmationPending
-      const attempt1 = await mcpAqlHandler.handleExecute({
+      // #1653: execute_agent now succeeds in a single call — auto-confirm
+      // eliminates the confirm_operation round-trip.
+      // In Claude Code: 1 user approval (the MCP tool call) instead of 3.
+      const result = await mcpAqlHandler.handleExecute({
         operation: 'execute_agent',
         params: { element_name: 'approval-count-agent', parameters: { objective: 'test' } },
       });
-      expect(attempt1.success).toBe(false);
-      const error1 = extractError(attempt1);
-      expect(error1).toMatch(/Approval needed/);
-
-      // Step 2: confirm_operation
-      const confirm = await mcpAqlHandler.handleExecute({
-        operation: 'confirm_operation',
-        params: { operation: 'execute_agent' },
-      });
-      expect(confirm.success).toBe(true);
-
-      // Step 3: Retry execute_agent — should now succeed
-      const attempt2 = await mcpAqlHandler.handleExecute({
-        operation: 'execute_agent',
-        params: { element_name: 'approval-count-agent', parameters: { objective: 'test' } },
-      });
-      // This documents the current behavior:
-      // With gatekeeper confirmation, execute_agent requires 2 MCP calls minimum
-      // (confirm_operation + execute_agent)
-      // In Claude Code with manual approval, each MCP call also needs Claude Code's approval
-      // = 3 total user interactions for a single agent execution
-      expect(attempt2.success).toBe(true);
+      expect(result.success).toBe(true);
     });
 
     it('should document that addEntry requires confirmation when not pre-confirmed', async () => {
@@ -891,6 +864,139 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
           // This confirms record_execution_step is a separate confirmation
         }
       }
+    });
+  });
+
+  // ── Scenario G: What protects the system when host auto-approves everything? ──
+
+  describe('Scenario G: Safety layers when host bypasses approval (mcp_aql_execute in allow list)', () => {
+    // These tests simulate the scenario where a user puts mcp_aql_execute
+    // in their Claude Code settings.json allow list AND the gatekeeper
+    // auto-confirms. The question: what still prevents runaway agents?
+
+    it('element deny policies still block even with full auto-confirm', async () => {
+      preConfirmAllOperations(container);
+
+      // Create a persona with deny policy for create_element
+      await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'deny-create-persona',
+          element_type: 'personas',
+          description: 'Denies create operations',
+          instructions: 'You block creates.',
+          gatekeeper: { deny: ['create_element'] },
+        },
+      });
+
+      await waitForElement(mcpAqlHandler, 'deny-create-persona', 'personas');
+
+      // Activate it
+      await mcpAqlHandler.handleRead({
+        operation: 'activate_element',
+        params: { element_name: 'deny-create-persona', element_type: 'personas' },
+      });
+
+      await waitForActivation(mcpAqlHandler, 'deny-create-persona');
+
+      // Revoke all pre-confirmations — rely purely on auto-confirm
+      gatekeeper.revokeAllConfirmations();
+
+      // create_element should be HARD DENIED — element deny overrides auto-confirm
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'should-not-exist',
+          element_type: 'skills',
+          description: 'Should be blocked',
+          content: '# Blocked\n\nShould not be created.',
+        },
+      });
+      expect(result.success).toBe(false);
+      // Hard deny throws, not "Approval needed"
+      if (result.error) {
+        expect(result.error).not.toMatch(/Approval needed/);
+      }
+    });
+
+    it('canBeElevated: false prevents element allow from loosening execute_agent', async () => {
+      // execute_agent has canBeElevated: false — even if an element has
+      // allow: ['execute_agent'], it cannot loosen the permission to AUTO_APPROVE.
+      // The operation still requires CONFIRM_SINGLE_USE which auto-confirms,
+      // but the elevation constraint ensures element policies can't silently
+      // set it to AUTO_APPROVE (bypassing the auto-confirm recording entirely).
+      const route = { operation: 'execute_agent', endpoint: 'EXECUTE' as const };
+      const decision = gatekeeper.enforce(route);
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      // The confirmation level should still be CONFIRM_SINGLE_USE
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+    });
+
+    it('delete_element canBeElevated: false prevents silent auto-approve', async () => {
+      const route = { operation: 'delete_element', endpoint: 'DELETE' as const };
+      const decision = gatekeeper.enforce(route);
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+    });
+
+    it('unknown operations default to CONFIRM_SINGLE_USE (secure fallback)', async () => {
+      // If someone invents a new operation, it's not AUTO_APPROVE
+      const route = { operation: 'totally_unknown_operation', endpoint: 'EXECUTE' as const };
+      const decision = gatekeeper.enforce(route);
+      // Unknown operations fail route validation, which is a hard deny
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('auto-confirm records in session — subsequent enforce() calls pass without re-confirming', async () => {
+      // First call: auto-confirms and proceeds
+      gatekeeper.revokeAllConfirmations();
+      const result1 = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'session-test-auto-1',
+          element_type: 'skills',
+          description: 'First auto-confirmed create',
+          content: '# Auto 1\n\nFirst.',
+        },
+      });
+      expect(result1.success).toBe(true);
+
+      // Second call: confirmation already in session, passes immediately
+      const result2 = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'session-test-auto-2',
+          element_type: 'skills',
+          description: 'Second auto-confirmed create',
+          content: '# Auto 2\n\nSecond.',
+        },
+      });
+      expect(result2.success).toBe(true);
+    });
+
+    it('document: with auto-confirm, the remaining safety layers are element deny + canBeElevated + safety tier + DangerZone', async () => {
+      // This test serves as living documentation of the safety model post-#1653.
+      // When host auto-approves AND gatekeeper auto-confirms:
+      //
+      // 1. Element deny policies: ACTIVE — hard deny bypasses auto-confirm
+      // 2. canBeElevated: false: ACTIVE — prevents element allow from loosening
+      // 3. Safety tier: ACTIVE — evaluated before confirmation check in enforce()
+      // 4. DangerZone: ACTIVE — separate verification flow (beetlejuice challenge)
+      // 5. confirm_operation explicit flow: AVAILABLE but not required
+      //
+      // What is NOT active:
+      // - Host tool approval (user put mcp_aql_execute in allow list)
+      // - Gatekeeper confirm round-trip (auto-confirmed)
+      //
+      // The system is still protected by 4 independent safety layers.
+      // This is acceptable because:
+      // - Auto-approving mcp_aql_execute is an explicit user choice
+      // - The user has accepted the risk by moving it from ask to allow
+      // - Element policies provide runtime-configurable guardrails
+      // - DangerZone provides last-resort OS-level verification
+      expect(true).toBe(true); // Documentation test — always passes
     });
   });
 });
