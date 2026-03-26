@@ -62,7 +62,36 @@ export const suppressions: Suppression[] = [
     file: 'src/elements/memories/MemoryManager.ts',
     reason: 'FALSE POSITIVE: Line 1024 is a logger.error() call formatting an error message with string concatenation. This is not a SQL query - the codebase does not use SQL. The string concatenation builds a user-facing error message for deletion failures. PR #7'
   },
-  
+  {
+    rule: 'CWE-89-001',
+    file: 'src/web/public/metrics.js',
+    reason: 'FALSE POSITIVE: Browser-side Date.toLocaleTimeString() concatenation for display label. Not SQL — the codebase does not use SQL.'
+  },
+
+  // ========================================
+  // Metrics & Web Console False Positives
+  // ========================================
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/metrics/sinks/MemoryMetricsSink.ts',
+    reason: 'FALSE POSITIVE: Internal metrics storage — does not process user input directly. Metric names and sources are server-generated constants. Input normalization is handled at the route handler boundary.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/metrics/collectors/PerformanceMonitorCollector.ts',
+    reason: 'FALSE POSITIVE: Metric collector with hardcoded constant strings only. No user input enters this component. All metric names, sources, and descriptions are compile-time constants.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/metrics.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Dashboard renders server-generated metric data only — no user text input.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/logs.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript. Filter inputs are used for local JS array filtering only — never sent to server. UnicodeValidator is a Node.js module unavailable in browser context.'
+  },
+
   // ========================================
   // Test File Suppressions
   // ========================================

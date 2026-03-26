@@ -10,6 +10,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
 import type { MetricSnapshot, MetricType } from '../../metrics/types.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 
 interface SSEClient {
   res: Response;
@@ -30,13 +31,13 @@ export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRout
     const options: Record<string, unknown> = {};
 
     if (typeof req.query['names'] === 'string' && req.query['names']) {
-      options['names'] = req.query['names'].split(',').map(s => s.trim());
+      options['names'] = UnicodeValidator.normalize(req.query['names']).normalizedContent.split(',').map(s => s.trim());
     }
     if (typeof req.query['source'] === 'string' && req.query['source']) {
-      options['source'] = req.query['source'];
+      options['source'] = UnicodeValidator.normalize(req.query['source']).normalizedContent;
     }
     if (typeof req.query['type'] === 'string' && req.query['type']) {
-      options['type'] = req.query['type'] as MetricType;
+      options['type'] = UnicodeValidator.normalize(req.query['type']).normalizedContent as MetricType;
     }
     if (typeof req.query['since'] === 'string' && req.query['since']) {
       options['since'] = req.query['since'];
