@@ -829,12 +829,18 @@ export class MCPAQLHandler {
             //
             // The confirmation is recorded in the session so subsequent enforce() calls
             // for the same operation pass without re-confirming.
-            this.gatekeeper.recordConfirmation(
-              operation,
-              decision.permissionLevel as PermissionLevel.CONFIRM_SESSION | PermissionLevel.CONFIRM_SINGLE_USE,
-              elementType
+            const confirmLevel = decision.permissionLevel as
+              PermissionLevel.CONFIRM_SESSION | PermissionLevel.CONFIRM_SINGLE_USE;
+            this.gatekeeper.recordConfirmation(operation, confirmLevel, elementType);
+
+            // Build and log a detailed summary for session review.
+            // Even though no human is prompted, this appears in query_logs
+            // so operators can trace what was auto-confirmed and why.
+            const summary = this.buildOperationSummary(operation, elementType, params);
+            const scope = elementType ? ' [' + elementType + ']' : '';
+            logger.debug(
+              '[Gatekeeper] Auto-confirmed: ' + summary + scope + '. Reason: ' + decision.reason
             );
-            logger.debug(`[Gatekeeper] Auto-confirmed '${operation}'${elementType ? ` (${elementType})` : ''}: ${decision.reason}`);
           } else {
             // Hard deny — operation is blocked by policy, no confirmation can help
             this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);

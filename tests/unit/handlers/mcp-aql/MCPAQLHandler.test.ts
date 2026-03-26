@@ -1536,7 +1536,7 @@ describe('MCPAQLHandler', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should require confirmation for CREATE operations (create_element)', async () => {
+    it('should auto-confirm CREATE operations without explicit confirm_operation (#1653)', async () => {
       const input: OperationInput = {
         operation: 'create_element',
         params: {
@@ -1547,30 +1547,13 @@ describe('MCPAQLHandler', () => {
         },
       };
 
+      // #1653: Auto-confirm — no confirm_operation round-trip needed
       const result = await enforcingHandler.handleCreate(input);
-      // Should fail with confirmation prompt
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('confirm_operation');
-      }
+      expect(result.success).toBe(true);
     });
 
-    it('should allow CREATE after confirm_operation flow', async () => {
-      // Step 1: Try create — should require confirmation
-      const createInput: OperationInput = {
-        operation: 'create_element',
-        params: {
-          element_name: 'Test',
-          element_type: 'persona',
-          description: 'Test',
-          content: 'Test',
-        },
-      };
-
-      const firstResult = await enforcingHandler.handleCreate(createInput);
-      expect(firstResult.success).toBe(false);
-
-      // Step 2: Confirm the operation (routed through EXECUTE)
+    it('confirm_operation still works for explicit pre-approval (#1653)', async () => {
+      // confirm_operation is still available for explicit pre-approval scenarios
       const confirmInput: OperationInput = {
         operation: 'confirm_operation',
         params: { operation: 'create_element' },
@@ -1582,9 +1565,18 @@ describe('MCPAQLHandler', () => {
         expect(confirmResult.data).toHaveProperty('confirmed', true);
       }
 
-      // Step 3: Retry create — should now succeed
-      const retryResult = await enforcingHandler.handleCreate(createInput);
-      expect(retryResult.success).toBe(true);
+      // Create after explicit confirmation
+      const createInput: OperationInput = {
+        operation: 'create_element',
+        params: {
+          element_name: 'Test',
+          element_type: 'persona',
+          description: 'Test',
+          content: 'Test',
+        },
+      };
+      const createResult = await enforcingHandler.handleCreate(createInput);
+      expect(createResult.success).toBe(true);
     });
 
     it('should pass active elements to Gatekeeper enforce()', async () => {
