@@ -1,0 +1,128 @@
+name: Publish to npm
+
+# This workflow publishes the package to npm registry when a release is published.
+# Uses npm Trusted Publishing (OIDC) for secure, token-free authentication.
+#
+# Trusted Publishing Setup Required:
+# 1. Go to https://www.npmjs.com/package/@dollhousemcp/mcp-server/access
+# 2. Add Trusted Publisher:
+#    - Provider: GitHub Actions
+#    - Organization: DollhouseMCP
+#    - Repository: mcp-server
+#    - Workflow: publish-npm.yml
+#    - Environment: (leave blank)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without publishing)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # Required for OIDC/Trusted Publishing
+  contents: read    # Required for checkout
+
+env:
+  NODE_OPTIONS: '--max-old-space-size=4096'
+  CI: true
+
+jobs:
+  publish-npm:
+    name: Publish to npm Registry
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          # Node 22.x is required for npm 11.x compatibility
+          # Note: Node 22.x ships with npm 10.x by default, so we upgrade npm separately below
+          node-version: '22.x'
+          # NOTE: Do NOT use registry-url here! It creates .npmrc with token placeholder
+          # that blocks OIDC detection. npm will use default registry automatically.
+          cache: 'npm'
+
+      - name: Upgrade npm to 11.x for OIDC support
+        shell: bash
+        run: |
+          echo "Current npm version: $(npm --version)"
+          npm install -g npm@11
+          echo "Upgraded npm version: $(npm --version)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      # Note: Tests are skipped in publish workflow because:
+      # 1. Tests already run in core-build-test workflow before any merge to main
+      # 2. jsdom ESM compatibility issue causes false failures in isolated environments
+      # 3. This workflow only runs after code has passed all CI checks
+
+      - name: Check package version
+        id: package_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Debug OIDC Environment
+        shell: bash
+        run: |
+          echo "=== OIDC Environment Check ==="
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT SET}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+SET (hidden)}"
+          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
+          echo ""
+          echo "=== npm version ==="
+          npm --version
+          echo ""
+          echo "=== .npmrc files ==="
+          cat ~/.npmrc 2>/dev/null || echo "No ~/.npmrc"
+          cat .npmrc 2>/dev/null || echo "No ./.npmrc"
+          echo ""
+          echo "=== NPM_CONFIG_* vars ==="
+          env | grep NPM_CONFIG || echo "No NPM_CONFIG vars"
+          echo ""
+          echo "=== NODE_AUTH_TOKEN ==="
+          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
+
+      - name: Publish to npm (with provenance)
+        if: github.event.inputs.dry_run != 'true'
+        shell: bash
+        env:
+          # Ensure provenance is enabled for OIDC detection
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          # Publish with provenance for supply chain security
+          # Uses OIDC authentication automatically when:
+          # 1. id-token: write permission is set
+          # 2. Running on GitHub Actions
+          # 3. No .npmrc with token configuration (we removed registry-url from setup-node)
+          # Using --loglevel verbose to diagnose OIDC issues
+          npm publish --provenance --access public --loglevel verbose
+
+      - name: Dry run (skip publish)
+        if: github.event.inputs.dry_run == 'true'
+        shell: bash
+        run: |
+          echo "🧪 DRY RUN MODE - Skipping publication"
+          echo "Package would be published: @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }}"
+          npm publish --dry-run
+
+      - name: Notify success
+        if: success() && github.event.inputs.dry_run != 'true'
+        shell: bash
+        run: |
+          echo "✅ Successfully published @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }} to npm!"
+          echo "📦 View at: https://www.npmjs.com/package/@dollhousemcp/mcp-server/v/${{ steps.package_version.outputs.version }}"
