@@ -815,20 +815,31 @@ export class MCPAQLHandler {
         });
 
         if (!decision.allowed) {
-          // Track block for executing agents (Agent Notification System)
-          this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);
-
           if (decision.confirmationPending) {
-            // Issue #748: Include human-readable summary + rationale explaining why
-            const summary = this.buildOperationSummary(operation, elementType, params);
-            return this.failure(
-              `Approval needed: ${summary}. Reason: ${decision.reason}. ` +
-              `Use confirm_operation with params { operation: "${operation}"${elementType ? `, element_type: "${elementType}"` : ''} } to approve, then retry.`,
-              startTime
+            // Issue #1653: Auto-confirm when the host (Claude Code, etc.) has already
+            // approved this MCP tool call. The host's tool-level approval is the primary
+            // human gate; the gatekeeper's confirm_operation round-trip is redundant when
+            // the host gates every call.
+            //
+            // Safety layers that remain active (proven by permission-flow-harness tests):
+            // - Element deny policies (hard deny, no confirmationPending flag)
+            // - canBeElevated: false constraints
+            // - Safety tier evaluation (runs before confirmation check)
+            // - DangerZone verification (separate flow)
+            //
+            // The confirmation is recorded in the session so subsequent enforce() calls
+            // for the same operation pass without re-confirming.
+            this.gatekeeper.recordConfirmation(
+              operation,
+              decision.permissionLevel as PermissionLevel.CONFIRM_SESSION | PermissionLevel.CONFIRM_SINGLE_USE,
+              elementType
             );
+            logger.debug(`[Gatekeeper] Auto-confirmed '${operation}'${elementType ? ` (${elementType})` : ''}: ${decision.reason}`);
+          } else {
+            // Hard deny — operation is blocked by policy, no confirmation can help
+            this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);
+            throw new Error(`[Gatekeeper] ${decision.reason}`);
           }
-          // Hard deny — operation is blocked by policy
-          throw new Error(`[Gatekeeper] ${decision.reason}`);
         }
 
         // Issue #673: Protect gatekeeper policy fields from element-policy elevation.
