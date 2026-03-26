@@ -23,7 +23,7 @@
 
 import { CRUDEndpoint } from './OperationRouter.js';
 import { Gatekeeper } from './Gatekeeper.js';
-import { type ActiveElement, translateToolConfigToPolicy } from './policies/index.js';
+import { type ActiveElement, translateToolConfigToPolicy, canOperationBeElevated } from './policies/index.js';
 import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode } from './GatekeeperTypes.js';
 import { getRoute } from './OperationRouter.js';
@@ -831,6 +831,12 @@ export class MCPAQLHandler {
             // for the same operation pass without re-confirming.
             const confirmLevel = decision.permissionLevel as
               PermissionLevel.CONFIRM_SESSION | PermissionLevel.CONFIRM_SINGLE_USE;
+
+            // Risk scoring for destructive/high-impact operations.
+            // Assigns a risk score (0-100) based on operation characteristics.
+            // This is the MCP-AQL equivalent of assessRisk() for CLI tools.
+            const riskScore = this.scoreOperationRisk(operation, endpoint, params);
+
             this.gatekeeper.recordConfirmation(operation, confirmLevel, elementType);
 
             // Build and log a detailed summary for session review.
@@ -838,9 +844,17 @@ export class MCPAQLHandler {
             // so operators can trace what was auto-confirmed and why.
             const summary = this.buildOperationSummary(operation, elementType, params);
             const scope = elementType ? ' [' + elementType + ']' : '';
-            logger.debug(
-              '[Gatekeeper] Auto-confirmed: ' + summary + scope + '. Reason: ' + decision.reason
-            );
+            const riskLabel = riskScore >= 80 ? 'HIGH' : riskScore >= 40 ? 'MODERATE' : 'LOW';
+            const logMessage = '[Gatekeeper] Auto-confirmed (' + riskLabel + ' risk=' + riskScore + '): '
+              + summary + scope + '. Reason: ' + decision.reason;
+
+            // CONFIRM_SINGLE_USE operations (delete, execute_agent, edit, abort)
+            // are higher-risk — log at warn level for visibility in audit trails.
+            if (confirmLevel === PermissionLevel.CONFIRM_SINGLE_USE) {
+              logger.warn(logMessage);
+            } else {
+              logger.debug(logMessage);
+            }
           } else {
             // Hard deny — operation is blocked by policy, no confirmation can help
             this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);
@@ -3067,6 +3081,56 @@ export class MCPAQLHandler {
         return `Perform operation: ${operation.replace(/_/g, ' ')}${paramHint}${elementType ? ` on ${elementType}` : ''}`;
       }
     }
+  }
+
+  /**
+   * Score the risk of an MCP-AQL operation for auto-confirm audit trails.
+   *
+   * Returns a score from 0-100 based on operation characteristics:
+   * - DELETE endpoint operations: base 80 (destructive, data loss)
+   * - EXECUTE endpoint operations: base 60 (unpredictable side effects)
+   * - UPDATE endpoint operations: base 40 (modifies existing data)
+   * - CREATE endpoint operations: base 20 (additive, low risk)
+   *
+   * Modifiers:
+   * - Operations with canBeElevated: false get +10 (structurally dangerous)
+   * - Operations targeting gatekeeper fields get +10 (privilege escalation vector)
+   *
+   * @param operation - The operation name
+   * @param endpoint - The CRUDE endpoint
+   * @param params - Operation parameters (for field inspection)
+   * @returns Risk score 0-100
+   */
+  private scoreOperationRisk(
+    operation: string,
+    endpoint: string,
+    params?: Record<string, unknown>
+  ): number {
+    // Base score by endpoint type
+    const baseScores: Record<string, number> = {
+      DELETE: 80,
+      EXECUTE: 60,
+      UPDATE: 40,
+      CREATE: 20,
+      READ: 0,
+    };
+    let score = baseScores[endpoint] ?? 40;
+
+    // Modifier: non-elevatable operations are structurally more dangerous
+    if (!canOperationBeElevated(operation)) {
+      score += 10;
+    }
+
+    // Modifier: operations targeting gatekeeper fields (privilege escalation vector)
+    if (params && operation === 'edit_element') {
+      const inputObj = (params as Record<string, unknown>).input as Record<string, unknown> | undefined;
+      if (inputObj?.gatekeeper !== undefined ||
+          (inputObj?.metadata as Record<string, unknown> | undefined)?.gatekeeper !== undefined) {
+        score += 10;
+      }
+    }
+
+    return Math.min(score, 100);
   }
 
   /**
