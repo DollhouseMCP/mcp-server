@@ -39,7 +39,7 @@
     if (!container || container.dataset.initialized === 'true') return;
     container.dataset.initialized = 'true';
 
-    uPlotAvailable = typeof globalThis.uPlot !== 'undefined';
+    uPlotAvailable = typeof globalThis.uPlot !== 'undefined'; // NOSONAR — typeof is the safe check for optional globals that may not be loaded
     buildDOM(container);
     bindEvents();
     fetchLatest();
@@ -147,18 +147,22 @@
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
+  function safeRender(fn, metrics) {
+    try { fn(metrics); } catch { /* isolate per-card failures */ }
+  }
+
   function renderAll(metrics) {
     if (!metrics) return;
 
     updateStatus();
-    renderSystemHealth(metrics);
-    renderSearchPerf(metrics);
-    renderOperations(metrics);
-    renderCacheEfficiency(metrics);
-    renderSecurity(metrics);
-    renderGatekeeper(metrics);
-    renderLocks(metrics);
-    renderMetaSystem(metrics);
+    safeRender(renderSystemHealth, metrics);
+    safeRender(renderSearchPerf, metrics);
+    safeRender(renderOperations, metrics);
+    safeRender(renderCacheEfficiency, metrics);
+    safeRender(renderSecurity, metrics);
+    safeRender(renderGatekeeper, metrics);
+    safeRender(renderLocks, metrics);
+    safeRender(renderMetaSystem, metrics);
   }
 
   function updateStatus() {
@@ -602,7 +606,7 @@
 
     try {
       container.innerHTML = '';
-      charts[chartKey] = new uPlot(opts, [times, ...seriesData], container);
+      charts[chartKey] = new uPlot(opts, [times, ...seriesData], container); // NOSONAR — uPlot is a third-party library with a lowercase constructor name
     } catch {
       container.innerHTML = '<div class="metrics-loading">Chart unavailable</div>';
     }

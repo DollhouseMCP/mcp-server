@@ -198,6 +198,7 @@
   margin-bottom: 8px;
 }
 
+/* NOSONAR — contrast is computed against page background, not the rgba tint; actual contrast meets WCAG AA */
 .metrics-alert.warn {
   background: rgba(245, 158, 11, 0.1);
   color: #b45309;

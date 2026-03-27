@@ -192,15 +192,16 @@ export class MetricsManager {
       this.timer = null;
     }
 
-    // Final collection
-    await this.collectNow();
+    try {
+      // Final collection — best-effort, should not prevent cleanup
+      await this.collectNow();
+    } finally {
+      this.closed = true;
 
-    // Set closed AFTER final collection
-    this.closed = true;
-
-    // Flush and close all sinks
-    await Promise.allSettled(this.sinks.map(s => s.flush()));
-    await Promise.allSettled(this.sinks.map(s => s.close()));
+      // Flush and close all sinks
+      await Promise.allSettled(this.sinks.map(s => s.flush()));
+      await Promise.allSettled(this.sinks.map(s => s.close()));
+    }
   }
 
   getManagerStats(): {

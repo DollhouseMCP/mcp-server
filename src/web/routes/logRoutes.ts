@@ -116,6 +116,7 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
 
   function broadcast(entry: UnifiedLogEntry): void {
     for (const client of clients) {
+      if (client.res.destroyed) { clients.delete(client); continue; }
       if (matchesFilter(entry, client.filter)) {
         client.res.write(`data: ${JSON.stringify(entry)}\n\n`);
       }

@@ -256,14 +256,16 @@ describe('LRUCacheCollector', () => {
       ]);
 
       const entries = collector.collect();
-      // broken cache produces 0 entries; healthy cache produces 7
-      expect(entries).toHaveLength(7);
-      for (const entry of entries) {
-        expect(entry.labels?.['cache']).toBe('healthy');
-      }
+      // broken cache produces 1 error metric; healthy cache produces 7
+      expect(entries).toHaveLength(8);
+      const errorEntry = entries.find(e => e.name === 'cache.lru.collection_error');
+      expect(errorEntry?.labels?.['cache']).toBe('broken');
+      expect(errorEntry?.value).toBe(1);
+      const healthyEntries = entries.filter(e => e.labels?.['cache'] === 'healthy');
+      expect(healthyEntries).toHaveLength(7);
     });
 
-    test('all caches failing returns []', () => {
+    test('all caches failing returns error metrics only', () => {
       const badCache = {
         getStats: () => { throw new Error('gone'); },
       };
@@ -271,7 +273,11 @@ describe('LRUCacheCollector', () => {
         { name: 'a', instance: badCache as never },
         { name: 'b', instance: badCache as never },
       ]);
-      expect(collector.collect()).toEqual([]);
+      const entries = collector.collect();
+      expect(entries).toHaveLength(2);
+      expect(entries.every(e => e.name === 'cache.lru.collection_error')).toBe(true);
+      expect(entries[0].labels?.['cache']).toBe('a');
+      expect(entries[1].labels?.['cache']).toBe('b');
     });
   });
 

@@ -96,6 +96,7 @@ export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRout
   function onSnapshot(snapshot: MetricSnapshot): void {
     const data = JSON.stringify(snapshot);
     for (const client of clients) {
+      if (client.res.destroyed) { clients.delete(client); continue; }
       client.res.write(`data: ${data}\n\n`);
     }
   }
