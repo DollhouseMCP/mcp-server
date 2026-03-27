@@ -41,6 +41,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
  */
 export class FileWatchService {
   private readonly watchers = new Map<string, WatchEntry>();
+  private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /**
    * Watch a directory for changes. If the directory doesn't exist, it will be created.
@@ -201,7 +202,6 @@ export class FileWatchService {
     try {
       // Debounce fs.watch events — coalesce rapid-fire notifications into
       // a single handler call per file within a 500ms window (Issue #1687).
-      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
       const pendingChanges = new Set<string>();
 
       watcher = watch(absoluteDir, { recursive: false }, (_eventType, filename) => {
@@ -210,9 +210,10 @@ export class FileWatchService {
         }
         pendingChanges.add(filename.toString());
 
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          debounceTimer = null;
+        const existingTimer = this.debounceTimers.get(absoluteDir);
+        if (existingTimer) clearTimeout(existingTimer);
+        this.debounceTimers.set(absoluteDir, setTimeout(() => {
+          this.debounceTimers.delete(absoluteDir);
           const files = [...pendingChanges];
           pendingChanges.clear();
           for (const relative of files) {
@@ -227,7 +228,7 @@ export class FileWatchService {
               }
             }
           }
-        }, 500);
+        }, 500));
       });
     } catch (watchError) {
       // File watching failed - fall back to polling (or no-op if polling also fails).
@@ -321,6 +322,12 @@ export class FileWatchService {
    * This method is invoked by the DI container's dispose() method.
    */
   dispose(): void {
+    // Clear all pending debounce timers to prevent post-dispose handler calls
+    for (const [dir, timer] of this.debounceTimers) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+
     for (const [dir, entry] of this.watchers) {
       try {
         entry.watcher.close();
