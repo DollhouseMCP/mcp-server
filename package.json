@@ -12,7 +12,7 @@
     "prebuild": "npm run build:safety && node scripts/generate-version.js",
     "build:safety": "cd packages/safety && npm install && npm run build",
     "build": "tsc",
-    "postbuild": "cp -r src/seed-elements dist/ && cp -r src/web/public dist/web/public",
+    "postbuild": "node -e \"const fs=require('fs'),p=require('path');function cpR(s,d){fs.mkdirSync(d,{recursive:true});for(const e of fs.readdirSync(s)){const sp=p.join(s,e),dp=p.join(d,e);fs.statSync(sp).isDirectory()?cpR(sp,dp):fs.copyFileSync(sp,dp)}}cpR('src/seed-elements','dist/seed-elements');cpR('src/web/public','dist/web/public');if(fs.existsSync('src/auto-dollhouse/public'))cpR('src/auto-dollhouse/public','dist/web/public')\"",
     "web": "node dist/index.js --web",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",

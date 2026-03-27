@@ -15,76 +15,20 @@ import express from 'express';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { platform, homedir } from 'node:os';
-import { mkdir, readdir, writeFile, unlink } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { platform } from 'node:os';
+import { mkdir, readdir } from 'node:fs/promises';
 import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { logger } from '../utils/logger.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 3939;
-const MAX_PORT_ATTEMPTS = 10;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
-
-/** Directory for runtime state files (port discovery, PID files) */
-const RUN_DIR = join(homedir(), '.dollhouse', 'run');
 
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
-let portFilePath: string | null = null;
-
-/**
- * Find an available port starting from the given port.
- * Tries sequential ports up to MAX_PORT_ATTEMPTS to avoid conflicts
- * when multiple DollhouseMCP sessions run simultaneously.
- */
-function findAvailablePort(startPort: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let attempt = 0;
-    function tryPort(port: number) {
-      const server = createServer();
-      server.once('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
-          attempt++;
-          tryPort(port + 1);
-        } else {
-          reject(err);
-        }
-      });
-      server.once('listening', () => {
-        server.close(() => resolve(port));
-      });
-      server.listen(port, '127.0.0.1');
-    }
-    tryPort(startPort);
-  });
-}
-
-/**
- * Write the active server port to a discoverable file.
- * PreToolUse hook scripts read this to know which port to curl.
- * Each process writes its own PID-keyed file for cleanup.
- */
-async function writePortFile(port: number): Promise<string> {
-  await mkdir(RUN_DIR, { recursive: true });
-  const pidFile = join(RUN_DIR, `permission-server-${process.pid}.port`);
-  const latestFile = join(RUN_DIR, 'permission-server.port');
-  await writeFile(pidFile, String(port), 'utf-8');
-  await writeFile(latestFile, String(port), 'utf-8');
-  return pidFile;
-}
-
-/**
- * Clean up port file on shutdown.
- */
-async function cleanupPortFile(): Promise<void> {
-  if (portFilePath) {
-    try { await unlink(portFilePath); } catch { /* already gone */ }
-  }
-}
 
 /**
  * Options for starting the web server.
@@ -166,20 +110,12 @@ function openInBrowser(url: string): Promise<{ success: boolean; error?: string 
  * @param options - Server configuration
  */
 export async function startWebServer(options: WebServerOptions): Promise<void> {
+  const port = options.port || DEFAULT_PORT;
+
   if (serverRunning) {
     if (options.openBrowser) {
       openInBrowser(`http://${CONSOLE_HOST}:${serverPort}`);
     }
-    return;
-  }
-
-  // Find an available port — handles multiple simultaneous DollhouseMCP sessions
-  const requestedPort = options.port || DEFAULT_PORT;
-  let port: number;
-  try {
-    port = await findAvailablePort(requestedPort);
-  } catch (err) {
-    logger.error(`[WebUI] Could not find available port starting from ${requestedPort}:`, err);
     return;
   }
 
@@ -258,29 +194,13 @@ export async function startWebServer(options: WebServerOptions): Promise<void> {
   });
 
   // Bind to localhost only
-  app.listen(port, '127.0.0.1', async () => {
+  app.listen(port, '127.0.0.1', () => {
     serverRunning = true;
     serverPort = port;
     const url = `http://${CONSOLE_HOST}:${port}`;
     const fallbackUrl = `http://127.0.0.1:${port}`;
     logger.info(`[WebUI] Management console running at ${url}`);
-    if (port !== requestedPort) {
-      logger.info(`[WebUI] Port ${requestedPort} was in use, bound to ${port} instead`);
-    }
-
-    // Write port file for PreToolUse hook discovery
-    try {
-      portFilePath = await writePortFile(port);
-      logger.info(`[WebUI] Port file written: ${portFilePath}`);
-    } catch (err) {
-      logger.warn('[WebUI] Failed to write port file:', err);
-    }
-
-    // Register cleanup on process exit
-    const exitCleanup = () => { cleanupPortFile().catch(() => {}); };
-    process.once('exit', exitCleanup);
-    process.once('SIGTERM', exitCleanup);
-    process.once('SIGINT', exitCleanup);
+    console.log(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
 
     if (options.openBrowser) {
       openInBrowser(url);

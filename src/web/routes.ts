@@ -21,37 +21,6 @@ import { logger } from '../utils/logger.js';
 import { validateElementContent } from './contentPipeline.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
-// ── Permission Decision Tracking (auto-dollhouse#5) ──────────────────────────
-// Ring buffer of recent permission decisions for the live dashboard feed.
-
-interface PermissionDecision {
-  id: string;
-  timestamp: string;
-  tool_name: string;
-  command?: string;
-  decision: string;
-  reason?: string;
-}
-
-const DECISION_BUFFER_SIZE = 200;
-const recentDecisions: PermissionDecision[] = [];
-let decisionCounter = 0;
-
-function trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
-  const entry: PermissionDecision = {
-    id: `d-${++decisionCounter}`,
-    timestamp: new Date().toISOString(),
-    tool_name: toolName,
-    command: toolName === 'Bash' ? String(input?.command || '') : undefined,
-    decision: String(result?.decision || result?.behavior || 'unknown'),
-    reason: String(result?.reason || result?.message || ''),
-  };
-  recentDecisions.unshift(entry);
-  if (recentDecisions.length > DECISION_BUFFER_SIZE) {
-    recentDecisions.length = DECISION_BUFFER_SIZE;
-  }
-}
-
 /** Normalize user input to NFC form to prevent Unicode homograph attacks */
 function normalizeInput(input: string): string {
   return input.normalize('NFC');
@@ -738,41 +707,6 @@ export function createApiRoutes(portfolioDir: string): Router {
     }
   });
 
-  /**
-   * POST /api/evaluate_permission
-   * auto-dollhouse#5: Permission evaluation endpoint for PreToolUse hooks.
-   * Translates hook requests into evaluate_permission MCP-AQL operations.
-   * Designed for Claude Code, Cursor, Gemini CLI, Windsurf, Codex hooks.
-   */
-  const permissionRateLimiter = new SlidingWindowRateLimiter(120, 60_000);
-  router.post('/evaluate_permission', express.json(), async (req, res) => {
-    if (!permissionRateLimiter.tryAcquire()) {
-      res.status(429).json({ decision: 'allow' }); // fail open on rate limit
-      return;
-    }
-
-    const { tool_name, input, platform } = req.body as {
-      tool_name?: string;
-      input?: Record<string, unknown>;
-      platform?: string;
-    };
-
-    if (!tool_name) {
-      // Fail open — missing tool_name means the hook script sent bad data
-      res.json({ decision: 'allow' });
-      return;
-    }
-
-    try {
-      // Route directly to the MCPAQLHandler for evaluation
-      // This requires the handler — fall back gracefully if not available
-      res.json({ decision: 'allow' });
-    } catch {
-      // Fail open on error
-      res.json({ decision: 'allow' });
-    }
-  });
-
   return router;
 }
 
@@ -1120,97 +1054,8 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
     }
   });
 
-  /**
-   * POST /api/evaluate_permission
-   * auto-dollhouse#5: Permission evaluation endpoint for PreToolUse hooks.
-   * Routes through evaluate_permission MCP-AQL READ operation.
-   * Fail-open: returns allow on any error to avoid blocking the user.
-   */
-  const gwPermissionLimiter = new SlidingWindowRateLimiter(120, 60_000);
-  router.post('/evaluate_permission', express.json(), async (req, res) => {
-    if (!gwPermissionLimiter.tryAcquire()) {
-      res.json({ decision: 'allow' }); // fail open on rate limit
-      return;
-    }
-
-    const { tool_name, input, platform } = req.body as {
-      tool_name?: string;
-      input?: Record<string, unknown>;
-      platform?: string;
-    };
-
-    if (!tool_name) {
-      res.json({ decision: 'allow' }); // fail open on bad input
-      return;
-    }
-
-    try {
-      const opResult = asSingleResult(await handler.handleRead({
-        operation: 'evaluate_permission',
-        params: {
-          tool_name,
-          input: input || {},
-          platform: platform || 'claude_code',
-        },
-      }));
-
-      if (!opResult.success) {
-        logger.warn(`[WebUI/Gateway] evaluate_permission failed: ${opResult.error}`);
-        res.json({ decision: 'allow' }); // fail open
-        return;
-      }
-
-      // Track decision for live dashboard feed
-      trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
-
-      res.json(opResult.data);
-    } catch (err) {
-      logger.error('[WebUI/Gateway] evaluate_permission error:', err);
-      res.json({ decision: 'allow' }); // fail open
-    }
-  });
-
-  /**
-   * GET /api/permissions/status
-   * auto-dollhouse#5: Returns current permission policies and recent decisions
-   * for the live permissions dashboard.
-   */
-  router.get('/permissions/status', async (_req, res) => {
-    try {
-      const opResult = asSingleResult(await handler.handleRead({
-        operation: 'get_effective_cli_policies',
-      }));
-
-      if (!opResult.success) {
-        res.status(500).json({ error: opResult.error || 'Failed to get policies' });
-        return;
-      }
-
-      const data = opResult.data as Record<string, unknown>;
-
-      // Extract confirm patterns from elements
-      const elements = (data.elements || []) as Array<Record<string, unknown>>;
-      const confirmPatterns: string[] = [];
-      for (const el of elements) {
-        const confirm = el.confirmPatterns as string[] | undefined;
-        if (confirm?.length) confirmPatterns.push(...confirm);
-      }
-
-      res.json({
-        activeElementCount: data.activeElementCount,
-        hasAllowlist: data.hasAllowlist,
-        denyPatterns: data.combinedDenyPatterns,
-        allowPatterns: data.combinedAllowPatterns,
-        confirmPatterns,
-        elements,
-        permissionPromptActive: data.permissionPromptActive,
-        recentDecisions,
-      });
-    } catch (err) {
-      logger.error('[WebUI/Gateway] permissions/status error:', err);
-      res.status(500).json({ error: 'Failed to get permission status' });
-    }
-  });
+  // auto-dollhouse permission routes are registered separately via
+  // src/auto-dollhouse/permissionRoutes.ts when running in autonomous mode.
 
   return router;
 }

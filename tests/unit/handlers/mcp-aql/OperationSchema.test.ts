@@ -618,8 +618,8 @@ describe('OperationSchema', () => {
     });
 
     describe('GATEKEEPER_SCHEMAS', () => {
-      it('should define 8 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(8);
+      it('should define 7 gatekeeper operations', () => {
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(7);
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice).toBeDefined();

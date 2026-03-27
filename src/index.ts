@@ -725,28 +725,28 @@ export class DollhouseMCPServer implements IToolHandler {
     const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
     serverSetup.setDeferredSetupPromise(deferredPromise);
 
-    // auto-dollhouse#5: Start HTTP permission server AFTER deferred setup completes.
-    // Must wait for portfolio indexing to finish, otherwise list_elements returns 0.
-    // The hook script fails open if the server isn't ready yet, so the brief delay
-    // on first session is safe.
+    // Log startup timing after deferred setup completes
     deferredPromise.then(async () => {
       const report = timer.getReport();
       logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
         `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
         `total ${report.totalMs}ms`);
-
-      try {
-        const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
-        // Pass mcpAqlHandler for permission evaluation endpoints only.
-        // Portfolio browsing uses direct filesystem routes (proven stable).
-        const mcpAqlHandler = this.container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('MCPAQLHandler');
-        const { startWebServer } = await import('./web/server.js');
-        await startWebServer({ portfolioDir, openBrowser: false, mcpAqlHandler });
-        logger.info('[Startup] Permission evaluation HTTP server started');
-      } catch (err) {
-        logger.warn('[Startup] Permission HTTP server failed to start (non-fatal):', err);
-      }
     }).catch(() => { /* already logged */ });
+
+    // auto-dollhouse: Register fork-only extensions when running in autonomous mode.
+    // This starts the permission HTTP server, mounts dashboard routes, etc.
+    const { existsSync } = await import('node:fs');
+    if (process.env.DOLLHOUSE_AUTONOMOUS_MODE || existsSync('.auto-dollhouse')) {
+      try {
+        const { registerAutoDollhouse } = await import('./auto-dollhouse/index.js');
+        await registerAutoDollhouse({
+          deferredSetupPromise: deferredPromise,
+          resolveHandler: () => this.container.resolve('MCPAQLHandler'),
+        });
+      } catch (err) {
+        logger.warn('[Startup] auto-dollhouse registration failed (non-fatal):', err);
+      }
+    }
   }
 }
 

@@ -9,6 +9,7 @@
   <meta http-equiv="X-Frame-Options" content="DENY">
   <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="permissions.css">
 </head>
 <body>
 
@@ -19,6 +20,10 @@
       <h1 class="site-title">DollhouseMCP Portfolio</h1>
       <p class="site-tagline">Your local AI elements</p>
     </div>
+    <nav class="console-tabs" id="console-tabs">
+      <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+      <button class="console-tab" data-tab="permissions">Permissions</button>
+    </nav>
     <div class="header-right">
       <div class="site-stats" id="stats" aria-live="polite"></div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
@@ -29,6 +34,11 @@
   </header>
 
   <main class="site-main">
+
+    <!-- Tab: Permissions Dashboard (hidden by default) -->
+    <div id="tab-permissions" class="tab-panel" hidden>
+      <div id="permissions-dashboard-root"></div>
+    </div>
 
     <div class="browse-controls">
       <div class="search-wrapper">
@@ -149,5 +159,7 @@
         crossorigin="anonymous"
         id="hljs-theme-dark" disabled>
   <script src="app.js"></script>
+  <script src="permissions.js"></script>
+  <script src="tabs.js"></script>
 </body>
 </html>
