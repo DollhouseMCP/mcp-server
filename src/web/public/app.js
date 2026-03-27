@@ -1886,7 +1886,7 @@ function safeParseYaml(content) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
-    const tabInits = { logs: false, metrics: false };
+    const tabInits = { logs: false, metrics: false, permissions: false };
 
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {
@@ -1919,6 +1919,10 @@ function safeParseYaml(content) {
       if (tab === 'metrics' && dc?.metrics) {
         if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(); }
         else if (dc.metrics.refresh) { dc.metrics.refresh(); }
+      }
+      if (tab === 'permissions' && dc?.permissions) {
+        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(); }
+        else if (dc.permissions.refresh) { dc.permissions.refresh(); }
       }
     }
 
