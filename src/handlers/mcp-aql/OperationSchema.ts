@@ -1364,6 +1364,23 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       '{ operation: "permission_prompt", params: { tool_name: "Edit", input: { file_path: "src/index.ts", old_string: "...", new_string: "..." } } }',
     ],
   },
+  // auto-dollhouse#5: HTTP permission evaluation for PreToolUse hooks (interactive sessions)
+  evaluate_permission: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex). Alternative to permission_prompt for interactive sessions using PreToolUse hooks.',
+    params: {
+      tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write")' },
+      input: { type: 'object', description: 'The tool input parameters to evaluate' },
+      platform: { type: 'string', description: 'Target platform for response formatting (default: "claude_code"). Options: claude_code, gemini, cursor, windsurf, codex' },
+    },
+    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { decision: "allow"|"deny"|"ask", reason? }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex: { hookSpecificOutput: { permissionDecision, reason? } }.' },
+    examples: [
+      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" } } }',
+      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git push --force" }, platform: "claude_code" } }',
+    ],
+  },
   // Issue #625 Phase 2: CLI policy visibility
   get_effective_cli_policies: {
     endpoint: 'READ',

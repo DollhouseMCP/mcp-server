@@ -86,6 +86,15 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.permissionPrompt',
     description: 'Evaluate CLI-level permission prompts for non-interactive sessions via --permission-prompt-tool',
   },
+  // auto-dollhouse#5: HTTP permission evaluation for PreToolUse hooks (interactive sessions)
+  // Unlike permission_prompt (which requires --permission-prompt-tool flag, non-interactive only),
+  // evaluate_permission is designed for hook-based callers (Claude Code PreToolUse, Cursor, Gemini CLI).
+  // Returns platform-formatted responses (claude_code, gemini, cursor, windsurf, codex).
+  evaluate_permission: {
+    endpoint: 'READ',
+    handler: 'Gatekeeper.evaluatePermission',
+    description: 'Evaluate CLI permission for a tool via HTTP/hook (interactive session alternative to permission_prompt)',
+  },
   // Issue #625 Phase 2: CLI policy visibility
   get_effective_cli_policies: {
     endpoint: 'READ',

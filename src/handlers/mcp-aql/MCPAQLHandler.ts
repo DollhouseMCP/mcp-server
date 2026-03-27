@@ -508,6 +508,44 @@ export class MCPAQLHandler {
     };
   }
 
+  /**
+   * auto-dollhouse#5: Format permission evaluation response for platform-specific hook scripts.
+   * Each platform expects a different JSON shape from its hook response.
+   */
+  private formatPermissionResponse(
+    decision: 'allow' | 'deny' | 'ask',
+    platform: string,
+    input: Record<string, unknown>,
+    reason?: string,
+  ): Record<string, unknown> {
+    switch (platform) {
+      case 'gemini':
+        return { decision: decision === 'ask' ? 'deny' : decision, ...(reason && { reason }) };
+      case 'cursor':
+        return { permission: decision, ...(reason && { reason }) };
+      case 'windsurf':
+        // Windsurf uses exit codes at the HTTP layer; JSON body is informational
+        return { allowed: decision === 'allow', ...(reason && { reason }) };
+      case 'codex':
+        return {
+          hookSpecificOutput: {
+            permissionDecision: decision === 'ask' ? 'deny' : decision,
+            ...(reason && { reason }),
+          },
+        };
+      case 'claude_code':
+      default:
+        // Claude Code PreToolUse hook format
+        if (decision === 'allow') {
+          return { decision: 'allow' };
+        }
+        if (decision === 'ask') {
+          return { decision: 'ask', ...(reason && { message: reason }) };
+        }
+        return { decision: 'deny', ...(reason && { reason }) };
+    }
+  }
+
   /** Issue #142: Rate limiter for verify_challenge attempts (max 10 failures per 60s window) */
   private readonly verificationRateLimiter = new VerificationRateLimiter();
   /** Issue #142: Metrics tracker for verification operations */
@@ -2825,6 +2863,54 @@ export class MCPAQLHandler {
           },
           policyContext: elementDecision.policyContext,
         };
+      }
+
+      case 'evaluatePermission': {
+        // auto-dollhouse#5: Evaluate CLI permission for PreToolUse hooks (interactive sessions)
+        // Simplified version of permissionPrompt — no approval workflow, no permissionPromptActive tracking.
+        // Returns platform-formatted response for hook scripts.
+        const evalToolName = validateRequiredString(
+          params,
+          'tool_name',
+          'the tool requesting permission (e.g., "Bash", "Edit", "Write")'
+        );
+        const evalInputRaw = params.input;
+        const evalInput = (evalInputRaw && typeof evalInputRaw === 'object')
+          ? evalInputRaw as Record<string, unknown>
+          : {};
+        const evalPlatform = typeof params.platform === 'string' ? params.platform : 'claude_code';
+
+        // Rate limit
+        const evalRateStatus = this.permissionPromptLimiter.checkLimit();
+        if (!evalRateStatus.allowed) {
+          return this.formatPermissionResponse('deny', evalPlatform, evalInput, 'Rate limit exceeded');
+        }
+        this.permissionPromptLimiter.consumeToken();
+
+        // Stage 1: Static classification
+        const evalClassification = classifyTool(evalToolName, evalInput);
+        if (evalClassification.behavior === 'allow') {
+          return this.formatPermissionResponse('allow', evalPlatform, evalInput);
+        }
+        if (evalClassification.behavior === 'deny') {
+          return this.formatPermissionResponse('deny', evalPlatform, evalInput, evalClassification.reason);
+        }
+
+        // Stage 2: Element policy evaluation
+        const evalElements = await this.getActiveElements();
+        const evalDecision = evaluateCliToolPolicy(evalToolName, evalInput, evalElements);
+
+        if (evalDecision.behavior === 'deny') {
+          return this.formatPermissionResponse('deny', evalPlatform, evalInput, evalDecision.message);
+        }
+        if (evalDecision.behavior === 'confirm') {
+          // Hooks don't support approval workflows — map confirm to 'ask' (let the platform prompt)
+          return this.formatPermissionResponse('ask', evalPlatform, evalInput,
+            evalDecision.message || 'Requires confirmation per element policy');
+        }
+
+        // Default: allow
+        return this.formatPermissionResponse('allow', evalPlatform, evalInput);
       }
 
       case 'getEffectiveCliPolicies': {

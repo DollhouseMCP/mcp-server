@@ -530,6 +530,11 @@ function safeParseYaml(content) {
         const res = await fetch(`/api/elements/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
+        // Capture validation scan results from response headers
+        el._validationStatus = res.headers.get('x-validation-status') || 'unknown';
+        el._validationReason = res.headers.get('x-validation-reason') ? decodeURIComponent(res.headers.get('x-validation-reason')) : null;
+        el._validationSeverity = res.headers.get('x-validation-severity') || null;
+        el._validationPatterns = res.headers.get('x-validation-patterns') ? decodeURIComponent(res.headers.get('x-validation-patterns')) : null;
       } else {
         const res = await fetch(`https://raw.githubusercontent.com/DollhouseMCP/collection/main/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -552,6 +557,23 @@ function safeParseYaml(content) {
 
       actions.appendChild(copyBtn);
       actions.appendChild(dlBtn);
+
+      // Security scan badge (local portfolio elements only)
+      if (el._local && el._validationStatus) {
+        const scanBadge = document.createElement('span');
+        scanBadge.className = 'scan-badge scan-badge--' + (el._validationStatus === 'pass' ? 'pass' : 'warn');
+        if (el._validationStatus === 'pass') {
+          scanBadge.textContent = '✓ Scan passed';
+          scanBadge.title = 'Content validated through security pipeline';
+        } else {
+          scanBadge.textContent = '⚠ Scan warning';
+          scanBadge.title = el._validationReason || 'Content flagged by security scanner';
+          if (el._validationPatterns) {
+            scanBadge.title += '\nPatterns: ' + el._validationPatterns;
+          }
+        }
+        actions.appendChild(scanBadge);
+      }
 
       if (el._local) {
         const submitBtn2 = document.createElement('button');
@@ -708,6 +730,11 @@ function safeParseYaml(content) {
     document.body.classList.add('modal-open');
     body.focus(); // focus body so arrow/Page/Home/End keys scroll content natively
 
+    // Deep link: update URL hash so this element can be linked directly
+    if (element.path) {
+      history.replaceState(null, '', '#element/' + element.path);
+    }
+
     // Fetch full content as raw text — local API for portfolio, GitHub for collection
     try {
       let content;
@@ -717,10 +744,32 @@ function safeParseYaml(content) {
         const res = await fetch(`/api/elements/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
+        element._validationStatus = res.headers.get('x-validation-status') || 'unknown';
+        element._validationReason = res.headers.get('x-validation-reason') ? decodeURIComponent(res.headers.get('x-validation-reason')) : null;
+        element._validationSeverity = res.headers.get('x-validation-severity') || null;
+        element._validationPatterns = res.headers.get('x-validation-patterns') ? decodeURIComponent(res.headers.get('x-validation-patterns')) : null;
       } else {
         const res = await fetch(`https://raw.githubusercontent.com/DollhouseMCP/collection/main/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
+      }
+
+      // Show security scan badge in modal toolbar
+      const toolbar = modal.querySelector('#modal-toolbar');
+      const existingScanBadge = toolbar ? toolbar.querySelector('.scan-badge') : null;
+      if (existingScanBadge) existingScanBadge.remove();
+      if (element._local && element._validationStatus && toolbar) {
+        const badge = document.createElement('span');
+        badge.className = 'scan-badge scan-badge--' + (element._validationStatus === 'pass' ? 'pass' : 'warn');
+        if (element._validationStatus === 'pass') {
+          badge.textContent = '✓ Scan passed';
+          badge.title = 'Content validated through security pipeline';
+        } else {
+          badge.textContent = '⚠ Scan warning';
+          badge.title = element._validationReason || 'Content flagged by security scanner';
+          if (element._validationPatterns) badge.title += '\nPatterns: ' + element._validationPatterns;
+        }
+        toolbar.appendChild(badge);
       }
 
       const renderBtn = modal.querySelector('#btn-render');
@@ -1407,6 +1456,8 @@ function safeParseYaml(content) {
     if (!modal) return;
     modal.close();
     document.body.classList.remove('modal-open');
+    // Clear deep link hash
+    history.replaceState(null, '', location.pathname);
   }
 
   // ── Grid keyboard navigation ───────────────────────────────────────────────
@@ -1872,7 +1923,24 @@ function safeParseYaml(content) {
     // Portfolio button
     document.getElementById('btn-portfolio')?.addEventListener('click', loadLocalPortfolio);
 
-    init();
+    init().then(() => {
+      // Deep link: open element modal if URL has #element/type/name hash
+      const hash = location.hash;
+      if (hash.startsWith('#element/')) {
+        const elementPath = hash.slice('#element/'.length);
+        // Find the element in allElements by path
+        const target = allElements.find(el => el.path === elementPath);
+        if (target) {
+          const idx = filteredElements.indexOf(target);
+          if (idx >= 0) {
+            showModal(target, idx);
+          } else {
+            // Element exists but is filtered out — show it anyway
+            showModal(target, 0);
+          }
+        }
+      }
+    });
   });
 
 })();

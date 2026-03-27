@@ -368,6 +368,7 @@ Auth:
 
 Gatekeeper & CLI policies:
 { operation: "permission_prompt", params: { tool: "Bash", prompt: "run npm test" } }
+{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
 
