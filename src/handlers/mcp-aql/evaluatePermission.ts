@@ -38,16 +38,16 @@ export function formatPermissionResponse(
 ): Record<string, unknown> {
   switch (platform) {
     case 'gemini':
-      return { decision: decision === 'ask' ? 'deny' : decision, ...(reason && { reason }) };
+      return { decision: decision === 'ask' ? 'deny' : decision, ...(reason ? { reason } : {}) };
     case 'cursor':
-      return { permission: decision, ...(reason && { reason }) };
+      return { permission: decision, ...(reason ? { reason } : {}) };
     case 'windsurf':
-      return { allowed: decision === 'allow', ...(reason && { reason }) };
+      return { allowed: decision === 'allow', ...(reason ? { reason } : {}) };
     case 'codex':
       return {
         hookSpecificOutput: {
           permissionDecision: decision === 'ask' ? 'deny' : decision,
-          ...(reason && { reason }),
+          ...(reason ? { reason } : {}),
         },
       };
     case 'claude_code':
@@ -56,9 +56,9 @@ export function formatPermissionResponse(
         return { decision: 'allow' };
       }
       if (decision === 'ask') {
-        return { decision: 'ask', ...(reason && { message: reason }) };
+        return { decision: 'ask', ...(reason ? { message: reason } : {}) };
       }
-      return { decision: 'deny', ...(reason && { reason }) };
+      return { decision: 'deny', ...(reason ? { reason } : {}) };
   }
 }
 
@@ -73,7 +73,7 @@ export async function evaluatePermission(
   params: { tool_name?: unknown; input?: unknown; platform?: unknown },
   deps: EvaluatePermissionDeps,
 ): Promise<Record<string, unknown>> {
-  const toolName = String(params.tool_name || '');
+  const toolName = typeof params.tool_name === 'string' ? params.tool_name : '';
   const inputRaw = params.input;
   const input = (inputRaw && typeof inputRaw === 'object')
     ? inputRaw as Record<string, unknown>

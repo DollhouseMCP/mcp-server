@@ -73,8 +73,7 @@ describe('evaluatePermission', () => {
     });
   });
 
-  describe('evaluatePermission pipeline', () => {
-    function createMockDeps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
+  function createMockDeps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
       return {
         permissionPromptLimiter: {
           checkLimit: () => ({ allowed: true, remainingTokens: 99, resetTime: new Date() }),
@@ -91,8 +90,9 @@ describe('evaluatePermission', () => {
         })),
         getActiveElements: overrides.getActiveElements ?? (async () => []),
       };
-    }
+  }
 
+  describe('evaluatePermission pipeline', () => {
     it('should deny when rate limited', async () => {
       const deps = createMockDeps({
         permissionPromptLimiter: {
