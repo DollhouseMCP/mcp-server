@@ -54,7 +54,6 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { ContentValidator } from '../../security/contentValidator.js';
 import type { ContentValidatorOptions, ContentValidationResult } from '../../security/contentValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { logger } from '../../utils/logger.js';
 import { VALIDATION_PATTERNS, PATTERN_DESCRIPTIONS } from '../../security/constants.js';
 
 /**
@@ -224,15 +223,8 @@ export class ValidationService {
       return { isValid: false, errors, warnings };
     }
 
-    // Step 6: Log successful validation
-    logger.debug(
-      '[ValidationService] Input validated and sanitized successfully',
-      {
-        originalLength: input.length,
-        sanitizedLength: cleaned.length,
-        hadUnicodeIssues: warnings.length > 0,
-      }
-    );
+    // Validation success is the normal path — only failures need logging.
+    // Failures throw errors with full context upstream.
 
     return {
       isValid: true,

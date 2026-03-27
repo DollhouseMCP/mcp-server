@@ -253,8 +253,6 @@ export function buildLogManagerConfig(envVars: {
   DOLLHOUSE_LOG_FILE_MAX_SIZE: number;
   DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES: number;
   DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY: number;
-  DOLLHOUSE_LOG_VIEWER: boolean;
-  DOLLHOUSE_LOG_VIEWER_PORT: number;
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
 }): LogManagerConfig {
   return {
@@ -274,8 +272,6 @@ export function buildLogManagerConfig(envVars: {
     fileMaxSize: envVars.DOLLHOUSE_LOG_FILE_MAX_SIZE,
     maxDirSizeBytes: envVars.DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES,
     maxFilesPerCategory: envVars.DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY,
-    viewerEnabled: envVars.DOLLHOUSE_LOG_VIEWER,
-    viewerPort: envVars.DOLLHOUSE_LOG_VIEWER_PORT,
     logLevel: envVars.LOG_LEVEL,
   };
 }

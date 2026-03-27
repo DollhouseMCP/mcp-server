@@ -1449,6 +1449,41 @@ export const LOGGING_SCHEMAS: OperationSchemaMap = {
 } as const;
 
 // ============================================================================
+// Metrics Operations Schema (Introspection-Only)
+// ============================================================================
+
+/**
+ * Metrics collection query schema — introspection-only.
+ *
+ * Dispatched via MCPAQLHandler.dispatchMetrics() which routes to
+ * MemoryMetricsSink.query(). Follows the same pattern as query_logs.
+ */
+export const METRICS_SCHEMAS: OperationSchemaMap = {
+  query_metrics: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchMetrics',
+    description: 'Query collected metrics snapshots. Returns filtered, paginated results sorted newest-first. Supports filtering by metric name (prefix or exact), source, type, and time range.',
+    params: {
+      names: { type: 'string[]', description: "Metric name filters. Exact match or prefix match with trailing '.' or '.*' (e.g., 'system.memory.*')" },
+      source: { type: 'string', description: 'Collector source filter (case-insensitive substring match)' },
+      type: { type: 'string', description: "Metric type filter: 'counter', 'gauge', or 'histogram'" },
+      since: { type: 'string', description: 'ISO 8601 timestamp — return snapshots after this time' },
+      until: { type: 'string', description: 'ISO 8601 timestamp — return snapshots before this time' },
+      latest: { type: 'boolean', description: 'If true (default), return only the most recent snapshot. Set false for historical range queries' },
+      limit: { type: 'number', description: 'Max snapshots to return (1-100, default 1)' },
+      offset: { type: 'number', description: 'Number of snapshots to skip for pagination (default 0)' },
+    },
+    returns: { name: 'MetricQueryResult', kind: 'object', description: 'Metric snapshots: { _type: "MetricQueryResult", snapshots, total, hasMore, oldestAvailable, newestAvailable }' },
+    examples: [
+      '{ operation: "query_metrics" }',
+      '{ operation: "query_metrics", params: { names: ["system.memory.*"], type: "gauge" } }',
+      '{ operation: "query_metrics", params: { latest: false, limit: 10, since: "2026-01-01T00:00:00Z" } }',
+    ],
+  },
+} as const;
+
+// ============================================================================
 // Activation Operations Schema (Introspection-Only)
 // ============================================================================
 
@@ -1627,6 +1662,7 @@ export const INTROSPECTION_ONLY_SCHEMAS: OperationSchemaMap = {
   ...EXECUTION_SCHEMAS,
   ...GATEKEEPER_SCHEMAS,
   ...LOGGING_SCHEMAS,
+  ...METRICS_SCHEMAS,
   ...ACTIVATION_SCHEMAS,
   ...SEARCH_SCHEMAS,
   ...BROWSER_SCHEMAS,

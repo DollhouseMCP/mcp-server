@@ -383,6 +383,13 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     description: 'Query recent log entries from the in-memory buffer with filtering and pagination',
   },
 
+  // ===== METRICS operations =====
+  query_metrics: {
+    endpoint: 'READ',
+    handler: 'Metrics.query',
+    description: 'Query collected metrics snapshots with filtering by name, source, type, and time range',
+  },
+
   // ===== ENHANCED INDEX operations =====
   find_similar_elements: {
     endpoint: 'READ',

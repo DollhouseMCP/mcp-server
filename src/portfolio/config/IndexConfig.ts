@@ -206,18 +206,6 @@ export class IndexConfigManager {
    * Update configuration with validation
    */
   public async updateConfig(updates: Partial<IndexConfiguration>): Promise<void> {
-    // SECURITY FIX: Add audit logging for configuration changes (DMCP-SEC-006)
-    SecurityMonitor.logSecurityEvent({
-      type: 'RULE_ENGINE_CONFIG_UPDATE' as any, // Using existing config update type
-      severity: 'LOW',
-      source: 'IndexConfigManager.updateConfig',
-      details: 'Index configuration update attempted',
-      additionalData: {
-        configType: 'index',
-        updateKeys: Object.keys(updates)
-      }
-    });
-
     // Validate the updates before applying
     this.validateConfig(updates);
 

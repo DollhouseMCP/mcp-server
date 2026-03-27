@@ -106,6 +106,29 @@ DOLLHOUSE_CLI_APPROVAL_TTL_MS=900000  # 15 minutes
 
 ---
 
+## Metrics Collection
+
+`src/config/env.ts` reads these variables to control the built-in metrics collection system. All variables are optional — metrics are enabled by default with sensible defaults.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLLHOUSE_METRICS_ENABLED` | `true` | Enable/disable the metrics collection system. When false, no collectors run and no snapshots are stored. |
+| `DOLLHOUSE_METRICS_COLLECTION_INTERVAL_MS` | `15000` | Interval (ms) between collection cycles. Clamped to 1000–300000. |
+| `DOLLHOUSE_METRICS_MEMORY_SNAPSHOT_CAPACITY` | `240` | Max snapshots retained in the in-memory ring buffer. Clamped to 10–10000. At default interval, 240 = ~1 hour of history. |
+| `DOLLHOUSE_METRICS_MAX_SNAPSHOT_SIZE` | `102400` | Max serialized snapshot size (bytes) accepted by sinks. Snapshots exceeding this are dropped with a warning. |
+| `DOLLHOUSE_METRICS_COLLECTOR_FAILURE_THRESHOLD` | `10` | Consecutive failures before a collector is disabled. Clamped to 1–100. |
+| `DOLLHOUSE_METRICS_COLLECTION_DURATION_WARN_MS` | `5000` | Log a warning if a collection cycle exceeds this duration (ms). Clamped to 100–60000. |
+
+```bash
+# Example: disable metrics in CI
+DOLLHOUSE_METRICS_ENABLED=false
+
+# Example: faster collection for debugging
+DOLLHOUSE_METRICS_COLLECTION_INTERVAL_MS=5000
+```
+
+---
+
 ## Testing & CI
 
 | Variable | Purpose |

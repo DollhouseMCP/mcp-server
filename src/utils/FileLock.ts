@@ -64,11 +64,6 @@ export class FileLock {
         await handle.close();
         this.acquired = true;
 
-        logger.debug('File lock acquired', {
-          lock: this.lockPath,
-          id: this.lockId
-        });
-
         return true;
       } catch (error) {
         if ((error as any).code === 'EEXIST') {
@@ -131,10 +126,6 @@ export class FileLock {
         await fs.unlink(this.lockPath);
         this.acquired = false;
 
-        logger.debug('File lock released', {
-          lock: this.lockPath,
-          id: this.lockId
-        });
       } else {
         logger.warn('Lock owned by different process', {
           lock: this.lockPath,

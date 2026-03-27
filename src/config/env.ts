@@ -106,10 +106,12 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_RETENTION_DAYS: z.coerce.number().default(30),
   DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS: z.coerce.number().default(7),
   DOLLHOUSE_LOG_FLUSH_INTERVAL_MS: z.coerce.number().default(5000),
-  DOLLHOUSE_LOG_BUFFER_SIZE: z.coerce.number().default(100),
+  // Buffer raised to 2000 to support the web console log viewer — the higher capacity
+  // reduces flush frequency and keeps more entries available for SSE backfill on connect.
+  DOLLHOUSE_LOG_BUFFER_SIZE: z.coerce.number().default(2000),
   DOLLHOUSE_LOG_MEMORY_CAPACITY: z.coerce.number().default(5000),
-  DOLLHOUSE_LOG_MEMORY_APP_CAPACITY: z.coerce.number().default(5000),
-  DOLLHOUSE_LOG_MEMORY_SECURITY_CAPACITY: z.coerce.number().default(3000),
+  DOLLHOUSE_LOG_MEMORY_APP_CAPACITY: z.coerce.number().default(10000),
+  DOLLHOUSE_LOG_MEMORY_SECURITY_CAPACITY: z.coerce.number().default(5000),
   DOLLHOUSE_LOG_MEMORY_PERF_CAPACITY: z.coerce.number().default(2000),
   DOLLHOUSE_LOG_MEMORY_TELEMETRY_CAPACITY: z.coerce.number().default(1000),
   DOLLHOUSE_LOG_MAX_ENTRY_SIZE: z.coerce.number().default(16384),
@@ -117,8 +119,12 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_FILE_MAX_SIZE: z.coerce.number().default(104857600),
   DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES: z.coerce.number().default(0),
   DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY: z.coerce.number().default(100),
-  DOLLHOUSE_LOG_VIEWER: z.coerce.boolean().default(false),
-  DOLLHOUSE_LOG_VIEWER_PORT: z.coerce.number().default(9100),
+
+  // ============================================================================
+  // Web Console Configuration
+  // ============================================================================
+  /** Enable the unified web console (logs + metrics tabs on port 3939) */
+  DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
 
   // ============================================================================
   // Security Configuration
@@ -176,6 +182,16 @@ const envSchema = z.object({
 
   /** Rate limit window in ms for permission prompt and CLI approvals (default: 60000 = 60s) */
   DOLLHOUSE_PERMISSION_RATE_WINDOW_MS: z.coerce.number().default(60_000),
+
+  // ============================================================================
+  // Metrics Collection Configuration
+  // ============================================================================
+  DOLLHOUSE_METRICS_ENABLED: z.coerce.boolean().default(true),
+  DOLLHOUSE_METRICS_COLLECTION_INTERVAL_MS: z.coerce.number().min(1000).max(300000).default(15000),
+  DOLLHOUSE_METRICS_MAX_SNAPSHOT_SIZE: z.coerce.number().default(102400),
+  DOLLHOUSE_METRICS_COLLECTOR_FAILURE_THRESHOLD: z.coerce.number().min(1).max(100).default(10),
+  DOLLHOUSE_METRICS_COLLECTION_DURATION_WARN_MS: z.coerce.number().min(100).max(60000).default(5000),
+  DOLLHOUSE_METRICS_MEMORY_SNAPSHOT_CAPACITY: z.coerce.number().min(10).max(10000).default(240),
 
   // Pattern encryption settings for Memory Security (Issue #1321)
   DOLLHOUSE_DISABLE_ENCRYPTION: z.coerce.boolean().default(false),

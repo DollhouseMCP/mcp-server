@@ -174,9 +174,9 @@ describe('query_logs CRUDE migration (Issue #528)', () => {
       expect(result.offset).toBe(0);
     });
 
-    it('should clamp limit to max 500', () => {
-      const result = memorySink.query({ limit: 9999 });
-      expect(result.limit).toBe(500);
+    it('should clamp limit to max 10000', () => {
+      const result = memorySink.query({ limit: 99999 });
+      expect(result.limit).toBe(10000);
     });
 
     it('should clamp limit to min 1', () => {

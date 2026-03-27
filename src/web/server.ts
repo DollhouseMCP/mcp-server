@@ -18,8 +18,13 @@ import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 import { mkdir, readdir } from 'node:fs/promises';
 import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
+import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
+import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
+import { createHealthRoutes } from './routes/healthRoutes.js';
 import { logger } from '../utils/logger.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
+import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
+import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 3939;
@@ -47,6 +52,20 @@ export interface WebServerOptions {
    * Issue #796: Web MCP-AQL Gateway.
    */
   mcpAqlHandler?: MCPAQLHandler;
+  /** MemoryLogSink for log routes (optional — logs tab disabled if not provided) */
+  memorySink?: MemoryLogSink;
+  /** MemoryMetricsSink for metrics routes (optional — metrics tab disabled if not provided) */
+  metricsSink?: MemoryMetricsSink;
+}
+
+/**
+ * Result of starting the web server, including hooks for DI wiring.
+ */
+export interface WebServerResult {
+  /** Log broadcast function — call with each entry to push to SSE clients */
+  logBroadcast?: (entry: import('../logging/types.js').UnifiedLogEntry) => void;
+  /** Metrics snapshot function — call with each snapshot to push to SSE clients */
+  metricsOnSnapshot?: (snapshot: import('../metrics/types.js').MetricSnapshot) => void;
 }
 
 /**
@@ -108,15 +127,17 @@ function openInBrowser(url: string): Promise<{ success: boolean; error?: string 
  * browser without starting a second instance.
  *
  * @param options - Server configuration
+ * @returns Hooks for DI wiring (log broadcast, metrics onSnapshot)
  */
-export async function startWebServer(options: WebServerOptions): Promise<void> {
+export async function startWebServer(options: WebServerOptions): Promise<WebServerResult> {
   const port = options.port || DEFAULT_PORT;
+  const result: WebServerResult = {};
 
   if (serverRunning) {
     if (options.openBrowser) {
       openInBrowser(`http://${CONSOLE_HOST}:${serverPort}`);
     }
-    return;
+    return result;
   }
 
   const app = express();
@@ -132,7 +153,7 @@ export async function startWebServer(options: WebServerOptions): Promise<void> {
     res.setHeader('Content-Security-Policy', [
       "default-src 'self'",
       "script-src 'self' cdn.jsdelivr.net cdnjs.cloudflare.com",
-      "style-src 'self' 'unsafe-inline' cdnjs.cloudflare.com",
+      "style-src 'self' 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net",
       "connect-src 'self' raw.githubusercontent.com",
       "font-src 'self'",
     ].join('; '));
@@ -149,6 +170,34 @@ export async function startWebServer(options: WebServerOptions): Promise<void> {
     logger.info('[WebUI] Portfolio: direct filesystem | Permissions: MCP-AQL gateway');
   } else {
     logger.info('[WebUI] Portfolio: direct filesystem | Permissions: not available');
+  }
+
+  // Console routes: logs, metrics, health
+  let logRoutes: LogRoutesResult | undefined;
+  let metricsRoutes: MetricsRoutesResult | undefined;
+
+  if (options.memorySink) {
+    logRoutes = createLogRoutes(options.memorySink);
+    app.use('/api', logRoutes.router);
+    result.logBroadcast = logRoutes.broadcast;
+    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
+  }
+
+  if (options.metricsSink) {
+    metricsRoutes = createMetricsRoutes(options.metricsSink);
+    app.use('/api', metricsRoutes.router);
+    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
+    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
+  }
+
+  if (options.memorySink) {
+    const healthRouter = createHealthRoutes({
+      memorySink: options.memorySink,
+      metricsSink: options.metricsSink,
+      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
+      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
+    });
+    app.use('/api', healthRouter);
   }
 
   // Serve ~/.dollhouse/pages/ at /pages/ — dashboards, generated content, stack views
@@ -206,6 +255,8 @@ export async function startWebServer(options: WebServerOptions): Promise<void> {
       openInBrowser(url);
     }
   });
+
+  return result;
 }
 
 /**

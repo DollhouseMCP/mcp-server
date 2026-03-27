@@ -82,10 +82,10 @@ export class EnhancedIndexHandler {
 
       // FIX: DMCP-SEC-006 - Add security audit logging for index operations
       SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
+        type: 'MEMORY_SEARCHED',
         severity: 'LOW',
         source: 'EnhancedIndexHandler.findSimilarElements',
-        details: `Similarity search performed for element: ${options.elementName}`,
+        details: `Similarity search for: ${options.elementName}`,
         additionalData: {
           elementType: options.elementType,
           limit: options.limit,
@@ -311,10 +311,10 @@ export class EnhancedIndexHandler {
 
       // FIX: DMCP-SEC-006 - Add security audit logging
       SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
+        type: 'MEMORY_SEARCHED',
         severity: 'LOW',
         source: 'EnhancedIndexHandler.searchByVerb',
-        details: `Verb search performed for action: ${options.verb}`,
+        details: `Verb search for action: ${options.verb}`,
         additionalData: {
           verb: options.verb,
           limit: options.limit
@@ -380,7 +380,7 @@ export class EnhancedIndexHandler {
 
       // FIX: DMCP-SEC-006 - Add security audit logging
       SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
+        type: 'MEMORY_SEARCHED',
         severity: 'LOW',
         source: 'EnhancedIndexHandler.getRelationshipStats',
         details: 'Enhanced Index statistics retrieved',

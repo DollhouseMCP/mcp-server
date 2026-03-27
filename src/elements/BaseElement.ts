@@ -165,15 +165,6 @@ export abstract class BaseElement implements IElement {
    * Subclasses should override and call super.validate() first.
    */
   public validate(): ElementValidationResult {
-    // Log security-relevant validation event
-    SecurityMonitor.logSecurityEvent({
-      type: 'YAML_PARSE_SUCCESS',
-      severity: 'LOW',
-      source: 'BaseElement.validate',
-      details: `Element validation performed for ${this.type}:${this.id}`,
-      additionalData: { elementType: this.type, elementId: this.id }
-    });
-    
     const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
     const suggestions: string[] = [];
@@ -602,7 +593,10 @@ export abstract class BaseElement implements IElement {
   }
   
   public async activate(): Promise<void> {
-    logger.info(`Activating ${this.type} element: ${this.metadata.name}`);
+    if (this._status !== ElementStatus.ACTIVE) {
+      logger.info(`Activating ${this.type} element: ${this.metadata.name}`);
+    }
+    // Re-activations of the same element are silent — no value in logging
     this._status = ElementStatus.ACTIVE;
   }
   

@@ -263,14 +263,6 @@ export class NLPScoringManager {
     // Cache the result with LRU management
     this.addToCache(cacheKey, result);
 
-    // Log scoring event for monitoring
-    logger.debug('NLP scoring completed', {
-      jaccard: result.jaccard.toFixed(3),
-      entropy: result.entropy.toFixed(3),
-      score: result.combinedScore.toFixed(3),
-      interpretation: result.interpretation
-    });
-
     return result;
   }
 
@@ -444,9 +436,12 @@ export class NLPScoringManager {
    * Clear the cache
    */
   public clearCache(): void {
+    const cleared = this.cache.size;
     this.cache.clear();
     this.cacheAccessOrder = [];
-    logger.debug('NLP scoring cache cleared');
+    if (cleared > 0) {
+      logger.debug('NLP scoring cache cleared', { entriesCleared: cleared });
+    }
   }
 
   /**

@@ -102,6 +102,7 @@ const SAFE_MCP_OPERATIONS = new Set([
   'get_build_info',
   'get_cache_budget_report',
   'query_logs',
+  'query_metrics',
   'find_similar_elements',
   'get_element_relationships',
   'search_by_verb',

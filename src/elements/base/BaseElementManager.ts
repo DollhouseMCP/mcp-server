@@ -1098,6 +1098,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Expose internal LRU cache instances for metrics collection.
+   */
+  public getMetricsCaches(): Array<{ name: string; instance: LRUCache<unknown> }> {
+    return [
+      { name: `elements:${this.elementType}`, instance: this.elements as LRUCache<unknown> },
+      { name: `pathIndex:${this.elementType}`, instance: this.filePathToId as LRUCache<unknown> },
+    ];
+  }
+
+  /**
    * Dispose of resources and cleanup
    * Subclasses should override to add their own cleanup logic
    */
