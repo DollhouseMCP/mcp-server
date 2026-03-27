@@ -31,7 +31,7 @@ describe('VALIDATION_PATTERNS.SAFE_DESCRIPTION', () => {
       ['backticks', 'Run `npm test` command'],
       ['asterisks', 'Important *note* about security'],
       ['caret', 'Version ^2.0.0 compatible'],
-      ['backslash', 'Windows path C:\\Users\\config'],
+      ['backslash', String.raw`Windows path C:\Users\config`],
       ['checkmarks', 'Status: ✓ passed ✗ failed'],
       ['quotes and apostrophes', "It's a \"quoted\" description"],
       ['colons and semicolons', 'Time: 3:45pm; Status: active'],
