@@ -41,8 +41,8 @@ function parseLogQueryOptions(query: Request['query']): Record<string, unknown> 
   }
   for (const field of ['limit', 'offset'] as const) {
     if (typeof query[field] === 'string') {
-      const parsed = parseInt(query[field], 10);
-      if (!isNaN(parsed)) options[field] = parsed;
+      const parsed = Number.parseInt(query[field], 10);
+      if (!Number.isNaN(parsed)) options[field] = parsed;
     }
   }
   return options;

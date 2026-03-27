@@ -44,7 +44,7 @@ export class MemoryMetricsSink implements IMetricsSink {
 
     // Compute availability bounds BEFORE filtering
     const oldestAvailable = allSnapshots.length > 0 ? allSnapshots[0].timestamp : '';
-    const newestAvailable = allSnapshots.length > 0 ? allSnapshots[allSnapshots.length - 1].timestamp : '';
+    const newestAvailable = allSnapshots.length > 0 ? allSnapshots.at(-1)!.timestamp : '';
 
     // If limit is 0, return empty result with bounds
     if (limit === 0) {
@@ -62,7 +62,7 @@ export class MemoryMetricsSink implements IMetricsSink {
     // 1. Select snapshots based on latest flag
     let snapshots: MetricSnapshot[];
     if (latest) {
-      snapshots = allSnapshots.length > 0 ? [allSnapshots[allSnapshots.length - 1]] : [];
+      snapshots = allSnapshots.length > 0 ? [allSnapshots.at(-1)!] : [];
     } else {
       snapshots = [...allSnapshots];
     }

@@ -23,8 +23,8 @@
   let uPlotAvailable = false;
 
   // ── Public API ───────────────────────────────────────────────────────────
-  window.DollhouseConsole = window.DollhouseConsole || {};
-  window.DollhouseConsole.metrics = {
+  globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
+  globalThis.DollhouseConsole.metrics = {
     init: initMetrics,
     destroy: destroyMetrics,
     refresh: () => {
@@ -39,7 +39,7 @@
     if (!container || container.dataset.initialized === 'true') return;
     container.dataset.initialized = 'true';
 
-    uPlotAvailable = typeof window.uPlot !== 'undefined';
+    uPlotAvailable = typeof globalThis.uPlot !== 'undefined';
     buildDOM(container);
     bindEvents();
     fetchLatest();
@@ -673,6 +673,6 @@
 
   function escapeHtml(s) {
     if (!s) return '';
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }
 })();

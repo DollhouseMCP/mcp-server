@@ -3068,15 +3068,12 @@ export class MCPAQLHandler {
       };
     }
 
-    switch (method) {
-      case 'query': {
-        const options = validateMetricQueryParams(params);
-        const result = this.handlers.metricsSink.query(options);
-        return { _type: 'MetricQueryResult', ...result };
-      }
-      default:
-        throw new Error(`Unknown Metrics method: ${method}`);
+    if (method === 'query') {
+      const options = validateMetricQueryParams(params);
+      const result = this.handlers.metricsSink.query(options);
+      return { _type: 'MetricQueryResult', ...result };
     }
+    throw new Error(`Unknown Metrics method: ${method}`);
   }
 
   /**

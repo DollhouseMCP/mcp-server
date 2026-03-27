@@ -1,6 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { FileLockManagerCollector } from '../../../../src/metrics/collectors/FileLockManagerCollector.js';
-import type { CounterEntry, GaugeEntry, MetricEntry } from '../../../../src/metrics/types.js';
+import type { MetricEntry } from '../../../../src/metrics/types.js';
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -52,7 +52,7 @@ describe('FileLockManagerCollector', () => {
     test('requests_total is a counter', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.requests_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.requests_total');
       expect(entry).toBeDefined();
       expect(entry.type).toBe('counter');
     });
@@ -60,7 +60,7 @@ describe('FileLockManagerCollector', () => {
     test('timeouts_total is a counter', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.timeouts_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.timeouts_total');
       expect(entry).toBeDefined();
       expect(entry.type).toBe('counter');
     });
@@ -68,7 +68,7 @@ describe('FileLockManagerCollector', () => {
     test('concurrent_waits_total is a counter', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.concurrent_waits_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.concurrent_waits_total');
       expect(entry).toBeDefined();
       expect(entry.type).toBe('counter');
     });
@@ -76,7 +76,7 @@ describe('FileLockManagerCollector', () => {
     test('active_current is a gauge', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.active_current') as GaugeEntry;
+      const entry = findByName(metrics, 'lock.file.active_current');
       expect(entry).toBeDefined();
       expect(entry.type).toBe('gauge');
     });
@@ -120,28 +120,28 @@ describe('FileLockManagerCollector', () => {
     test('requests_total value matches totalRequests from mock', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.requests_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.requests_total');
       expect(entry.value).toBe(500);
     });
 
     test('active_current value matches activeLocksCount from mock', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.active_current') as GaugeEntry;
+      const entry = findByName(metrics, 'lock.file.active_current');
       expect(entry.value).toBe(3);
     });
 
     test('timeouts_total value matches timeouts from mock', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.timeouts_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.timeouts_total');
       expect(entry.value).toBe(7);
     });
 
     test('concurrent_waits_total value matches concurrentWaits from mock', () => {
       const collector = new FileLockManagerCollector(makeMockLockManager() as never);
       const metrics = collector.collect() as MetricEntry[];
-      const entry = findByName(metrics, 'lock.file.concurrent_waits_total') as CounterEntry;
+      const entry = findByName(metrics, 'lock.file.concurrent_waits_total');
       expect(entry.value).toBe(12);
     });
   });

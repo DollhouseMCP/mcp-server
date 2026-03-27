@@ -1911,14 +1911,14 @@ function safeParseYaml(content) {
     }
 
     function lazyInitTab(tab, tabInits) {
-      const console = window.DollhouseConsole;
-      if (tab === 'logs' && console?.logs) {
-        if (!tabInits.logs) { tabInits.logs = true; console.logs.init(); }
-        else if (console.logs.refresh) { console.logs.refresh(); }
+      const dc = globalThis.DollhouseConsole;
+      if (tab === 'logs' && dc?.logs) {
+        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(); }
+        else if (dc.logs.refresh) { dc.logs.refresh(); }
       }
-      if (tab === 'metrics' && console?.metrics) {
-        if (!tabInits.metrics) { tabInits.metrics = true; console.metrics.init(); }
-        else if (console.metrics.refresh) { console.metrics.refresh(); }
+      if (tab === 'metrics' && dc?.metrics) {
+        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(); }
+        else if (dc.metrics.refresh) { dc.metrics.refresh(); }
       }
     }
 

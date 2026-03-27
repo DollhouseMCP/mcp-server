@@ -46,8 +46,8 @@
   const rowPool = [];
 
   // ── Public API ───────────────────────────────────────────────────────────
-  window.DollhouseConsole = window.DollhouseConsole || {};
-  window.DollhouseConsole.logs = {
+  globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
+  globalThis.DollhouseConsole.logs = {
     init: initLogViewer,
     destroy: destroyLogViewer,
     refresh: () => {
@@ -311,13 +311,13 @@
 
   function applyFilters() {
     const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId;
-    if (!hasFilter) {
-      filteredIndices = null;
-    } else {
+    if (hasFilter) {
       filteredIndices = [];
       for (let i = 0; i < buffer.length; i++) {
         if (matchesFilters(buffer[i])) filteredIndices.push(i);
       }
+    } else {
+      filteredIndices = null;
     }
     updateEntryCount();
     renderViewport();
@@ -330,11 +330,11 @@
 
   // ── Virtual scroll rendering ─────────────────────────────────────────────
   function getVisibleCount() {
-    return filteredIndices !== null ? filteredIndices.length : buffer.length;
+    return filteredIndices === null ? buffer.length : filteredIndices.length;
   }
 
   function getEntry(visibleIndex) {
-    const bufferIndex = filteredIndices !== null ? filteredIndices[visibleIndex] : visibleIndex;
+    const bufferIndex = filteredIndices === null ? visibleIndex : filteredIndices[visibleIndex];
     return buffer[bufferIndex];
   }
 
@@ -523,7 +523,7 @@
   function onRowClick(e) {
     const row = e.currentTarget;
     const entryId = row.dataset.entryId;
-    const visIdx = parseInt(row.dataset.visibleIndex, 10);
+    const visIdx = Number.parseInt(row.dataset.visibleIndex, 10);
     if (!entryId) return;
     if (handleTraceClick(e)) return;
     handleSelectionClick(e, entryId, visIdx);
@@ -627,6 +627,6 @@
 
   function escapeHtml(s) {
     if (!s) return '';
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
   }
 })();

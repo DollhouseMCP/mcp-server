@@ -1,6 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { OperationalTelemetryCollector } from '../../../../src/metrics/collectors/OperationalTelemetryCollector.js';
-import type { GaugeEntry, MetricEntry } from '../../../../src/metrics/types.js';
+import type { MetricEntry } from '../../../../src/metrics/types.js';
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -34,7 +34,7 @@ describe('OperationalTelemetryCollector', () => {
   describe('metric count', () => {
     test('returns exactly 1 metric', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
-      const metrics = collector.collect() as MetricEntry[];
+      const metrics = collector.collect();
       expect(metrics).toHaveLength(1);
     });
   });
@@ -42,8 +42,8 @@ describe('OperationalTelemetryCollector', () => {
   describe('metric type', () => {
     test('enabled is a gauge', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
-      const metrics = collector.collect() as MetricEntry[];
-      const entry = metrics[0] as GaugeEntry;
+      const metrics = collector.collect();
+      const entry = metrics[0];
       expect(entry.type).toBe('gauge');
     });
   });
@@ -51,7 +51,7 @@ describe('OperationalTelemetryCollector', () => {
   describe('metric name', () => {
     test('produces telemetry.operational.enabled', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
-      const metrics = collector.collect() as MetricEntry[];
+      const metrics = collector.collect();
       const entry = findByName(metrics, 'telemetry.operational.enabled');
       expect(entry).toBeDefined();
     });
@@ -60,7 +60,7 @@ describe('OperationalTelemetryCollector', () => {
   describe('metric unit', () => {
     test('unit is none (boolean flag)', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
-      const metrics = collector.collect() as MetricEntry[];
+      const metrics = collector.collect();
       expect(metrics[0].unit).toBe('none');
     });
   });
@@ -68,15 +68,15 @@ describe('OperationalTelemetryCollector', () => {
   describe('metric value', () => {
     test('value is 1 when telemetry is enabled', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry(true) as never);
-      const metrics = collector.collect() as MetricEntry[];
-      const entry = metrics[0] as GaugeEntry;
+      const metrics = collector.collect();
+      const entry = metrics[0];
       expect(entry.value).toBe(1);
     });
 
     test('value is 0 when telemetry is disabled', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry(false) as never);
-      const metrics = collector.collect() as MetricEntry[];
-      const entry = metrics[0] as GaugeEntry;
+      const metrics = collector.collect();
+      const entry = metrics[0];
       expect(entry.value).toBe(0);
     });
   });
@@ -84,7 +84,7 @@ describe('OperationalTelemetryCollector', () => {
   describe('source', () => {
     test('source is OperationalTelemetry', () => {
       const collector = new OperationalTelemetryCollector(makeMockTelemetry() as never);
-      const metrics = collector.collect() as MetricEntry[];
+      const metrics = collector.collect();
       expect(metrics[0].source).toBe('OperationalTelemetry');
     });
   });

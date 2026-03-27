@@ -92,7 +92,9 @@ export class LRUCacheCollector implements IMetricCollector {
           },
         );
       } catch (_err) {
-        // Silently skip this cache — MetricsManager logs collector-level errors
+        // Skip this cache — MetricsManager logs collector-level errors.
+        // Individual cache failures should not prevent other caches from reporting.
+        continue;
       }
     }
 
