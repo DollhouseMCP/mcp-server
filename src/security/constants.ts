@@ -60,7 +60,7 @@ export const VALIDATION_PATTERNS = {
   // &(and) ~(approximate) *(emphasis) |(separators) {}(templates)
   // <>(angle brackets) $(currency) ^(caret) `(backtick)
   // →↔←↑↓(arrows) ✓✗(checkmarks) and other Unicode symbols
-  SAFE_DESCRIPTION: /^[\p{L}\p{N}\p{P}\p{S}\s\-_.,!?'":;()\[\]{}<>/@#$%^&*+=~`|\\]+$/u,
+  SAFE_DESCRIPTION: /^[\p{L}\p{N}\p{P}\p{S}\s@#$%^&*+=~`|\\]+$/u,
 
   // For content: most permissive - ContentValidator handles security threats
   // This allows essentially anything since content validation is separate
@@ -89,7 +89,7 @@ export const PATTERN_DESCRIPTIONS: Record<string, {
   },
   SAFE_DESCRIPTION: {
     allowed: 'letters, numbers, symbols, spaces, and common punctuation',
-    charTest: /^[\p{L}\p{N}\p{P}\p{S}\s\-_.,!?'":;()\[\]{}<>/@#$%^&*+=~`|\\]$/u,
+    charTest: /^[\p{L}\p{N}\p{P}\p{S}\s@#$%^&*+=~`|\\]$/u,
   },
   SAFE_CONTENT: {
     allowed: 'any characters',
