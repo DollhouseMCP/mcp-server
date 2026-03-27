@@ -3,13 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DollhouseMCP Portfolio</title>
-  <meta name="description" content="Browse your local DollhouseMCP portfolio elements">
+  <title>DollhouseMCP Console</title>
+  <meta name="description" content="DollhouseMCP management console — portfolio, logs, metrics, permissions">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta http-equiv="X-Frame-Options" content="DENY">
   <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="logs.css">
+  <link rel="stylesheet" href="metrics.css">
   <link rel="stylesheet" href="permissions.css">
+  <!-- uPlot for metrics time-series charts -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
 <body>
 
@@ -17,89 +21,104 @@
 
   <header class="site-header">
     <div class="header-brand">
-      <h1 class="site-title">DollhouseMCP Portfolio</h1>
-      <p class="site-tagline">Your local AI elements</p>
+      <h1 class="site-title">DollhouseMCP Console</h1>
+      <p class="site-tagline">Management console</p>
     </div>
-    <nav class="console-tabs" id="console-tabs">
-      <button class="console-tab active" data-tab="portfolio">Portfolio</button>
-      <button class="console-tab" data-tab="permissions">Permissions</button>
-    </nav>
     <div class="header-right">
+      <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
+        <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+        <button class="console-tab" data-tab="logs">Logs</button>
+        <button class="console-tab" data-tab="metrics">Metrics</button>
+        <button class="console-tab" data-tab="permissions">Permissions</button>
+      </nav>
       <div class="site-stats" id="stats" aria-live="polite"></div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
-        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">☾</span>
+        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">&#9790;</span>
         <span class="sr-only" id="theme-toggle-label">Switch to dark mode</span>
       </button>
     </div>
   </header>
 
-  <main class="site-main">
+  <!-- Tab: Portfolio -->
+  <div id="tab-portfolio" class="tab-panel active">
+    <main class="site-main">
 
-    <!-- Tab: Permissions Dashboard (hidden by default) -->
-    <div id="tab-permissions" class="tab-panel" hidden>
-      <div id="permissions-dashboard-root"></div>
-    </div>
-
-    <div class="browse-controls">
-      <div class="search-wrapper">
-        <label for="search-input" class="sr-only">Search elements</label>
-        <input
-          type="search"
-          id="search-input"
-          class="search-input"
-          placeholder="Search by name, description, author, or tag… (press / to focus)"
-          autocomplete="off"
-          spellcheck="false"
-        >
+      <div class="browse-controls">
+        <div class="search-wrapper">
+          <label for="search-input" class="sr-only">Search elements</label>
+          <input
+            type="search"
+            id="search-input"
+            class="search-input"
+            placeholder="Search by name, description, author, or tag... (press / to focus)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+        <div class="type-filter-row">
+          <fieldset class="type-filters" id="type-filters"><legend class="sr-only">Filter by element type</legend></fieldset>
+          <!-- Portfolio is the default view — no collection toggle needed -->
+        </div>
+        <fieldset class="topic-filters" id="topic-filters" hidden><legend class="sr-only">Filter by topic</legend></fieldset>
       </div>
-      <div class="type-filter-row">
-        <fieldset class="type-filters" id="type-filters"><legend class="sr-only">Filter by element type</legend></fieldset>
-        <!-- Portfolio is the default view — no collection toggle needed -->
+
+      <div class="results-bar">
+        <span class="results-count" id="results-count" aria-live="polite"></span>
+        <output class="sr-only" id="results-announcer" aria-live="polite" aria-atomic="true"></output>
+        <fieldset class="source-toggle" id="source-toggle">
+          <legend class="sr-only">Filter by source</legend>
+          <button class="source-btn active" data-source="all"        aria-pressed="true">All</button>
+          <button class="source-btn"        data-source="collection" aria-pressed="false">Collection</button>
+          <button class="source-btn"        data-source="portfolio"  aria-pressed="false">Portfolio</button>
+        </fieldset>
+        <label for="sort-select" class="sr-only">Sort by</label>
+        <select id="sort-select" class="sort-select" aria-label="Sort elements">
+          <option value="name-asc">Name A-Z</option>
+          <option value="name-desc">Name Z-A</option>
+          <option value="date-desc" selected>Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="type-asc">By type</option>
+        </select>
+        <fieldset class="view-toggle" id="view-toggle">
+          <legend class="sr-only">View mode</legend>
+          <button class="view-btn active" data-view="grid"   aria-pressed="true">Cards</button>
+          <button class="view-btn"        data-view="list"   aria-pressed="false">List</button>
+          <button class="view-btn"        data-view="detail" aria-pressed="false">Detail</button>
+        </fieldset>
       </div>
-      <fieldset class="topic-filters" id="topic-filters" hidden><legend class="sr-only">Filter by topic</legend></fieldset>
-    </div>
 
-    <div class="results-bar">
-      <span class="results-count" id="results-count" aria-live="polite"></span>
-      <output class="sr-only" id="results-announcer" aria-live="polite" aria-atomic="true"></output>
-      <fieldset class="source-toggle" id="source-toggle">
-        <legend class="sr-only">Filter by source</legend>
-        <button class="source-btn active" data-source="all"        aria-pressed="true">All</button>
-        <button class="source-btn"        data-source="collection" aria-pressed="false">Collection</button>
-        <button class="source-btn"        data-source="portfolio"  aria-pressed="false">Portfolio</button>
-      </fieldset>
-      <label for="sort-select" class="sr-only">Sort by</label>
-      <select id="sort-select" class="sort-select" aria-label="Sort elements">
-        <option value="name-asc">Name A–Z</option>
-        <option value="name-desc">Name Z–A</option>
-        <option value="date-desc" selected>Newest first</option>
-        <option value="date-asc">Oldest first</option>
-        <option value="type-asc">By type</option>
-      </select>
-      <fieldset class="view-toggle" id="view-toggle">
-        <legend class="sr-only">View mode</legend>
-        <button class="view-btn active" data-view="grid"   aria-pressed="true">Cards</button>
-        <button class="view-btn"        data-view="list"   aria-pressed="false">List</button>
-        <button class="view-btn"        data-view="detail" aria-pressed="false">Detail</button>
-      </fieldset>
-    </div>
+      <ul class="elements-grid" id="elements-grid"></ul>
 
-    <ul class="elements-grid" id="elements-grid"></ul>
+      <nav class="pagination" id="pagination" hidden aria-label="Page navigation">
+        <button class="pagination-btn" id="btn-prev-page">&#8249; Prev</button>
+        <span class="pagination-info" id="page-info"></span>
+        <button class="pagination-btn" id="btn-next-page">Next &#8250;</button>
+      </nav>
 
-    <nav class="pagination" id="pagination" hidden aria-label="Page navigation">
-      <button class="pagination-btn" id="btn-prev-page">‹ Prev</button>
-      <span class="pagination-info" id="page-info"></span>
-      <button class="pagination-btn" id="btn-next-page">Next ›</button>
-    </nav>
+    </main>
+  </div>
 
-  </main>
+  <!-- Tab: Logs -->
+  <div id="tab-logs" class="tab-panel" hidden>
+    <div id="log-viewer-root"></div>
+  </div>
+
+  <!-- Tab: Metrics -->
+  <div id="tab-metrics" class="tab-panel" hidden>
+    <div id="metrics-dashboard-root"></div>
+  </div>
+
+  <!-- Tab: Permissions (auto-dollhouse) -->
+  <div id="tab-permissions" class="tab-panel" hidden>
+    <div id="permissions-dashboard-root"></div>
+  </div>
 
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">
       <header class="modal-header">
         <div class="modal-heading">
-          <h2 class="modal-title" id="modal-title">Loading…</h2>
+          <h2 class="modal-title" id="modal-title">Loading...</h2>
           <span class="modal-type"></span>
         </div>
         <div class="modal-meta">
@@ -111,11 +130,11 @@
         <button class="modal-close" id="modal-close" aria-label="Close element detail">&#x2715;</button>
       </header>
       <div class="modal-toolbar" id="modal-toolbar">
-        <button class="modal-action-btn" id="btn-render">⇄ Raw</button>
-        <button class="modal-action-btn" id="btn-copy">⎘ Copy</button>
-        <button class="modal-action-btn" id="btn-download">⤓ Download</button>
-        <a class="modal-action-btn" id="btn-github" target="_blank" rel="noopener noreferrer">↗ GitHub</a>
-        <a class="modal-action-btn modal-action-btn--submit" id="btn-submit" target="_blank" rel="noopener noreferrer" style="display:none">↑ Submit</a>
+        <button class="modal-action-btn" id="btn-render">&#8644; Raw</button>
+        <button class="modal-action-btn" id="btn-copy">&#9112; Copy</button>
+        <button class="modal-action-btn" id="btn-download">&#10515; Download</button>
+        <a class="modal-action-btn" id="btn-github" target="_blank" rel="noopener noreferrer">&#8599; GitHub</a>
+        <a class="modal-action-btn modal-action-btn--submit" id="btn-submit" target="_blank" rel="noopener noreferrer" style="display:none">&#8593; Submit</a>
         <div class="modal-nav" id="modal-nav">
           <button class="modal-nav-btn" id="btn-prev-element">&#8249;<span class="sr-only"> Previous element</span></button>
           <span class="modal-nav-count" id="modal-nav-count"></span>
@@ -158,8 +177,11 @@
         integrity="sha512-rO+olRTkcf304DQBxSWxln8JXCzTHlKnIdnMUwYvQa9/Jd4cQaNkItIUj6Z4nvW1dqK0SKXLbn9h4KwZTNtAyw=="
         crossorigin="anonymous"
         id="hljs-theme-dark" disabled>
+  <!-- uPlot for metrics charts -->
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
   <script src="app.js"></script>
+  <script src="logs.js"></script>
+  <script src="metrics.js"></script>
   <script src="permissions.js"></script>
-  <script src="tabs.js"></script>
 </body>
 </html>

@@ -733,20 +733,9 @@ export class DollhouseMCPServer implements IToolHandler {
         `total ${report.totalMs}ms`);
     }).catch(() => { /* already logged */ });
 
-    // auto-dollhouse: Register fork-only extensions when running in autonomous mode.
-    // This starts the permission HTTP server, mounts dashboard routes, etc.
-    const { existsSync } = await import('node:fs');
-    if (process.env.DOLLHOUSE_AUTONOMOUS_MODE || existsSync('.auto-dollhouse')) {
-      try {
-        const { registerAutoDollhouse } = await import('./auto-dollhouse/index.js');
-        await registerAutoDollhouse({
-          deferredSetupPromise: deferredPromise,
-          resolveHandler: () => this.container.resolve('MCPAQLHandler'),
-        });
-      } catch (err) {
-        logger.warn('[Startup] auto-dollhouse registration failed (non-fatal):', err);
-      }
-    }
+    // auto-dollhouse features (port discovery, permission routes, mcpAqlHandler gateway)
+    // are now wired directly in Container.deferredWebConsole() when .auto-dollhouse marker
+    // or DOLLHOUSE_AUTONOMOUS_MODE env var is detected. No separate registration needed.
   }
 }
 

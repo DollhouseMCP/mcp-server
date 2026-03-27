@@ -19,26 +19,44 @@ import { logger } from '../utils/logger.js';
 /**
  * Register all auto-dollhouse extensions.
  *
- * @param options.deferredSetupPromise - Promise that resolves when deferred setup (indexing) completes
- * @param options.resolveHandler - Function to resolve MCPAQLHandler from the DI container
+ * Waits for deferred setup to complete, then starts the web console
+ * with permission routes, log viewer, and metrics dashboard.
  */
 export async function registerAutoDollhouse(options: {
   deferredSetupPromise: Promise<void>;
   resolveHandler: () => unknown;
+  resolveService: (name: string) => unknown;
 }): Promise<void> {
   logger.info('[auto-dollhouse] Registering fork-only extensions');
 
-  // Start the permission server after deferred setup completes
-  // (portfolio must be indexed before evaluate_permission can query active elements)
-  options.deferredSetupPromise.then(async () => {
-    try {
-      const { startPermissionServer } = await import('./webAutoStart.js');
-      const handler = options.resolveHandler();
-      await startPermissionServer(handler as import('../handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler);
-    } catch (err) {
-      logger.warn('[auto-dollhouse] Permission server startup failed (non-fatal):', err);
-    }
-  }).catch(() => { /* deferred setup error already logged */ });
+  // Wait for deferred setup (portfolio indexing) before starting the web server
+  try {
+    await options.deferredSetupPromise;
+  } catch (err) {
+    logger.error('[auto-dollhouse] Deferred setup failed, starting web server anyway:', err);
+  }
 
-  logger.info('[auto-dollhouse] Extensions registered');
+  logger.info('[auto-dollhouse] Deferred setup complete, starting web console');
+
+  try {
+    const { startPermissionServer } = await import('./webAutoStart.js');
+    const handler = options.resolveHandler();
+
+    // Resolve optional sinks for log/metrics routes
+    let memorySink: unknown;
+    let metricsSink: unknown;
+    try { memorySink = options.resolveService('MemoryLogSink'); } catch { logger.warn('[auto-dollhouse] MemoryLogSink not available'); }
+    try { metricsSink = options.resolveService('MemoryMetricsSink'); } catch { logger.warn('[auto-dollhouse] MemoryMetricsSink not available'); }
+
+    logger.info(`[auto-dollhouse] Sinks resolved: logs=${!!memorySink}, metrics=${!!metricsSink}`);
+
+    await startPermissionServer(
+      handler as import('../handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler,
+      memorySink,
+      metricsSink,
+      options.resolveService,
+    );
+  } catch (err) {
+    logger.error('[auto-dollhouse] Permission server startup FAILED:', err);
+  }
 }

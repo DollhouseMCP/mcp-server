@@ -168,6 +168,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   if (options.mcpAqlHandler) {
     app.use('/api', createGatewayApiRoutes(options.mcpAqlHandler, options.portfolioDir));
     logger.info('[WebUI] Portfolio: direct filesystem | Permissions: MCP-AQL gateway');
+    // auto-dollhouse: mount permission evaluation routes when handler is available
+    try {
+      const { registerPermissionRoutes } = await import('../auto-dollhouse/permissionRoutes.js');
+      const permRouter = (await import('express')).Router();
+      registerPermissionRoutes(permRouter, options.mcpAqlHandler);
+      app.use('/api', permRouter);
+      logger.info('[WebUI] Permission routes mounted (auto-dollhouse)');
+    } catch {
+      // auto-dollhouse module not available — skip permission routes
+    }
   } else {
     logger.info('[WebUI] Portfolio: direct filesystem | Permissions: not available');
   }

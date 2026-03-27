@@ -22,7 +22,26 @@
   window.DollhouseConsole.permissions = {
     init: initPermissions,
     destroy: destroyPermissions,
+    refresh: function () { poll(); },
   };
+
+  // Hook into tab switching — Todd's app.js lazyInitTab only knows logs/metrics,
+  // so we self-register by listening for tab clicks on 'permissions'.
+  document.addEventListener('DOMContentLoaded', function () {
+    const tabs = document.getElementById('console-tabs');
+    if (tabs) {
+      tabs.addEventListener('click', function (e) {
+        const btn = e.target.closest('.console-tab');
+        if (btn && btn.dataset.tab === 'permissions') {
+          var dc = window.DollhouseConsole;
+          if (dc && dc.permissions) {
+            if (!initialized) dc.permissions.init();
+            else if (dc.permissions.refresh) dc.permissions.refresh();
+          }
+        }
+      });
+    }
+  });
 
   // ── Initialization ─────────────────────────────────────────
 

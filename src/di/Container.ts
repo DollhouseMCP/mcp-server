@@ -960,9 +960,29 @@ export class DollhouseContainer {
     timer.startPhase('web_console', false);
     try {
       if (env.DOLLHOUSE_WEB_CONSOLE) {
+        const { existsSync } = await import('node:fs');
+        const autoDollhouseActive = process.env.DOLLHOUSE_AUTONOMOUS_MODE || existsSync('.auto-dollhouse');
+
+        // auto-dollhouse: use port discovery to avoid conflicts with concurrent sessions
+        let port: number | undefined;
+        if (autoDollhouseActive) {
+          try {
+            const { findAvailablePort, writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
+            port = await findAvailablePort(3939);
+            await writePortFile(port);
+            registerPortCleanup();
+            logger.info(`[Container] auto-dollhouse port discovery: bound to ${port}`);
+          } catch (err) {
+            logger.warn('[Container] auto-dollhouse port discovery failed, using default:', err);
+          }
+        }
+
         const { startWebServer } = await import('../web/server.js');
         const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
         const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+        const mcpAqlHandler = autoDollhouseActive
+          ? this.resolve<MCPAQLHandler>('mcpAqlHandler')
+          : undefined;
 
         let metricsSink: MemoryMetricsSink | undefined;
         try {
@@ -973,6 +993,8 @@ export class DollhouseContainer {
           portfolioDir: portfolioManager.getBaseDir(),
           memorySink,
           metricsSink,
+          ...(port ? { port } : {}),
+          ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
         });
 
         if (webResult.logBroadcast) {
@@ -987,9 +1009,19 @@ export class DollhouseContainer {
           } catch { /* metrics manager not available */ }
         }
 
-        logger.info('[Container] Web console started');
+        // Debug: write to file since logger backpressure drops messages
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync('/tmp/auto-dollhouse-web-debug.log',
+          `[${new Date().toISOString()}] Web console started (auto-dollhouse=${autoDollhouseActive}, port=${port})\n` +
+          `logBroadcast=${!!webResult.logBroadcast}, metricsOnSnapshot=${!!webResult.metricsOnSnapshot}\n`,
+          { flag: 'a' });
+        logger.info(`[Container] Web console started${autoDollhouseActive ? ' (auto-dollhouse mode)' : ''}`);
       }
     } catch (error) {
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync('/tmp/auto-dollhouse-web-debug.log',
+        `[${new Date().toISOString()}] Web console FAILED: ${error}\n${(error as Error).stack || ''}\n`,
+        { flag: 'a' });
       logger.warn('[Container] Web console startup failed:', error);
     }
     timer.endPhase('web_console');
