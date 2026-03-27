@@ -163,7 +163,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
     app.use('/api', createGatewayApiRoutes(options.mcpAqlHandler, options.portfolioDir));
-    logger.info('[WebUI] API routes using MCP-AQL Gateway (validated, cached, gatekeeper-checked)');
+
+    // Permission evaluation routes (POST /evaluate_permission, GET /permissions/status)
+    const { registerPermissionRoutes } = await import('./routes/permissionRoutes.js');
+    const permRouter = (await import('express')).Router();
+    registerPermissionRoutes(permRouter, options.mcpAqlHandler);
+    app.use('/api', permRouter);
+
+    logger.info('[WebUI] API routes using MCP-AQL Gateway + permission routes');
   } else {
     app.use('/api', createApiRoutes(options.portfolioDir));
     logger.warn('[WebUI] API routes using direct filesystem access (no MCP-AQL handler available)');

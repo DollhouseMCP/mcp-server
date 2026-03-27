@@ -969,10 +969,17 @@ export class DollhouseContainer {
           metricsSink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
         } catch { /* metrics not available */ }
 
+        // Resolve mcpAqlHandler for permission evaluation and gateway routes
+        let mcpAqlHandler: MCPAQLHandler | undefined;
+        try {
+          mcpAqlHandler = this.resolve<MCPAQLHandler>('mcpAqlHandler');
+        } catch { /* handler not available */ }
+
         const webResult = await startWebServer({
           portfolioDir: portfolioManager.getBaseDir(),
           memorySink,
           metricsSink,
+          ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
         });
 
         if (webResult.logBroadcast) {
