@@ -20,14 +20,19 @@ import type { ActiveElement } from './policies/ElementPolicies.js';
 
 /** Error thrown when permission evaluation fails at a specific stage */
 export class PermissionEvaluationError extends Error {
+  public readonly stage: 'rate_limit' | 'classification' | 'policy' | 'element_fetch';
+  public readonly toolName: string;
+
   constructor(
     message: string,
-    public readonly stage: 'rate_limit' | 'classification' | 'policy' | 'element_fetch',
-    public readonly toolName: string,
-    public readonly cause?: unknown,
+    stage: 'rate_limit' | 'classification' | 'policy' | 'element_fetch',
+    toolName: string,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, cause ? { cause } : undefined);
     this.name = 'PermissionEvaluationError';
+    this.stage = stage;
+    this.toolName = toolName;
   }
 }
 
