@@ -960,6 +960,10 @@ export class DollhouseContainer {
     timer.startPhase('web_console', false);
     try {
       if (env.DOLLHOUSE_WEB_CONSOLE) {
+        // Port discovery: find an available port for concurrent sessions
+        const { discoverAndBindPort } = await import('../web/portDiscovery.js');
+        const port = await discoverAndBindPort();
+
         const { startWebServer } = await import('../web/server.js');
         const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
         const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
@@ -973,6 +977,7 @@ export class DollhouseContainer {
           portfolioDir: portfolioManager.getBaseDir(),
           memorySink,
           metricsSink,
+          ...(port ? { port } : {}),
         });
 
         if (webResult.logBroadcast) {
