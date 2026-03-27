@@ -41,11 +41,17 @@ interface CacheNode<T> {
 }
 
 export class LRUCache<T> {
+  private static hasLoggedInit = false;
   private static logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
 
   static addLogListener(fn: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void): () => void {
     LRUCache.logListener = fn;
     return () => { LRUCache.logListener = undefined; };
+  }
+
+  /** Reset static flags for test isolation. */
+  static resetStaticState(): void {
+    LRUCache.hasLoggedInit = false;
   }
 
   private readonly name: string;
@@ -85,19 +91,22 @@ export class LRUCache<T> {
     this.onSet = options.onSet;
     this.sizeEstimationMode = options.sizeEstimationMode || 'fast';
 
-    // FIX: DMCP-SEC-006 - Audit cache initialization
-    SecurityMonitor.logSecurityEvent({
-      type: 'PORTFOLIO_INITIALIZATION',
-      severity: 'LOW',
-      source: 'LRUCache.constructor',
-      details: `Cache initialized with maxSize=${this.maxSize}, maxMemoryMB=${options.maxMemoryMB || 50}, ttl=${this.ttlMs}ms`,
-      additionalData: {
-        maxSize: this.maxSize,
-        maxMemoryMB: options.maxMemoryMB || 50,
-        ttlMs: this.ttlMs,
-        sizeEstimationMode: this.sizeEstimationMode
-      }
-    });
+    // FIX: DMCP-SEC-006 - Audit cache initialization (logs only for the first cache constructed)
+    if (!LRUCache.hasLoggedInit) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'PORTFOLIO_INITIALIZATION',
+        severity: 'LOW',
+        source: 'LRUCache.constructor',
+        details: `Cache initialized with maxSize=${this.maxSize}, maxMemoryMB=${options.maxMemoryMB || 50}, ttl=${this.ttlMs}ms`,
+        additionalData: {
+          maxSize: this.maxSize,
+          maxMemoryMB: options.maxMemoryMB || 50,
+          ttlMs: this.ttlMs,
+          sizeEstimationMode: this.sizeEstimationMode
+        }
+      });
+      LRUCache.hasLoggedInit = true;
+    }
   }
 
   /**
@@ -234,19 +243,21 @@ export class LRUCache<T> {
     this.nextExpiryTimestamp = Infinity;
     this.evictionCount += this.cache.size;
 
-    LRUCache.logListener?.('debug', 'Clear cache', {
-      cacheName: this.name,
-      entriesCleared,
-    });
+    if (entriesCleared > 0) {
+      LRUCache.logListener?.('debug', 'Clear cache', {
+        cacheName: this.name,
+        entriesCleared,
+      });
 
-    // FIX: DMCP-SEC-006 - Audit cache clearing
-    SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_CLEARED',
-      severity: 'LOW',
-      source: 'LRUCache.clear',
-      details: `Cache cleared: ${entriesCleared} entries removed`,
-      additionalData: { entriesCleared }
-    });
+      // FIX: DMCP-SEC-006 - Audit cache clearing
+      SecurityMonitor.logSecurityEvent({
+        type: 'MEMORY_CLEARED',
+        severity: 'LOW',
+        source: 'LRUCache.clear',
+        details: `Cache cleared: ${entriesCleared} entries removed`,
+        additionalData: { entriesCleared }
+      });
+    }
   }
 
   /**

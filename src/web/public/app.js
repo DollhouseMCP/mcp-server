@@ -173,11 +173,19 @@ function safeParseYaml(content) {
 
   // ── Type filter chips ──────────────────────────────────────────────────────
 
+  /** Elements filtered by source toggle only (no type/topic/search). */
+  function getSourceFilteredElements() {
+    if (activeSource === 'collection') return allElements.filter(el => !el._local);
+    if (activeSource === 'portfolio') return allElements.filter(el => el._local);
+    return allElements;
+  }
+
   function renderTypeFilters() {
     const container = document.getElementById('type-filters');
     if (!container) return;
 
-    const typeCounts = allElements.reduce((acc, el) => {
+    const sourceFiltered = getSourceFilteredElements();
+    const typeCounts = sourceFiltered.reduce((acc, el) => {
       acc[el.type] = (acc[el.type] || 0) + 1;
       return acc;
     }, {});
@@ -186,7 +194,7 @@ function safeParseYaml(content) {
 
     const isAllActive = activeTypes.size === 0;
     container.innerHTML = types.map(type => {
-      const count = type === 'all' ? allElements.length : typeCounts[type];
+      const count = type === 'all' ? sourceFiltered.length : typeCounts[type];
       const isActive = type === 'all' ? isAllActive : activeTypes.has(type);
       return `<button
         class="type-filter${isActive ? ' active' : ''}"
@@ -253,8 +261,9 @@ function safeParseYaml(content) {
     const container = document.getElementById('topic-filters');
     if (!container) return;
 
+    const sourceFiltered = getSourceFilteredElements();
     const topicCounts = {};
-    allElements.forEach(el => {
+    sourceFiltered.forEach(el => {
       const topic = getTopicForElement(el);
       if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1;
     });
@@ -264,7 +273,7 @@ function safeParseYaml(content) {
 
     container.hidden = false;
     container.innerHTML = topics.map(topic => {
-      const count = topic === 'all' ? allElements.length : topicCounts[topic];
+      const count = topic === 'all' ? sourceFiltered.length : topicCounts[topic];
       const isActive = topic === activeTopic;
       return `<button
         class="topic-filter${isActive ? ' active' : ''}"
@@ -356,9 +365,10 @@ function safeParseYaml(content) {
     const pageItems = filteredElements.slice(pageStart, pageEnd);
 
     if (countEl) {
-      const base = total === allElements.length
-        ? `${allElements.length} elements`
-        : `${total} of ${allElements.length} elements`;
+      const sourceTotal = getSourceFilteredElements().length;
+      const base = total === sourceTotal
+        ? `${sourceTotal} elements`
+        : `${total} of ${sourceTotal} elements`;
       const pageNote = totalPages > 1 ? ` · page ${currentPage} of ${totalPages}` : '';
       countEl.textContent = base + pageNote;
     }
@@ -1865,12 +1875,52 @@ function safeParseYaml(content) {
           b.classList.toggle('active', on);
           b.setAttribute('aria-pressed', on);
         });
+        renderTypeFilters();
+        renderTopicFilters();
         applyFilters();
       });
     }
 
     // Portfolio button
     document.getElementById('btn-portfolio')?.addEventListener('click', loadLocalPortfolio);
+
+    // ── Tab switching ─────────────────────────────────────────────────────────
+    const consoleTabs = document.getElementById('console-tabs');
+    const tabInits = { logs: false, metrics: false };
+
+    if (consoleTabs) {
+      consoleTabs.addEventListener('click', (e) => {
+        const btn = e.target.closest('.console-tab');
+        if (!btn) return;
+        const tab = btn.dataset.tab;
+        if (!tab) return;
+
+        // Update active tab button
+        consoleTabs.querySelectorAll('.console-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // Show/hide panels
+        document.querySelectorAll('.tab-panel').forEach(p => {
+          p.hidden = p.id !== 'tab-' + tab;
+          if (p.id === 'tab-' + tab) p.classList.add('active');
+          else p.classList.remove('active');
+        });
+
+        lazyInitTab(tab, tabInits);
+      });
+    }
+
+    function lazyInitTab(tab, tabInits) {
+      const dc = globalThis.DollhouseConsole;
+      if (tab === 'logs' && dc?.logs) {
+        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(); }
+        else if (dc.logs.refresh) { dc.logs.refresh(); }
+      }
+      if (tab === 'metrics' && dc?.metrics) {
+        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(); }
+        else if (dc.metrics.refresh) { dc.metrics.refresh(); }
+      }
+    }
 
     init();
   });

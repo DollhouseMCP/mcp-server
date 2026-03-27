@@ -83,6 +83,10 @@ import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { LogQueryOptions } from '../../logging/types.js';
+import type { MetricQueryOptions, MetricType } from '../../metrics/types.js';
+import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
+import type { OperationMetricsTracker } from '../../metrics/OperationMetricsTracker.js';
+import type { GatekeeperMetricsTracker } from '../../metrics/GatekeeperMetricsTracker.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '../../elements/agents/handoff.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
@@ -216,6 +220,39 @@ function validateLogQueryParams(params: Record<string, unknown>): LogQueryOption
   }
   if (typeof params.correlationId === 'string') {
     options.correlationId = params.correlationId;
+  }
+
+  return options;
+}
+
+const VALID_METRIC_TYPES = new Set<MetricType>(['counter', 'gauge', 'histogram']);
+
+function validateMetricQueryParams(params: Record<string, unknown>): MetricQueryOptions {
+  const options: MetricQueryOptions = {};
+
+  if (Array.isArray(params.names)) {
+    options.names = params.names.filter((n): n is string => typeof n === 'string');
+  }
+  if (typeof params.source === 'string') {
+    options.source = params.source;
+  }
+  if (typeof params.type === 'string' && VALID_METRIC_TYPES.has(params.type as MetricType)) {
+    options.type = params.type as MetricType;
+  }
+  if (typeof params.since === 'string') {
+    options.since = params.since;
+  }
+  if (typeof params.until === 'string') {
+    options.until = params.until;
+  }
+  if (typeof params.latest === 'boolean') {
+    options.latest = params.latest;
+  }
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit)) {
+    options.limit = params.limit;
+  }
+  if (typeof params.offset === 'number' && Number.isFinite(params.offset)) {
+    options.offset = params.offset;
   }
 
   return options;
@@ -411,6 +448,14 @@ export interface HandlerRegistry {
   verificationNotifier?: IVerificationNotifier;
   // Issue #528: MemoryLogSink for CRUDE-routed query_logs
   memorySink?: MemoryLogSink;
+  // Metrics: MemoryMetricsSink for CRUDE-routed query_metrics
+  metricsSink?: import('../../metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
+  // Search metrics: PerformanceMonitor for recordSearch()
+  performanceMonitor?: PerformanceMonitor;
+  // Operation metrics: OperationMetricsTracker for CRUD operation stats
+  operationMetricsTracker?: OperationMetricsTracker;
+  // Gatekeeper metrics: GatekeeperMetricsTracker for policy enforcement stats
+  gatekeeperMetricsTracker?: GatekeeperMetricsTracker;
 }
 
 /**
@@ -814,6 +859,14 @@ export class MCPAQLHandler {
           skipElementPolicies: isGatekeeperInfraOperation(operation),
         });
 
+        // Record Gatekeeper decision for metrics
+        this.handlers.gatekeeperMetricsTracker?.record({
+          allowed: decision.allowed,
+          permissionLevel: decision.permissionLevel,
+          policySource: decision.policySource,
+          confirmationPending: decision.confirmationPending,
+        });
+
         if (!decision.allowed) {
           if (decision.confirmationPending) {
             // Issue #1653: Auto-confirm when the host (Claude Code, etc.) has already
@@ -918,24 +971,35 @@ export class MCPAQLHandler {
       // Apply field filtering if fields param provided
       const data = this.applyFieldSelection(rawData, params as Record<string, unknown>);
 
-      // Step 6: Log successful operation and return result
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_COMPLETED',
-        severity: 'LOW',
-        source: `MCPAQLHandler.${endpoint.toLowerCase()}`,
-        details: `${endpoint} '${operation}' completed on ${elementType || 'unspecified'}`,
-        additionalData: {
-          endpoint,
-          operation,
-          elementType,
-          parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
-        }
-      });
+      // Step 6: Log successful operation — only mutations are security-relevant
+      if (endpoint !== 'READ') {
+        SecurityMonitor.logSecurityEvent({
+          type: 'OPERATION_COMPLETED',
+          severity: 'LOW',
+          source: `MCPAQLHandler.${endpoint.toLowerCase()}`,
+          details: elementType
+            ? `${endpoint} '${operation}' completed on ${elementType}`
+            : `${endpoint} '${operation}' completed`,
+          additionalData: {
+            endpoint,
+            operation,
+            elementType,
+            parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
+          }
+        });
+      }
+      const durationMs = performance.now() - startTime;
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
+      const typeSuffix = elementType ? ':' + elementType : '';
+      logger.debug(`[MCP-AQL] ${endpoint} ${operation}${typeSuffix} (${durationMs.toFixed(1)}ms)`);
       return this.success(data, startTime);
     } catch (error) {
       // Catch all errors and return as OperationFailure
       const message = error instanceof Error ? error.message : String(error);
       const isSecurityViolation = message.includes('Security violation');
+
+      const durationMs = performance.now() - startTime;
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, false);
 
       // Log security events with appropriate severity
       SecurityMonitor.logSecurityEvent({
@@ -1172,6 +1236,11 @@ export class MCPAQLHandler {
     // Logging operations (Issue #528 - CRUDE migration)
     if (module === 'Logging') {
       return this.dispatchLogging(method, params as Record<string, unknown>);
+    }
+
+    // Metrics operations (CRUDE-routed query_metrics)
+    if (module === 'Metrics') {
+      return this.dispatchMetrics(method, params as Record<string, unknown>);
     }
 
     // Browser operations (Issue #774: open portfolio browser)
@@ -1851,6 +1920,8 @@ export class MCPAQLHandler {
    * @returns Search results with matched elements and relevance info
    */
   private async handleSearchElements(input: OperationInput): Promise<unknown> {
+    const searchStart = performance.now();
+    const memoryBefore = process.memoryUsage().heapUsed;
     const { elementType, params } = input;
     const p = params as Record<string, unknown>;
     const query = (p.query as string)?.trim();
@@ -1934,6 +2005,18 @@ export class MCPAQLHandler {
         logger.debug(`Failed to load elements for search: ${type}`, { error });
       }
     }
+
+    // Record search metrics via PerformanceMonitor
+    this.handlers.performanceMonitor?.recordSearch({
+      query,
+      duration: performance.now() - searchStart,
+      resultCount: allResults.length,
+      sources: elementTypes,
+      cacheHit: false,
+      memoryBefore,
+      memoryAfter: process.memoryUsage().heapUsed,
+      timestamp: new Date(),
+    });
 
     // Sort results (currently only 'name' is supported as a sort field)
     const sortedResults = [...allResults].sort((a, b) => {
@@ -2963,6 +3046,34 @@ export class MCPAQLHandler {
       default:
         throw new Error(`Unknown Logging method: ${method}`);
     }
+  }
+
+  /**
+   * Dispatch Metrics operations.
+   *
+   * Routes query_metrics through the unified CRUDE pipeline, providing
+   * operation routing, gatekeeper policy enforcement, and structured response format.
+   */
+  private dispatchMetrics(
+    method: string,
+    params: Record<string, unknown>
+  ): unknown {
+    if (!this.handlers.metricsSink) {
+      return {
+        _type: 'MetricQueryResult',
+        snapshots: [],
+        total: 0,
+        hasMore: false,
+        message: 'Metrics collection is not enabled. Set DOLLHOUSE_METRICS_ENABLED=true to activate.',
+      };
+    }
+
+    if (method === 'query') {
+      const options = validateMetricQueryParams(params);
+      const result = this.handlers.metricsSink.query(options);
+      return { _type: 'MetricQueryResult', ...result };
+    }
+    throw new Error(`Unknown Metrics method: ${method}`);
   }
 
   /**

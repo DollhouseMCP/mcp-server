@@ -152,25 +152,12 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
    * ```
    */
   public query(items: T[], options?: QueryOptions): QueryResult<T> {
-    logger.debug('ElementQueryService.query called', {
-      totalItems: items.length,
-      hasFilters: !!options?.filters,
-      hasSort: !!options?.sort,
-      hasPagination: !!options?.pagination,
-    });
-
     // Step 1: Validate all options
     this.validateOptions(options);
 
     // Step 2: Apply filters
     const filteredItems = this.filterService.filter(items, options?.filters);
     const appliedFilters = this.filterService.summarizeFilters(options?.filters);
-
-    logger.debug('ElementQueryService.query: Filtering complete', {
-      inputItems: items.length,
-      filteredItems: filteredItems.length,
-      filtersApplied: appliedFilters.count,
-    });
 
     // Step 3: Sort filtered items
     const sortedItems = this.sortService.sort(filteredItems, options?.sort);
@@ -179,21 +166,8 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
       sortOrder: options?.sort?.sortOrder ?? this.sortService.getDefaultSorting().sortOrder,
     };
 
-    logger.debug('ElementQueryService.query: Sorting complete', {
-      sortBy: appliedSorting.sortBy,
-      sortOrder: appliedSorting.sortOrder,
-      itemCount: sortedItems.length,
-    });
-
     // Step 4: Paginate sorted items
     const paginatedResult = this.paginationService.paginate(sortedItems, options?.pagination);
-
-    logger.debug('ElementQueryService.query: Pagination complete', {
-      page: paginatedResult.pagination.page,
-      pageSize: paginatedResult.pagination.pageSize,
-      totalPages: paginatedResult.pagination.totalPages,
-      returnedItems: paginatedResult.items.length,
-    });
 
     // Step 5: Build complete query result
     const result: QueryResult<T> = {
@@ -204,13 +178,6 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
         applied: appliedFilters,
       },
     };
-
-    logger.debug('ElementQueryService.query completed', {
-      resultItems: result.items.length,
-      totalItems: result.pagination.totalItems,
-      filtersApplied: result.filters.applied.count,
-      sortBy: result.sorting.sortBy,
-    });
 
     return result;
   }
@@ -242,16 +209,7 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
    * ```
    */
   public queryItems(items: T[], options?: QueryOptions): T[] {
-    logger.debug('ElementQueryService.queryItems called', {
-      totalItems: items.length,
-    });
-
     const result = this.query(items, options);
-
-    logger.debug('ElementQueryService.queryItems completed', {
-      returnedItems: result.items.length,
-    });
-
     return result.items;
   }
 
@@ -332,12 +290,6 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
       return true; // No options is valid (use defaults)
     }
 
-    logger.debug('ElementQueryService.validateOptions called', {
-      hasFilters: !!options.filters,
-      hasSort: !!options.sort,
-      hasPagination: !!options.pagination,
-    });
-
     try {
       // Validate filter criteria
       if (options.filters) {
@@ -355,7 +307,6 @@ export class ElementQueryService<T extends IElement = IElement> implements IElem
         this.validatePaginationStructure(options.pagination);
       }
 
-      logger.debug('ElementQueryService.validateOptions: All options valid');
       return true;
     } catch (error) {
       logger.error('ElementQueryService.validateOptions failed', {

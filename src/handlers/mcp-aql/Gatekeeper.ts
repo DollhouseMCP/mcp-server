@@ -223,15 +223,18 @@ export class Gatekeeper {
       ? resolveElementPolicy(operation, activeElements, elementType)
       : { permissionLevel: getDefaultPermissionLevel(operation), sourceElement: undefined, matchedPolicy: undefined as ElementPolicyResult['matchedPolicy'] };
     const policyMs = Date.now() - policyStart;
-    logger.debug('Gatekeeper policy resolution', {
-      operation,
-      activeElementCount: activeElements.length,
-      overridesEnabled: this.config.allowElementPolicyOverrides,
-      resultLevel: policyResult.permissionLevel,
-      sourceElement: policyResult.sourceElement,
-      matchedPolicy: policyResult.matchedPolicy,
-      durationMs: policyMs,
-    });
+    // Only log policy resolution when it's not the default AUTO_APPROVE path
+    if (policyResult.permissionLevel !== PermissionLevel.AUTO_APPROVE || policyMs > 5) {
+      logger.debug('Gatekeeper policy resolution', {
+        operation,
+        activeElementCount: activeElements.length,
+        overridesEnabled: this.config.allowElementPolicyOverrides,
+        resultLevel: policyResult.permissionLevel,
+        sourceElement: policyResult.sourceElement,
+        matchedPolicy: policyResult.matchedPolicy,
+        durationMs: policyMs,
+      });
+    }
 
     // If element policy denies, return immediately
     if (policyResult.permissionLevel === PermissionLevel.DENY) {
@@ -503,13 +506,16 @@ export class Gatekeeper {
       clientInfo: this.session.clientInfo,
     };
 
-    SecurityMonitor.logSecurityEvent({
-      type: decision.allowed ? 'GATEKEEPER_DECISION' : 'UPDATE_SECURITY_VIOLATION',
-      severity: decision.allowed ? 'LOW' : 'MEDIUM',
-      source: 'Gatekeeper.enforce',
-      details: `Gatekeeper decision: ${decision.allowed ? 'ALLOWED' : 'DENIED'} - ${decision.reason}`,
-      additionalData: auditEntry,
-    });
+    // Only log security events for denied decisions — allowed ops are normal traffic
+    if (!decision.allowed) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'UPDATE_SECURITY_VIOLATION',
+        severity: 'MEDIUM',
+        source: 'Gatekeeper.enforce',
+        details: `Gatekeeper decision: DENIED - ${decision.reason}`,
+        additionalData: auditEntry,
+      });
+    }
   }
 }
 

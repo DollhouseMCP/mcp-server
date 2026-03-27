@@ -120,13 +120,8 @@ This is a test skill.`;
       expect(skill.metadata.description).toBe('A test skill for unit testing');
       expect(skill.instructions).toContain('This is a test skill.');
       
-      // Verify security logging - FileOperationsService logs YAML_PARSE_SUCCESS
-      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'YAML_PARSE_SUCCESS',
-          severity: 'LOW'
-        })
-      );
+      // YAML_PARSE_SUCCESS removed from hot-path parser to reduce log noise.
+      // Security audit for YAML parsing is handled at higher-level call sites.
     });
 
     it('should handle missing file gracefully', async () => {

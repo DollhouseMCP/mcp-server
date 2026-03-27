@@ -404,7 +404,7 @@ export class PortfolioIndexManager {
    */
   private async performBuild(): Promise<void> {
     const startTime = Date.now();
-    logger.info('Building portfolio index...');
+    logger.debug('Building portfolio index...');
     
     try {
       const portfolioManager = this.portfolioManager;

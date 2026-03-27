@@ -1273,6 +1273,66 @@ body.modal-open { overflow: hidden; }
   text-align: center;
 }
 
+/* ── Console tabs ────────────────────────────────────────────────────────── */
+
+.console-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.console-tab {
+  background: transparent;
+  color: var(--ink-500);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 14px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  letter-spacing: 0.02em;
+}
+
+.console-tab:hover {
+  color: var(--ink-900);
+  background: var(--surface-2);
+}
+
+.console-tab.active {
+  background: var(--paper-strong);
+  color: var(--signal);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+@media (max-width: 640px) {
+  .console-tabs {
+    order: -1;
+    width: 100%;
+  }
+  .console-tab {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+/* ── Tab panels ──────────────────────────────────────────────────────────── */
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.tab-panel[hidden] {
+  display: none !important;
+}
+
 /* ── Site footer ─────────────────────────────────────────────────────────── */
 
 .site-footer {

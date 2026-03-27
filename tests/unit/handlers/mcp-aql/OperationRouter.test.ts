@@ -70,6 +70,8 @@ describe('OperationRouter', () => {
         'permission_prompt', // Issue #647: Moved from EXECUTE to READ
         // LOGGING operations (Issue #528)
         'query_logs',
+        // METRICS operations
+        'query_metrics',
         // UPDATE operations
         'edit_element',
         'upgrade_element',

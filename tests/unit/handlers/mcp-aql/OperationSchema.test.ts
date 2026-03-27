@@ -23,6 +23,7 @@ import {
   EXECUTION_SCHEMAS,
   GATEKEEPER_SCHEMAS,
   LOGGING_SCHEMAS,
+  METRICS_SCHEMAS,
   ACTIVATION_SCHEMAS,
   SEARCH_SCHEMAS,
   BROWSER_SCHEMAS,
@@ -772,6 +773,7 @@ describe('OperationSchema', () => {
           Object.keys(EXECUTION_SCHEMAS).length +
           Object.keys(GATEKEEPER_SCHEMAS).length +
           Object.keys(LOGGING_SCHEMAS).length +
+          Object.keys(METRICS_SCHEMAS).length +
           Object.keys(ACTIVATION_SCHEMAS).length +
           Object.keys(SEARCH_SCHEMAS).length +
           Object.keys(BROWSER_SCHEMAS).length;

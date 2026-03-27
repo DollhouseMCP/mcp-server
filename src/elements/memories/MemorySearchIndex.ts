@@ -362,7 +362,7 @@ export class MemorySearchIndex {
       this.contentIndex = new ContentIndex(this.config);
     }
 
-    logger.debug('MemorySearchIndex created', this.config);
+    // Config available via stats methods — no need to log on every instantiation
   }
 
   /**

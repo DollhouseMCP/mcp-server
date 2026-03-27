@@ -353,7 +353,10 @@ export class MemoryStorageLayer implements IStorageLayer {
       // 4. Diff against manifest
       const diff = this.manifest.diff(stats);
 
-      logger.debug(`MemoryStorageLayer.scan: DISK SCAN — ${allRelativePaths.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed, ${diff.unchanged.length} unchanged`);
+      const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
+      if (hasChanges) {
+        logger.debug(`MemoryStorageLayer.scan: DISK SCAN — ${allRelativePaths.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
+      }
 
       // 5. For added/modified: read file, extract metadata, update index
       const toIndex = [...diff.added, ...diff.modified];

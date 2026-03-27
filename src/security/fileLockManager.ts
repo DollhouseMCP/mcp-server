@@ -55,13 +55,12 @@ export class FileLockManager {
     const startTime = Date.now();
     this.metrics.totalLockRequests++;
     
-    logger.debug(`Lock requested for resource: ${resource}`);
-    
     // Wait for any existing operation on this resource
     const existingLock = this.locks.get(resource);
     if (existingLock) {
       this.metrics.concurrentWaits++;
-      logger.debug(`Waiting for existing lock on: ${resource}`);
+      const shortResource = path.basename(resource);
+      logger.debug(`Lock contention on: ${shortResource}`, { resource });
       this.logListener?.('debug', 'Detect lock contention', { resource });
       
       try {
@@ -87,13 +86,16 @@ export class FileLockManager {
       }
       this.metrics.lockWaitTime.get(resource)!.push(waitTime);
       
-      logger.debug(`Lock released for resource: ${resource} (${waitTime}ms)`);
+      // Only log locks that actually waited (>5ms indicates real contention)
+      if (waitTime > 5) {
+        const shortResource = path.basename(resource);
+        logger.debug(`Slow lock: ${shortResource} (${waitTime}ms)`);
+      }
       return result;
     } finally {
       // Clean up lock - unconditional delete is safe and race-free
       // This operation completed, so remove its lock from the map
       this.locks.delete(resource);
-      logger.debug(`Lock queue cleaned up for resource: ${resource}`);
     }
   }
 
@@ -147,7 +149,6 @@ export class FileLockManager {
       // Atomic rename (on same filesystem)
       await fs.rename(tempPath, filePath);
       
-      logger.debug(`Atomic write completed: ${filePath}`);
     } catch (error) {
       // Clean up temp file on error
       try {

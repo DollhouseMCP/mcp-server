@@ -12,7 +12,7 @@
     "prebuild": "npm run build:safety && node scripts/generate-version.js",
     "build:safety": "cd packages/safety && npm install && npm run build",
     "build": "tsc",
-    "postbuild": "cp -r src/seed-elements dist/ && cp -r src/web/public dist/web/public",
+    "postbuild": "cp -r src/seed-elements dist/ && rm -rf dist/web/public && cp -r src/web/public dist/web/public",
     "web": "node dist/index.js --web",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",

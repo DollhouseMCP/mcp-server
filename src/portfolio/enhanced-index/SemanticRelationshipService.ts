@@ -28,7 +28,7 @@ export class SemanticRelationshipService {
     const elementCount = Object.values(index.elements)
       .reduce((sum, elements) => sum + Object.keys(elements).length, 0);
 
-    logger.info('Starting semantic relationship calculation', {
+    logger.debug('Starting semantic relationship calculation', {
       elementCount,
       maxForFullMatrix: config.performance.maxElementsForFullMatrix
     });
@@ -247,23 +247,12 @@ export class SemanticRelationshipService {
       typeSampleSizes.set(type, sampleSize);
     }
 
-    logger.debug('Proportional sampling distribution', {
-      typeCounts: Object.fromEntries(typeCounts),
-      sampleSizes: Object.fromEntries(typeSampleSizes)
-    });
-
     const maxKeysToProcess = Math.min(
       Math.ceil(Math.sqrt(keys.length)),
       Math.ceil(crossTypeComparisons / Math.max(1, typeSampleSizes.size))
     );
 
     const sampledKeys1 = this.randomSample(keys, maxKeysToProcess);
-
-    logger.debug('Cross-type sampling with limited key set', {
-      totalKeys: keys.length,
-      sampledKeys: sampledKeys1.length,
-      maxKeysToProcess
-    });
 
     for (const key1 of sampledKeys1) {
       if (comparisons >= maxComparisons) break;
@@ -351,12 +340,6 @@ export class SemanticRelationshipService {
         significantClusters.set(keyword, elementKeys);
       }
     }
-
-    logger.debug('Keyword clusters built', {
-      totalClusters: clusters.size,
-      significantClusters: significantClusters.size,
-      largestCluster: Math.max(...Array.from(significantClusters.values()).map(v => v.length))
-    });
 
     return significantClusters;
   }
