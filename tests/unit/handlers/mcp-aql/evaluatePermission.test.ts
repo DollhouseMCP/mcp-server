@@ -6,7 +6,7 @@
  */
 
 import { jest } from '@jest/globals';
-import { formatPermissionResponse, evaluatePermission, type EvaluatePermissionDeps } from '../../../../src/handlers/mcp-aql/evaluatePermission.js';
+import { formatPermissionResponse, evaluatePermission, PermissionEvaluationError, SUPPORTED_PLATFORMS, type EvaluatePermissionDeps } from '../../../../src/handlers/mcp-aql/evaluatePermission.js';
 
 function createMockDeps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
   return {
@@ -242,6 +242,41 @@ describe('evaluatePermission', () => {
       await evaluatePermission({ tool_name: 'Bash', input: {} }, deps);
 
       expect(consumeToken).not.toHaveBeenCalled();
+    });
+
+    it('should throw PermissionEvaluationError when element fetch fails', async () => {
+      const deps = createMockDeps({
+        getActiveElements: async () => { throw new Error('Database timeout'); },
+      });
+
+      await expect(evaluatePermission(
+        { tool_name: 'Bash', input: { command: 'test' } },
+        deps,
+      )).rejects.toThrow(PermissionEvaluationError);
+
+      try {
+        await evaluatePermission({ tool_name: 'Bash', input: {} }, deps);
+      } catch (err) {
+        expect(err).toBeInstanceOf(PermissionEvaluationError);
+        expect((err as PermissionEvaluationError).stage).toBe('element_fetch');
+        expect((err as PermissionEvaluationError).toolName).toBe('Bash');
+      }
+    });
+  });
+
+  describe('platform support', () => {
+    it('should export list of supported platforms', () => {
+      expect(SUPPORTED_PLATFORMS).toContain('claude_code');
+      expect(SUPPORTED_PLATFORMS).toContain('gemini');
+      expect(SUPPORTED_PLATFORMS).toContain('cursor');
+      expect(SUPPORTED_PLATFORMS).toContain('windsurf');
+      expect(SUPPORTED_PLATFORMS).toContain('codex');
+      expect(SUPPORTED_PLATFORMS.length).toBe(5);
+    });
+
+    it('should default to claude_code format for unknown platform', () => {
+      const result = formatPermissionResponse('allow', 'unknown_platform', {});
+      expect(result).toEqual({ decision: 'allow' });
     });
   });
 });

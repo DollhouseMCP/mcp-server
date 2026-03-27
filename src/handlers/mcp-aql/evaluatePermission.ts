@@ -18,6 +18,19 @@ import type { RateLimiter } from '../../utils/RateLimiter.js';
 import type { ToolClassificationResult, CliToolPolicyResult } from './policies/ToolClassification.js';
 import type { ActiveElement } from './policies/ElementPolicies.js';
 
+/** Error thrown when permission evaluation fails at a specific stage */
+export class PermissionEvaluationError extends Error {
+  constructor(
+    message: string,
+    public readonly stage: 'rate_limit' | 'classification' | 'policy' | 'element_fetch',
+    public readonly toolName: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'PermissionEvaluationError';
+  }
+}
+
 /** Dependencies injected from MCPAQLHandler */
 export interface EvaluatePermissionDeps {
   permissionPromptLimiter: RateLimiter;
@@ -67,9 +80,14 @@ const platformFormatters: Record<string, (decision: string, reason?: string) => 
   claude_code: formatClaudeCode,
 };
 
+/** Known platform identifiers */
+export const SUPPORTED_PLATFORMS = Object.keys(platformFormatters);
+
 /**
  * Format permission evaluation response for platform-specific hook scripts.
  * Each platform expects a different JSON shape from its hook response.
+ *
+ * Unknown platforms default to claude_code format with a warning log.
  */
 export function formatPermissionResponse(
   decision: 'allow' | 'deny' | 'ask',
@@ -77,7 +95,14 @@ export function formatPermissionResponse(
   _input: Record<string, unknown>,
   reason?: string,
 ): Record<string, unknown> {
-  const formatter = platformFormatters[platform] ?? formatClaudeCode;
+  const formatter = platformFormatters[platform];
+  if (!formatter) {
+    // Import lazily to avoid circular dependency at module load time
+    import('../../utils/logger.js').then(({ logger }) => {
+      logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
+    }).catch(() => { /* logger not available */ });
+    return formatClaudeCode(decision, reason);
+  }
   return formatter(decision, reason);
 }
 
@@ -116,7 +141,15 @@ export async function evaluatePermission(
   }
 
   // Stage 2: Element policy evaluation
-  const elements = await deps.getActiveElements();
+  let elements: ActiveElement[];
+  try {
+    elements = await deps.getActiveElements();
+  } catch (err) {
+    throw new PermissionEvaluationError(
+      `Failed to fetch active elements for policy evaluation: ${err instanceof Error ? err.message : String(err)}`,
+      'element_fetch', toolName, err,
+    );
+  }
   const decision = deps.evaluateCliToolPolicy(toolName, input, elements);
 
   if (decision.behavior === 'deny') {
