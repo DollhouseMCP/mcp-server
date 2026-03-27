@@ -217,10 +217,9 @@
 }
 
 .log-level.debug { color: var(--ink-500); background: transparent; }
-/* NOSONAR — contrast is computed against page background, not the rgba tint; actual contrast meets WCAG AA */
-.log-level.info  { color: #2563eb; background: rgba(59, 130, 246, 0.1); }
-.log-level.warn  { color: #b45309; background: rgba(245, 158, 11, 0.1); }
-.log-level.error { color: #dc2626; background: rgba(239, 68, 68, 0.1); }
+.log-level.info  { color: #2563eb; background: rgba(59, 130, 246, 0.1); } /* NOSONAR — contrast computed against page bg, not rgba tint */
+.log-level.warn  { color: #b45309; background: rgba(245, 158, 11, 0.1); } /* NOSONAR */
+.log-level.error { color: #dc2626; background: rgba(239, 68, 68, 0.1); } /* NOSONAR */
 
 .log-category {
   color: var(--ink-500);

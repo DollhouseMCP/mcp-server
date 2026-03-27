@@ -148,7 +148,7 @@
 
   // ── Rendering ────────────────────────────────────────────────────────────
   function safeRender(fn, metrics) {
-    try { fn(metrics); } catch { /* isolate per-card failures */ }
+    try { fn(metrics); } catch (err) { console.warn('[Metrics] Card render failed:', err); }
   }
 
   function renderAll(metrics) {
