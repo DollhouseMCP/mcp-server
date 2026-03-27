@@ -54,9 +54,13 @@ export const VALIDATION_PATTERNS = {
   // Uses Unicode property escapes for proper international support
   SAFE_NAME: /^[\p{L}\p{N}\s\-_.]+$/u,
 
-  // For descriptions: allow more punctuation for readability
-  // Includes em-dash (—), en-dash (–), and forward slash (/) which appear in real-world portfolio elements
-  SAFE_DESCRIPTION: /^[\p{L}\p{N}\s\-_.,!?'":;()\[\]\u2013\u2014/]+$/u,
+  // For descriptions: allow broad punctuation for readability
+  // Includes common symbols found in real-world portfolio descriptions:
+  // #(C#/hashtags) +(C++) %(percentages) =(key=value) @(email/handles)
+  // &(and) ~(approximate) *(emphasis) |(separators) {}(templates)
+  // <>(angle brackets) $(currency) ^(caret) `(backtick)
+  // →↔←↑↓(arrows) ✓✗(checkmarks) and other Unicode symbols
+  SAFE_DESCRIPTION: /^[\p{L}\p{N}\p{P}\p{S}\s\-_.,!?'":;()\[\]{}<>/@#$%^&*+=~`|\\]+$/u,
 
   // For content: most permissive - ContentValidator handles security threats
   // This allows essentially anything since content validation is separate
@@ -84,8 +88,8 @@ export const PATTERN_DESCRIPTIONS: Record<string, {
     charTest: /^[\p{L}\p{N}\s\-_.]$/u,
   },
   SAFE_DESCRIPTION: {
-    allowed: 'letters, numbers, spaces, hyphens, underscores, dots, common punctuation, em-dash, en-dash, and forward slash',
-    charTest: /^[\p{L}\p{N}\s\-_.,!?'":;()\[\]\u2013\u2014/]$/u,
+    allowed: 'letters, numbers, symbols, spaces, and common punctuation',
+    charTest: /^[\p{L}\p{N}\p{P}\p{S}\s\-_.,!?'":;()\[\]{}<>/@#$%^&*+=~`|\\]$/u,
   },
   SAFE_CONTENT: {
     allowed: 'any characters',
