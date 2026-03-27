@@ -956,46 +956,52 @@ export class DollhouseContainer {
     timer.endPhase('metrics_collectors');
   }
 
+  /** Try to resolve a service, returning undefined if not registered */
+  private tryResolve<T>(name: string): T | undefined {
+    try { return this.resolve<T>(name); } catch { return undefined; }
+  }
+
+  /** Wire SSE broadcast sinks for the web console */
+  private wireSSEBroadcasts(
+    webResult: import('../web/server.js').WebServerResult,
+    metricsSink: MemoryMetricsSink | undefined,
+  ): void {
+    if (webResult.logBroadcast) {
+      const logManager = this.resolve<LogManager>('LogManager');
+      logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    }
+    if (webResult.metricsOnSnapshot && metricsSink) {
+      const metricsManager = this.tryResolve<MetricsManager>('MetricsManager');
+      if (metricsManager) {
+        metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
+      }
+    }
+  }
+
   private async deferredWebConsole(timer: StartupTimer): Promise<void> {
     timer.startPhase('web_console', false);
     try {
-      if (env.DOLLHOUSE_WEB_CONSOLE) {
-        const { startWebServer } = await import('../web/server.js');
-        const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
-        const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+      if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
-        let metricsSink: MemoryMetricsSink | undefined;
-        try {
-          metricsSink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
-        } catch { /* metrics not available */ }
+      const { discoverAndBindPort } = await import('../web/portDiscovery.js');
+      const port = await discoverAndBindPort();
 
-        // Resolve mcpAqlHandler for permission evaluation and gateway routes
-        let mcpAqlHandler: MCPAQLHandler | undefined;
-        try {
-          mcpAqlHandler = this.resolve<MCPAQLHandler>('mcpAqlHandler');
-        } catch { /* handler not available */ }
+      const { startWebServer } = await import('../web/server.js');
+      const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
+      const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+      const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
+      const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
 
-        const webResult = await startWebServer({
-          portfolioDir: portfolioManager.getBaseDir(),
-          memorySink,
-          metricsSink,
-          ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
-        });
+      const webResult = await startWebServer({
+        portfolioDir: portfolioManager.getBaseDir(),
+        memorySink,
+        metricsSink,
+        ...(port ? { port } : {}),
+        ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
+      });
 
-        if (webResult.logBroadcast) {
-          const logManager = this.resolve<LogManager>('LogManager');
-          logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
-        }
-
-        if (webResult.metricsOnSnapshot && metricsSink) {
-          try {
-            const metricsManager = this.resolve<MetricsManager>('MetricsManager');
-            metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
-          } catch { /* metrics manager not available */ }
-        }
-
-        logger.info('[Container] Web console started');
-      }
+      this.wireSSEBroadcasts(webResult, metricsSink);
+      logger.info('[Container] Web console started');
     } catch (error) {
       logger.warn('[Container] Web console startup failed:', error);
     }

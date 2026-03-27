@@ -2910,6 +2910,17 @@ export class MCPAQLHandler {
         };
       }
 
+      case 'evaluatePermission': {
+        // Evaluate CLI permission for PreToolUse hooks (all platforms)
+        const { evaluatePermission } = await import('./evaluatePermission.js');
+        return evaluatePermission(params, {
+          permissionPromptLimiter: this.permissionPromptLimiter,
+          classifyTool,
+          evaluateCliToolPolicy,
+          getActiveElements: () => this.getActiveElements(),
+        });
+      }
+
       case 'getEffectiveCliPolicies': {
         // Issue #625 Phase 2: Get effective CLI permission policies
         const toolName = params.tool_name as string | undefined;

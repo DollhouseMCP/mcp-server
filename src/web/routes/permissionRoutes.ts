@@ -52,9 +52,11 @@ function trackDecision(toolName: string, input: Record<string, unknown>, result:
     id: `d-${++decisionCounter}`,
     timestamp: new Date().toISOString(),
     tool_name: toolName,
-    command: toolName === 'Bash' ? String(input?.command || '') : undefined,
-    decision: String(result?.decision || result?.behavior || 'unknown'),
-    reason: String(result?.reason || result?.message || ''),
+    command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
+    decision: typeof result?.decision === 'string' ? result.decision
+      : typeof result?.behavior === 'string' ? result.behavior : 'unknown',
+    reason: typeof result?.reason === 'string' ? result.reason
+      : typeof result?.message === 'string' ? result.message : '',
   };
   recentDecisions.unshift(entry);
   if (recentDecisions.length > DECISION_BUFFER_SIZE) {

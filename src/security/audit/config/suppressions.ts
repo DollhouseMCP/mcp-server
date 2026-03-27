@@ -1106,6 +1106,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: 'src/converters/AgentSkillConverter.ts',
     reason: 'NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. File-level scanner flags despite per-input fix.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/permissionRoutes.ts',
+    reason: 'HTTP inputs from localhost-only binding (127.0.0.1) forward to MCPAQLHandler.handleRead() which applies Unicode normalization at its entry point. GET /permissions/status has no user-supplied string parameters.'
   }
 ];
 
