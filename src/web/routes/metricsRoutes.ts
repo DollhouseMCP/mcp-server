@@ -22,42 +22,41 @@ export interface MetricsRoutesResult {
   clientCount: () => number;
 }
 
+function parseMetricsQueryOptions(query: Request['query']): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  if (typeof query['names'] === 'string' && query['names']) {
+    options['names'] = UnicodeValidator.normalize(query['names']).normalizedContent.split(',').map(s => s.trim());
+  }
+  if (typeof query['source'] === 'string' && query['source']) {
+    options['source'] = UnicodeValidator.normalize(query['source']).normalizedContent;
+  }
+  if (typeof query['type'] === 'string' && query['type']) {
+    options['type'] = UnicodeValidator.normalize(query['type']).normalizedContent as MetricType;
+  }
+  for (const field of ['since', 'until'] as const) {
+    if (typeof query[field] === 'string' && query[field]) {
+      options[field] = query[field];
+    }
+  }
+  if (typeof query['latest'] === 'string') {
+    options['latest'] = query['latest'] !== 'false';
+  }
+  for (const field of ['limit', 'offset'] as const) {
+    if (typeof query[field] === 'string') {
+      const parsed = parseInt(query[field], 10);
+      if (!isNaN(parsed)) options[field] = parsed;
+    }
+  }
+  return options;
+}
+
 export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRoutesResult {
   const router = Router();
   const clients = new Set<SSEClient>();
 
   // GET /api/metrics — JSON query
   router.get('/metrics', (req: Request, res: Response) => {
-    const options: Record<string, unknown> = {};
-
-    if (typeof req.query['names'] === 'string' && req.query['names']) {
-      options['names'] = UnicodeValidator.normalize(req.query['names']).normalizedContent.split(',').map(s => s.trim());
-    }
-    if (typeof req.query['source'] === 'string' && req.query['source']) {
-      options['source'] = UnicodeValidator.normalize(req.query['source']).normalizedContent;
-    }
-    if (typeof req.query['type'] === 'string' && req.query['type']) {
-      options['type'] = UnicodeValidator.normalize(req.query['type']).normalizedContent as MetricType;
-    }
-    if (typeof req.query['since'] === 'string' && req.query['since']) {
-      options['since'] = req.query['since'];
-    }
-    if (typeof req.query['until'] === 'string' && req.query['until']) {
-      options['until'] = req.query['until'];
-    }
-    if (typeof req.query['latest'] === 'string') {
-      options['latest'] = req.query['latest'] !== 'false';
-    }
-    if (typeof req.query['limit'] === 'string') {
-      const parsed = parseInt(req.query['limit'], 10);
-      if (!isNaN(parsed)) options['limit'] = parsed;
-    }
-    if (typeof req.query['offset'] === 'string') {
-      const parsed = parseInt(req.query['offset'], 10);
-      if (!isNaN(parsed)) options['offset'] = parsed;
-    }
-
-    const result = metricsSink.query(options);
+    const result = metricsSink.query(parseMetricsQueryOptions(req.query));
     res.json(result);
   });
 

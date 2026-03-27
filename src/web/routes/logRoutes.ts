@@ -31,44 +31,47 @@ export interface LogRoutesResult {
   clientCount: () => number;
 }
 
+function parseLogQueryOptions(query: Request['query']): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  const stringFields = ['category', 'level', 'source', 'message', 'correlationId', 'since', 'until'] as const;
+  for (const field of stringFields) {
+    if (typeof query[field] === 'string' && query[field]) {
+      options[field] = query[field];
+    }
+  }
+  for (const field of ['limit', 'offset'] as const) {
+    if (typeof query[field] === 'string') {
+      const parsed = parseInt(query[field], 10);
+      if (!isNaN(parsed)) options[field] = parsed;
+    }
+  }
+  return options;
+}
+
+function parseSseFilter(query: Request['query']): SSEClientFilter {
+  const filter: SSEClientFilter = {};
+  if (typeof query['category'] === 'string' && query['category']) {
+    filter.category = query['category'] as LogCategory;
+  }
+  if (typeof query['level'] === 'string' && query['level']) {
+    filter.level = query['level'] as LogLevel;
+  }
+  if (typeof query['source'] === 'string' && query['source']) {
+    filter.source = query['source'];
+  }
+  if (typeof query['correlationId'] === 'string' && query['correlationId']) {
+    filter.correlationId = query['correlationId'];
+  }
+  return filter;
+}
+
 export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
   const router = Router();
   const clients = new Set<SSEClient>();
 
   // GET /api/logs — JSON query
   router.get('/logs', (req: Request, res: Response) => {
-    const options: Record<string, unknown> = {};
-    if (typeof req.query['category'] === 'string' && req.query['category']) {
-      options['category'] = req.query['category'];
-    }
-    if (typeof req.query['level'] === 'string' && req.query['level']) {
-      options['level'] = req.query['level'];
-    }
-    if (typeof req.query['source'] === 'string' && req.query['source']) {
-      options['source'] = req.query['source'];
-    }
-    if (typeof req.query['message'] === 'string' && req.query['message']) {
-      options['message'] = req.query['message'];
-    }
-    if (typeof req.query['correlationId'] === 'string' && req.query['correlationId']) {
-      options['correlationId'] = req.query['correlationId'];
-    }
-    if (typeof req.query['limit'] === 'string') {
-      const parsed = parseInt(req.query['limit'], 10);
-      if (!isNaN(parsed)) options['limit'] = parsed;
-    }
-    if (typeof req.query['offset'] === 'string') {
-      const parsed = parseInt(req.query['offset'], 10);
-      if (!isNaN(parsed)) options['offset'] = parsed;
-    }
-    if (typeof req.query['since'] === 'string' && req.query['since']) {
-      options['since'] = req.query['since'];
-    }
-    if (typeof req.query['until'] === 'string' && req.query['until']) {
-      options['until'] = req.query['until'];
-    }
-
-    const result = memorySink.query(options);
+    const result = memorySink.query(parseLogQueryOptions(req.query));
     res.json(result);
   });
 
@@ -81,20 +84,7 @@ export function createLogRoutes(memorySink: MemoryLogSink): LogRoutesResult {
     });
     res.write(':connected\n\n');
 
-    const filter: SSEClientFilter = {};
-    if (typeof req.query['category'] === 'string' && req.query['category']) {
-      filter.category = req.query['category'] as LogCategory;
-    }
-    if (typeof req.query['level'] === 'string' && req.query['level']) {
-      filter.level = req.query['level'] as LogLevel;
-    }
-    if (typeof req.query['source'] === 'string' && req.query['source']) {
-      filter.source = req.query['source'];
-    }
-    if (typeof req.query['correlationId'] === 'string' && req.query['correlationId']) {
-      filter.correlationId = req.query['correlationId'];
-    }
-
+    const filter = parseSseFilter(req.query);
     const client: SSEClient = { res, filter };
     clients.add(client);
 

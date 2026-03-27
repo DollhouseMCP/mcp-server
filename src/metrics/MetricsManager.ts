@@ -83,10 +83,33 @@ export class MetricsManager {
     this.assertOpen();
 
     const startTime = performance.now();
+    const { entries, errors } = await this.collectFromCollectors();
+    entries.push(...this.buildSelfMonitoringMetrics());
+
+    const durationMs = performance.now() - startTime;
+    const snapshot: MetricSnapshot = {
+      id: `SNAP-${Date.now()}-${this.snapshotCounter++}`,
+      timestamp: new Date().toISOString(),
+      metrics: entries,
+      errors,
+      durationMs,
+    };
+
+    this.warnIfOversized(snapshot);
+    this.warnIfSlow(snapshot, durationMs);
+    this.deepFreezeSnapshot(snapshot);
+    this.dispatchToSinks(snapshot);
+
+    this.collectionsCompleted++;
+    this.lastCollectionDurationMs = durationMs;
+
+    return snapshot;
+  }
+
+  private async collectFromCollectors(): Promise<{ entries: MetricEntry[]; errors: string[] }> {
     const entries: MetricEntry[] = [];
     const errors: string[] = [];
 
-    // Collect from each non-disabled collector
     for (const record of this.collectors) {
       if (record.disabled) continue;
 
@@ -114,21 +137,10 @@ export class MetricsManager {
       }
     }
 
-    // Self-monitoring metrics
-    const selfMetrics = this.buildSelfMonitoringMetrics();
-    entries.push(...selfMetrics);
+    return { entries, errors };
+  }
 
-    // Assemble snapshot
-    const durationMs = performance.now() - startTime;
-    const snapshot: MetricSnapshot = {
-      id: `SNAP-${Date.now()}-${this.snapshotCounter++}`,
-      timestamp: new Date().toISOString(),
-      metrics: entries,
-      errors,
-      durationMs,
-    };
-
-    // Size warning
+  private warnIfOversized(snapshot: MetricSnapshot): void {
     const serializedSize = JSON.stringify(snapshot).length;
     if (serializedSize > this.config.maxSnapshotSize) {
       this.logger.warn(
@@ -136,19 +148,18 @@ export class MetricsManager {
         { snapshotId: snapshot.id, size: serializedSize },
       );
     }
+  }
 
-    // Duration warning (skip warmup period)
-    if (
-      durationMs > this.config.collectionDurationWarnMs &&
-      this.collectionsCompleted >= 3
-    ) {
+  private warnIfSlow(snapshot: MetricSnapshot, durationMs: number): void {
+    if (durationMs > this.config.collectionDurationWarnMs && this.collectionsCompleted >= 3) {
       this.logger.warn(
         `Collection took ${durationMs.toFixed(1)}ms (threshold: ${this.config.collectionDurationWarnMs}ms)`,
         { snapshotId: snapshot.id },
       );
     }
+  }
 
-    // Freeze snapshot deeply (including nested histogram value objects)
+  private deepFreezeSnapshot(snapshot: MetricSnapshot): void {
     Object.freeze(snapshot.metrics);
     for (const entry of snapshot.metrics) {
       if (entry.value !== null && typeof entry.value === 'object') {
@@ -158,8 +169,9 @@ export class MetricsManager {
     }
     Object.freeze(snapshot.errors);
     Object.freeze(snapshot);
+  }
 
-    // Dispatch to sinks
+  private dispatchToSinks(snapshot: MetricSnapshot): void {
     for (const sink of this.sinks) {
       try {
         sink.onSnapshot(snapshot);
@@ -169,11 +181,6 @@ export class MetricsManager {
         this.logger.warn(`Sink "${sink.name}" failed: ${message}`);
       }
     }
-
-    this.collectionsCompleted++;
-    this.lastCollectionDurationMs = durationMs;
-
-    return snapshot;
   }
 
   async close(): Promise<void> {

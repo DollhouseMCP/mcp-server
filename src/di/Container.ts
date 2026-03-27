@@ -858,7 +858,26 @@ export class DollhouseContainer {
       await new Promise(resolve => setTimeout(resolve, testDelay));
     }
 
-    // --- memory_autoload (deferred) ---
+    await this.deferredMemoryAutoload(timer);
+    await this.deferredActivationRestore(timer);
+    await this.deferredPolicyExport();
+    await this.deferredLogHooks(timer);
+    await this.deferredMetricsCollectors(timer);
+    await this.deferredWebConsole(timer);
+    await this.deferredDangerZoneInit(timer);
+    await this.deferredPatternEncryption(timer);
+    await this.deferredBackgroundValidator(timer);
+
+    this.deferredSetupComplete = true;
+
+    const report = timer.getReport();
+    logger.info(
+      `[Startup] Deferred setup completed in ${report.deferredMs}ms ` +
+      `(total startup: ${report.totalMs}ms, critical: ${report.criticalPathMs}ms)`
+    );
+  }
+
+  private async deferredMemoryAutoload(timer: StartupTimer): Promise<void> {
     timer.startPhase('memory_autoload', false);
     try {
       const configManager = this.resolve<ConfigManager>('ConfigManager');
@@ -886,8 +905,9 @@ export class DollhouseContainer {
       logger.error('[Container] Memory auto-load failed:', error);
     }
     timer.endPhase('memory_autoload');
+  }
 
-    // --- activation_restore (deferred) ---
+  private async deferredActivationRestore(timer: StartupTimer): Promise<void> {
     timer.startPhase('activation_restore', false);
     try {
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
@@ -900,16 +920,18 @@ export class DollhouseContainer {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
     timer.endPhase('activation_restore');
+  }
 
-    // --- policy_export (deferred, Issue #762) ---
+  private async deferredPolicyExport(): Promise<void> {
     try {
       const policyExportService = this.resolve<PolicyExportService>('PolicyExportService');
       await policyExportService.exportPolicies();
     } catch (error) {
       logger.debug('[Container] Policy export skipped:', error);
     }
+  }
 
-    // --- log_hooks (deferred) ---
+  private async deferredLogHooks(timer: StartupTimer): Promise<void> {
     timer.startPhase('log_hooks', false);
     try {
       const logManager = this.resolve<LogManager>('LogManager');
@@ -919,8 +941,9 @@ export class DollhouseContainer {
       logger.warn('[Container] Failed to wire log hooks:', error);
     }
     timer.endPhase('log_hooks');
+  }
 
-    // --- metrics_collectors (deferred) ---
+  private async deferredMetricsCollectors(timer: StartupTimer): Promise<void> {
     timer.startPhase('metrics_collectors', false);
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');
@@ -931,8 +954,9 @@ export class DollhouseContainer {
       logger.warn('[Container] Metrics wiring skipped:', error);
     }
     timer.endPhase('metrics_collectors');
+  }
 
-    // --- web_console (deferred) ---
+  private async deferredWebConsole(timer: StartupTimer): Promise<void> {
     timer.startPhase('web_console', false);
     try {
       if (env.DOLLHOUSE_WEB_CONSOLE) {
@@ -951,7 +975,6 @@ export class DollhouseContainer {
           metricsSink,
         });
 
-        // Wire WebSSE sinks into LogManager and MetricsManager
         if (webResult.logBroadcast) {
           const logManager = this.resolve<LogManager>('LogManager');
           logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
@@ -970,8 +993,9 @@ export class DollhouseContainer {
       logger.warn('[Container] Web console startup failed:', error);
     }
     timer.endPhase('web_console');
+  }
 
-    // --- danger_zone_init (deferred) ---
+  private async deferredDangerZoneInit(timer: StartupTimer): Promise<void> {
     timer.startPhase('danger_zone_init', false);
     try {
       const dangerZoneEnforcer = this.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
@@ -980,8 +1004,9 @@ export class DollhouseContainer {
       logger.warn('[Container] DangerZoneEnforcer initialization failed:', error);
     }
     timer.endPhase('danger_zone_init');
+  }
 
-    // --- pattern_encryption (deferred) ---
+  private async deferredPatternEncryption(timer: StartupTimer): Promise<void> {
     timer.startPhase('pattern_encryption', false);
     try {
       const patternEncryptor = this.resolve('PatternEncryptor') as PatternEncryptor;
@@ -991,8 +1016,9 @@ export class DollhouseContainer {
       logger.warn('[Container] Pattern encryption initialization failed:', error);
     }
     timer.endPhase('pattern_encryption');
+  }
 
-    // --- background_validator (deferred) ---
+  private async deferredBackgroundValidator(timer: StartupTimer): Promise<void> {
     timer.startPhase('background_validator', false);
     try {
       const backgroundValidator = this.resolve('BackgroundValidator') as any;
@@ -1002,14 +1028,6 @@ export class DollhouseContainer {
       logger.warn('[Container] Background validator start failed:', error);
     }
     timer.endPhase('background_validator');
-
-    this.deferredSetupComplete = true;
-
-    const report = timer.getReport();
-    logger.info(
-      `[Startup] Deferred setup completed in ${report.deferredMs}ms ` +
-      `(total startup: ${report.totalMs}ms, critical: ${report.criticalPathMs}ms)`
-    );
   }
 
   /**
@@ -1495,30 +1513,10 @@ export class DollhouseContainer {
     } catch { /* not registered */ }
 
     // LRUCache instances — API cache + all element manager caches
-    try {
-      const caches: Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> = [];
-      try {
-        const apiCache = this.resolve<{ getStats(): import('../cache/LRUCache.js').CacheStats }>('APICache');
-        // APICache wraps LRUCache but exposes getStats() directly — treat it as LRUCache-compatible
-        caches.push({ name: 'APICache', instance: apiCache as any });
-      } catch { /* not available */ }
-
-      // Element manager caches (elements + pathIndex per type)
-      const managerNames = [
-        'PersonaManager', 'SkillManager', 'AgentManager',
-        'MemoryManager', 'EnsembleManager', 'TemplateManager',
-      ] as const;
-      for (const name of managerNames) {
-        try {
-          const mgr = this.resolve<import('../elements/base/BaseElementManager.js').BaseElementManager<any>>(name);
-          caches.push(...mgr.getMetricsCaches());
-        } catch { /* not registered */ }
-      }
-
-      if (caches.length > 0) {
-        metricsManager.registerCollector(new LRUCacheCollector(caches));
-      }
-    } catch { /* skip */ }
+    const caches = this.collectLruCachesForMetrics();
+    if (caches.length > 0) {
+      metricsManager.registerCollector(new LRUCacheCollector(caches));
+    }
 
     // SecurityMonitor (static)
     try {
@@ -1571,6 +1569,27 @@ export class DollhouseContainer {
       const gkTracker = this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker');
       metricsManager.registerCollector(new GatekeeperMetricsCollector(gkTracker));
     } catch { /* not registered */ }
+  }
+
+  private collectLruCachesForMetrics(): Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> {
+    const caches: Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> = [];
+    try {
+      const apiCache = this.resolve<{ getStats(): import('../cache/LRUCache.js').CacheStats }>('APICache');
+      caches.push({ name: 'APICache', instance: apiCache as any });
+    } catch { /* not available */ }
+
+    const managerNames = [
+      'PersonaManager', 'SkillManager', 'AgentManager',
+      'MemoryManager', 'EnsembleManager', 'TemplateManager',
+    ] as const;
+    for (const name of managerNames) {
+      try {
+        const mgr = this.resolve<import('../elements/base/BaseElementManager.js').BaseElementManager<any>>(name);
+        caches.push(...mgr.getMetricsCaches());
+      } catch { /* not registered */ }
+    }
+
+    return caches;
   }
 
   public async dispose(): Promise<void> {
