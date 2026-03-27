@@ -321,16 +321,28 @@
 }
 
 [data-theme="dark"] .perm-card-header {
-  background: var(--paper-base, #0f172a);
+  background: var(--paper-strong, #1e293b);
   border-color: var(--ink-100, #334155);
+  color: var(--ink-50, #f1f5f9);
 }
 
 [data-theme="dark"] .perm-card-header:hover {
-  background: var(--ink-50, #1e293b);
+  background: var(--ink-100, #334155);
 }
 
 [data-theme="dark"] .perm-stat-value {
   color: var(--ink-50, #f1f5f9);
+}
+
+[data-theme="dark"] .perm-stat-label,
+[data-theme="dark"] .perm-card-title,
+[data-theme="dark"] .perm-pattern-text,
+[data-theme="dark"] .perm-source-name {
+  color: var(--ink-200, #e2e8f0);
+}
+
+[data-theme="dark"] .perm-feed-entry {
+  border-color: var(--ink-100, #334155);
 }
 
 [data-theme="dark"] .perm-pattern-badge--deny {

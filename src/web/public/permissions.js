@@ -92,6 +92,7 @@
   }
 
   function renderError(message) {
+    console.warn('[Permissions Dashboard] API error:', message);
     const dot = document.getElementById('perm-dot-server');
     if (dot) {
       dot.dataset.status = 'error';
@@ -247,9 +248,9 @@
 
         <!-- Summary Stats -->
         <div class="perm-card perm-card--full" data-collapsed="false">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Autonomy Overview</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
             <div class="perm-stat-grid">
@@ -287,9 +288,9 @@
 
         <!-- Policy Sources -->
         <div class="perm-card" data-collapsed="false">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Policy Sources</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
             <ul class="perm-source-list" id="perm-source-list">
@@ -300,9 +301,9 @@
 
         <!-- Deny Patterns -->
         <div class="perm-card" data-collapsed="false">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Deny Patterns</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
             <ul class="perm-pattern-list" id="perm-deny-list">
@@ -313,9 +314,9 @@
 
         <!-- Allow Patterns -->
         <div class="perm-card" data-collapsed="true">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Allow Patterns</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
             <ul class="perm-pattern-list" id="perm-allow-list">
@@ -326,9 +327,9 @@
 
         <!-- Confirm Patterns -->
         <div class="perm-card" data-collapsed="false">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Confirm Patterns (Requires Approval)</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
             <ul class="perm-pattern-list" id="perm-confirm-list">
@@ -339,12 +340,12 @@
 
         <!-- Live Decision Feed -->
         <div class="perm-card perm-card--full" data-collapsed="false">
-          <div class="perm-card-header">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Live Decision Feed</h3>
-            <span class="perm-card-toggle">&#9662;</span>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
-            <div class="perm-feed" id="perm-feed">
+            <div class="perm-feed" id="perm-feed" role="log" aria-live="polite" aria-label="Permission decisions">
               <div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>
             </div>
           </div>
@@ -358,10 +359,15 @@
 
   function attachCardToggles() {
     document.querySelectorAll('.perm-card-header').forEach(header => {
-      header.addEventListener('click', () => {
+      const toggle = () => {
         const card = header.parentElement;
         const collapsed = card.dataset.collapsed === 'true';
         card.dataset.collapsed = collapsed ? 'false' : 'true';
+        header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
+      };
+      header.addEventListener('click', toggle);
+      header.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
       });
     });
   }
