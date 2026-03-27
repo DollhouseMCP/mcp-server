@@ -50,7 +50,8 @@ let decisionCounter = 0;
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
-    if (typeof obj?.[key] === 'string') return obj[key] as string;
+    const val = obj?.[key];
+    if (typeof val === 'string') return val;
   }
   return fallback;
 }
