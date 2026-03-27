@@ -92,9 +92,7 @@ export class MemoryMetricsSink implements IMetricsSink {
     }
 
     // 4. Sort newest-first (descending timestamp)
-    snapshots.sort((a, b) =>
-      a.timestamp > b.timestamp ? -1 : a.timestamp < b.timestamp ? 1 : 0,
-    );
+    snapshots.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
     // 5. Count total before pagination
     const total = snapshots.length;

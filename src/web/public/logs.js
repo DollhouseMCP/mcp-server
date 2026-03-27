@@ -540,7 +540,7 @@
     if (selectedIds.size === 0) return;
     const entries = buffer.filter(e => selectedIds.has(e.id));
     // Sort by timestamp
-    entries.sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
+    entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     const text = entries.map(formatEntryAsText).join('\n\n');
     copyToClipboard(text);
   }
@@ -621,7 +621,7 @@
       document.body.appendChild(ta);
       ta.select();
       document.execCommand('copy');
-      document.body.removeChild(ta);
+      ta.remove();
     });
   }
 

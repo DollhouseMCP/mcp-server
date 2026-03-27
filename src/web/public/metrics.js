@@ -21,7 +21,6 @@
   let historySnapshots = []; // for time-series charts
   let charts = {};           // uPlot instances by section
   let uPlotAvailable = false;
-  let initialized = false;
 
   // ── Public API ───────────────────────────────────────────────────────────
   window.DollhouseConsole = window.DollhouseConsole || {};
@@ -45,7 +44,6 @@
     bindEvents();
     fetchLatest();
     pollTimer = setInterval(fetchLatest, POLL_INTERVAL_MS);
-    initialized = true;
   }
 
   function destroyMetrics() {
@@ -54,10 +52,9 @@
       pollTimer = null;
     }
     for (const chart of Object.values(charts)) {
-      if (chart && chart.destroy) chart.destroy();
+      if (chart?.destroy) chart.destroy();
     }
     charts = {};
-    initialized = false;
   }
 
   // ── DOM construction ─────────────────────────────────────────────────────
@@ -122,7 +119,7 @@
       const res = await fetch('/api/metrics?latest=true');
       if (!res.ok) return;
       const data = await res.json();
-      if (data.snapshots && data.snapshots.length > 0) {
+      if (data.snapshots?.length > 0) {
         lastSnapshot = data.snapshots[0];
         // Deduplicate by snapshot id
         if (!historySnapshots.some(s => s.id === lastSnapshot.id)) {
@@ -314,7 +311,7 @@
     // Group by labels.cache_name
     const caches = new Map();
     for (const m of cacheMetrics) {
-      const name = m.labels && (m.labels.cache_name || m.labels.cache) ? (m.labels.cache_name || m.labels.cache) : 'unknown';
+      const name = m.labels?.cache_name || m.labels?.cache || 'unknown';
       if (!caches.has(name)) caches.set(name, {});
       caches.get(name)[m.name.replace('cache.lru.', '')] = m.value;
     }
@@ -374,7 +371,7 @@
       fetch('/api/logs?category=security&level=warn&limit=5')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
-          if (data && data.entries) {
+          if (data?.entries) {
             securityEventsCache = data.entries;
             securityEventsCacheTime = Date.now();
             renderSecurityEvents(data.entries);
@@ -584,7 +581,10 @@
           grid: { stroke: isDark ? '#2b3445' : '#e0e0e0', width: 1 },
           font: '10px sans-serif',
           size: 70,
-          values: (u, vals) => vals.map(v => v == null ? '' : formatter ? formatter(v) : String(v)),
+          values: (u, vals) => vals.map(v => {
+            if (v == null) return '';
+            return formatter ? formatter(v) : String(v);
+          }),
         },
       ],
       series: [

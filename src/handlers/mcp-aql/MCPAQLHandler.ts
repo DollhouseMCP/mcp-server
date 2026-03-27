@@ -977,7 +977,9 @@ export class MCPAQLHandler {
           type: 'OPERATION_COMPLETED',
           severity: 'LOW',
           source: `MCPAQLHandler.${endpoint.toLowerCase()}`,
-          details: `${endpoint} '${operation}' completed${elementType ? ` on ${elementType}` : ''}`,
+          details: elementType
+            ? `${endpoint} '${operation}' completed on ${elementType}`
+            : `${endpoint} '${operation}' completed`,
           additionalData: {
             endpoint,
             operation,
@@ -988,7 +990,8 @@ export class MCPAQLHandler {
       }
       const durationMs = performance.now() - startTime;
       this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
-      logger.debug(`[MCP-AQL] ${endpoint} ${operation}${elementType ? `:${elementType}` : ''} (${durationMs.toFixed(1)}ms)`);
+      const typeSuffix = elementType ? ':' + elementType : '';
+      logger.debug(`[MCP-AQL] ${endpoint} ${operation}${typeSuffix} (${durationMs.toFixed(1)}ms)`);
       return this.success(data, startTime);
     } catch (error) {
       // Catch all errors and return as OperationFailure

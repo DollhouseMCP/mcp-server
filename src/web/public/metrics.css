@@ -64,6 +64,7 @@
 
 .metrics-card-body {
   padding: 14px;
+  overflow-x: auto;
 }
 
 /* ── Status bar ───────────────────────────────────────────────── */
@@ -142,10 +143,6 @@
 }
 
 /* ── Tables ───────────────────────────────────────────────────── */
-.metrics-card-body {
-  overflow-x: auto;
-}
-
 .metrics-table {
   width: 100%;
   min-width: 480px;
@@ -203,13 +200,13 @@
 
 .metrics-alert.warn {
   background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
+  color: #b45309;
   border: 1px solid rgba(245, 158, 11, 0.2);
 }
 
 .metrics-alert.error {
   background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
+  color: #dc2626;
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
