@@ -6,10 +6,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import * as fs from 'fs/promises';
-import { writeFileSync, mkdirSync } from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { FileWatchService } from '../../../src/services/FileWatchService.js';
 
 describe('FileWatchService debouncing (Issue #1687)', () => {

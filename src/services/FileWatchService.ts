@@ -323,7 +323,7 @@ export class FileWatchService {
    */
   dispose(): void {
     // Clear all pending debounce timers to prevent post-dispose handler calls
-    for (const [dir, timer] of this.debounceTimers) {
+    for (const [, timer] of this.debounceTimers) {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
