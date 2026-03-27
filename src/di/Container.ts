@@ -956,72 +956,53 @@ export class DollhouseContainer {
     timer.endPhase('metrics_collectors');
   }
 
+  /** Try to resolve a service, returning undefined if not registered */
+  private tryResolve<T>(name: string): T | undefined {
+    try { return this.resolve<T>(name); } catch { return undefined; }
+  }
+
+  /** Wire SSE broadcast sinks for the web console */
+  private wireSSEBroadcasts(
+    webResult: import('../web/server.js').WebServerResult,
+    metricsSink: MemoryMetricsSink | undefined,
+  ): void {
+    if (webResult.logBroadcast) {
+      const logManager = this.resolve<LogManager>('LogManager');
+      logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    }
+    if (webResult.metricsOnSnapshot && metricsSink) {
+      const metricsManager = this.tryResolve<MetricsManager>('MetricsManager');
+      if (metricsManager) {
+        metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
+      }
+    }
+  }
+
   private async deferredWebConsole(timer: StartupTimer): Promise<void> {
     timer.startPhase('web_console', false);
     try {
-      if (env.DOLLHOUSE_WEB_CONSOLE) {
-        const { existsSync } = await import('node:fs');
-        const autoDollhouseActive = process.env.DOLLHOUSE_AUTONOMOUS_MODE || existsSync('.auto-dollhouse');
+      if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
-        // auto-dollhouse: use port discovery to avoid conflicts with concurrent sessions
-        let port: number | undefined;
-        if (autoDollhouseActive) {
-          try {
-            const { findAvailablePort, writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
-            port = await findAvailablePort(3939);
-            await writePortFile(port);
-            registerPortCleanup();
-            logger.info(`[Container] auto-dollhouse port discovery: bound to ${port}`);
-          } catch (err) {
-            logger.warn('[Container] auto-dollhouse port discovery failed, using default:', err);
-          }
-        }
+      const { discoverAndBindPort } = await import('../web/portDiscovery.js');
+      const port = await discoverAndBindPort();
 
-        const { startWebServer } = await import('../web/server.js');
-        const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
-        const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
-        const mcpAqlHandler = autoDollhouseActive
-          ? this.resolve<MCPAQLHandler>('mcpAqlHandler')
-          : undefined;
+      const { startWebServer } = await import('../web/server.js');
+      const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
+      const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+      const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
+      const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
 
-        let metricsSink: MemoryMetricsSink | undefined;
-        try {
-          metricsSink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
-        } catch { /* metrics not available */ }
+      const webResult = await startWebServer({
+        portfolioDir: portfolioManager.getBaseDir(),
+        memorySink,
+        metricsSink,
+        ...(port ? { port } : {}),
+        ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
+      });
 
-        const webResult = await startWebServer({
-          portfolioDir: portfolioManager.getBaseDir(),
-          memorySink,
-          metricsSink,
-          ...(port ? { port } : {}),
-          ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
-        });
-
-        if (webResult.logBroadcast) {
-          const logManager = this.resolve<LogManager>('LogManager');
-          logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
-        }
-
-        if (webResult.metricsOnSnapshot && metricsSink) {
-          try {
-            const metricsManager = this.resolve<MetricsManager>('MetricsManager');
-            metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
-          } catch { /* metrics manager not available */ }
-        }
-
-        // Debug: write to file since logger backpressure drops messages
-        const { writeFileSync } = await import('node:fs');
-        writeFileSync('/tmp/auto-dollhouse-web-debug.log',
-          `[${new Date().toISOString()}] Web console started (auto-dollhouse=${autoDollhouseActive}, port=${port})\n` +
-          `logBroadcast=${!!webResult.logBroadcast}, metricsOnSnapshot=${!!webResult.metricsOnSnapshot}\n`,
-          { flag: 'a' });
-        logger.info(`[Container] Web console started${autoDollhouseActive ? ' (auto-dollhouse mode)' : ''}`);
-      }
+      this.wireSSEBroadcasts(webResult, metricsSink);
+      logger.info('[Container] Web console started');
     } catch (error) {
-      const { writeFileSync } = await import('node:fs');
-      writeFileSync('/tmp/auto-dollhouse-web-debug.log',
-        `[${new Date().toISOString()}] Web console FAILED: ${error}\n${(error as Error).stack || ''}\n`,
-        { flag: 'a' });
       logger.warn('[Container] Web console startup failed:', error);
     }
     timer.endPhase('web_console');

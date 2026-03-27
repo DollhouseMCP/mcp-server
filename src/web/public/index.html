@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="logs.css">
   <link rel="stylesheet" href="metrics.css">
+  <link rel="stylesheet" href="permissions.css">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -28,6 +29,7 @@
         <button class="console-tab active" data-tab="portfolio">Portfolio</button>
         <button class="console-tab" data-tab="logs">Logs</button>
         <button class="console-tab" data-tab="metrics">Metrics</button>
+        <button class="console-tab" data-tab="permissions">Permissions</button>
       </nav>
       <div class="site-stats" id="stats" aria-live="polite"></div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
@@ -106,6 +108,11 @@
     <div id="metrics-dashboard-root"></div>
   </div>
 
+  <!-- Tab: Permissions -->
+  <div id="tab-permissions" class="tab-panel" hidden>
+    <div id="permissions-dashboard-root"></div>
+  </div>
+
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">
@@ -175,5 +182,6 @@
   <script src="app.js"></script>
   <script src="logs.js"></script>
   <script src="metrics.js"></script>
+  <script src="permissions.js"></script>
 </body>
 </html>

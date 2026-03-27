@@ -1107,31 +1107,10 @@ export const suppressions: Suppression[] = [
     file: 'src/converters/AgentSkillConverter.ts',
     reason: 'NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. File-level scanner flags despite per-input fix.'
   },
-
-  // ========================================
-  // Auto-Dollhouse Module Suppressions
-  // All user input flows through MCPAQLHandler which applies Unicode
-  // normalization at its entry point before dispatching to these modules.
-  // ========================================
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/auto-dollhouse/evaluatePermission.ts',
-    reason: 'Inputs arrive via MCPAQLHandler.dispatchGatekeeper() which validates params through validateRequiredString() and the MCP-AQL transport layer. Unicode normalization is applied at the MCPAQLHandler entry point before dispatch.'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/auto-dollhouse/permissionRoutes.ts',
-    reason: 'HTTP inputs from localhost-only binding (127.0.0.1) forward to MCPAQLHandler.handleRead() which applies Unicode normalization at its entry point. GET /permissions/status has no user input parameters.'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/auto-dollhouse/operationExtensions.ts',
-    reason: 'Static schema/route definitions only — contains operation metadata (types, descriptions, examples) for MCP tool registration. No runtime user input processing.'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/auto-dollhouse/index.ts',
-    reason: 'Registration entry point — resolves DI container references and wires deferred startup. No user input processing. All input flows through MCPAQLHandler which normalizes at its boundary.'
+    file: 'src/web/routes/permissionRoutes.ts',
+    reason: 'NFC normalization applied to tool_name and platform inputs at HTTP boundary before forwarding to MCPAQLHandler.handleRead(). GET /permissions/status has no user-supplied string parameters. Scanner may flag file-level despite per-input fix.'
   }
 ];
 

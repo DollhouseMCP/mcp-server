@@ -160,26 +160,20 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     next();
   });
 
-  // Portfolio browsing: always use direct filesystem routes (reads frontmatter,
-  // returns real filenames, dates, authors — everything app.js needs).
-  // The gateway list_elements is too thin for the web UI (no filenames, no dates).
-  // Permission endpoints: use MCP-AQL gateway when handler is available.
-  app.use('/api', createApiRoutes(options.portfolioDir));
+  // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
     app.use('/api', createGatewayApiRoutes(options.mcpAqlHandler, options.portfolioDir));
-    logger.info('[WebUI] Portfolio: direct filesystem | Permissions: MCP-AQL gateway');
-    // auto-dollhouse: mount permission evaluation routes when handler is available
-    try {
-      const { registerPermissionRoutes } = await import('../auto-dollhouse/permissionRoutes.js');
-      const permRouter = (await import('express')).Router();
-      registerPermissionRoutes(permRouter, options.mcpAqlHandler);
-      app.use('/api', permRouter);
-      logger.info('[WebUI] Permission routes mounted (auto-dollhouse)');
-    } catch {
-      // auto-dollhouse module not available — skip permission routes
-    }
+
+    // Permission evaluation routes (POST /evaluate_permission, GET /permissions/status)
+    const { registerPermissionRoutes } = await import('./routes/permissionRoutes.js');
+    const permRouter = (await import('express')).Router();
+    registerPermissionRoutes(permRouter, options.mcpAqlHandler);
+    app.use('/api', permRouter);
+
+    logger.info('[WebUI] API routes using MCP-AQL Gateway + permission routes');
   } else {
-    logger.info('[WebUI] Portfolio: direct filesystem | Permissions: not available');
+    app.use('/api', createApiRoutes(options.portfolioDir));
+    logger.warn('[WebUI] API routes using direct filesystem access (no MCP-AQL handler available)');
   }
 
   // Console routes: logs, metrics, health

@@ -2911,8 +2911,8 @@ export class MCPAQLHandler {
       }
 
       case 'evaluatePermission': {
-        // auto-dollhouse#5: Delegated to src/auto-dollhouse/evaluatePermission.ts
-        const { evaluatePermission } = await import('../../auto-dollhouse/evaluatePermission.js');
+        // Evaluate CLI permission for PreToolUse hooks (all platforms)
+        const { evaluatePermission } = await import('./evaluatePermission.js');
         return evaluatePermission(params, {
           permissionPromptLimiter: this.permissionPromptLimiter,
           classifyTool,

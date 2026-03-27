@@ -86,6 +86,12 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.permissionPrompt',
     description: 'Evaluate CLI-level permission prompts for non-interactive sessions via --permission-prompt-tool',
   },
+  // Permission evaluation for PreToolUse hooks (interactive sessions, all platforms)
+  evaluate_permission: {
+    endpoint: 'READ',
+    handler: 'Gatekeeper.evaluatePermission',
+    description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex).',
+  },
   // Issue #625 Phase 2: CLI policy visibility
   get_effective_cli_policies: {
     endpoint: 'READ',
