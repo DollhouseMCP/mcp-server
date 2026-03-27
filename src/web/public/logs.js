@@ -578,9 +578,9 @@
   function updateEntryCount() {
     const total = buffer.length;
     const visible = getVisibleCount();
-    entryCountEl.textContent = filteredIndices !== null
-      ? visible + ' / ' + total + ' entries'
-      : total + ' entries';
+    entryCountEl.textContent = filteredIndices === null
+      ? total + ' entries'
+      : visible + ' / ' + total + ' entries';
   }
 
   function formatTime(iso) {

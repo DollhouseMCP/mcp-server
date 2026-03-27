@@ -22,21 +22,28 @@ export interface MetricsRoutesResult {
   clientCount: () => number;
 }
 
+function normalizedStringParam(query: Request['query'], key: string): string | undefined {
+  const val = query[key];
+  if (typeof val === 'string' && val) {
+    return UnicodeValidator.normalize(val).normalizedContent;
+  }
+  return undefined;
+}
+
 function parseMetricsQueryOptions(query: Request['query']): Record<string, unknown> {
   const options: Record<string, unknown> = {};
-  if (typeof query['names'] === 'string' && query['names']) {
-    options['names'] = UnicodeValidator.normalize(query['names']).normalizedContent.split(',').map(s => s.trim());
-  }
-  if (typeof query['source'] === 'string' && query['source']) {
-    options['source'] = UnicodeValidator.normalize(query['source']).normalizedContent;
-  }
-  if (typeof query['type'] === 'string' && query['type']) {
-    options['type'] = UnicodeValidator.normalize(query['type']).normalizedContent as MetricType;
-  }
+
+  const names = normalizedStringParam(query, 'names');
+  if (names) options['names'] = names.split(',').map(s => s.trim());
+
+  const source = normalizedStringParam(query, 'source');
+  if (source) options['source'] = source;
+
+  const type = normalizedStringParam(query, 'type');
+  if (type) options['type'] = type as MetricType;
+
   for (const field of ['since', 'until'] as const) {
-    if (typeof query[field] === 'string' && query[field]) {
-      options[field] = query[field];
-    }
+    if (typeof query[field] === 'string' && query[field]) options[field] = query[field];
   }
   if (typeof query['latest'] === 'string') {
     options['latest'] = query['latest'] !== 'false';

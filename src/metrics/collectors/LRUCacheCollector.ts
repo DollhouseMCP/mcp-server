@@ -91,10 +91,18 @@ export class LRUCacheCollector implements IMetricCollector {
             value: stats.memoryUsageMB,
           },
         );
-      } catch (_err) {
-        // Skip this cache — MetricsManager logs collector-level errors.
+      } catch (err) {
+        // Record failure as a metric so it's visible in the dashboard.
         // Individual cache failures should not prevent other caches from reporting.
-        continue;
+        entries.push({
+          type: 'gauge' as const,
+          name: 'cache.lru.collection_error',
+          source: SOURCE,
+          unit: 'count' as const,
+          description: `Failed to collect stats: ${err instanceof Error ? err.message : String(err)}`,
+          labels: { cache: name },
+          value: 1,
+        });
       }
     }
 

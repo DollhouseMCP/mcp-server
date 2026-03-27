@@ -199,8 +199,8 @@
     const statsHtml = '<div class="metrics-stat-grid" id="system-stats">' +
       statBox('Heap Used', formatBytes(v.heapUsed)) +
       statBox('RSS', formatBytes(v.rss)) +
-      statBox('Growth', v.growthRate != null ? formatNumber(v.growthRate, 2) + ' MB/s' : '-') +
-      statBox('CPU', v.cpu != null ? formatNumber(v.cpu, 2) + ' s' : '-') +
+      statBox('Growth', v.growthRate == null ? '-' : formatNumber(v.growthRate, 2) + ' MB/s') +
+      statBox('CPU', v.cpu == null ? '-' : formatNumber(v.cpu, 2) + ' s') +
       statBox('Uptime', formatDuration(v.uptime)) +
       '</div>';
 
@@ -238,7 +238,7 @@
     }
 
     let html = '<div class="metrics-stat-grid">';
-    if (duration && duration.type === 'histogram') {
+    if (duration?.type === 'histogram') {
       const v = duration.value;
       html += statBox('Avg', fmtMs(v.avg));
       html += statBox('P50', fmtMs(v.p50));
@@ -246,8 +246,8 @@
       html += statBox('P99', fmtMs(v.p99));
       html += statBox('Count', formatNumber(v.count || 0));
     }
-    html += statBox('Cache Hit', hitRate != null ? formatPercent(hitRate) : '-');
-    html += statBox('Slow Queries', slowCount != null ? formatNumber(slowCount) : '-');
+    html += statBox('Cache Hit', hitRate == null ? '-' : formatPercent(hitRate));
+    html += statBox('Slow Queries', slowCount == null ? '-' : formatNumber(slowCount));
     html += '</div>';
 
     body.innerHTML = html;
@@ -326,7 +326,7 @@
       totalMemMB += memMB;
       html += '<tr>' +
         '<td>' + escapeHtml(name) + '</td>' +
-        '<td>' + (vals.hit_rate != null ? formatPercent(vals.hit_rate) : '-') + '</td>' +
+        '<td>' + (vals.hit_rate == null ? '-' : formatPercent(vals.hit_rate)) + '</td>' +
         '<td>' + formatNumber(vals.hits_total || 0) + '</td>' +
         '<td>' + formatNumber(vals.misses_total || 0) + '</td>' +
         '<td>' + formatNumber(vals.size_current || 0) + '</td>' +
@@ -355,8 +355,8 @@
     const attacksPerHour = findVal(metrics, 'security.telemetry.attacks_per_hour');
 
     let html = '<div class="metrics-stat-grid">';
-    html += statBox('Blocked (24h)', blocked24h != null ? formatNumber(blocked24h) : '0');
-    html += statBox('Attacks/hour', attacksPerHour != null ? formatNumber(attacksPerHour, 1) : '0');
+    html += statBox('Blocked (24h)', blocked24h == null ? '0' : formatNumber(blocked24h));
+    html += statBox('Attacks/hour', attacksPerHour == null ? '0' : formatNumber(attacksPerHour, 1));
     html += '</div>';
 
     html += '<div id="security-recent-events"><div class="metrics-loading">Loading recent events...</div></div>';
@@ -511,7 +511,7 @@
     html += statBox('Collectors', formatNumber(registered || 0));
     html += statBox('Disabled', formatNumber(disabled || 0));
     html += statBox('Errors', formatNumber(errors || 0));
-    html += statBox('Duration', duration != null ? formatNumber(duration, 1) + ' ms' : '-');
+    html += statBox('Duration', duration == null ? '-' : formatNumber(duration, 1) + ' ms');
     html += '</div>';
 
     if (disabled > 0) {
