@@ -1110,7 +1110,7 @@ export const suppressions: Suppression[] = [
   {
     rule: 'DMCP-SEC-004',
     file: 'src/web/routes/permissionRoutes.ts',
-    reason: 'HTTP inputs from localhost-only binding (127.0.0.1) forward to MCPAQLHandler.handleRead() which applies Unicode normalization at its entry point. GET /permissions/status has no user-supplied string parameters.'
+    reason: 'NFC normalization applied to tool_name and platform inputs at HTTP boundary before forwarding to MCPAQLHandler.handleRead(). GET /permissions/status has no user-supplied string parameters. Scanner may flag file-level despite per-input fix.'
   }
 ];
 

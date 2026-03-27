@@ -47,16 +47,22 @@ const DECISION_BUFFER_SIZE = 200;
 const recentDecisions: PermissionDecision[] = [];
 let decisionCounter = 0;
 
+/** Extract a string field from a record, trying multiple keys in order */
+function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
+  for (const key of keys) {
+    if (typeof obj?.[key] === 'string') return obj[key] as string;
+  }
+  return fallback;
+}
+
 function trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
   const entry: PermissionDecision = {
     id: `d-${++decisionCounter}`,
     timestamp: new Date().toISOString(),
     tool_name: toolName,
     command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-    decision: typeof result?.decision === 'string' ? result.decision
-      : typeof result?.behavior === 'string' ? result.behavior : 'unknown',
-    reason: typeof result?.reason === 'string' ? result.reason
-      : typeof result?.message === 'string' ? result.message : '',
+    decision: extractString(result, ['decision', 'behavior'], 'unknown'),
+    reason: extractString(result, ['reason', 'message'], ''),
   };
   recentDecisions.unshift(entry);
   if (recentDecisions.length > DECISION_BUFFER_SIZE) {
@@ -88,11 +94,16 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       return;
     }
 
-    const { tool_name, input, platform } = req.body as {
+    const body = req.body as {
       tool_name?: string;
       input?: Record<string, unknown>;
       platform?: string;
     };
+
+    // Unicode normalization (NFC) on string inputs to prevent homograph attacks
+    const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
+    const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : undefined;
+    const input = body.input;
 
     if (!tool_name) {
       res.json({ decision: 'allow' }); // fail open on bad input
