@@ -256,6 +256,15 @@
     body.innerHTML = html;
   }
 
+  function buildLabeledTable(entries, labelKey, headerLabel) {
+    let html = '<table class="metrics-table"><thead><tr><th>' + escapeHtml(headerLabel) + '</th><th>Count</th></tr></thead><tbody>';
+    for (const m of entries) {
+      const label = m.labels?.[labelKey] || '?';
+      html += '<tr><td>' + escapeHtml(label) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
+    }
+    return html + '</tbody></table>';
+  }
+
   function renderOperations(metrics) {
     const body = document.getElementById('metrics-body-operations');
     if (!body) return;
@@ -274,34 +283,19 @@
     let html = '<div class="metrics-stat-grid">';
     html += statBox('Total Ops', formatNumber(totalOps || 0));
     html += statBox('Error Rate', formatPercent(errorRate));
-    if (duration && duration.type === 'histogram') {
-      const v = duration.value;
-      html += statBox('Avg', fmtMs(v.avg));
-      html += statBox('P95', fmtMs(v.p95));
+    if (duration?.type === 'histogram') {
+      html += statBox('Avg', fmtMs(duration.value.avg));
+      html += statBox('P95', fmtMs(duration.value.p95));
     }
     html += '</div>';
 
-    // Per-endpoint breakdown
     const endpointMetrics = metrics.filter(m => m.name === 'mcpaql.by_endpoint');
-    if (endpointMetrics.length > 0) {
-      html += '<table class="metrics-table"><thead><tr><th>Endpoint</th><th>Count</th></tr></thead><tbody>';
-      for (const m of endpointMetrics) {
-        const ep = m.labels && m.labels.endpoint ? m.labels.endpoint : '?';
-        html += '<tr><td>' + escapeHtml(ep) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
-      }
-      html += '</tbody></table>';
-    }
+    if (endpointMetrics.length > 0) html += buildLabeledTable(endpointMetrics, 'endpoint', 'Endpoint');
 
-    // Top operations mini-table
     const opMetrics = metrics.filter(m => m.name === 'mcpaql.by_operation');
     if (opMetrics.length > 0) {
       const sorted = opMetrics.slice().sort((a, b) => (b.value || 0) - (a.value || 0));
-      html += '<table class="metrics-table"><thead><tr><th>Operation</th><th>Count</th></tr></thead><tbody>';
-      for (const m of sorted) {
-        const op = m.labels && m.labels.operation ? m.labels.operation : '?';
-        html += '<tr><td>' + escapeHtml(op) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
-      }
-      html += '</tbody></table>';
+      html += buildLabeledTable(sorted, 'operation', 'Operation');
     }
 
     body.innerHTML = html;
@@ -442,6 +436,35 @@
     return Math.floor(diff / 86400000) + 'd ago';
   }
 
+  function buildShareTable(entries, labelKey, headerLabel, total) {
+    let html = '<table class="metrics-table"><thead><tr><th>' + escapeHtml(headerLabel) + '</th><th>Count</th><th>Share</th></tr></thead><tbody>';
+    for (const m of entries) {
+      const label = m.labels?.[labelKey] || '?';
+      const share = total > 0 ? formatPercent(m.value / total) : '-';
+      html += '<tr><td>' + escapeHtml(label) + '</td><td>' + formatNumber(m.value) + '</td><td>' + share + '</td></tr>';
+    }
+    return html + '</tbody></table>';
+  }
+
+  function renderGatekeeperStats(metrics, total, allowed, denied, confirmations) {
+    const allowRate = total > 0 ? allowed / total : 0;
+    let html = '<div class="metrics-stat-grid">';
+    html += statBox('Decisions', formatNumber(total));
+    html += statBox('Allowed', formatNumber(allowed || 0));
+    html += statBox('Denied', formatNumber(denied || 0));
+    html += statBox('Allow Rate', formatPercent(allowRate));
+    if (confirmations > 0) html += statBox('Confirmations', formatNumber(confirmations));
+    html += '</div>';
+
+    const sourceMetrics = metrics.filter(m => m.name === 'gatekeeper.by_policy_source');
+    if (sourceMetrics.length > 0) html += buildShareTable(sourceMetrics, 'policy_source', 'Policy Source', total);
+
+    const levelMetrics = metrics.filter(m => m.name === 'gatekeeper.by_permission_level');
+    if (levelMetrics.length > 0) html += buildLabeledTable(levelMetrics, 'permission_level', 'Permission Level');
+
+    return html;
+  }
+
   function renderGatekeeper(metrics) {
     const body = document.getElementById('metrics-body-gatekeeper');
     if (!body) return;
@@ -449,49 +472,14 @@
     const total = findVal(metrics, 'gatekeeper.decisions_total');
     const allowed = findVal(metrics, 'gatekeeper.allowed_total');
     const denied = findVal(metrics, 'gatekeeper.denied_total');
-    const confirmations = findVal(metrics, 'gatekeeper.confirmations_pending_total');
+    const confirmations = findVal(metrics, 'gatekeeper.confirmations_requested_total');
 
     if (total == null || total === 0) {
       body.innerHTML = '<div class="metrics-loading">No Gatekeeper decisions yet</div>';
       return;
     }
 
-    const allowRate = total > 0 ? allowed / total : 0;
-
-    let html = '<div class="metrics-stat-grid">';
-    html += statBox('Decisions', formatNumber(total));
-    html += statBox('Allowed', formatNumber(allowed || 0));
-    html += statBox('Denied', formatNumber(denied || 0));
-    html += statBox('Allow Rate', formatPercent(allowRate));
-    if (confirmations > 0) {
-      html += statBox('Confirmations', formatNumber(confirmations));
-    }
-    html += '</div>';
-
-    // Policy source breakdown
-    const sourceMetrics = metrics.filter(m => m.name === 'gatekeeper.by_policy_source');
-    if (sourceMetrics.length > 0) {
-      html += '<table class="metrics-table"><thead><tr><th>Policy Source</th><th>Count</th><th>Share</th></tr></thead><tbody>';
-      for (const m of sourceMetrics) {
-        const src = m.labels && m.labels.policy_source ? m.labels.policy_source : '?';
-        const share = total > 0 ? formatPercent(m.value / total) : '-';
-        html += '<tr><td>' + escapeHtml(src) + '</td><td>' + formatNumber(m.value) + '</td><td>' + share + '</td></tr>';
-      }
-      html += '</tbody></table>';
-    }
-
-    // Permission level breakdown
-    const levelMetrics = metrics.filter(m => m.name === 'gatekeeper.by_permission_level');
-    if (levelMetrics.length > 0) {
-      html += '<table class="metrics-table"><thead><tr><th>Permission Level</th><th>Count</th></tr></thead><tbody>';
-      for (const m of levelMetrics) {
-        const lvl = m.labels && m.labels.permission_level ? m.labels.permission_level : '?';
-        html += '<tr><td>' + escapeHtml(lvl) + '</td><td>' + formatNumber(m.value) + '</td></tr>';
-      }
-      html += '</tbody></table>';
-    }
-
-    body.innerHTML = html;
+    body.innerHTML = renderGatekeeperStats(metrics, total, allowed, denied, confirmations);
   }
 
   function renderLocks(metrics) {
@@ -537,6 +525,14 @@
   }
 
   // ── Chart rendering (uPlot) ──────────────────────────────────────────────
+  function extractSeriesValues(name) {
+    return historySnapshots.map(s => {
+      const m = s.metrics.find(entry => entry.name === name);
+      if (!m) return null;
+      return typeof m.value === 'number' ? m.value : null;
+    });
+  }
+
   function updateChart(containerId, chartKey, metricNames, labels, formatter) {
     const container = document.getElementById(containerId);
     if (!container || !uPlotAvailable) return;
@@ -550,13 +546,7 @@
 
     // Build data arrays
     const times = historySnapshots.map(s => Math.floor(new Date(s.timestamp).getTime() / 1000));
-    const seriesData = metricNames.map(name => {
-      return historySnapshots.map(s => {
-        const m = s.metrics.find(m => m.name === name);
-        if (!m) return null;
-        return typeof m.value === 'number' ? m.value : null;
-      });
-    });
+    const seriesData = metricNames.map(name => extractSeriesValues(name));
 
     // If we already have a chart, update its data instead of recreating
     if (charts[chartKey]) {

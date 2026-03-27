@@ -1906,29 +1906,20 @@ function safeParseYaml(content) {
           else p.classList.remove('active');
         });
 
-        // Lazy-initialize log viewer and metrics dashboard
-        if (tab === 'logs') {
-          if (!tabInits.logs) {
-            tabInits.logs = true;
-            if (window.DollhouseConsole && window.DollhouseConsole.logs) {
-              window.DollhouseConsole.logs.init();
-            }
-          } else if (window.DollhouseConsole && window.DollhouseConsole.logs.refresh) {
-            // Re-render after tab switch in case entries arrived while hidden
-            window.DollhouseConsole.logs.refresh();
-          }
-        }
-        if (tab === 'metrics') {
-          if (!tabInits.metrics) {
-            tabInits.metrics = true;
-            if (window.DollhouseConsole && window.DollhouseConsole.metrics) {
-              window.DollhouseConsole.metrics.init();
-            }
-          } else if (window.DollhouseConsole && window.DollhouseConsole.metrics.refresh) {
-            window.DollhouseConsole.metrics.refresh();
-          }
-        }
+        lazyInitTab(tab, tabInits);
       });
+    }
+
+    function lazyInitTab(tab, tabInits) {
+      const console = window.DollhouseConsole;
+      if (tab === 'logs' && console?.logs) {
+        if (!tabInits.logs) { tabInits.logs = true; console.logs.init(); }
+        else if (console.logs.refresh) { console.logs.refresh(); }
+      }
+      if (tab === 'metrics' && console?.metrics) {
+        if (!tabInits.metrics) { tabInits.metrics = true; console.metrics.init(); }
+        else if (console.metrics.refresh) { console.metrics.refresh(); }
+      }
     }
 
     init();

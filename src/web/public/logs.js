@@ -268,26 +268,27 @@
   }
 
   // ── RAF batch processing ─────────────────────────────────────────────────
+  function appendToBuffer(entry) {
+    if (buffer.length >= BUFFER_SIZE) {
+      const removed = buffer.shift();
+      if (removed) selectedIds.delete(removed.id);
+      if (filteredIndices !== null) {
+        filteredIndices = filteredIndices.map(i => i - 1).filter(i => i >= 0);
+      }
+    }
+    buffer.push(entry);
+    if (filteredIndices !== null && matchesFilters(entry)) {
+      filteredIndices.push(buffer.length - 1);
+    }
+  }
+
   function processPending() {
     rafScheduled = false;
     if (pendingEntries.length === 0) return;
 
     const entries = pendingEntries;
     pendingEntries = [];
-
-    for (const entry of entries) {
-      if (buffer.length >= BUFFER_SIZE) {
-        const removed = buffer.shift();
-        if (removed) selectedIds.delete(removed.id);
-        if (filteredIndices !== null) {
-          filteredIndices = filteredIndices.map(i => i - 1).filter(i => i >= 0);
-        }
-      }
-      buffer.push(entry);
-      if (filteredIndices !== null && matchesFilters(entry)) {
-        filteredIndices.push(buffer.length - 1);
-      }
-    }
+    for (const entry of entries) appendToBuffer(entry);
 
     if (!paused) {
       updateEntryCount();
@@ -484,56 +485,48 @@
   }
 
   // ── Selection & copy ─────────────────────────────────────────────────────
-  function onRowClick(e) {
-    const row = e.currentTarget;
-    const entryId = row.dataset.entryId;
-    const visIdx = parseInt(row.dataset.visibleIndex, 10);
-    if (!entryId) return;
-
-    // Click on correlation badge = filter by correlationId
+  function handleTraceClick(e) {
     const clickedTrace = e.target.closest('.log-corr-badge');
-    if (clickedTrace) {
-      e.stopPropagation();
-      const corrId = clickedTrace.dataset.correlationId;
-      if (corrId) {
-        if (filterCorrelationId === corrId) {
-          clearTraceFilter();
-        } else {
-          setTraceFilter(corrId);
-        }
-      }
-      return;
+    if (!clickedTrace) return false;
+    e.stopPropagation();
+    const corrId = clickedTrace.dataset.correlationId;
+    if (corrId) {
+      if (filterCorrelationId === corrId) clearTraceFilter();
+      else setTraceFilter(corrId);
     }
+    return true;
+  }
 
-    // Click on checkbox area = toggle select
+  function handleSelectionClick(e, entryId, visIdx) {
     const clickedCheckbox = e.target.closest('.log-checkbox');
 
     if (e.shiftKey && lastClickedIndex >= 0) {
-      // Shift-click: range select
       const start = Math.min(lastClickedIndex, visIdx);
       const end = Math.max(lastClickedIndex, visIdx);
       for (let i = start; i <= end; i++) {
         const entry = getEntry(i);
         if (entry) selectedIds.add(entry.id);
       }
-      lastClickedIndex = visIdx;
-      updateSelectionUI();
-      renderViewport();
     } else if (clickedCheckbox || e.ctrlKey || e.metaKey) {
-      // Ctrl/Cmd-click or checkbox click: toggle single selection
-      if (selectedIds.has(entryId)) {
-        selectedIds.delete(entryId);
-      } else {
-        selectedIds.add(entryId);
-      }
-      lastClickedIndex = visIdx;
-      updateSelectionUI();
-      renderViewport();
+      if (selectedIds.has(entryId)) selectedIds.delete(entryId);
+      else selectedIds.add(entryId);
     } else {
-      // Plain click: open detail modal
       const entry = buffer.find(e => e.id === entryId);
       if (entry) openDetailModal(entry);
+      return;
     }
+    lastClickedIndex = visIdx;
+    updateSelectionUI();
+    renderViewport();
+  }
+
+  function onRowClick(e) {
+    const row = e.currentTarget;
+    const entryId = row.dataset.entryId;
+    const visIdx = parseInt(row.dataset.visibleIndex, 10);
+    if (!entryId) return;
+    if (handleTraceClick(e)) return;
+    handleSelectionClick(e, entryId, visIdx);
   }
 
   function updateSelectionUI() {

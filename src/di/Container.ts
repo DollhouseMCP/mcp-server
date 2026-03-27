@@ -1605,46 +1605,38 @@ export class DollhouseContainer {
       cleanups.forEach(fn => fn());
     } catch { /* hooks not yet wired */ }
 
-    // Use Promise.allSettled to ensure all services attempt disposal
-    // even if some fail. This provides better resilience and comprehensive
-    // error reporting compared to Promise.all which fails fast.
-    const disposalPromises: Array<{ name: string; promise: Promise<void> }> = [];
+    const disposalPromises = this.buildDisposalPromises();
+    const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
+    this.reportDisposalFailures(disposalPromises, results);
+  }
 
+  private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {
+    const promises: Array<{ name: string; promise: Promise<void> }> = [];
     for (const [name, service] of this.services) {
-      if (service.instance) {
-        const instance = service.instance as any;
-        if (typeof instance.dispose === 'function') {
-          // Wrap in try-catch to handle synchronous throws, then wrap in Promise
-          disposalPromises.push({
-            name,
-            promise: Promise.resolve().then(() => instance.dispose())
-          });
-        } else if (typeof instance.cleanup === 'function') {
-          // Wrap in try-catch to handle synchronous throws, then wrap in Promise
-          disposalPromises.push({
-            name,
-            promise: Promise.resolve().then(() => instance.cleanup())
-          });
-        }
+      if (!service.instance) continue;
+      const instance = service.instance as any;
+      if (typeof instance.dispose === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.dispose()) });
+      } else if (typeof instance.cleanup === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.cleanup()) });
       }
     }
+    return promises;
+  }
 
-    // Execute all disposals in parallel, collecting results
-    const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
-
-    // Aggregate and report all failures for comprehensive diagnostics
-    const failures: Array<{ service: string; error: Error }> = [];
-
+  private reportDisposalFailures(
+    disposalPromises: Array<{ name: string; promise: Promise<void> }>,
+    results: PromiseSettledResult<void>[],
+  ): void {
+    const failures: string[] = [];
     for (const [index, result] of results.entries()) {
       if (result.status === 'rejected') {
         const serviceName = disposalPromises[index].name;
         const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-        failures.push({ service: serviceName, error });
+        failures.push(serviceName);
         logger.warn(`Failed to dispose service '${serviceName}'`, { error });
       }
     }
-
-    // Log summary if there were failures
     if (failures.length > 0) {
       logger.warn(`Container disposal completed with ${failures.length} failure(s) out of ${disposalPromises.length} services`);
     }
