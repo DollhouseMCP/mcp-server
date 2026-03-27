@@ -189,19 +189,19 @@
 
 .perm-pattern-badge--deny {
   background: #fef2f2;
-  color: #dc2626;
+  color: #991b1b;
   border: 1px solid #fecaca;
 }
 
 .perm-pattern-badge--allow {
   background: #f0fdf4;
-  color: #16a34a;
+  color: #166534;
   border: 1px solid #bbf7d0;
 }
 
 .perm-pattern-badge--confirm {
   background: #fff7ed;
-  color: #ea580c;
+  color: #9a3412;
   border: 1px solid #fed7aa;
 }
 
