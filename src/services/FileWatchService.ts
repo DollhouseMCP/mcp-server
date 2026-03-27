@@ -119,49 +119,72 @@ export class FileWatchService {
         return undefined;
       }
 
-      // Polling is a fallback for environments where fs.watch is unreliable/unavailable (e.g., EMFILE/ENOSPC).
+      // Adaptive polling interval: scale with directory size to prevent
+      // scan-overlaps on large portfolios (Issue #1687).
+      // Base: 2s, +2ms per file, capped at 10s.
+      const baseIntervalMs = 2000;
+      const perFileMs = 2;
+      const maxIntervalMs = 10_000;
+      const adaptiveInterval = Math.min(
+        baseIntervalMs + previous.size * perFileMs,
+        maxIntervalMs,
+      );
+
+      // Guard: skip poll if a previous scan is still being processed
+      let scanInProgress = false;
+
+      // Debounce: batch changed files and notify handlers once per cycle
       const interval = setInterval(() => {
-        let next: Map<string, number>;
+        if (scanInProgress) return;
+        scanInProgress = true;
+
         try {
-          next = snapshot();
-        } catch {
-          return;
-        }
+          let next: Map<string, number>;
+          try {
+            next = snapshot();
+          } catch {
+            return;
+          }
 
-        for (const [filename, mtimeMs] of next) {
-          const priorMtime = previous.get(filename);
-          if (priorMtime === undefined || priorMtime !== mtimeMs) {
-            for (const h of handlers) {
-              try {
-                h(filename);
-              } catch (error) {
-                logger.warn('FileWatchService polling handler failed', {
-                  directory: absoluteDir,
-                  error: error instanceof Error ? error.message : error
-                });
+          // Collect all changed files before notifying handlers
+          const changedFiles: string[] = [];
+
+          for (const [filename, mtimeMs] of next) {
+            const priorMtime = previous.get(filename);
+            if (priorMtime === undefined || priorMtime !== mtimeMs) {
+              changedFiles.push(filename);
+            }
+          }
+
+          // Deletions
+          for (const filename of previous.keys()) {
+            if (!next.has(filename)) {
+              changedFiles.push(filename);
+            }
+          }
+
+          // Notify handlers once per changed file (deduplicated)
+          if (changedFiles.length > 0) {
+            const uniqueChanges = [...new Set(changedFiles)];
+            for (const filename of uniqueChanges) {
+              for (const h of handlers) {
+                try {
+                  h(filename);
+                } catch (error) {
+                  logger.warn('FileWatchService polling handler failed', {
+                    directory: absoluteDir,
+                    error: error instanceof Error ? error.message : error
+                  });
+                }
               }
             }
           }
-        }
 
-        // Deletions: notify handlers so callers can rescan.
-        for (const filename of previous.keys()) {
-          if (!next.has(filename)) {
-            for (const h of handlers) {
-              try {
-                h(filename);
-              } catch (error) {
-                logger.warn('FileWatchService polling handler failed', {
-                  directory: absoluteDir,
-                  error: error instanceof Error ? error.message : error
-                });
-              }
-            }
-          }
+          previous = next;
+        } finally {
+          scanInProgress = false;
         }
-
-        previous = next;
-      }, 250);
+      }, adaptiveInterval);
 
       logger.warn('Falling back to polling directory watcher', {
         directory: absoluteDir,
@@ -176,21 +199,35 @@ export class FileWatchService {
     // Try to set up file watcher - may fail due to permission restrictions or platform limitations
     let watcher: FSWatcher | PollingWatcher | undefined;
     try {
-      watcher = watch(absoluteDir, { recursive: false }, (eventType, filename) => {
+      // Debounce fs.watch events — coalesce rapid-fire notifications into
+      // a single handler call per file within a 500ms window (Issue #1687).
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      const pendingChanges = new Set<string>();
+
+      watcher = watch(absoluteDir, { recursive: false }, (_eventType, filename) => {
         if (!filename) {
           return;
         }
-        const relative = filename.toString();
-        for (const h of handlers) {
-          try {
-            h(relative);
-          } catch (error) {
-            logger.warn('FileWatchService handler failed', {
-              directory: absoluteDir,
-              error: error instanceof Error ? error.message : error
-            });
+        pendingChanges.add(filename.toString());
+
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          const files = [...pendingChanges];
+          pendingChanges.clear();
+          for (const relative of files) {
+            for (const h of handlers) {
+              try {
+                h(relative);
+              } catch (error) {
+                logger.warn('FileWatchService handler failed', {
+                  directory: absoluteDir,
+                  error: error instanceof Error ? error.message : error
+                });
+              }
+            }
           }
-        }
+        }, 500);
       });
     } catch (watchError) {
       // File watching failed - fall back to polling (or no-op if polling also fails).
