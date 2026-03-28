@@ -35,8 +35,13 @@ const MAX_FILE_SIZE_BYTES = 1_048_576;
 /** Valid element file extensions */
 const VALID_EXTENSIONS = new Set(['.md', '.yaml', '.yml']);
 
+/** Known-safe filename pattern: starts alphanumeric, body allows hyphens/underscores, valid extension */
+const SAFE_FILENAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*\.(yaml|yml|md)$/;
+
 /** Check if a filename is a backup or cruft file */
 function isBackupOrCruft(filename: string): boolean {
+  // Guaranteed safe filenames skip blacklist checks entirely
+  if (SAFE_FILENAME_RE.test(filename)) return false;
   if (filename.startsWith('.')) return true;
   if (filename === '_index.json') return true;
   if (filename.includes('.backup') || filename.includes('.state')) return true;
