@@ -2,7 +2,8 @@
  * Session awareness for the unified web console.
  *
  * Shows a labeled "N sessions" box in the header. Clicking opens a
- * dropdown listing each session by its puppet name and role.
+ * dropdown with selectable sessions. Selecting a session filters
+ * logs and metrics to that session only.
  *
  * @since v2.1.0 — Issue #1700
  */
@@ -21,6 +22,56 @@
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
+  // Apply session filter across logs and metrics
+  function applyFilter(sessionId) {
+    filterSessionId = sessionId;
+
+    // Sync the log viewer filter dropdown if it exists
+    var logSelect = document.getElementById('log-session-filter');
+    if (logSelect) logSelect.value = sessionId;
+
+    // Trigger log re-filter
+    if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
+      window.DollhouseConsole.logs.refilter();
+    }
+
+    // Update dropdown selection state
+    var items = document.querySelectorAll('.session-dropdown-item');
+    for (var i = 0; i < items.length; i++) {
+      var isSelected = items[i].dataset.sessionId === sessionId;
+      items[i].classList.toggle('session-dropdown-item--selected', isSelected);
+    }
+
+    // Update the "All" item
+    var allItem = document.querySelector('.session-dropdown-item--all');
+    if (allItem) {
+      allItem.classList.toggle('session-dropdown-item--selected', !sessionId);
+    }
+
+    // Update the box label to show filtered session name
+    updateBoxLabel();
+  }
+
+  // Update the box text to reflect current filter
+  function updateBoxLabel() {
+    var countEl = document.querySelector('.session-box-count');
+    var labelEl = document.querySelector('.session-box-label');
+    if (!countEl || !labelEl) return;
+
+    var active = sessions.filter(function(s) { return s.status === 'active'; });
+
+    if (filterSessionId) {
+      var filtered = active.find(function(s) { return s.sessionId === filterSessionId; });
+      if (filtered) {
+        countEl.textContent = displayName(filtered);
+        labelEl.textContent = '1/' + active.length;
+        return;
+      }
+    }
+    countEl.textContent = String(active.length);
+    labelEl.textContent = active.length === 1 ? 'session' : 'sessions';
+  }
+
   // Update the header session indicator
   function updateSessionIndicator() {
     var indicator = document.getElementById('session-indicator');
@@ -30,56 +81,90 @@
     var count = active.length;
 
     indicator.innerHTML = '';
-
     if (count === 0) return;
 
-    // Labeled box
+    // Labeled box button
     var box = document.createElement('button');
     box.className = 'session-box';
     box.type = 'button';
     box.setAttribute('aria-expanded', 'false');
-    box.setAttribute('aria-haspopup', 'true');
+    box.setAttribute('aria-haspopup', 'listbox');
 
-    var label = document.createElement('span');
-    label.className = 'session-box-count';
-    label.textContent = String(count);
+    var countEl = document.createElement('span');
+    countEl.className = 'session-box-count';
 
-    var text = document.createElement('span');
-    text.className = 'session-box-label';
-    text.textContent = count === 1 ? 'session' : 'sessions';
+    var labelEl = document.createElement('span');
+    labelEl.className = 'session-box-label';
 
-    box.appendChild(label);
-    box.appendChild(text);
+    box.appendChild(countEl);
+    box.appendChild(labelEl);
 
     // Dropdown
     var dropdown = document.createElement('div');
     dropdown.className = 'session-dropdown';
+    dropdown.setAttribute('role', 'listbox');
     dropdown.hidden = true;
 
-    var heading = document.createElement('div');
-    heading.className = 'session-dropdown-heading';
-    heading.textContent = 'Active Sessions';
-    dropdown.appendChild(heading);
+    // "All Sessions" option
+    var allItem = document.createElement('div');
+    allItem.className = 'session-dropdown-item session-dropdown-item--all';
+    if (!filterSessionId) allItem.classList.add('session-dropdown-item--selected');
+    allItem.setAttribute('role', 'option');
+    allItem.innerHTML =
+      '<span class="session-dropdown-check">' + (!filterSessionId ? '\u2713' : '') + '</span>' +
+      '<span class="session-dropdown-name">All Sessions</span>' +
+      '<span class="session-dropdown-role">' + count + ' total</span>';
+    allItem.addEventListener('click', function(e) {
+      e.stopPropagation();
+      applyFilter('');
+    });
+    dropdown.appendChild(allItem);
 
+    // Divider
+    var divider = document.createElement('div');
+    divider.className = 'session-dropdown-divider';
+    dropdown.appendChild(divider);
+
+    // Session items
     for (var i = 0; i < active.length; i++) {
-      var item = document.createElement('div');
-      item.className = 'session-dropdown-item';
+      (function(s) {
+        var item = document.createElement('div');
+        item.className = 'session-dropdown-item';
+        item.dataset.sessionId = s.sessionId;
+        item.setAttribute('role', 'option');
+        if (s.sessionId === filterSessionId) item.classList.add('session-dropdown-item--selected');
 
-      var dot = document.createElement('span');
-      dot.className = 'session-dot' + (active[i].isLeader ? ' session-dot--leader' : '');
-      item.appendChild(dot);
+        var check = document.createElement('span');
+        check.className = 'session-dropdown-check';
+        check.textContent = s.sessionId === filterSessionId ? '\u2713' : '';
+        item.appendChild(check);
 
-      var nameEl = document.createElement('span');
-      nameEl.className = 'session-dropdown-name';
-      nameEl.textContent = displayName(active[i]);
-      item.appendChild(nameEl);
+        var dot = document.createElement('span');
+        dot.className = 'session-dot' + (s.isLeader ? ' session-dot--leader' : '');
+        item.appendChild(dot);
 
-      var roleEl = document.createElement('span');
-      roleEl.className = 'session-dropdown-role';
-      roleEl.textContent = active[i].isLeader ? 'leader' : 'follower';
-      item.appendChild(roleEl);
+        var nameEl = document.createElement('span');
+        nameEl.className = 'session-dropdown-name';
+        nameEl.textContent = displayName(s);
+        item.appendChild(nameEl);
 
-      dropdown.appendChild(item);
+        var roleEl = document.createElement('span');
+        roleEl.className = 'session-dropdown-role';
+        roleEl.textContent = s.isLeader ? 'leader' : 'follower';
+        item.appendChild(roleEl);
+
+        item.addEventListener('click', function(e) {
+          e.stopPropagation();
+          // Toggle: click same session again to deselect
+          if (filterSessionId === s.sessionId) {
+            applyFilter('');
+          } else {
+            applyFilter(s.sessionId);
+          }
+        });
+
+        dropdown.appendChild(item);
+      })(active[i]);
     }
 
     var wrapper = document.createElement('div');
@@ -87,6 +172,9 @@
     wrapper.appendChild(box);
     wrapper.appendChild(dropdown);
     indicator.appendChild(wrapper);
+
+    // Set initial label
+    updateBoxLabel();
 
     // Toggle dropdown
     box.addEventListener('click', function(e) {
@@ -120,10 +208,7 @@
 
     var select = group.querySelector('select');
     select.addEventListener('change', function() {
-      filterSessionId = this.value;
-      if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
-        window.DollhouseConsole.logs.refilter();
-      }
+      applyFilter(this.value);
     });
   }
 
