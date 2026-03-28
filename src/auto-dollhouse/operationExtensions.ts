@@ -3,6 +3,11 @@
  *
  * Extracted from OperationRouter.ts, OperationSchema.ts, and MCPAQLTools.ts.
  * These definitions are registered at runtime when auto-dollhouse activates.
+ *
+ * 1. DMCP-SEC-004: FALSE POSITIVE SUPPRESSION - No user input Unicode normalization needed
+ *    This file contains only static route/schema definitions and string constants.
+ *    No user-provided data flows through this module that requires Unicode normalization.
+ *    Actual input normalization is handled in evaluatePermission.ts and permissionRoutes.ts.
  */
 
 /** Route definition for evaluate_permission */
