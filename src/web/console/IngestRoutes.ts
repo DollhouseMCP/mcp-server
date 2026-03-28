@@ -227,6 +227,34 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     res.json({ sessions: allSessions });
   });
 
+  /**
+   * POST /api/sessions/:sessionId/kill — Terminate a session's server process.
+   */
+  router.post('/api/sessions/:sessionId/kill', (req: Request, res: Response) => {
+    const sessionId = req.params['sessionId'] as string;
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    if (!session.pid) {
+      res.status(400).json({ error: 'No PID for session' });
+      return;
+    }
+
+    try {
+      process.kill(session.pid, 'SIGTERM');
+      session.status = 'ended';
+      namePool.release(sessionId);
+      logger.info(`[IngestRoutes] Killed session ${session.displayName} (pid=${session.pid})`);
+      res.json({ ok: true, killed: session.displayName, pid: session.pid });
+    } catch (err) {
+      res.status(500).json({ error: `Failed to kill pid ${session.pid}: ${(err as Error).message}` });
+    }
+  });
+
   function getSessions(): SessionInfo[] {
     return Array.from(sessions.values());
   }

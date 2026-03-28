@@ -211,6 +211,20 @@
         uptimeEl.textContent = formatUptime(s.startedAt);
         item.appendChild(uptimeEl);
 
+        var killBtn = document.createElement('button');
+        killBtn.className = 'session-kill-btn';
+        killBtn.type = 'button';
+        killBtn.title = 'Stop ' + displayName(s);
+        killBtn.textContent = '\u00D7';
+        killBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (!confirm('Stop session ' + displayName(s) + '?')) return;
+          fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
+            .then(function() { fetchSessions(); })
+            .catch(function() {});
+        });
+        item.appendChild(killBtn);
+
         item.addEventListener('click', function(e) {
           e.stopPropagation();
           applyFilter(filterSessionId === s.sessionId ? '' : s.sessionId);

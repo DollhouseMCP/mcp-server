@@ -172,6 +172,31 @@
   color: var(--ink-900, #e0e8f0);
 }
 
+/* Kill button */
+.session-kill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500, #677893);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+  padding: 0;
+}
+
+.session-kill-btn:hover {
+  background: color-mix(in srgb, #ef4444 15%, transparent);
+  color: #ef4444;
+}
+
 /* Session badge on log entries */
 .log-session-badge {
   display: inline-block;
