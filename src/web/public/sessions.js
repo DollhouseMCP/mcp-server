@@ -93,10 +93,21 @@
 
     var active = sessions.filter(function(s) { return s.status === 'active'; });
 
+    if (active.length === 1) {
+      countEl.textContent = displayName(active[0]);
+      if (active[0].color) countEl.style.color = active[0].color;
+      labelEl.textContent = formatUptime(active[0].startedAt);
+      return;
+    }
+
+    // Reset color when showing count
+    countEl.style.color = '';
+
     if (filterSessionId) {
       var filtered = active.find(function(s) { return s.sessionId === filterSessionId; });
       if (filtered) {
         countEl.textContent = displayName(filtered);
+        if (filtered.color) countEl.style.color = filtered.color;
         labelEl.textContent = '1/' + active.length;
         return;
       }
@@ -248,12 +259,19 @@
     // Apply current selection state
     refreshSelectionState();
 
-    // Toggle dropdown
+    // Toggle dropdown — fetch fresh data on open
     box.addEventListener('click', function(e) {
       e.stopPropagation();
       var open = !dropdown.hidden;
-      dropdown.hidden = open;
-      box.setAttribute('aria-expanded', String(!open));
+      if (open) {
+        dropdown.hidden = true;
+        box.setAttribute('aria-expanded', 'false');
+      } else {
+        // Fetch fresh session data before showing
+        fetchSessions();
+        dropdown.hidden = false;
+        box.setAttribute('aria-expanded', 'true');
+      }
     });
     document.addEventListener('click', function() {
       dropdown.hidden = true;
