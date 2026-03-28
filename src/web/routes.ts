@@ -32,6 +32,63 @@ const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 
 /** Max file size for element reads (1 MB) */
 const MAX_FILE_SIZE_BYTES = 1_048_576;
 
+/** Check if a filename is a backup or cruft file */
+function isBackupOrCruft(filename: string): boolean {
+  if (filename.startsWith('.')) return true;
+  if (filename === '_index.json') return true;
+  if (filename.includes('.backup') || filename.includes('.state')) return true;
+  if (filename.endsWith('.bak') || filename.endsWith('~')) return true;
+  if (filename.includes(' copy')) return true;
+  return false;
+}
+
+/**
+ * Load memories from the _index.json file.
+ * Memories use date-partitioned storage with an index, unlike other
+ * element types which are flat files in a directory.
+ */
+async function loadMemoriesFromIndex(portfolioDir: string): Promise<unknown[]> {
+  const indexPath = join(portfolioDir, 'memories', '_index.json');
+  try {
+    const raw = await readFile(indexPath, 'utf-8');
+    const index = JSON.parse(raw) as {
+      entries?: Record<string, { name?: string; description?: string; tags?: string[]; created?: string; [key: string]: unknown }>;
+      entryCount?: number;
+    };
+
+    const entries = index.entries || {};
+    const elements: unknown[] = [];
+
+    for (const [path, entry] of Object.entries(entries)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const pathParts = path.split('/');
+      const filename = pathParts.pop() || path;
+      // Extract date from directory path (e.g., "2025-09-19/code-patterns.yaml" -> "2025-09-19")
+      const dateFromPath = pathParts.length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(pathParts[0]) ? pathParts[0] : '';
+      // Fall back to filename if index has no name or stored "unnamed" (upstream indexer bug)
+      const indexName = entry.name && entry.name !== 'unnamed' ? entry.name : null;
+      const name = indexName || filename.replace(/\.(yaml|yml|md)$/, '');
+
+      elements.push({
+        name,
+        description: entry.description || '',
+        type: 'memory',
+        version: entry.version || '1.0.0',
+        author: entry.author || '',
+        category: entry.category || entry.memoryType || '',
+        tags: entry.tags || [],
+        created: entry.created || dateFromPath,
+        filename: path, // date/filename path for content loading
+      });
+    }
+
+    return elements;
+  } catch {
+    // Fall back to empty if no index
+    return [];
+  }
+}
+
 /**
  * Simple sliding-window rate limiter.
  * Tracks timestamps of recent requests and evicts entries older than the window.
@@ -96,79 +153,8 @@ function parseYamlFile(content: string): { metadata: Record<string, unknown>; bo
   }
 }
 
-/** Rate limiter for read-only content endpoints: max 300 per 60 seconds */
-const contentRateLimiter = new SlidingWindowRateLimiter(300, 60_000);
-
-/** Check if a filename is a backup or cruft file */
-function isBackupOrCruft(filename: string): boolean {
-  if (filename.startsWith('.')) return true;
-  if (filename === '_index.json') return true;
-  if (filename.includes('.backup')) return true;
-  if (filename.includes('.state')) return true;
-  if (filename.endsWith('.bak')) return true;
-  if (filename.endsWith('~')) return true;
-  if (filename.includes(' copy')) return true;
-  return false;
-}
-
-/**
- * Load memories from the _index.json file.
- * Memories use date-partitioned storage with an index, unlike other
- * element types which are flat files in a directory.
- */
-async function loadMemoriesFromIndex(portfolioDir: string): Promise<unknown[]> {
-  const indexPath = join(portfolioDir, 'memories', '_index.json');
-  try {
-    const raw = await readFile(indexPath, 'utf-8');
-    const index = JSON.parse(raw) as {
-      entries?: Record<string, { name?: string; description?: string; tags?: string[]; created?: string; [key: string]: unknown }>;
-      entryCount?: number;
-    };
-
-    const entries = index.entries || {};
-    const elements: unknown[] = [];
-
-    for (const [path, entry] of Object.entries(entries)) {
-      if (!entry || typeof entry !== 'object') continue;
-      const pathParts = path.split('/');
-      const filename = pathParts.pop() || path;
-      // Extract date from directory path (e.g., "2025-09-19/code-patterns.yaml" → "2025-09-19")
-      const dateFromPath = pathParts.length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(pathParts[0]) ? pathParts[0] : '';
-      // Fall back to filename if index has no name or stored "unnamed" (upstream indexer bug)
-      const indexName = entry.name && entry.name !== 'unnamed' ? entry.name : null;
-      const name = indexName || filename.replace(/\.(yaml|yml|md)$/, '');
-
-      elements.push({
-        name,
-        description: entry.description || '',
-        type: 'memory',
-        version: entry.version || '1.0.0',
-        author: entry.author || '',
-        category: entry.category || entry.memoryType || '',
-        tags: entry.tags || [],
-        created: entry.created || dateFromPath,
-        filename: path, // date/filename path for content loading
-      });
-    }
-
-    return elements;
-  } catch {
-    // Fall back to flat directory scan if no index
-    return [];
-  }
-}
-
 export function createApiRoutes(portfolioDir: string): Router {
   const router = Router();
-
-  // Rate limit all routes: 300 requests per 60 seconds (CodeQL js/missing-rate-limiting)
-  router.use((_req, res, next) => {
-    if (!contentRateLimiter.tryAcquire()) {
-      res.status(429).json({ error: 'Too many requests' });
-      return;
-    }
-    next();
-  });
 
   /**
    * GET /api/elements
@@ -188,16 +174,8 @@ export function createApiRoutes(portfolioDir: string): Router {
       let totalCount = 0;
 
       for (const type of ELEMENT_TYPES) {
+        const typeDir = join(portfolioDir, type);
         try {
-          // Memories use index-based listing (date-partitioned storage)
-          if (type === 'memories') {
-            const memElements = await loadMemoriesFromIndex(portfolioDir);
-            result[type] = memElements;
-            totalCount += memElements.length;
-            continue;
-          }
-
-          const typeDir = join(portfolioDir, type);
           const dirStat = await stat(typeDir);
           if (!dirStat.isDirectory()) continue;
 
@@ -205,7 +183,8 @@ export function createApiRoutes(portfolioDir: string): Router {
           const elements: unknown[] = [];
 
           for (const file of files) {
-            if (isBackupOrCruft(file)) continue;
+            // Skip backups, hidden files, state files
+            if (file.startsWith('.') || file.includes('.backup-') || file.includes('.state')) continue;
 
             const ext = extname(file);
             if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
@@ -213,23 +192,16 @@ export function createApiRoutes(portfolioDir: string): Router {
             try {
               const filePath = join(typeDir, file);
 
-              // Skip directories (memories have date subdirs)
+              // Skip files larger than 1 MB
               const fileStat = await stat(filePath);
-              if (!fileStat.isFile()) continue;
               if (fileStat.size > MAX_FILE_SIZE_BYTES) {
                 logger.debug(`[WebUI] Skipping oversized file (${fileStat.size} bytes): ${file}`);
                 continue;
               }
 
               const content = await readFile(filePath, 'utf-8');
-              const validationResult = validateElementContent(file, content, type);
+              const { metadata } = ext === '.md' ? parseFrontMatter(content) : parseYamlFile(content);
 
-              if (!validationResult.valid) {
-                logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
-                continue;
-              }
-
-              const { metadata } = validationResult;
               elements.push({
                 name: metadata.name || file.replace(ext, ''),
                 description: metadata.description || '',
@@ -291,19 +263,12 @@ export function createApiRoutes(portfolioDir: string): Router {
     }
 
     try {
-      // Memories use index-based listing
-      if (type === 'memories') {
-        const memElements = await loadMemoriesFromIndex(portfolioDir);
-        res.json({ type, elements: memElements, count: memElements.length });
-        return;
-      }
-
       const typeDir = join(portfolioDir, type);
       const files = await readdir(typeDir);
       const elements: unknown[] = [];
 
       for (const file of files) {
-        if (isBackupOrCruft(file)) continue;
+        if (file.startsWith('.') || file.includes('.backup-') || file.includes('.state')) continue;
 
         const ext = extname(file);
         if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
@@ -311,22 +276,16 @@ export function createApiRoutes(portfolioDir: string): Router {
         try {
           const filePath = join(typeDir, file);
 
+          // Skip files larger than 1 MB
           const fileStat = await stat(filePath);
-          if (!fileStat.isFile()) continue;
           if (fileStat.size > MAX_FILE_SIZE_BYTES) {
             logger.debug(`[WebUI] Skipping oversized file (${fileStat.size} bytes): ${file}`);
             continue;
           }
 
           const content = await readFile(filePath, 'utf-8');
-          const validationResult = validateElementContent(file, content, type);
+          const { metadata, body } = ext === '.md' ? parseFrontMatter(content) : parseYamlFile(content);
 
-          if (!validationResult.valid) {
-            logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
-            continue;
-          }
-
-          const { metadata, body } = validationResult;
           elements.push({
             name: metadata.name || file.replace(ext, ''),
             description: metadata.description || '',
@@ -352,61 +311,6 @@ export function createApiRoutes(portfolioDir: string): Router {
   });
 
   /**
-   * GET /api/elements/memories/:date/:file
-   * Memory content loading with date-partitioned paths (e.g., 2025-09-19/code-patterns.yaml).
-   * Must be registered before the generic :type/:name route.
-   * codeql[js/missing-rate-limiting] — Localhost-only, read-only endpoint.
-   */
-  router.get('/elements/memories/:date/:file', async (req, res) => {
-    const { date, file } = req.params;
-
-    // Validate date format
-    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      res.status(400).json({ error: 'Invalid date format' });
-      return;
-    }
-    if (file.includes('..') || file.includes('/') || file.includes('\\') || isBackupOrCruft(file)) {
-      res.status(400).json({ error: 'Invalid filename' });
-      return;
-    }
-
-    try {
-      const filePath = join(portfolioDir, 'memories', date, file);
-      const resolvedPath = resolve(filePath);
-      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
-        res.status(400).json({ error: 'Path traversal detected' });
-        return;
-      }
-
-      const fileStat = await stat(filePath);
-      if (!fileStat.isFile() || fileStat.size > MAX_FILE_SIZE_BYTES) {
-        res.status(fileStat.isFile() ? 413 : 404).json({ error: fileStat.isFile() ? 'File too large' : 'Not found' });
-        return;
-      }
-
-      const content = await readFile(filePath, 'utf-8');
-      const validation = validateElementContent(file, content, 'memories');
-
-      // Serve content regardless of validation — local files are never blocked.
-      // Validation results are included as headers so the UI can display scan status.
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('X-Validation-Status', validation.valid ? 'pass' : 'warn');
-      if (!validation.valid && validation.rejection) {
-        res.setHeader('X-Validation-Reason', encodeURIComponent(validation.rejection.reason));
-        if (validation.rejection.severity) {
-          res.setHeader('X-Validation-Severity', validation.rejection.severity);
-        }
-        if (validation.rejection.patterns) {
-          res.setHeader('X-Validation-Patterns', encodeURIComponent(validation.rejection.patterns.join(', ')));
-        }
-      }
-      res.send(content);
-    } catch {
-      res.status(404).json({ error: `Memory not found: ${date}/${file}` });
-    }
-  });
-
-  /**
    * GET /api/elements/:type/:name
    * Returns the raw file content as plain text.
    * The client-side app handles YAML/markdown parsing and rendering.
@@ -418,47 +322,28 @@ export function createApiRoutes(portfolioDir: string): Router {
       return;
     }
 
-    // Prevent path traversal (but allow / for memory date paths like 2025-09-19/file.yaml)
-    if (name.includes('..') || name.includes('\\')) {
-      res.status(400).json({ error: 'Invalid element name' });
-      return;
-    }
-
-    // Non-memory types must not contain /
-    if (type !== 'memories' && name.includes('/')) {
+    // Prevent path traversal
+    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
       res.status(400).json({ error: 'Invalid element name' });
       return;
     }
 
     try {
-      let filePath: string;
+      const typeDir = join(portfolioDir, type);
+      const files = await readdir(typeDir);
 
-      if (type === 'memories' && name.includes('/')) {
-        // Memory date-path: e.g., "2025-09-19/code-patterns.yaml"
-        // Validate the path components (date dir + filename)
-        const parts = name.split('/');
-        if (parts.length !== 2 || !parts[0].match(/^\d{4}-\d{2}-\d{2}$/) || isBackupOrCruft(parts[1])) {
-          res.status(400).json({ error: 'Invalid memory path' });
-          return;
-        }
-        filePath = join(portfolioDir, type, name);
-      } else {
-        const typeDir = join(portfolioDir, type);
-        const files = await readdir(typeDir);
+      // Find the file by name (with or without extension)
+      const match = files.find(f => {
+        const base = f.replace(extname(f), '');
+        return base === name || f === name;
+      });
 
-        // Find the file by name (with or without extension)
-        const match = files.find(f => {
-          const base = f.replace(extname(f), '');
-          return base === name || f === name;
-        });
-
-        if (!match) {
-          res.status(404).json({ error: `Element not found: ${type}/${name}` });
-          return;
-        }
-
-        filePath = join(portfolioDir, type, match);
+      if (!match) {
+        res.status(404).json({ error: `Element not found: ${type}/${name}` });
+        return;
       }
+
+      const filePath = join(typeDir, match);
 
       // Verify resolved path stays within portfolio directory (defense in depth)
       const resolvedPath = resolve(filePath);
@@ -475,22 +360,9 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
 
       const content = await readFile(filePath, 'utf-8');
-      const filename = filePath.split('/').pop() || name;
-      const validation = validateElementContent(filename, content, type);
 
-      // Serve content regardless of validation — local files are never blocked.
-      // Validation results are included as headers so the UI can display scan status.
+      // Return raw text — client-side handles parsing/rendering
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('X-Validation-Status', validation.valid ? 'pass' : 'warn');
-      if (!validation.valid && validation.rejection) {
-        res.setHeader('X-Validation-Reason', encodeURIComponent(validation.rejection.reason));
-        if (validation.rejection.severity) {
-          res.setHeader('X-Validation-Severity', validation.rejection.severity);
-        }
-        if (validation.rejection.patterns) {
-          res.setHeader('X-Validation-Patterns', encodeURIComponent(validation.rejection.patterns.join(', ')));
-        }
-      }
       res.send(content);
     } catch {
       res.status(500).json({ error: `Failed to get element: ${type}/${name}` });
@@ -508,17 +380,12 @@ export function createApiRoutes(portfolioDir: string): Router {
 
       for (const type of ELEMENT_TYPES) {
         try {
-          if (type === 'memories') {
-            // Use index for memory count (matches listing behavior)
-            const memElements = await loadMemoriesFromIndex(portfolioDir);
-            stats[type] = memElements.length;
-            total += memElements.length;
-            continue;
-          }
           const typeDir = join(portfolioDir, type);
           const files = await readdir(typeDir);
           const count = files.filter(f =>
-            !isBackupOrCruft(f) &&
+            !f.startsWith('.') &&
+            !f.includes('.backup-') &&
+            !f.includes('.state') &&
             ['.md', '.yaml', '.yml'].includes(extname(f))
           ).length;
           stats[type] = count;
@@ -752,20 +619,12 @@ function asSingleResult(r: unknown): SingleOpResult {
 export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: string): Router {
   const router = Router();
 
-  // Rate limit all routes: 300 requests per 60 seconds (CodeQL js/missing-rate-limiting)
-  router.use((_req, res, next) => {
-    if (!contentRateLimiter.tryAcquire()) {
-      res.status(429).json({ error: 'Too many requests' });
-      return;
-    }
-    next();
-  });
-
   /**
    * GET /api/elements
    * Uses direct filesystem listing to get accurate YAML frontmatter metadata
-   * (created, author, category) that list_elements MCP-AQL does not return.
-   * Same logic as the non-gateway route — MCP-AQL is used for all other endpoints.
+   * (created, author, category) with content validated through the security
+   * pipeline (Unicode normalization, YAML bomb detection, injection scanning).
+   * MCP-AQL is used for all other endpoints.
    * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
    */
   router.get('/elements', async (req, res) => {
@@ -868,35 +727,19 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
     }
 
     try {
-      const allItems: unknown[] = [];
-      let currentPage = 1;
-      let hasMore = true;
-      while (hasMore) {
-        const opResult = asSingleResult(await handler.handleRead({
-          operation: 'list_elements',
-          element_type: toSingularType(type), params: { page: currentPage, pageSize: 100 },
-        }));
-        if (opResult.success && opResult.data) {
-          const data = opResult.data as Record<string, unknown>;
-          const items = Array.isArray(data.items) ? data.items : [];
-          allItems.push(...items);
-          const pagination = data.pagination as Record<string, unknown> | undefined;
-          hasMore = pagination?.hasNextPage === true;
-          currentPage++;
-        } else {
-          if (!allItems.length) {
-            res.status(500).json({ error: (opResult as SingleOpResult).error || `Failed to list ${type}` });
-            return;
-          }
-          hasMore = false;
-        }
+      const opResult = asSingleResult(await handler.handleRead({
+        operation: 'list_elements',
+        params: { element_type: toSingularType(type), page: 1, pageSize: 1000 },
+      }));
+
+      if (!opResult.success) {
+        res.status(500).json({ error: opResult.error || `Failed to list ${type}` });
+        return;
       }
-      // Map MCP-AQL fields to what app.js expects
-      const mapped = allItems.map((item: unknown) => {
-        const el = item as Record<string, unknown>;
-        return { ...el, name: el.element_name || el.name, filename: `${el.element_name || el.name}.md` };
-      });
-      res.json({ type, elements: mapped, count: mapped.length });
+
+      const data = opResult.data as Record<string, unknown>;
+      const items = Array.isArray(data.items) ? data.items : [];
+      res.json({ type, elements: items, count: items.length });
     } catch {
       res.status(500).json({ error: `Failed to list ${type}` });
     }
@@ -937,18 +780,20 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       const content = await readFile(filePath, 'utf-8');
       const validation = validateElementContent(file, content, 'memories');
 
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('X-Validation-Status', validation.valid ? 'pass' : 'warn');
-      if (!validation.valid && validation.rejection) {
-        res.setHeader('X-Validation-Reason', encodeURIComponent(validation.rejection.reason));
-        if (validation.rejection.severity) {
-          res.setHeader('X-Validation-Severity', validation.rejection.severity);
-        }
-        if (validation.rejection.patterns) {
-          res.setHeader('X-Validation-Patterns', encodeURIComponent(validation.rejection.patterns.join(', ')));
-        }
-      }
-      res.send(content);
+      res.json({
+        metadata: validation.metadata,
+        body: validation.body,
+        raw: content,
+        type: 'memory',
+        validation: {
+          status: validation.valid ? 'pass' : 'warn',
+          ...(validation.rejection && {
+            reason: validation.rejection.reason,
+            severity: validation.rejection.severity,
+            patterns: validation.rejection.patterns,
+          }),
+        },
+      });
     } catch {
       res.status(404).json({ error: `Memory not found: ${date}/${file}` });
     }
@@ -956,8 +801,8 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
 
   /**
    * GET /api/elements/:type/:name
-   * Routes through get_element for a specific element.
-   * Returns the raw file content as plain text (same as legacy behavior).
+   * Returns the raw file content as plain text, validated through the security pipeline.
+   * The client-side app handles YAML/markdown parsing and rendering.
    */
   router.get('/elements/:type/:name', async (req, res) => {
     const { type, name } = req.params;
@@ -966,30 +811,48 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       return;
     }
 
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+    // Prevent path traversal (but allow / for memory date paths like 2025-09-19/file.yaml)
+    if (name.includes('..') || name.includes('\\')) {
+      res.status(400).json({ error: 'Invalid element name' });
+      return;
+    }
+
+    // Non-memory types must not contain /
+    if (type !== 'memories' && name.includes('/')) {
       res.status(400).json({ error: 'Invalid element name' });
       return;
     }
 
     try {
-      // Direct file read for speed — the app.js expects raw markdown/YAML content
-      // for client-side parsing. MCP-AQL get_element returns a formatted summary
-      // which is too slow and loses the raw content. Direct read is safe here:
-      // it's the user's own local portfolio files, path-validated below.
-      const typeDir = join(portfolioDir, type);
-      const files = await readdir(typeDir);
+      let filePath: string;
 
-      const match = files.find(f => {
-        const base = f.replace(extname(f), '');
-        return base === name || f === name;
-      });
+      if (type === 'memories' && name.includes('/')) {
+        // Memory date-path: e.g., "2025-09-19/code-patterns.yaml"
+        const parts = name.split('/');
+        if (parts.length !== 2 || !parts[0].match(/^\d{4}-\d{2}-\d{2}$/) || isBackupOrCruft(parts[1])) {
+          res.status(400).json({ error: 'Invalid memory path' });
+          return;
+        }
+        filePath = join(portfolioDir, type, name);
+      } else {
+        const typeDir = join(portfolioDir, type);
+        const files = await readdir(typeDir);
 
-      if (!match) {
-        res.status(404).json({ error: `Element not found: ${type}/${name}` });
-        return;
+        // Find the file by name (with or without extension)
+        const match = files.find(f => {
+          const base = f.replace(extname(f), '');
+          return base === name || f === name;
+        });
+
+        if (!match) {
+          res.status(404).json({ error: `Element not found: ${type}/${name}` });
+          return;
+        }
+
+        filePath = join(portfolioDir, type, match);
       }
 
-      const filePath = join(typeDir, match);
+      // Verify resolved path stays within portfolio directory (defense in depth)
       const resolvedPath = resolve(filePath);
       if (!resolvedPath.startsWith(resolve(portfolioDir))) {
         res.status(400).json({ error: 'Path traversal detected' });
@@ -1003,20 +866,26 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       }
 
       const content = await readFile(filePath, 'utf-8');
+      const filename = filePath.split('/').pop() || name;
+      const validation = validateElementContent(filename, content, type);
 
-      // Validate through the security pipeline before serving
-      const validation = validateElementContent(match, content, type);
-      if (!validation.valid) {
-        res.status(422).json({
-          error: 'Content failed security validation',
-          reason: validation.rejection?.reason,
-          severity: validation.rejection?.severity,
-        });
-        return;
-      }
-
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.send(content);
+      // Return structured JSON: parsed metadata + body + raw content.
+      // The client renders metadata directly (no re-parsing), uses raw for
+      // the Raw toggle, Copy, and Download actions.
+      res.json({
+        metadata: validation.metadata,
+        body: validation.body,
+        raw: content,
+        type: type.endsWith('s') ? type.slice(0, -1) : type,
+        validation: {
+          status: validation.valid ? 'pass' : 'warn',
+          ...(validation.rejection && {
+            reason: validation.rejection.reason,
+            severity: validation.rejection.severity,
+            patterns: validation.rejection.patterns,
+          }),
+        },
+      });
     } catch {
       res.status(500).json({ error: `Failed to get element: ${type}/${name}` });
     }
@@ -1035,7 +904,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       const typeStats = await Promise.all(ELEMENT_TYPES.map(async (type) => {
         const opResult = asSingleResult(await handler.handleRead({
           operation: 'list_elements',
-          element_type: toSingularType(type),
+          params: { element_type: toSingularType(type), page: 1, pageSize: 1 },
         }));
         if (opResult.success && opResult.data) {
           const data = opResult.data as Record<string, unknown>;
@@ -1092,6 +961,58 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
   });
 
   /**
+   * GET /api/collection/content/*
+   * Proxies collection element content from GitHub, validates through the
+   * security pipeline, and returns structured JSON (same format as portfolio detail).
+   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
+   */
+  router.get('/collection/content/:prefix/:type/:name', async (req, res) => {
+    const elementPath = `${req.params.prefix}/${req.params.type}/${req.params.name}`;
+    if (!elementPath || elementPath.includes('..') || elementPath.includes('\\')) {
+      res.status(400).json({ error: 'Invalid element path' });
+      return;
+    }
+
+    const elementType = req.params.type;
+    const filename = req.params.name;
+
+    try {
+      const githubUrl = `https://raw.githubusercontent.com/DollhouseMCP/collection/main/${elementPath}`;
+      const response = await fetch(githubUrl);
+      if (!response.ok) {
+        res.status(response.status === 404 ? 404 : 502).json({
+          error: response.status === 404
+            ? `Collection element not found: ${elementPath}`
+            : `Failed to fetch from GitHub (HTTP ${response.status})`,
+        });
+        return;
+      }
+
+      const content = await response.text();
+      const validation = validateElementContent(filename, content, elementType);
+      const singularType = PLURAL_TO_SINGULAR[elementType] || (elementType.endsWith('s') ? elementType.slice(0, -1) : elementType);
+
+      res.json({
+        metadata: validation.metadata,
+        body: validation.body,
+        raw: content,
+        type: singularType,
+        validation: {
+          status: validation.valid ? 'pass' : 'warn',
+          ...(validation.rejection && {
+            reason: validation.rejection.reason,
+            severity: validation.rejection.severity,
+            patterns: validation.rejection.patterns,
+          }),
+        },
+      });
+    } catch (err) {
+      logger.error('[WebUI/Gateway] Failed to fetch collection content:', err);
+      res.status(502).json({ error: 'Failed to fetch collection element' });
+    }
+  });
+
+  /**
    * POST /api/install
    * Routes through install_collection_content MCP-AQL operation.
    * All validation, gatekeeper checks handled by the pipeline.
@@ -1141,9 +1062,6 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       res.status(500).json({ error: `Install failed: ${(err as Error).message}` });
     }
   });
-
-  // auto-dollhouse permission routes are registered separately via
-  // src/auto-dollhouse/permissionRoutes.ts when running in autonomous mode.
 
   return router;
 }

@@ -540,11 +540,6 @@ function safeParseYaml(content) {
         const res = await fetch(`/api/elements/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
-        // Capture validation scan results from response headers
-        el._validationStatus = res.headers.get('x-validation-status') || 'unknown';
-        el._validationReason = res.headers.get('x-validation-reason') ? decodeURIComponent(res.headers.get('x-validation-reason')) : null;
-        el._validationSeverity = res.headers.get('x-validation-severity') || null;
-        el._validationPatterns = res.headers.get('x-validation-patterns') ? decodeURIComponent(res.headers.get('x-validation-patterns')) : null;
       } else {
         const res = await fetch(`https://raw.githubusercontent.com/DollhouseMCP/collection/main/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -567,23 +562,6 @@ function safeParseYaml(content) {
 
       actions.appendChild(copyBtn);
       actions.appendChild(dlBtn);
-
-      // Security scan badge (local portfolio elements only)
-      if (el._local && el._validationStatus) {
-        const scanBadge = document.createElement('span');
-        scanBadge.className = 'scan-badge scan-badge--' + (el._validationStatus === 'pass' ? 'pass' : 'warn');
-        if (el._validationStatus === 'pass') {
-          scanBadge.textContent = '✓ Scan passed';
-          scanBadge.title = 'Content validated through security pipeline';
-        } else {
-          scanBadge.textContent = '⚠ Scan warning';
-          scanBadge.title = el._validationReason || 'Content flagged by security scanner';
-          if (el._validationPatterns) {
-            scanBadge.title += '\nPatterns: ' + el._validationPatterns;
-          }
-        }
-        actions.appendChild(scanBadge);
-      }
 
       if (el._local) {
         const submitBtn2 = document.createElement('button');
@@ -740,46 +718,25 @@ function safeParseYaml(content) {
     document.body.classList.add('modal-open');
     body.focus(); // focus body so arrow/Page/Home/End keys scroll content natively
 
-    // Deep link: update URL hash so this element can be linked directly
-    if (element.path) {
-      history.replaceState(null, '', '#element/' + element.path);
-    }
-
-    // Fetch full content as raw text — local API for portfolio, GitHub for collection
+    // Fetch element content — structured JSON for local, raw text for collection
     try {
-      let content;
+      let content;       // raw file content (for Raw view, Copy, Download)
+      let structured;    // { metadata, body, type, validation } when available
+
       if (element._content) {
         content = element._content;
       } else if (element._local) {
         const res = await fetch(`/api/elements/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        content = await res.text();
-        element._validationStatus = res.headers.get('x-validation-status') || 'unknown';
-        element._validationReason = res.headers.get('x-validation-reason') ? decodeURIComponent(res.headers.get('x-validation-reason')) : null;
-        element._validationSeverity = res.headers.get('x-validation-severity') || null;
-        element._validationPatterns = res.headers.get('x-validation-patterns') ? decodeURIComponent(res.headers.get('x-validation-patterns')) : null;
+        const data = await res.json();
+        structured = data;
+        content = data.raw;
       } else {
-        const res = await fetch(`https://raw.githubusercontent.com/DollhouseMCP/collection/main/${element.path}`);
+        const res = await fetch(`/api/collection/content/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        content = await res.text();
-      }
-
-      // Show security scan badge in modal toolbar
-      const toolbar = modal.querySelector('#modal-toolbar');
-      const existingScanBadge = toolbar ? toolbar.querySelector('.scan-badge') : null;
-      if (existingScanBadge) existingScanBadge.remove();
-      if (element._local && element._validationStatus && toolbar) {
-        const badge = document.createElement('span');
-        badge.className = 'scan-badge scan-badge--' + (element._validationStatus === 'pass' ? 'pass' : 'warn');
-        if (element._validationStatus === 'pass') {
-          badge.textContent = '✓ Scan passed';
-          badge.title = 'Content validated through security pipeline';
-        } else {
-          badge.textContent = '⚠ Scan warning';
-          badge.title = element._validationReason || 'Content flagged by security scanner';
-          if (element._validationPatterns) badge.title += '\nPatterns: ' + element._validationPatterns;
-        }
-        toolbar.appendChild(badge);
+        const data = await res.json();
+        structured = data;
+        content = data.raw;
       }
 
       const renderBtn = modal.querySelector('#btn-render');
@@ -788,6 +745,11 @@ function safeParseYaml(content) {
         if (modalShowRaw) {
           body.innerHTML = `<pre class="element-source"><code class="element-code language-yaml">${escapeHtml(content)}</code></pre>`;
           if (globalThis.hljs) body.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+        } else if (structured) {
+          body.innerHTML = renderStructuredDetail(structured);
+          body.querySelectorAll('pre code').forEach(b => {
+            if (globalThis.hljs) hljs.highlightElement(b);
+          });
         } else {
           body.innerHTML = renderDetailView(content, element.type);
           body.querySelectorAll('pre code').forEach(b => {
@@ -1363,6 +1325,108 @@ function safeParseYaml(content) {
     return html;
   }
 
+  /**
+   * Render element detail from pre-parsed structured JSON.
+   * The server has already validated and parsed the YAML — no client-side
+   * re-parsing needed. Uses the same rendering helpers as renderDetailView.
+   */
+  function renderStructuredDetail(data) {
+    const { metadata: fm, body, type } = data;
+    if (!fm || typeof fm !== 'object') {
+      return `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || JSON.stringify(data))}</code></pre>`;
+    }
+
+    // Memories: render all fields with the memory-aware renderer
+    if (type === 'memory') {
+      return renderMemoryView(data.raw);
+    }
+
+    let html = '';
+
+    // Validation badge
+    if (data.validation && data.validation.status === 'warn') {
+      html += `<div class="detail-validation-warn">Security scan: ${escapeHtml(data.validation.reason || 'warning')}</div>`;
+    }
+
+    // Created date
+    const createdVal = fm.created || fm.created_date;
+    if (createdVal) {
+      html += `<div class="detail-created"><span class="detail-created-label">Created</span><span class="detail-created-value">${escapeHtml(formatDate(createdVal))}</span></div>`;
+    }
+
+    // Core metadata
+    const coreFields = [
+      detailField('Author', fm.author),
+      detailField('Version', fm.version ? `v${fm.version}` : null),
+      detailField('Category', fm.category),
+      detailField('License', fm.license),
+      detailField('Age rating', fm.age_rating),
+      detailField('Modified', fm.modified ? formatDate(fm.modified) : null),
+    ].filter(Boolean).join('');
+    if (coreFields) html += detailSection('Details', coreFields);
+
+    // Tags
+    if (Array.isArray(fm.tags) && fm.tags.length) {
+      html += detailSection('Tags', detailPillList(fm.tags, 'pill-tag'));
+    }
+
+    // Triggers (personas)
+    if (Array.isArray(fm.triggers) && fm.triggers.length) {
+      html += detailSection('Trigger words', detailPillList(fm.triggers, 'pill-trigger'));
+    }
+
+    // Components (ensembles)
+    const compTypes = ['personas','skills','tools','templates','prompts','memories'];
+    const compEntries = compTypes
+      .filter(k => Array.isArray(fm[k]) && fm[k].length)
+      .map(k => `<div class="detail-field"><span class="detail-label">${capitalize(k)}</span><span class="detail-value">${detailPillList(fm[k])}</span></div>`)
+      .join('');
+    if (compEntries) html += detailSection('Components', compEntries);
+
+    // Ensemble coordination
+    if (fm.coordination_strategy) html += detailSection('Coordination', `<p class="detail-prose">${escapeHtml(fm.coordination_strategy)}</p>`);
+
+    // Use cases
+    if (Array.isArray(fm.use_cases) && fm.use_cases.length) {
+      const useCaseItems = fm.use_cases.map(u => `<li>${escapeHtml(u)}</li>`).join('');
+      html += detailSection('Use cases', `<ul class="detail-list">${useCaseItems}</ul>`);
+    }
+
+    // Instructions (non-agent/ensemble)
+    if (fm.instructions && type !== 'agent' && type !== 'ensemble') {
+      html += detailSection('Instructions', renderInstructions(fm.instructions));
+    }
+
+    // Gatekeeper (non-agent/ensemble)
+    if (fm.gatekeeper && typeof fm.gatekeeper === 'object' && type !== 'agent' && type !== 'ensemble') {
+      html += renderGatekeeperSection(fm.gatekeeper);
+    }
+
+    // Parameters (skills/tools)
+    html += renderDetailParameters(fm);
+
+    // Variables (templates)
+    html += renderDetailVariables(fm);
+
+    // Proficiency levels (skills)
+    if (fm.proficiency_levels && typeof fm.proficiency_levels === 'object') {
+      const levels = Object.entries(fm.proficiency_levels)
+        .map(([lvl, desc]) => detailField(capitalize(lvl), desc)).join('');
+      if (levels) html += detailSection('Proficiency levels', levels);
+    }
+
+    // Agent fields
+    if (type === 'agent') html += renderAgentSection(fm);
+
+    // Ensemble fields
+    if (type === 'ensemble') html += renderEnsembleSection(fm);
+
+    // Catch-all + body
+    html += renderDetailExtra(fm, body || '');
+
+    return html || `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || '')}</code></pre>`;
+  }
+
   function renderDetailView(content, type) { // NOSONAR - sequential independent metadata sections; complexity score is inflated by &&-guards on array existence checks
     if (type === 'memory') {
       // Portfolio memories are pure YAML — jsyaml.load succeeds.
@@ -1466,8 +1530,6 @@ function safeParseYaml(content) {
     if (!modal) return;
     modal.close();
     document.body.classList.remove('modal-open');
-    // Clear deep link hash
-    history.replaceState(null, '', location.pathname);
   }
 
   // ── Grid keyboard navigation ───────────────────────────────────────────────
