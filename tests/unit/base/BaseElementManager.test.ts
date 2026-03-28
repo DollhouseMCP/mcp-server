@@ -1061,6 +1061,43 @@ describe('BaseElementManager - Requirements & Contract', () => {
       );
     });
 
+    it('suppresses element:load:error event on repeated identical error', async () => {
+      // Create a manager with a real event dispatcher to track events
+      const dispatcher = new ElementEventDispatcher();
+      const loadErrorEvents: string[] = [];
+      dispatcher.on('element:load:error', (payload) => {
+        loadErrorEvents.push((payload as any).filePath);
+      });
+
+      class FailingDispatchManager extends TestElementManager {
+        protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {
+          if (data.name === 'FAIL_PARSE') throw new Error('Simulated parse failure');
+          return super.parseMetadata(data);
+        }
+      }
+
+      const dispatchManager = new FailingDispatchManager(
+        ElementType.SKILL, portfolioManager, fileLockManager,
+        fileOperationsService, validationRegistry,
+        { eventDispatcher: dispatcher },
+      );
+
+      await fs.writeFile(
+        path.join(elementsDir, 'dispatch-test.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // First load — event should fire
+      await expect(dispatchManager.load('dispatch-test.md')).rejects.toThrow();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(loadErrorEvents).toHaveLength(1);
+
+      // Second load — same error — event should NOT fire
+      await expect(dispatchManager.load('dispatch-test.md')).rejects.toThrow();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(loadErrorEvents).toHaveLength(1); // still 1, not 2
+    });
+
     it('re-logs error when the error reason changes', async () => {
       await fs.writeFile(
         path.join(elementsDir, 'bad-element.md'),
