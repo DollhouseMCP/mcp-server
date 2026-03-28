@@ -30,6 +30,12 @@ const MAX_PAYLOAD_SIZE = '1mb';
 const RATE_LIMIT_MAX = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** How often to check for stale sessions (ms) */
+const REAPER_INTERVAL_MS = 15_000;
+
+/** How long since last heartbeat before a session is considered dead (ms) */
+const SESSION_STALE_MS = 30_000;
+
 /**
  * Tracked session information.
  */
@@ -255,8 +261,25 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
   });
 
+  // Reaper: periodically check for stale sessions whose heartbeat has expired
+  const reaperInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      if (session.status !== 'active') continue;
+      if (session.isLeader) continue; // leader manages itself
+      const age = now - new Date(session.lastHeartbeat).getTime();
+      if (age > SESSION_STALE_MS) {
+        session.status = 'ended';
+        namePool.release(id);
+        logger.info(`[IngestRoutes] Reaped stale session: ${session.displayName} (${id}, last heartbeat ${Math.round(age / 1000)}s ago)`);
+        broadcasts.sessionBroadcast?.(session);
+      }
+    }
+  }, REAPER_INTERVAL_MS);
+  reaperInterval.unref();
+
   function getSessions(): SessionInfo[] {
-    return Array.from(sessions.values());
+    return Array.from(sessions.values()).filter(s => s.status === 'active');
   }
 
   function registerLeaderSession(sessionId: string, pid: number): void {
