@@ -9,6 +9,7 @@
 
 import express, { Router } from 'express';
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
 /**
@@ -86,11 +87,15 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       return;
     }
 
-    const { tool_name, input, platform } = req.body as {
+    const { tool_name: rawToolName, input, platform: rawPlatform } = req.body as {
       tool_name?: string;
       input?: Record<string, unknown>;
       platform?: string;
     };
+
+    // DMCP-SEC-004: Normalize user input to prevent Unicode-based attacks
+    const tool_name = rawToolName ? UnicodeValidator.normalize(rawToolName).normalizedContent : undefined;
+    const platform = rawPlatform ? UnicodeValidator.normalize(rawPlatform).normalizedContent : undefined;
 
     if (!tool_name) {
       res.json({ decision: 'allow' }); // fail open on bad input

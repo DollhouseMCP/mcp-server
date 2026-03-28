@@ -718,8 +718,16 @@ export function createApiRoutes(portfolioDir: string): Router {
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Normalize element type to singular form for MCP-AQL operations */
+const PLURAL_TO_SINGULAR: Record<string, string> = {
+  personas: 'persona',
+  skills: 'skill',
+  templates: 'template',
+  agents: 'agent',
+  memories: 'memory',
+  ensembles: 'ensemble',
+};
 function toSingularType(type: string): string {
-  return type.endsWith('s') ? type.slice(0, -1) : type;
+  return PLURAL_TO_SINGULAR[type] || (type.endsWith('s') ? type.slice(0, -1) : type);
 }
 
 /**
@@ -755,7 +763,10 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
 
   /**
    * GET /api/elements
-   * Routes through list_elements for each type, aggregates results.
+   * Uses direct filesystem listing to get accurate YAML frontmatter metadata
+   * (created, author, category) that list_elements MCP-AQL does not return.
+   * Same logic as the non-gateway route — MCP-AQL is used for all other endpoints.
+   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
    */
   router.get('/elements', async (req, res) => {
     try {
@@ -768,38 +779,63 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       const result: Record<string, unknown[]> = {};
       let totalCount = 0;
 
-      // Fetch all elements per type, paginating through results (max pageSize: 100)
-      const typeResults = await Promise.all(ELEMENT_TYPES.map(async (type) => {
-        const allItems: unknown[] = [];
-        let currentPage = 1;
-        let hasMore = true;
-        while (hasMore) {
-          const opResult = asSingleResult(await handler.handleRead({
-            operation: 'list_elements',
-            element_type: toSingularType(type), params: { page: currentPage, pageSize: 100 },
-          }));
-          if (opResult.success && opResult.data) {
-            const data = opResult.data as Record<string, unknown>;
-            const items = Array.isArray(data.items) ? data.items : [];
-            allItems.push(...items);
-            const pagination = data.pagination as Record<string, unknown> | undefined;
-            hasMore = pagination?.hasNextPage === true;
-            currentPage++;
-          } else {
-            hasMore = false;
+      for (const type of ELEMENT_TYPES) {
+        try {
+          if (type === 'memories') {
+            const memElements = await loadMemoriesFromIndex(portfolioDir);
+            result[type] = memElements;
+            totalCount += memElements.length;
+            continue;
           }
-        }
-        // Map MCP-AQL fields to what app.js expects
-        return { type, items: allItems.map((item: unknown) => ({
-          ...(item as Record<string, unknown>),
-          name: (item as Record<string, unknown>).element_name || (item as Record<string, unknown>).name,
-          filename: `${(item as Record<string, unknown>).element_name || (item as Record<string, unknown>).name}.md`,
-        })) };
-      }));
 
-      for (const { type, items } of typeResults) {
-        result[type] = items;
-        totalCount += items.length;
+          const typeDir = join(portfolioDir, type);
+          const dirStat = await stat(typeDir);
+          if (!dirStat.isDirectory()) continue;
+
+          const files = await readdir(typeDir);
+          const elements: unknown[] = [];
+
+          for (const file of files) {
+            if (isBackupOrCruft(file)) continue;
+            const ext = extname(file);
+            if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
+
+            try {
+              const filePath = join(typeDir, file);
+              const fileStat = await stat(filePath);
+              if (!fileStat.isFile()) continue;
+              if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
+
+              const content = await readFile(filePath, 'utf-8');
+              const validationResult = validateElementContent(file, content, type);
+
+              if (!validationResult.valid) {
+                logger.debug(`[WebUI/Gateway] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
+                continue;
+              }
+
+              const { metadata } = validationResult;
+              elements.push({
+                name: metadata.name || file.replace(ext, ''),
+                description: metadata.description || '',
+                type: type.slice(0, -1),
+                version: metadata.version || '1.0.0',
+                author: metadata.author || '',
+                category: metadata.category || '',
+                tags: metadata.tags || '',
+                created: metadata.created || '',
+                filename: file,
+              });
+            } catch (err) {
+              logger.debug(`[WebUI/Gateway] Failed to parse ${file}:`, err);
+            }
+          }
+
+          result[type] = elements;
+          totalCount += elements.length;
+        } catch {
+          result[type] = [];
+        }
       }
 
       if (wantPagination) {
@@ -863,6 +899,58 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       res.json({ type, elements: mapped, count: mapped.length });
     } catch {
       res.status(500).json({ error: `Failed to list ${type}` });
+    }
+  });
+
+  /**
+   * GET /api/elements/memories/:date/:file
+   * Memory content loading with date-partitioned paths.
+   * Must be registered before the generic :type/:name route.
+   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
+   */
+  router.get('/elements/memories/:date/:file', async (req, res) => {
+    const { date, file } = req.params;
+
+    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      res.status(400).json({ error: 'Invalid date format' });
+      return;
+    }
+    if (file.includes('..') || file.includes('/') || file.includes('\\') || isBackupOrCruft(file)) {
+      res.status(400).json({ error: 'Invalid filename' });
+      return;
+    }
+
+    try {
+      const filePath = join(portfolioDir, 'memories', date, file);
+      const resolvedPath = resolve(filePath);
+      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
+        res.status(400).json({ error: 'Path traversal detected' });
+        return;
+      }
+
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile() || fileStat.size > MAX_FILE_SIZE_BYTES) {
+        res.status(fileStat.isFile() ? 413 : 404).json({ error: fileStat.isFile() ? 'File too large' : 'Not found' });
+        return;
+      }
+
+      const content = await readFile(filePath, 'utf-8');
+      const validation = validateElementContent(file, content, 'memories');
+
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('X-Validation-Status', validation.valid ? 'pass' : 'warn');
+      if (!validation.valid && validation.rejection) {
+        res.setHeader('X-Validation-Reason', encodeURIComponent(validation.rejection.reason));
+        if (validation.rejection.severity) {
+          res.setHeader('X-Validation-Severity', validation.rejection.severity);
+        }
+        if (validation.rejection.patterns) {
+          res.setHeader('X-Validation-Patterns', encodeURIComponent(validation.rejection.patterns.join(', ')));
+        }
+      }
+      res.send(content);
+    } catch {
+      res.status(404).json({ error: `Memory not found: ${date}/${file}` });
     }
   });
 

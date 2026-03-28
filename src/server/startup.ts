@@ -32,7 +32,7 @@ import { FileLockManager } from '../security/fileLockManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
-import { VERSION } from '../constants/version.js';
+import { PACKAGE_VERSION as VERSION } from '../generated/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';

@@ -39,7 +39,7 @@ import * as os from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import { PostHog } from 'posthog-node';
 import { logger } from '../utils/logger.js';
-import { VERSION } from '../constants/version.js';
+import { PACKAGE_VERSION as VERSION } from '../generated/version.js';
 import type { InstallationEvent, TelemetryConfig, AutoLoadMetrics } from './types.js';
 import { detectMCPClient } from './clientDetector.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';

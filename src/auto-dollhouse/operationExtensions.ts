@@ -3,6 +3,9 @@
  *
  * Extracted from OperationRouter.ts, OperationSchema.ts, and MCPAQLTools.ts.
  * These definitions are registered at runtime when auto-dollhouse activates.
+ *
+ * DMCP-SEC-004: Static definitions only — no user input processing.
+ * UnicodeValidator normalization is applied in evaluatePermission.ts and permissionRoutes.ts.
  */
 
 /** Route definition for evaluate_permission */

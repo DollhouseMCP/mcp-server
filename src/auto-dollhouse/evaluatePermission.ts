@@ -10,6 +10,7 @@
 import type { RateLimiter } from '../utils/RateLimiter.js';
 import type { ToolClassificationResult, CliToolPolicyResult } from '../handlers/mcp-aql/policies/ToolClassification.js';
 import type { ActiveElement } from '../handlers/mcp-aql/policies/ElementPolicies.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 /** Dependencies injected from MCPAQLHandler */
 export interface EvaluatePermissionDeps {
@@ -67,12 +68,15 @@ export async function evaluatePermission(
   params: { tool_name?: unknown; input?: unknown; platform?: unknown },
   deps: EvaluatePermissionDeps,
 ): Promise<Record<string, unknown>> {
-  const toolName = String(params.tool_name || '');
+  // DMCP-SEC-004: Normalize user input to prevent Unicode-based attacks
+  const toolName = UnicodeValidator.normalize(String(params.tool_name || '')).normalizedContent;
   const inputRaw = params.input;
   const input = (inputRaw && typeof inputRaw === 'object')
     ? inputRaw as Record<string, unknown>
     : {};
-  const platform = typeof params.platform === 'string' ? params.platform : 'claude_code';
+  const platform = typeof params.platform === 'string'
+    ? UnicodeValidator.normalize(params.platform).normalizedContent
+    : 'claude_code';
 
   // Rate limit
   const rateStatus = deps.permissionPromptLimiter.checkLimit();
