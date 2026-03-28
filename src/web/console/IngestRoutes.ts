@@ -20,6 +20,7 @@ import type { Request, Response } from 'express';
 import type { UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { SessionNamePool } from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
 
 /** Maximum payload size for ingestion requests */
@@ -34,6 +35,8 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
  */
 export interface SessionInfo {
   sessionId: string;
+  /** Friendly puppet name (e.g., "Kermit", "Punch") */
+  displayName: string;
   pid: number;
   startedAt: string;
   lastHeartbeat: string;
@@ -97,6 +100,7 @@ export interface IngestRoutesResult {
 export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesResult {
   const router = Router();
   const sessions = new Map<string, SessionInfo>();
+  const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 
   // JSON body parsing with size limit
@@ -174,8 +178,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     switch (payload.event) {
       case 'started': {
+        const displayName = namePool.assign(payload.sessionId);
         const info: SessionInfo = {
           sessionId: payload.sessionId,
+          displayName,
           pid: payload.pid,
           startedAt: payload.startedAt || now,
           lastHeartbeat: now,
@@ -183,7 +189,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           isLeader: false,
         };
         sessions.set(payload.sessionId, info);
-        logger.info(`[IngestRoutes] Session registered: ${payload.sessionId} (pid=${payload.pid})`);
+        logger.info(`[IngestRoutes] Session registered: ${displayName} (${payload.sessionId}, pid=${payload.pid})`);
         broadcasts.sessionBroadcast?.(info);
         break;
       }
@@ -192,6 +198,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         if (existing) {
           existing.status = 'ended';
           existing.lastHeartbeat = now;
+          namePool.release(payload.sessionId);
           broadcasts.sessionBroadcast?.(existing);
         }
         break;
@@ -221,14 +228,17 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   }
 
   function registerLeaderSession(sessionId: string, pid: number): void {
+    const displayName = namePool.assign(sessionId);
     sessions.set(sessionId, {
       sessionId,
+      displayName,
       pid,
       startedAt: new Date().toISOString(),
       lastHeartbeat: new Date().toISOString(),
       status: 'active',
       isLeader: true,
     });
+    logger.info(`[IngestRoutes] Leader session: ${displayName} (${sessionId})`);
   }
 
   return { router, getSessions, registerLeaderSession };

@@ -32,12 +32,13 @@
     return SESSION_COLORS[Math.abs(hash) % SESSION_COLORS.length];
   }
 
-  // Truncate session ID for display
-  function shortSessionId(sessionId) {
-    if (!sessionId) return '';
-    // "session-lz5abc-de4f1234" -> "lz5abc"
-    const parts = sessionId.split('-');
-    return parts.length >= 2 ? parts[1] : sessionId.slice(0, 8);
+  // Get display name for a session (uses server-assigned puppet name, falls back to truncated ID)
+  function displayName(session) {
+    if (typeof session === 'object' && session.displayName) return session.displayName;
+    // Fallback for raw session ID string
+    const id = typeof session === 'string' ? session : session?.sessionId || '';
+    const parts = id.split('-');
+    return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
   // Update the header session indicator
@@ -58,14 +59,14 @@
     const badge = document.createElement('span');
     badge.className = 'session-count-badge';
     if (count === 1) {
-      badge.textContent = shortSessionId(active[0].sessionId);
+      badge.textContent = displayName(active[0]);
       badge.style.background = sessionColor(active[0].sessionId);
     } else {
       badge.textContent = count + ' sessions';
     }
     indicator.appendChild(badge);
     indicator.title = active.map(s =>
-      `${shortSessionId(s.sessionId)} (pid ${s.pid})${s.isLeader ? ' [leader]' : ''}`
+      `${displayName(s)} (pid ${s.pid})${s.isLeader ? ' [leader]' : ''}`
     ).join('\n');
   }
 
@@ -115,7 +116,7 @@
     for (const s of active) {
       const opt = document.createElement('option');
       opt.value = s.sessionId;
-      const label = shortSessionId(s.sessionId);
+      const label = displayName(s);
       opt.textContent = label + (s.isLeader ? ' (leader)' : '');
       opt.style.color = sessionColor(s.sessionId);
       if (s.sessionId === current) opt.selected = true;
@@ -142,7 +143,7 @@
   window.DollhouseSessions = {
     getFilterSessionId: function() { return filterSessionId; },
     sessionColor: sessionColor,
-    shortSessionId: shortSessionId,
+    displayName: displayName,
     getSessions: function() { return sessions; },
   };
 
