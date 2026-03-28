@@ -56,18 +56,62 @@
       return;
     }
 
-    const badge = document.createElement('span');
-    badge.className = 'session-count-badge';
-    if (count === 1) {
-      badge.textContent = displayName(active[0]);
-      badge.style.background = sessionColor(active[0].sessionId);
+    // Badge shows names for 1-2 sessions, count for 3+
+    var badgeContainer = document.createElement('div');
+    badgeContainer.className = 'session-badge-container';
+
+    if (count <= 2) {
+      for (var i = 0; i < active.length; i++) {
+        var badge = document.createElement('span');
+        badge.className = 'session-count-badge';
+        badge.textContent = displayName(active[i]);
+        badge.style.background = sessionColor(active[i].sessionId);
+        badge.dataset.sessionId = active[i].sessionId;
+        badgeContainer.appendChild(badge);
+      }
     } else {
-      badge.textContent = count + ' sessions';
+      var countBadge = document.createElement('span');
+      countBadge.className = 'session-count-badge';
+      countBadge.textContent = count + ' sessions';
+      badgeContainer.appendChild(countBadge);
     }
-    indicator.appendChild(badge);
-    indicator.title = active.map(s =>
-      `${displayName(s)} (pid ${s.pid})${s.isLeader ? ' [leader]' : ''}`
-    ).join('\n');
+
+    // Dropdown (always available on click)
+    var dropdown = document.createElement('div');
+    dropdown.className = 'session-dropdown';
+    dropdown.id = 'session-dropdown';
+    dropdown.hidden = true;
+
+    for (var j = 0; j < active.length; j++) {
+      var item = document.createElement('div');
+      item.className = 'session-dropdown-item';
+      var dot = document.createElement('span');
+      dot.className = 'session-dot';
+      dot.style.background = sessionColor(active[j].sessionId);
+      item.appendChild(dot);
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'session-dropdown-name';
+      nameSpan.textContent = displayName(active[j]);
+      item.appendChild(nameSpan);
+      var roleSpan = document.createElement('span');
+      roleSpan.className = 'session-dropdown-role';
+      roleSpan.textContent = active[j].isLeader ? 'leader' : 'follower';
+      item.appendChild(roleSpan);
+      dropdown.appendChild(item);
+    }
+
+    badgeContainer.appendChild(dropdown);
+    indicator.appendChild(badgeContainer);
+
+    // Toggle dropdown on click
+    badgeContainer.addEventListener('click', function(e) {
+      e.stopPropagation();
+      dropdown.hidden = !dropdown.hidden;
+    });
+    // Close on outside click
+    document.addEventListener('click', function() {
+      dropdown.hidden = true;
+    });
   }
 
   // Inject session filter into log viewer filter bar
