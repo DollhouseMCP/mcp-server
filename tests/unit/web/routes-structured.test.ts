@@ -235,5 +235,133 @@ version: 1.0.0
       const structured = await request(structuredApp).get('/api/elements/memories');
       expect(plain.body.count).toBe(structured.body.count);
     });
+
+    it('should use filesystem scan, not MCP-AQL, for per-type listing', async () => {
+      // Gateway per-type route uses scanElementDirectory (filesystem),
+      // not handler.handleRead (MCP-AQL). The mock handler has no handleRead,
+      // so if the route tried to use it, it would throw.
+      const res = await request(structuredApp).get('/api/elements/personas');
+      expect(res.status).toBe(200);
+      expect(res.body.count).toBe(1);
+      expect(res.body.elements[0].name).toBe('Alex Sterling');
+    });
+  });
+
+  // ── Collection content proxy ─────────────────────────────────────────────
+
+  describe('Collection content proxy', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('should return structured JSON from GitHub content', async () => {
+      const mockContent = `---
+name: Community Skill
+description: A skill from the collection
+version: 1.0.0
+---
+# Community Skill
+Do community things.
+`;
+      globalThis.fetch = (() => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(mockContent),
+      })) as unknown as typeof globalThis.fetch;
+
+      const res = await request(structuredApp).get('/api/collection/content/library/skills/community-skill.md');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('metadata');
+      expect(res.body).toHaveProperty('body');
+      expect(res.body).toHaveProperty('raw');
+      expect(res.body).toHaveProperty('type');
+      expect(res.body).toHaveProperty('validation');
+      expect(res.body.metadata.name).toBe('Community Skill');
+      expect(res.body.type).toBe('skill');
+      expect(res.body.raw).toBe(mockContent);
+      expect(res.body.validation.status).toBe('pass');
+    });
+
+    it('should return 404 for missing collection element', async () => {
+      globalThis.fetch = (() => Promise.resolve({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('Not Found'),
+      })) as unknown as typeof globalThis.fetch;
+
+      const res = await request(structuredApp).get('/api/collection/content/library/skills/nonexistent.md');
+      expect(res.status).toBe(404);
+    });
+
+    it('should return 502 for GitHub server errors', async () => {
+      globalThis.fetch = (() => Promise.resolve({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Server Error'),
+      })) as unknown as typeof globalThis.fetch;
+
+      const res = await request(structuredApp).get('/api/collection/content/library/skills/broken.md');
+      expect(res.status).toBe(502);
+    });
+
+    it('should reject invalid element types', async () => {
+      const res = await request(structuredApp).get('/api/collection/content/library/hacking/evil.md');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid element type');
+    });
+
+    it('should reject path traversal', async () => {
+      const res = await request(structuredApp).get('/api/collection/content/library/personas/..%2F..%2Fetc%2Fpasswd');
+      expect(res.status).toBe(400);
+    });
+
+    it('should singularize type correctly for memories', async () => {
+      const mockContent = 'name: test-memory\ndescription: A memory\n';
+      globalThis.fetch = (() => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(mockContent),
+      })) as unknown as typeof globalThis.fetch;
+
+      const res = await request(structuredApp).get('/api/collection/content/library/memories/test-memory.yaml');
+      expect(res.status).toBe(200);
+      expect(res.body.type).toBe('memory'); // not 'memorie'
+    });
+  });
+
+  // ── Gateway install endpoint ─────────────────────────────────────────────
+
+  describe('Gateway install endpoint', () => {
+    it('should reject missing required fields', async () => {
+      const res = await request(structuredApp)
+        .post('/api/install')
+        .send({ name: 'test' }); // missing path and type
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Missing required fields');
+    });
+
+    it('should reject path traversal in element path', async () => {
+      const res = await request(structuredApp)
+        .post('/api/install')
+        .send({ path: '../../../etc/passwd', name: 'evil', type: 'personas' });
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject path traversal in name', async () => {
+      const res = await request(structuredApp)
+        .post('/api/install')
+        .send({ path: 'library/personas/test.md', name: '../../../evil', type: 'personas' });
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject invalid path characters', async () => {
+      const res = await request(structuredApp)
+        .post('/api/install')
+        .send({ path: 'library/personas/test;rm -rf.md', name: 'test', type: 'personas' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid element path characters');
+    });
   });
 });
