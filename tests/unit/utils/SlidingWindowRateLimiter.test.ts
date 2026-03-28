@@ -3,6 +3,7 @@
  * Previously duplicated in 3 files; now shared from src/utils/.
  */
 
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { SlidingWindowRateLimiter } from '../../../src/utils/SlidingWindowRateLimiter.js';
 
 describe('SlidingWindowRateLimiter', () => {

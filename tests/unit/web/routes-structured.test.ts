@@ -9,6 +9,7 @@
  * - raw field in structured response matches plain text response
  */
 
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';

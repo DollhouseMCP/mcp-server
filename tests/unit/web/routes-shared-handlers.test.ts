@@ -4,6 +4,7 @@
  * isBackupOrCruft, and loadMemoriesFromIndex through the HTTP routes.
  */
 
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
