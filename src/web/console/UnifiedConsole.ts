@@ -115,15 +115,15 @@ async function startAsLeader(
     };
   }
 
-  // Mount ingestion routes for follower events
-  // Note: This requires the Express app, which we get by importing server.ts internals
-  // For now, we create the ingest routes and they'll be mounted via the server's Express app
+  // Mount ingestion routes for follower events on the Express app
   let ingestResult: IngestRoutesResult | undefined;
-  if (webResult.logBroadcast) {
+  if (webResult.logBroadcast && webResult.app) {
     ingestResult = createIngestRoutes({
       logBroadcast: webResult.logBroadcast,
       metricsOnSnapshot: webResult.metricsOnSnapshot,
     });
+    webResult.app.use(ingestResult.router);
+    logger.info('[UnifiedConsole] Ingestion routes mounted for follower event forwarding');
 
     // Register the leader as a session
     ingestResult.registerLeaderSession(options.sessionId, process.pid);
