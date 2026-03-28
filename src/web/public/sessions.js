@@ -137,8 +137,12 @@
     countEl.className = 'session-box-count';
     var labelEl = document.createElement('span');
     labelEl.className = 'session-box-label';
+    var arrow = document.createElement('span');
+    arrow.className = 'session-box-arrow';
+    arrow.textContent = '\u25BE';
     box.appendChild(countEl);
     box.appendChild(labelEl);
+    box.appendChild(arrow);
 
     // Dropdown
     var dropdown = document.createElement('div');
