@@ -26,6 +26,7 @@ function normalizeInput(input: string): string {
   return input.normalize('NFC');
 }
 import { ContentValidator } from '../security/contentValidator.js';
+import { SlidingWindowRateLimiter } from '../utils/SlidingWindowRateLimiter.js';
 
 const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'] as const;
 
@@ -198,30 +199,6 @@ async function loadMemoriesFromIndex(portfolioDir: string): Promise<unknown[]> {
   } catch {
     // Fall back to empty if no index
     return [];
-  }
-}
-
-/**
- * Simple sliding-window rate limiter.
- * Tracks timestamps of recent requests and evicts entries older than the window.
- */
-class SlidingWindowRateLimiter {
-  private timestamps: number[] = [];
-  constructor(
-    private readonly maxRequests: number,
-    private readonly windowMs: number,
-  ) {}
-
-  /** Returns true if the request is allowed, false if rate-limited. */
-  tryAcquire(): boolean {
-    const now = Date.now();
-    // Evict entries outside the window
-    this.timestamps = this.timestamps.filter(t => now - t < this.windowMs);
-    if (this.timestamps.length >= this.maxRequests) {
-      return false;
-    }
-    this.timestamps.push(now);
-    return true;
   }
 }
 
