@@ -32,6 +32,9 @@ const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 
 /** Max file size for element reads (1 MB) */
 const MAX_FILE_SIZE_BYTES = 1_048_576;
 
+/** Valid element file extensions */
+const VALID_EXTENSIONS = new Set(['.md', '.yaml', '.yml']);
+
 /** Check if a filename is a backup or cruft file */
 function isBackupOrCruft(filename: string): boolean {
   if (filename.startsWith('.')) return true;
@@ -193,7 +196,7 @@ export function createApiRoutes(portfolioDir: string): Router {
             if (isBackupOrCruft(file)) continue;
 
             const ext = extname(file);
-            if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
+            if (!VALID_EXTENSIONS.has(ext)) continue;
 
             try {
               const filePath = join(typeDir, file);
@@ -286,7 +289,7 @@ export function createApiRoutes(portfolioDir: string): Router {
         if (isBackupOrCruft(file)) continue;
 
         const ext = extname(file);
-        if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
+        if (!VALID_EXTENSIONS.has(ext)) continue;
 
         try {
           const filePath = join(typeDir, file);
@@ -442,7 +445,7 @@ export function createApiRoutes(portfolioDir: string): Router {
           const files = await readdir(typeDir);
           const count = files.filter(f =>
             !isBackupOrCruft(f) &&
-            ['.md', '.yaml', '.yml'].includes(extname(f))
+            VALID_EXTENSIONS.has(extname(f))
           ).length;
           stats[type] = count;
           total += count;
@@ -713,7 +716,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
           for (const file of files) {
             if (isBackupOrCruft(file)) continue;
             const ext = extname(file);
-            if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
+            if (!VALID_EXTENSIONS.has(ext)) continue;
 
             try {
               const filePath = join(typeDir, file);
@@ -789,7 +792,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       }));
 
       if (!opResult.success) {
-        res.status(500).json({ error: opResult.error || `Failed to list ${type}` });
+        res.status(502).json({ error: opResult.error || `Failed to list ${type}` });
         return;
       }
 
