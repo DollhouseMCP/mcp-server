@@ -216,5 +216,6 @@ export class SecurityMonitor {
   static clearAllEventsForTesting(): void {
     this.events.clear();
     this.eventCount = 0;
+    this.recentEventKeys.clear();
   }
 }
