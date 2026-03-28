@@ -685,15 +685,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
   ): void {
     const errorMsg = error instanceof Error ? error.message : String(error);
     failedLoads.push({ file, error: errorMsg });
-    // Only log security event if load() didn't suppress this as a repeat
-    if (!this.isLoadErrorSuppressed(file)) {
-      SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
-        severity: 'LOW',
-        source: 'MemoryManager.list',
-        details: `Failed to load ${file}: ${error}`
-      });
-    }
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED,
+      severity: 'LOW',
+      source: 'MemoryManager.list',
+      details: `Failed to load ${file}: ${error}`
+    });
   }
 
   /**
