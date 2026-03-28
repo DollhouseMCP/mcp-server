@@ -302,4 +302,74 @@ describe('SecurityMonitor', () => {
       expect(remainingEvents[0].details).toBe('Recent event');
     });
   });
+
+  describe('Event deduplication', () => {
+    it('should suppress repeated identical events', () => {
+      const event = {
+        type: 'CONTENT_INJECTION_ATTEMPT' as const,
+        severity: 'HIGH' as const,
+        source: 'content_validation',
+        details: 'Detected pattern: Path traversal attempt',
+      };
+
+      SecurityMonitor.logSecurityEvent(event);
+      SecurityMonitor.logSecurityEvent(event);
+      SecurityMonitor.logSecurityEvent(event);
+
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(1);
+    });
+
+    it('should not suppress events with different details', () => {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'content_validation',
+        details: 'Pattern A',
+      });
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'content_validation',
+        details: 'Pattern B',
+      });
+
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(2);
+    });
+
+    it('should not suppress events with different types', () => {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'HIGH',
+        source: 'test',
+        details: 'Same details',
+      });
+      SecurityMonitor.logSecurityEvent({
+        type: 'PATH_TRAVERSAL_ATTEMPT',
+        severity: 'HIGH',
+        source: 'test',
+        details: 'Same details',
+      });
+
+      const events = SecurityMonitor.getRecentEvents();
+      expect(events).toHaveLength(2);
+    });
+
+    it('should handle high-volume repeated events without memory growth', () => {
+      // Simulate element load flooding — same event 500 times
+      for (let i = 0; i < 500; i++) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          severity: 'HIGH',
+          source: 'content_validation',
+          details: 'Detected pattern: Instruction override',
+        });
+      }
+
+      // Should only have 1 event stored, not 500
+      const events = SecurityMonitor.getEventsByType('CONTENT_INJECTION_ATTEMPT');
+      expect(events).toHaveLength(1);
+    });
+  });
 });

@@ -7,6 +7,7 @@
 
 import { logger } from '../utils/logger.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
+import { EventDeduplicator } from '../utils/EventDeduplicator.js';
 
 export interface SecurityEvent {
   type: 'CONTENT_INJECTION_ATTEMPT' | 'YAML_INJECTION_ATTEMPT' | 'PATH_TRAVERSAL_ATTEMPT' |
@@ -69,6 +70,7 @@ export class SecurityMonitor {
   private static eventCount = 0;
   private static events = new EvictingQueue<SecurityLogEntry>(1000);
   private static logListener?: (entry: SecurityLogEntry) => void;
+  private static readonly dedup = new EventDeduplicator(60_000, 500);
 
   static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
     this.logListener = fn;
@@ -76,9 +78,14 @@ export class SecurityMonitor {
   }
 
   /**
-   * Logs a security event
+   * Logs a security event, suppressing repeated identical events within the dedup window.
    */
   static logSecurityEvent(event: SecurityEvent): void {
+    // Deduplicate: same type + source + details within 60s window = suppress
+    if (this.dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
+      return;
+    }
+
     const logEntry: SecurityLogEntry = {
       ...event,
       timestamp: new Date().toISOString(),
@@ -92,7 +99,7 @@ export class SecurityMonitor {
     // In MCP servers, we cannot write to stderr/stdout as it breaks the JSON-RPC protocol
     // Security events are stored in memory and can be retrieved via API
     // Only send critical alerts via the proper channel
-    
+
     if (event.severity === 'CRITICAL') {
       this.sendSecurityAlert(logEntry);
     }
@@ -197,5 +204,6 @@ export class SecurityMonitor {
   static clearAllEventsForTesting(): void {
     this.events.clear();
     this.eventCount = 0;
+    this.dedup.clear();
   }
 }
