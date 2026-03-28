@@ -1,6 +1,6 @@
 import os from "os";
 import * as path from "path";
-import { VERSION } from "../constants/version.js";
+import { PACKAGE_VERSION as VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
 import { RelationshipManager } from "../portfolio/RelationshipManager.js";
