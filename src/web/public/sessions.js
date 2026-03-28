@@ -32,9 +32,12 @@
     return days + 'd ' + remainHrs + 'h';
   }
 
+  /** NFC-normalize a string safely */
+  function nfc(s) { try { return s.normalize('NFC'); } catch(e) { return s; } }
+
   function displayName(session) {
-    if (typeof session === 'object' && session.displayName) return session.displayName;
-    var id = typeof session === 'string' ? session : (session && session.sessionId) || '';
+    if (typeof session === 'object' && session.displayName) return nfc(session.displayName);
+    var id = typeof session === 'string' ? nfc(session) : nfc((session && session.sessionId) || '');
     var parts = id.split('-');
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }

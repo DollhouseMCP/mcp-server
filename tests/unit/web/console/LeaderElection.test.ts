@@ -5,10 +5,7 @@
  * stale detection, PID liveness checks, and claim mechanics.
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { join } from 'node:path';
-import { mkdir, readFile, writeFile, unlink, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { describe, it, expect } from '@jest/globals';
 
 // We test the exported utility functions directly rather than mocking fs,
 // using a real temp directory for isolation.

@@ -234,11 +234,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   });
 
   // Additional routers (e.g., unified console ingest routes) — must mount before SPA fallback
-  if (options.additionalRouters) {
-    for (const router of options.additionalRouters) {
-      app.use(router);
-    }
-  }
+  options.additionalRouters?.forEach(router => app.use(router));
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');

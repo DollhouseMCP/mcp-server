@@ -104,10 +104,20 @@ const ALL_PUPPET_NAMES: readonly string[] = [
 /** Names that can never be assigned to a leader session */
 const FOLLOWER_ONLY_NAMES = new Set(['Punch']);
 
-/** Fisher-Yates shuffle using crypto random bytes */
+/** Unbiased random integer in [0, max) using rejection sampling */
+function randomIntUnbiased(max: number): number {
+  const limit = Math.floor(0x100000000 / max) * max;
+  let val: number;
+  do {
+    val = randomBytes(4).readUInt32BE(0);
+  } while (val >= limit);
+  return val % max;
+}
+
+/** Fisher-Yates shuffle using unbiased crypto random */
 function shuffleArray<T>(arr: T[]): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
+    const j = randomIntUnbiased(i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -197,9 +207,9 @@ interface CooldownEntry {
  */
 export class SessionNamePool {
   /** Names currently assigned to active sessions: sessionId → name */
-  private assigned = new Map<string, string>();
+  private readonly assigned = new Map<string, string>();
   /** Reverse lookup: name → sessionId */
-  private nameToSession = new Map<string, string>();
+  private readonly nameToSession = new Map<string, string>();
   /** Names in cooldown after session end */
   private cooldown: CooldownEntry[] = [];
 

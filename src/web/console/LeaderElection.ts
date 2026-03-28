@@ -143,6 +143,7 @@ export async function deleteLeaderLock(): Promise<void> {
  * @returns Election result with role and leader info
  */
 export async function electLeader(sessionId: string, port: number): Promise<ElectionResult> {
+  try { sessionId = sessionId.normalize('NFC'); } catch { /* use raw */ }
   const existingLock = await readLeaderLock();
 
   if (existingLock && !isLockStale(existingLock)) {
@@ -187,7 +188,11 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
   logger.warn('[LeaderElection] Lock vanished after failed claim. Retrying.');
   const retryInfo: ConsoleLeaderInfo = { ...myInfo, heartbeat: new Date().toISOString() };
   const retryClaimed = await claimLeadership(retryInfo);
-  return { role: retryClaimed ? 'leader' : 'follower', leaderInfo: retryInfo };
+  if (retryClaimed) {
+    return { role: 'leader', leaderInfo: retryInfo };
+  }
+  const actualLeader = await readLeaderLock();
+  return { role: 'follower', leaderInfo: actualLeader ?? retryInfo };
 }
 
 /**

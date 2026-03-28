@@ -24,7 +24,7 @@ import {
   registerLeaderCleanup,
   type ElectionResult,
 } from './LeaderElection.js';
-import { createIngestRoutes, type IngestRoutesResult } from './IngestRoutes.js';
+import { createIngestRoutes } from './IngestRoutes.js';
 import {
   LeaderForwardingLogSink,
   SessionHeartbeat,

@@ -41,7 +41,7 @@ const REQUEST_TIMEOUT_MS = 5_000;
  * ILogSink that batch-POSTs entries to the leader's /api/ingest/logs.
  */
 export class LeaderForwardingLogSink implements ILogSink {
-  private buffer: UnifiedLogEntry[] = [];
+  private readonly buffer: UnifiedLogEntry[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private backoffMs = INITIAL_BACKOFF_MS;
   private flushing = false;
@@ -50,6 +50,7 @@ export class LeaderForwardingLogSink implements ILogSink {
     private readonly leaderUrl: string,
     private readonly sessionId: string,
   ) {
+    try { this.sessionId = sessionId.normalize('NFC'); } catch { /* use raw */ }
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
     this.flushTimer.unref();
   }
@@ -104,16 +105,24 @@ export class LeaderForwardingLogSink implements ILogSink {
       if (response.ok) {
         this.backoffMs = INITIAL_BACKOFF_MS;
       } else {
-        // Put entries back at the front
-        this.buffer.unshift(...batch);
+        this.requeueBatch(batch);
         this.scheduleRetry();
       }
     } catch {
-      // Network failure — put entries back and backoff
-      this.buffer.unshift(...batch);
+      this.requeueBatch(batch);
       this.scheduleRetry();
     } finally {
       this.flushing = false;
+    }
+  }
+
+  private requeueBatch(batch: UnifiedLogEntry[]): void {
+    const spaceAvailable = MAX_BUFFER_SIZE - this.buffer.length;
+    if (spaceAvailable > 0) {
+      const toRequeue = batch.slice(0, spaceAvailable);
+      this.buffer.unshift(...toRequeue);
+    } else {
+      logger.warn(`[ForwardingSink] Buffer full (${MAX_BUFFER_SIZE}), dropping ${batch.length} entries`);
     }
   }
 
