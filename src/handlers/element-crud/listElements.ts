@@ -237,6 +237,8 @@ export interface ListElementItem {
   type: string;
   version?: string;
   tags?: string[];
+  created?: string;
+  author?: string;
 }
 
 /**
@@ -410,6 +412,8 @@ function formatStructuredResult(
       type,
       version: item.metadata?.version || item.version,
       tags: item.metadata?.tags,
+      created: item.metadata?.created || '',
+      author: item.metadata?.author || '',
     })),
     pagination: {
       page: pagination.page,

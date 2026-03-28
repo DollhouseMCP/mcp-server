@@ -193,7 +193,11 @@ export class MetadataService {
 
     // Created date (YYYY-MM-DD format, matching PersonaManager line 178)
     if (opts.setCreated && !normalized.created) {
-      normalized.created = this.generateDate('date-only');
+      if (normalized.created_date) {
+        normalized.created = String(normalized.created_date).split('T')[0];
+      } else {
+        normalized.created = this.generateDate('date-only');
+      }
     }
 
     // Modified date (ISO 8601 full format, matching AgentManager line 231)

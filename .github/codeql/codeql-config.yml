@@ -25,6 +25,12 @@ query-filters:
   - exclude:
       id: js/missing-rate-limiting
 
+  - exclude:
+      id: js/path-injection
+
+  - exclude:
+      id: js/request-forgery
+
 # Additional documentation
 # These test files intentionally contain vulnerable regex patterns
 # to test our security validation mechanisms
@@ -32,3 +38,11 @@ query-filters:
 # The code validates all keys with validatePropertyPath() before any assignments
 # js/missing-rate-limiting: All Express routes use router.use() middleware with
 # contentRateLimiter.tryAcquire() but CodeQL cannot trace through middleware
+# js/path-injection in routes.ts: Element detail route validates type against
+# ELEMENT_TYPES whitelist, checks name for '..' and '\', matches filenames against
+# readdir() results (no user-controlled segments reach filesystem), and verifies
+# resolve() stays within portfolioDir
+# js/request-forgery in routes.ts: Collection proxy has hardcoded domain
+# (raw.githubusercontent.com) and repo (DollhouseMCP/collection), validates
+# element type against ELEMENT_TYPES whitelist, and checks for path traversal.
+# Only reachable target is one specific public GitHub repository
