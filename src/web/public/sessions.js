@@ -10,7 +10,7 @@
 (function() {
   'use strict';
 
-  var SESSION_POLL_INTERVAL = 10000;
+  var SESSION_POLL_INTERVAL = 5000;
   var sessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;

@@ -31,10 +31,10 @@ const RATE_LIMIT_MAX = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** How often to check for stale sessions (ms) */
-const REAPER_INTERVAL_MS = 15_000;
+const REAPER_INTERVAL_MS = 5_000;
 
 /** How long since last heartbeat before a session is considered dead (ms) */
-const SESSION_STALE_MS = 30_000;
+const SESSION_STALE_MS = 15_000;
 
 /**
  * Tracked session information.
