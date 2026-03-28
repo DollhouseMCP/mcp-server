@@ -18,6 +18,7 @@
  * @since v2.0.0 - Issue #598
  */
 
+import { randomBytes } from 'node:crypto';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
@@ -90,7 +91,7 @@ function resolveSessionId(): string {
   if (!envValue) {
     // Generate a unique session ID per server instance to prevent
     // cross-session activation leaking (issue #33)
-    const id = `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `session-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     logger.info(`[ActivationStore] No DOLLHOUSE_SESSION_ID set — generated '${id}'`);
     return id;
   }

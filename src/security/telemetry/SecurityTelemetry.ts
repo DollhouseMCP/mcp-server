@@ -23,6 +23,15 @@ export interface AttackVector {
   blockedPatterns: string[];
 }
 
+export interface DeduplicationStats {
+  /** Number of repeated events that were suppressed */
+  suppressedEvents: number;
+  /** Number of unique events that passed through */
+  uniqueEvents: number;
+  /** Current number of keys in the dedup cache */
+  cacheSize: number;
+}
+
 export interface SecurityMetrics {
   totalBlockedAttempts: number;
   uniqueAttackVectors: number;
@@ -32,6 +41,7 @@ export interface SecurityMetrics {
   lowSeverityBlocked: number;
   topAttackVectors: AttackVector[];
   attacksPerHour: number[];
+  deduplication: DeduplicationStats;
   lastUpdated: string;
 }
 
@@ -45,6 +55,12 @@ export interface AttackTelemetryEntry {
   metadata?: Record<string, any>;
 }
 
+/** Deduplication window: suppress identical log listener calls within this period */
+const DEDUP_WINDOW_MS = 60_000;
+
+/** Maximum dedup cache entries before LRU eviction */
+const DEDUP_MAX_SIZE = 500;
+
 /**
  * Security Telemetry Service
  *
@@ -56,7 +72,7 @@ export class SecurityTelemetry {
   private readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
   private readonly attackVectorMap: Map<string, AttackVector> = new Map();
   private logListener?: (entry: AttackTelemetryEntry) => void;
-  private readonly logDedup = new EventDeduplicator(60_000, 500);
+  private readonly logDedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
 
   addLogListener(fn: (entry: AttackTelemetryEntry) => void): () => void {
     this.logListener = fn;
@@ -184,7 +200,22 @@ export class SecurityTelemetry {
       lowSeverityBlocked: lowCount,
       topAttackVectors: topVectors,
       attacksPerHour,
+      deduplication: this.getDeduplicationStats(),
       lastUpdated: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Returns deduplication statistics for observability.
+   * Tracks how many repeated log listener calls were suppressed
+   * vs. how many unique events passed through.
+   */
+  getDeduplicationStats(): DeduplicationStats {
+    const stats = this.logDedup.getStats();
+    return {
+      suppressedEvents: stats.suppressedCount,
+      uniqueEvents: stats.processedCount,
+      cacheSize: stats.cacheSize,
     };
   }
 
@@ -261,6 +292,11 @@ Severity Breakdown:
 - High: ${metrics.highSeverityBlocked}
 - Medium: ${metrics.mediumSeverityBlocked}
 - Low: ${metrics.lowSeverityBlocked}
+
+Deduplication:
+- Suppressed (repeated): ${metrics.deduplication.suppressedEvents}
+- Unique (passed through): ${metrics.deduplication.uniqueEvents}
+- Cache entries: ${metrics.deduplication.cacheSize}
 
 Top Attack Vectors:
 ${metrics.topAttackVectors.map((v, i) =>
