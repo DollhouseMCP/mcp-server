@@ -196,11 +196,13 @@
 
         var dot = document.createElement('span');
         dot.className = 'session-dot';
+        if (s.color) dot.style.background = s.color;
         item.appendChild(dot);
 
         var nameEl = document.createElement('span');
         nameEl.className = 'session-dropdown-name';
         nameEl.textContent = displayName(s);
+        if (s.color) nameEl.style.color = s.color;
         item.appendChild(nameEl);
 
         var uptimeEl = document.createElement('span');

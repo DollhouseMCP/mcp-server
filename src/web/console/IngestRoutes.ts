@@ -37,6 +37,8 @@ export interface SessionInfo {
   sessionId: string;
   /** Friendly puppet name (e.g., "Kermit", "Punch") */
   displayName: string;
+  /** Canonical hex color for this puppet character */
+  color: string;
   pid: number;
   startedAt: string;
   lastHeartbeat: string;
@@ -179,9 +181,11 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     switch (payload.event) {
       case 'started': {
         const displayName = namePool.assign(payload.sessionId);
+        const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
         const info: SessionInfo = {
           sessionId: payload.sessionId,
           displayName,
+          color,
           pid: payload.pid,
           startedAt: payload.startedAt || now,
           lastHeartbeat: now,
@@ -229,9 +233,11 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
   function registerLeaderSession(sessionId: string, pid: number): void {
     const displayName = namePool.assign(sessionId, true);
+    const color = namePool.getColor(sessionId) ?? '#3b82f6';
     sessions.set(sessionId, {
       sessionId,
       displayName,
+      color,
       pid,
       startedAt: new Date().toISOString(),
       lastHeartbeat: new Date().toISOString(),

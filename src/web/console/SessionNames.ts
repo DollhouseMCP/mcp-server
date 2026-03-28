@@ -99,6 +99,57 @@ function shuffleArray<T>(arr: T[]): T[] {
 /** Shuffled copy of the name pool — randomized on each process start */
 const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
 
+/**
+ * Canonical colors for each puppet character.
+ * Adjusted from true canonical colors for UI readability in both light/dark themes.
+ */
+const PUPPET_COLORS: Record<string, string> = {
+  'Punch':        '#DC143C', // crimson red costume
+  'Judy':         '#1E90FF', // blue dress
+  'Pinocchio':    '#DAA520', // goldenrod (wooden, yellow hat)
+  'Petrouchka':   '#B0BEC5', // blue-gray (white costume, adjusted for visibility)
+  'Pulcinella':   '#90A4AE', // gray-blue (white costume, adjusted)
+  'Guignol':      '#8B4513', // saddle brown
+  'Kasperle':     '#FF0000', // red pointed cap
+  'Kermit':       '#4CAF50', // green frog
+  'Piggy':        '#E91E8C', // hot pink (glamorous pig)
+  'Fozzie':       '#CC7722', // ochre brown bear
+  'Gonzo':        '#4169E1', // royal blue
+  'Scooter':      '#FF8C00', // dark orange
+  'Rowlf':        '#8B6914', // dark goldenrod brown dog
+  'Waldorf':      '#556B2F', // dark olive green
+  'Statler':      '#708090', // slate gray
+  'Kukla':        '#FF0000', // red nose and costume
+  'Ollie':        '#228B22', // forest green dragon
+  'Howdy':        '#E2725B', // terra cotta
+  'Clarabell':    '#FFCC00', // bright yellow clown
+  'Grover':       '#4682B4', // steel blue
+  'Elmo':         '#FF2400', // scarlet red
+  'Ernie':        '#F4A460', // sandy brown
+  'Bert':         '#FFD700', // gold yellow
+  'Oscar':        '#6B8E23', // olive drab green
+  'Mortimer':     '#DEB887', // burlywood
+  'Lambchop':     '#D4C5A9', // warm cream (adjusted from pure white)
+  'Madame':       '#800080', // purple
+  'Topo':         '#A0A0A0', // silver gray
+  'Bunraku':      '#B22222', // firebrick red
+  'Wayang':       '#6B4226', // dark leather brown (lightened for visibility)
+  'Petrushka':    '#FF4500', // orange red
+  'Hanneschen':   '#CD5C5C', // indian red
+  'Vitezslav':    '#B8860B', // dark goldenrod
+  'Salem':        '#4A4A4A', // dark gray (black cat, lightened for visibility)
+  'Triumph':      '#6F4E37', // coffee brown
+  'Peanut':       '#9370DB', // medium purple
+  'Achmed':       '#C8BFA9', // bone/parchment (lightened from beige)
+  'Fantoccini':   '#C41E3A', // cardinal red
+  'Saltimbanque': '#DAA520', // goldenrod
+  'Burattino':    '#D2691E', // chocolate brown
+  'Harlequin':    '#E60026', // diamond red
+  'Echo':         '#5C6370', // slate (dark attire, lightened for visibility)
+  'Spike':        '#E8DCC8', // platinum/bleach (lightened for readability)
+  'Angel':        '#3D3D3D', // charcoal (black duster, lightened for visibility)
+};
+
 /** Cooldown period before a released name can be reused (ms) */
 const NAME_COOLDOWN_MS = 5 * 60_000; // 5 minutes
 
@@ -186,6 +237,14 @@ export class SessionNamePool {
    */
   getName(sessionId: string): string | undefined {
     return this.assigned.get(sessionId);
+  }
+
+  /**
+   * Get the canonical color for an assigned session name.
+   */
+  getColor(sessionId: string): string | undefined {
+    const name = this.assigned.get(sessionId);
+    return name ? (PUPPET_COLORS[name] ?? undefined) : undefined;
   }
 
   /**
