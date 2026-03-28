@@ -27,13 +27,9 @@ query-filters:
 
   - exclude:
       id: js/path-injection
-      paths:
-        - "src/web/routes.ts"
 
   - exclude:
       id: js/request-forgery
-      paths:
-        - "src/web/routes.ts"
 
 # Additional documentation
 # These test files intentionally contain vulnerable regex patterns
