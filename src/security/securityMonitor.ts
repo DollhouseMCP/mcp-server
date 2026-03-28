@@ -69,6 +69,9 @@ export class SecurityMonitor {
   private static eventCount = 0;
   private static events = new EvictingQueue<SecurityLogEntry>(1000);
   private static logListener?: (entry: SecurityLogEntry) => void;
+  /** Tracks recently seen events to suppress repeated identical alerts */
+  private static recentEventKeys = new Map<string, number>();
+  private static readonly DEDUP_WINDOW_MS = 60_000;
 
   static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
     this.logListener = fn;
@@ -76,9 +79,25 @@ export class SecurityMonitor {
   }
 
   /**
-   * Logs a security event
+   * Logs a security event, suppressing repeated identical events within the dedup window.
    */
   static logSecurityEvent(event: SecurityEvent): void {
+    // Deduplicate: same type + source + details within window = suppress
+    const dedupKey = `${event.type}:${event.source}:${event.details}`;
+    const now = Date.now();
+    const lastSeen = this.recentEventKeys.get(dedupKey);
+    if (lastSeen && (now - lastSeen) < this.DEDUP_WINDOW_MS) {
+      return; // suppress duplicate within window
+    }
+    this.recentEventKeys.set(dedupKey, now);
+
+    // Evict stale dedup entries periodically
+    if (this.recentEventKeys.size > 500) {
+      for (const [key, ts] of this.recentEventKeys) {
+        if ((now - ts) >= this.DEDUP_WINDOW_MS) this.recentEventKeys.delete(key);
+      }
+    }
+
     const logEntry: SecurityLogEntry = {
       ...event,
       timestamp: new Date().toISOString(),
@@ -92,7 +111,7 @@ export class SecurityMonitor {
     // In MCP servers, we cannot write to stderr/stdout as it breaks the JSON-RPC protocol
     // Security events are stored in memory and can be retrieved via API
     // Only send critical alerts via the proper channel
-    
+
     if (event.severity === 'CRITICAL') {
       this.sendSecurityAlert(logEntry);
     }
