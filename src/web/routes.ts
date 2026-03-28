@@ -272,29 +272,37 @@ export function createApiRoutes(portfolioDir: string): Router {
     }
 
     try {
+      if (type === 'memories') {
+        const memElements = await loadMemoriesFromIndex(portfolioDir);
+        res.json({ type, elements: memElements, count: memElements.length });
+        return;
+      }
+
       const typeDir = join(portfolioDir, type);
       const files = await readdir(typeDir);
       const elements: unknown[] = [];
 
       for (const file of files) {
-        if (file.startsWith('.') || file.includes('.backup-') || file.includes('.state')) continue;
+        if (isBackupOrCruft(file)) continue;
 
         const ext = extname(file);
         if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
 
         try {
           const filePath = join(typeDir, file);
-
-          // Skip files larger than 1 MB
           const fileStat = await stat(filePath);
-          if (fileStat.size > MAX_FILE_SIZE_BYTES) {
-            logger.debug(`[WebUI] Skipping oversized file (${fileStat.size} bytes): ${file}`);
+          if (!fileStat.isFile()) continue;
+          if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
+
+          const content = await readFile(filePath, 'utf-8');
+          const validationResult = validateElementContent(file, content, type);
+
+          if (!validationResult.valid) {
+            logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
             continue;
           }
 
-          const content = await readFile(filePath, 'utf-8');
-          const { metadata, body } = ext === '.md' ? parseFrontMatter(content) : parseYamlFile(content);
-
+          const { metadata } = validationResult;
           elements.push({
             name: metadata.name || file.replace(ext, ''),
             description: metadata.description || '',
@@ -304,9 +312,7 @@ export function createApiRoutes(portfolioDir: string): Router {
             category: metadata.category || '',
             tags: metadata.tags || '',
             created: metadata.created || '',
-            modified: metadata.modified || '',
             filename: file,
-            bodyPreview: sanitizeForHtml(body.slice(0, 500)),
           });
         } catch (err) {
           logger.debug(`[WebUI] Failed to parse ${file}:`, err);
@@ -316,6 +322,45 @@ export function createApiRoutes(portfolioDir: string): Router {
       res.json({ type, elements, count: elements.length });
     } catch {
       res.status(500).json({ error: `Failed to list ${type}` });
+    }
+  });
+
+  /**
+   * GET /api/elements/memories/:date/:file
+   * Memory content loading with date-partitioned paths.
+   * Must be registered before the generic :type/:name route.
+   */
+  router.get('/elements/memories/:date/:file', async (req, res) => {
+    const { date, file } = req.params;
+
+    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      res.status(400).json({ error: 'Invalid date format' });
+      return;
+    }
+    if (file.includes('..') || file.includes('/') || file.includes('\\') || isBackupOrCruft(file)) {
+      res.status(400).json({ error: 'Invalid filename' });
+      return;
+    }
+
+    try {
+      const filePath = join(portfolioDir, 'memories', date, file);
+      const resolvedPath = resolve(filePath);
+      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
+        res.status(400).json({ error: 'Path traversal detected' });
+        return;
+      }
+
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile() || fileStat.size > MAX_FILE_SIZE_BYTES) {
+        res.status(fileStat.isFile() ? 413 : 404).json({ error: fileStat.isFile() ? 'File too large' : 'Not found' });
+        return;
+      }
+
+      const content = await readFile(filePath, 'utf-8');
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.send(content);
+    } catch {
+      res.status(404).json({ error: `Memory not found: ${date}/${file}` });
     }
   });
 
@@ -331,8 +376,12 @@ export function createApiRoutes(portfolioDir: string): Router {
       return;
     }
 
-    // Prevent path traversal
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+    if (name.includes('..') || name.includes('\\')) {
+      res.status(400).json({ error: 'Invalid element name' });
+      return;
+    }
+
+    if (type !== 'memories' && name.includes('/')) {
       res.status(400).json({ error: 'Invalid element name' });
       return;
     }
@@ -341,7 +390,6 @@ export function createApiRoutes(portfolioDir: string): Router {
       const typeDir = join(portfolioDir, type);
       const files = await readdir(typeDir);
 
-      // Find the file by name (with or without extension)
       const match = files.find(f => {
         const base = f.replace(extname(f), '');
         return base === name || f === name;
@@ -353,15 +401,12 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
 
       const filePath = join(typeDir, match);
-
-      // Verify resolved path stays within portfolio directory (defense in depth)
       const resolvedPath = resolve(filePath);
       if (!resolvedPath.startsWith(resolve(portfolioDir))) {
         res.status(400).json({ error: 'Path traversal detected' });
         return;
       }
 
-      // Reject files larger than 1 MB
       const fileStat = await stat(filePath);
       if (fileStat.size > MAX_FILE_SIZE_BYTES) {
         res.status(413).json({ error: `File too large (${fileStat.size} bytes). Max 1 MB.` });
@@ -369,8 +414,6 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
 
       const content = await readFile(filePath, 'utf-8');
-
-      // Return raw text — client-side handles parsing/rendering
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.send(content);
     } catch {
