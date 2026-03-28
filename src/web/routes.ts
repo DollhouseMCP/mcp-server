@@ -718,8 +718,16 @@ export function createApiRoutes(portfolioDir: string): Router {
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Normalize element type to singular form for MCP-AQL operations */
+const PLURAL_TO_SINGULAR: Record<string, string> = {
+  personas: 'persona',
+  skills: 'skill',
+  templates: 'template',
+  agents: 'agent',
+  memories: 'memory',
+  ensembles: 'ensemble',
+};
 function toSingularType(type: string): string {
-  return type.endsWith('s') ? type.slice(0, -1) : type;
+  return PLURAL_TO_SINGULAR[type] || (type.endsWith('s') ? type.slice(0, -1) : type);
 }
 
 /**
