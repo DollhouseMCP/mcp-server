@@ -148,17 +148,21 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
   const existingLock = await readLeaderLock();
 
   if (existingLock && !isLockStale(existingLock)) {
-    logger.info(
-      `[LeaderElection] Existing leader found: session=${existingLock.sessionId} pid=${existingLock.pid} port=${existingLock.port}`
-    );
+    logger.info('[LeaderElection] Existing leader found — becoming follower', {
+      leaderSession: existingLock.sessionId, leaderPid: existingLock.pid,
+      leaderPort: existingLock.port, mySession: sessionId, myPid: process.pid,
+    });
     return { role: 'follower', leaderInfo: existingLock };
   }
 
   // No valid leader — try to claim
   if (existingLock) {
-    logger.info(
-      `[LeaderElection] Stale leader lock detected (pid=${existingLock.pid}, alive=${isProcessAlive(existingLock.pid)}). Taking over.`
-    );
+    const alive = isProcessAlive(existingLock.pid);
+    const heartbeatAge = Date.now() - new Date(existingLock.heartbeat).getTime();
+    logger.info('[LeaderElection] Stale leader lock — taking over', {
+      stalePid: existingLock.pid, alive, heartbeatAgeMs: heartbeatAge,
+      staleSession: existingLock.sessionId, mySession: sessionId,
+    });
     await deleteLeaderLock();
   }
 
@@ -174,14 +178,16 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
 
   const claimed = await claimLeadership(myInfo);
   if (claimed) {
-    logger.info(`[LeaderElection] Claimed leadership: session=${sessionId} port=${port}`);
+    logger.info('[LeaderElection] Claimed leadership', { sessionId, port, pid: process.pid });
     return { role: 'leader', leaderInfo: myInfo };
   }
 
   // Another process won the race — re-read and become follower
   const winner = await readLeaderLock();
   if (winner) {
-    logger.info(`[LeaderElection] Lost election to pid=${winner.pid}. Becoming follower.`);
+    logger.info('[LeaderElection] Lost election — becoming follower', {
+      winnerPid: winner.pid, winnerSession: winner.sessionId, mySession: sessionId, myPid: process.pid,
+    });
     return { role: 'follower', leaderInfo: winner };
   }
 

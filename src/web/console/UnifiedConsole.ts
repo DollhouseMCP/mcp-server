@@ -131,13 +131,16 @@ async function startAsLeader(
   }
   liveMetricsOnSnapshot = webResult.metricsOnSnapshot;
 
-  logger.info('[UnifiedConsole] Ingestion routes mounted for follower event forwarding');
+  logger.info('[UnifiedConsole] Ingestion routes mounted');
 
   // Start heartbeat and register cleanup
   const stopHeartbeat = startHeartbeat(election.leaderInfo);
   registerLeaderCleanup();
 
-  logger.info(`[UnifiedConsole] Leader started: session=${options.sessionId} port=${CONSOLE_PORT}`);
+  logger.info('[UnifiedConsole] Leader started', {
+    sessionId: options.sessionId, port: CONSOLE_PORT, pid: process.pid,
+    role: 'leader', ingestRoutes: ['/api/ingest/logs', '/api/ingest/metrics', '/api/ingest/session', '/api/sessions'],
+  });
 
   return {
     role: 'leader',
@@ -167,9 +170,11 @@ async function startAsFollower(
   const sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid);
   await sessionHeartbeat.start();
 
-  logger.info(
-    `[UnifiedConsole] Follower started: session=${options.sessionId} → leader=${election.leaderInfo.sessionId} port=${election.leaderInfo.port}`
-  );
+  logger.info('[UnifiedConsole] Follower started', {
+    sessionId: options.sessionId, pid: process.pid, role: 'follower',
+    leaderSession: election.leaderInfo.sessionId, leaderPid: election.leaderInfo.pid,
+    leaderPort: election.leaderInfo.port, leaderUrl,
+  });
 
   return {
     role: 'follower',

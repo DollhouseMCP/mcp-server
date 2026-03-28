@@ -131,15 +131,17 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     const payload = req.body as IngestLogPayload;
     if (!payload?.sessionId || !Array.isArray(payload.entries)) {
-      res.status(400).json({ error: 'Invalid payload: requires sessionId and entries[]' });
+      const received = payload ? Object.keys(payload) : [];
+      logger.warn('[IngestRoutes] Invalid log payload', { received, hasSessionId: !!payload?.sessionId, hasEntries: Array.isArray(payload?.entries) });
+      res.status(400).json({ error: 'Invalid payload', required: ['sessionId', 'entries'], received });
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
 
     let count = 0;
+    let skipped = 0;
     for (const entry of payload.entries) {
-      if (!entry || typeof entry.message !== 'string') continue;
-      // Stamp session context into the data field
+      if (!entry || typeof entry.message !== 'string') { skipped++; continue; }
       const stamped: UnifiedLogEntry = {
         ...entry,
         data: { ...entry.data, _sessionId: payload.sessionId },
@@ -154,7 +156,11 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       session.lastHeartbeat = new Date().toISOString();
     }
 
-    res.status(200).json({ accepted: count });
+    if (skipped > 0) {
+      logger.debug(`[IngestRoutes] Log ingest from ${session?.displayName ?? payload.sessionId}: accepted=${count}, skipped=${skipped}`);
+    }
+
+    res.status(200).json({ accepted: count, skipped });
   });
 
   /**
@@ -168,7 +174,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     const payload = req.body as IngestMetricsPayload;
     if (!payload?.sessionId || !payload.snapshot) {
-      res.status(400).json({ error: 'Invalid payload: requires sessionId and snapshot' });
+      const received = payload ? Object.keys(payload) : [];
+      logger.warn('[IngestRoutes] Invalid metrics payload', { received });
+      res.status(400).json({ error: 'Invalid payload', required: ['sessionId', 'snapshot'], received });
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
@@ -177,6 +185,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       broadcasts.metricsOnSnapshot(payload.snapshot);
     }
 
+    const session = sessions.get(payload.sessionId);
+    logger.debug(`[IngestRoutes] Metrics ingested from ${session?.displayName ?? payload.sessionId}`);
     res.status(200).json({ accepted: true });
   });
 
@@ -186,7 +196,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   router.post('/api/ingest/session', (req: Request, res: Response) => {
     const payload = req.body as SessionEventPayload;
     if (!payload?.sessionId || !payload.event) {
-      res.status(400).json({ error: 'Invalid payload: requires sessionId and event' });
+      const received = payload ? Object.keys(payload) : [];
+      logger.warn('[IngestRoutes] Invalid session event payload', { received });
+      res.status(400).json({ error: 'Invalid payload', required: ['sessionId', 'event'], received });
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
@@ -208,7 +220,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           isLeader: false,
         };
         sessions.set(payload.sessionId, info);
-        logger.info(`[IngestRoutes] Session registered: ${displayName} (${payload.sessionId}, pid=${payload.pid})`);
+        logger.info('[IngestRoutes] Session registered', {
+          displayName, sessionId: payload.sessionId, pid: payload.pid, color,
+          activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length,
+        });
         broadcasts.sessionBroadcast?.(info);
         break;
       }
@@ -218,6 +233,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           existing.status = 'ended';
           existing.lastHeartbeat = now;
           namePool.release(payload.sessionId);
+          logger.info('[IngestRoutes] Session stopped', {
+            displayName: existing.displayName, sessionId: payload.sessionId, pid: existing.pid,
+            activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+          });
           broadcasts.sessionBroadcast?.(existing);
         }
         break;
@@ -250,12 +269,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     const session = sessions.get(sessionId);
 
     if (!session) {
-      res.status(404).json({ error: 'Session not found' });
+      logger.warn('[IngestRoutes] Kill requested for unknown session', { sessionId });
+      res.status(404).json({ error: 'Session not found', sessionId });
       return;
     }
 
     if (!session.pid) {
-      res.status(400).json({ error: 'No PID for session' });
+      res.status(400).json({ error: 'No PID for session', sessionId, displayName: session.displayName });
       return;
     }
 
@@ -263,10 +283,17 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       process.kill(session.pid, 'SIGTERM');
       session.status = 'ended';
       namePool.release(sessionId);
-      logger.info(`[IngestRoutes] Killed session ${session.displayName} (pid=${session.pid})`);
+      logger.info('[IngestRoutes] Session killed', {
+        displayName: session.displayName, sessionId, pid: session.pid,
+        activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+      });
       res.json({ ok: true, killed: session.displayName, pid: session.pid });
     } catch (err) {
-      res.status(500).json({ error: `Failed to kill pid ${session.pid}: ${(err as Error).message}` });
+      const message = (err as Error).message;
+      logger.error('[IngestRoutes] Failed to kill session', {
+        displayName: session.displayName, sessionId, pid: session.pid, error: message,
+      });
+      res.status(500).json({ error: 'Failed to kill session', sessionId, displayName: session.displayName, pid: session.pid, detail: message });
     }
   });
 
@@ -280,7 +307,11 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       if (age > SESSION_STALE_MS) {
         session.status = 'ended';
         namePool.release(id);
-        logger.info(`[IngestRoutes] Reaped stale session: ${session.displayName} (${id}, last heartbeat ${Math.round(age / 1000)}s ago)`);
+        logger.info('[IngestRoutes] Reaped stale session', {
+          displayName: session.displayName, sessionId: id, pid: session.pid,
+          lastHeartbeatAgo: `${Math.round(age / 1000)}s`,
+          activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+        });
         broadcasts.sessionBroadcast?.(session);
       }
     }
@@ -304,7 +335,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       status: 'active',
       isLeader: true,
     });
-    logger.info(`[IngestRoutes] Leader session: ${displayName} (${sessionId})`);
+    logger.info('[IngestRoutes] Leader session registered', { displayName, sessionId, pid, color });
   }
 
   return { router, getSessions, registerLeaderSession };
