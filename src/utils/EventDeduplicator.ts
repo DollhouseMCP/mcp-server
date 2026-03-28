@@ -33,6 +33,10 @@ export class EventDeduplicator {
    * Returns false if this is a new event that should be processed.
    */
   shouldSuppress(key: string): boolean {
+    // NFC-normalize to ensure canonical Unicode equivalents deduplicate correctly
+    // (e.g. 'Café' decomposed vs composed). Uses String.normalize directly to
+    // avoid circular dependency with UnicodeValidator → SecurityMonitor → this.
+    key = key.normalize('NFC');
     const now = Date.now();
     const lastSeen = this.recentKeys.get(key);
 
