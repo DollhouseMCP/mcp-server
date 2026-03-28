@@ -379,16 +379,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         });
       }
 
-      this.eventDispatcher.emitAsync(
-        'element:load:error',
-        this.createEventPayload({ correlationId, filePath: relativePath, error })
-      );
-
       if (isRepeatError) {
         this.suppressedLoadPaths.add(relativePath);
         logger.debug(`Suppressed repeated load error for ${this.getElementLabel()} ${relativePath}`);
       } else {
         this.suppressedLoadPaths.delete(relativePath);
+        this.eventDispatcher.emitAsync(
+          'element:load:error',
+          this.createEventPayload({ correlationId, filePath: relativePath, error })
+        );
         logger.error(`Failed to load ${this.getElementLabel()} from ${absolutePath}:`, error);
       }
       throw error;
