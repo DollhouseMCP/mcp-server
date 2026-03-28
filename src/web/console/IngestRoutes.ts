@@ -100,6 +100,11 @@ export interface IngestRoutesResult {
   registerLeaderSession: (sessionId: string, pid: number) => void;
 }
 
+/** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
+function normalizeInput(s: string): string {
+  return UnicodeValidator.normalize(s).normalizedContent;
+}
+
 /**
  * Create the ingestion routes and session registry.
  *
@@ -111,11 +116,6 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   const sessions = new Map<string, SessionInfo>();
   const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
-
-  /** Normalize a string via UnicodeValidator */
-  function normalizeInput(s: string): string {
-    return UnicodeValidator.normalize(s).normalizedContent;
-  }
 
   // JSON body parsing with size limit
   router.use(express.json({ limit: MAX_PAYLOAD_SIZE }));
