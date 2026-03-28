@@ -17,6 +17,7 @@
 
 import type { ILogSink, UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 
 /** Maximum entries to buffer when leader is unreachable */
@@ -50,7 +51,7 @@ export class LeaderForwardingLogSink implements ILogSink {
     private readonly leaderUrl: string,
     private readonly sessionId: string,
   ) {
-    try { this.sessionId = sessionId.normalize('NFC'); } catch { /* use raw */ }
+    this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
     this.flushTimer.unref();
   }

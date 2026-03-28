@@ -20,6 +20,7 @@ import type { Request, Response } from 'express';
 import type { UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SessionNamePool } from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
 
@@ -111,8 +112,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 
-  /** NFC-normalize a string, falling back to raw on error */
-  function nfc(s: string): string { try { return s.normalize('NFC'); } catch { return s; } }
+  /** Normalize a string via UnicodeValidator */
+  function normalizeInput(s: string): string {
+    return UnicodeValidator.normalize(s).normalizedContent;
+  }
 
   // JSON body parsing with size limit
   router.use(express.json({ limit: MAX_PAYLOAD_SIZE }));
@@ -131,7 +134,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       res.status(400).json({ error: 'Invalid payload: requires sessionId and entries[]' });
       return;
     }
-    payload.sessionId = nfc(payload.sessionId);
+    payload.sessionId = normalizeInput(payload.sessionId);
 
     let count = 0;
     for (const entry of payload.entries) {
@@ -168,7 +171,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       res.status(400).json({ error: 'Invalid payload: requires sessionId and snapshot' });
       return;
     }
-    payload.sessionId = nfc(payload.sessionId);
+    payload.sessionId = normalizeInput(payload.sessionId);
 
     if (broadcasts.metricsOnSnapshot) {
       broadcasts.metricsOnSnapshot(payload.snapshot);
@@ -186,7 +189,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       res.status(400).json({ error: 'Invalid payload: requires sessionId and event' });
       return;
     }
-    payload.sessionId = nfc(payload.sessionId);
+    payload.sessionId = normalizeInput(payload.sessionId);
 
     const now = new Date().toISOString();
 

@@ -5,6 +5,10 @@
  * dropdown with selectable sessions. Selecting a session filters
  * logs and metrics to that session only.
  *
+ * @security-audit-suppress DMCP-SEC-004 Client-side JS — all session data is
+ * pre-normalized server-side via UnicodeValidator. Browser String.normalize('NFC')
+ * is applied as defense-in-depth.
+ *
  * @since v2.1.0 — Issue #1700
  */
 (function() {

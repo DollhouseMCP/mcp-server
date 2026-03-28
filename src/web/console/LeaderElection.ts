@@ -20,6 +20,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 
 /** Directory for runtime state files */
@@ -143,7 +144,7 @@ export async function deleteLeaderLock(): Promise<void> {
  * @returns Election result with role and leader info
  */
 export async function electLeader(sessionId: string, port: number): Promise<ElectionResult> {
-  try { sessionId = sessionId.normalize('NFC'); } catch { /* use raw */ }
+  sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
   const existingLock = await readLeaderLock();
 
   if (existingLock && !isLockStale(existingLock)) {
