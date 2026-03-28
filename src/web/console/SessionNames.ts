@@ -82,6 +82,23 @@ const ALL_PUPPET_NAMES: readonly string[] = [
   // Inside jokes
   'Spike',
   'Angel',
+
+  // Classic dolls
+  'Barbie',
+  'Ken',
+  'Skipper',
+  'Midge',
+  'Christie',
+  'Annie',
+  'Andy',
+  'Cathy',
+  'Teddy',
+  'Xavier',
+  'Strawberry',
+  'Blythe',
+  'Ginny',
+  'Betsy',
+  'Madeline',
 ];
 
 /** Names that can never be assigned to a leader session */
@@ -148,6 +165,23 @@ const PUPPET_COLORS: Record<string, string> = {
   'Echo':         '#5C6370', // slate (dark attire, lightened for visibility)
   'Spike':        '#E8DCC8', // platinum/bleach (lightened for readability)
   'Angel':        '#3D3D3D', // charcoal (black duster, lightened for visibility)
+
+  // Classic dolls
+  'Barbie':       '#E91E90', // Barbie pink
+  'Ken':          '#4A90D9', // Ken blue
+  'Skipper':      '#FF6B6B', // coral red
+  'Midge':        '#E87040', // warm auburn
+  'Christie':     '#C06030', // warm brown
+  'Annie':        '#E03030', // Raggedy Ann red yarn hair
+  'Andy':         '#3070C0', // Raggedy Andy blue sailor outfit
+  'Cathy':        '#D4A574', // Chatty Cathy vintage tan
+  'Teddy':        '#A0784A', // Teddy Ruxpin bear brown
+  'Xavier':       '#5AAF4A', // Xavier Roberts / Cabbage Patch green
+  'Strawberry':   '#E8445A', // strawberry red-pink
+  'Blythe':       '#7B68EE', // big-eyed purple
+  'Ginny':        '#5B9BD5', // classic blue dress
+  'Betsy':        '#DD7694', // rose pink
+  'Madeline':     '#FFD700', // yellow hat
 };
 
 /** Cooldown period before a released name can be reused (ms) */
