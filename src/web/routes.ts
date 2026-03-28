@@ -174,8 +174,15 @@ export function createApiRoutes(portfolioDir: string): Router {
       let totalCount = 0;
 
       for (const type of ELEMENT_TYPES) {
-        const typeDir = join(portfolioDir, type);
         try {
+          if (type === 'memories') {
+            const memElements = await loadMemoriesFromIndex(portfolioDir);
+            result[type] = memElements;
+            totalCount += memElements.length;
+            continue;
+          }
+
+          const typeDir = join(portfolioDir, type);
           const dirStat = await stat(typeDir);
           if (!dirStat.isDirectory()) continue;
 
@@ -183,8 +190,7 @@ export function createApiRoutes(portfolioDir: string): Router {
           const elements: unknown[] = [];
 
           for (const file of files) {
-            // Skip backups, hidden files, state files
-            if (file.startsWith('.') || file.includes('.backup-') || file.includes('.state')) continue;
+            if (isBackupOrCruft(file)) continue;
 
             const ext = extname(file);
             if (ext !== '.md' && ext !== '.yaml' && ext !== '.yml') continue;
@@ -192,20 +198,23 @@ export function createApiRoutes(portfolioDir: string): Router {
             try {
               const filePath = join(typeDir, file);
 
-              // Skip files larger than 1 MB
               const fileStat = await stat(filePath);
-              if (fileStat.size > MAX_FILE_SIZE_BYTES) {
-                logger.debug(`[WebUI] Skipping oversized file (${fileStat.size} bytes): ${file}`);
+              if (!fileStat.isFile()) continue;
+              if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
+
+              const content = await readFile(filePath, 'utf-8');
+              const validationResult = validateElementContent(file, content, type);
+
+              if (!validationResult.valid) {
+                logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
                 continue;
               }
 
-              const content = await readFile(filePath, 'utf-8');
-              const { metadata } = ext === '.md' ? parseFrontMatter(content) : parseYamlFile(content);
-
+              const { metadata } = validationResult;
               elements.push({
                 name: metadata.name || file.replace(ext, ''),
                 description: metadata.description || '',
-                type: type.slice(0, -1), // plural → singular
+                type: type.slice(0, -1),
                 version: metadata.version || '1.0.0',
                 author: metadata.author || '',
                 category: metadata.category || '',
@@ -380,12 +389,16 @@ export function createApiRoutes(portfolioDir: string): Router {
 
       for (const type of ELEMENT_TYPES) {
         try {
+          if (type === 'memories') {
+            const memElements = await loadMemoriesFromIndex(portfolioDir);
+            stats[type] = memElements.length;
+            total += memElements.length;
+            continue;
+          }
           const typeDir = join(portfolioDir, type);
           const files = await readdir(typeDir);
           const count = files.filter(f =>
-            !f.startsWith('.') &&
-            !f.includes('.backup-') &&
-            !f.includes('.state') &&
+            !isBackupOrCruft(f) &&
             ['.md', '.yaml', '.yml'].includes(extname(f))
           ).length;
           stats[type] = count;
@@ -852,7 +865,11 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
         filePath = join(portfolioDir, type, match);
       }
 
-      // Verify resolved path stays within portfolio directory (defense in depth)
+      // Verify resolved path stays within portfolio directory (defense in depth).
+      // codeql[js/path-injection] — mitigated: type validated against ELEMENT_TYPES whitelist,
+      // name checked for '..' and '\', memory paths validated as YYYY-MM-DD/filename,
+      // non-memory names matched against actual readdir() results (no user-controlled segments
+      // reach the filesystem), and final resolve() containment check below.
       const resolvedPath = resolve(filePath);
       if (!resolvedPath.startsWith(resolve(portfolioDir))) {
         res.status(400).json({ error: 'Path traversal detected' });
@@ -976,7 +993,16 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
     const elementType = req.params.type;
     const filename = req.params.name;
 
+    // Validate element type against known types to prevent arbitrary path construction
+    if (!ELEMENT_TYPES.includes(elementType as typeof ELEMENT_TYPES[number])) {
+      res.status(400).json({ error: `Invalid element type: ${elementType}` });
+      return;
+    }
+
     try {
+      // codeql[js/request-forgery] — mitigated: domain and repo are hardcoded constants,
+      // elementType is validated against ELEMENT_TYPES whitelist above, path traversal
+      // is checked, and the only reachable target is a specific public GitHub repository.
       const githubUrl = `https://raw.githubusercontent.com/DollhouseMCP/collection/main/${elementPath}`;
       const response = await fetch(githubUrl);
       if (!response.ok) {
