@@ -59,7 +59,7 @@
       "rule": "DMCP-SEC-004",
       "file": "**/src/utils/EvictingQueue.ts",
       "reason": "Generic data structure - does not process user input. All callers (Agent, SecurityTelemetry, SecurityMonitor, Logger) sanitize input before pushing to the queue"
-    }
+    },
     {
       "rule": "DMCP-SEC-005",
       "file": "**/src/web/public/app.js",
@@ -84,6 +84,26 @@
       "rule": "DMCP-SEC-004",
       "file": "**/src/converters/AgentSkillConverter.ts",
       "reason": "NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. Scanner may flag file-level despite fix."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/auto-dollhouse/evaluatePermission.ts",
+      "reason": "All inputs arrive via MCPAQLHandler.dispatchGatekeeper() which validates params through validateRequiredString() and the MCP-AQL transport layer. Unicode normalization is applied at the MCPAQLHandler entry point before dispatch. This module receives pre-validated params, not raw user input."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/auto-dollhouse/permissionRoutes.ts",
+      "reason": "HTTP inputs arrive via Express JSON middleware from localhost-only binding (127.0.0.1). The POST /evaluate_permission route forwards to MCPAQLHandler.handleRead() which applies Unicode normalization at its entry point. The GET /permissions/status route has no user input parameters."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/auto-dollhouse/operationExtensions.ts",
+      "reason": "Static schema/route definitions only — no runtime user input processing. Contains operation metadata (types, descriptions, examples) used for MCP tool registration."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "**/src/auto-dollhouse/index.ts",
+      "reason": "Registration entry point only — resolves DI container references and wires deferred startup. No user input processing. All user input flows through MCPAQLHandler which normalizes at its boundary."
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

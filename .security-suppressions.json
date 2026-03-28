@@ -81,6 +81,11 @@
       "rule": "DMCP-SEC-006",
       "file": "src/handlers/CollectionHandler.ts",
       "reason": "Delegates to specialized services - logging happens in CollectionBrowser/ElementInstaller"
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auto-dollhouse/operationExtensions.ts",
+      "reason": "Static schema/route definitions only — no runtime user input processing. Actual Unicode normalization is in evaluatePermission.ts and permissionRoutes.ts."
     }
   ]
 }

@@ -100,15 +100,19 @@ export function formatPermissionResponse(
   _input: Record<string, unknown>,
   reason?: string,
 ): Record<string, unknown> {
-  const formatter = platformFormatters[platform];
-  if (!formatter) {
-    // Import lazily to avoid circular dependency at module load time
-    import('../../utils/logger.js').then(({ logger }) => {
-      logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
-    }).catch(() => { /* logger not available */ });
-    return formatClaudeCode(decision, reason);
+  switch (platform) {
+    case 'gemini': return formatGemini(decision, reason);
+    case 'cursor': return formatCursor(decision, reason);
+    case 'windsurf': return formatWindsurf(decision, reason);
+    case 'codex': return formatCodex(decision, reason);
+    case 'claude_code': return formatClaudeCode(decision, reason);
+    default:
+      // Import lazily to avoid circular dependency at module load time
+      import('../../utils/logger.js').then(({ logger }) => {
+        logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
+      }).catch(() => { /* logger not available */ });
+      return formatClaudeCode(decision, reason);
   }
-  return formatter(decision, reason);
 }
 
 /**

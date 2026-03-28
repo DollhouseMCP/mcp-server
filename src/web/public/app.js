@@ -718,19 +718,25 @@ function safeParseYaml(content) {
     document.body.classList.add('modal-open');
     body.focus(); // focus body so arrow/Page/Home/End keys scroll content natively
 
-    // Fetch full content as raw text — local API for portfolio, GitHub for collection
+    // Fetch element content — structured JSON for local, raw text for collection
     try {
-      let content;
+      let content;       // raw file content (for Raw view, Copy, Download)
+      let structured;    // { metadata, body, type, validation } when available
+
       if (element._content) {
         content = element._content;
       } else if (element._local) {
         const res = await fetch(`/api/elements/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        content = await res.text();
+        const data = await res.json();
+        structured = data;
+        content = data.raw;
       } else {
-        const res = await fetch(`https://raw.githubusercontent.com/DollhouseMCP/collection/main/${element.path}`);
+        const res = await fetch(`/api/collection/content/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        content = await res.text();
+        const data = await res.json();
+        structured = data;
+        content = data.raw;
       }
 
       const renderBtn = modal.querySelector('#btn-render');
@@ -739,6 +745,11 @@ function safeParseYaml(content) {
         if (modalShowRaw) {
           body.innerHTML = `<pre class="element-source"><code class="element-code language-yaml">${escapeHtml(content)}</code></pre>`;
           if (globalThis.hljs) body.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+        } else if (structured) {
+          body.innerHTML = renderStructuredDetail(structured);
+          body.querySelectorAll('pre code').forEach(b => {
+            if (globalThis.hljs) hljs.highlightElement(b);
+          });
         } else {
           body.innerHTML = renderDetailView(content, element.type);
           body.querySelectorAll('pre code').forEach(b => {
@@ -1314,6 +1325,106 @@ function safeParseYaml(content) {
     return html;
   }
 
+  /** Render common metadata sections (created, author, tags, etc.) shared by both renderers */
+  function renderCommonMetadata(fm, type) {
+    let html = '';
+
+    const createdVal = fm.created || fm.created_date;
+    if (createdVal) {
+      html += `<div class="detail-created"><span class="detail-created-label">Created</span><span class="detail-created-value">${escapeHtml(formatDate(createdVal))}</span></div>`;
+    }
+
+    const coreFields = [
+      detailField('Author', fm.author),
+      detailField('Version', fm.version ? `v${fm.version}` : null),
+      detailField('Category', fm.category),
+      detailField('License', fm.license),
+      detailField('Age rating', fm.age_rating),
+      detailField('Modified', fm.modified ? formatDate(fm.modified) : null),
+    ].filter(Boolean).join('');
+    if (coreFields) html += detailSection('Details', coreFields);
+
+    if (Array.isArray(fm.tags) && fm.tags.length) {
+      html += detailSection('Tags', detailPillList(fm.tags, 'pill-tag'));
+    }
+    if (Array.isArray(fm.triggers) && fm.triggers.length) {
+      html += detailSection('Trigger words', detailPillList(fm.triggers, 'pill-trigger'));
+    }
+
+    html += renderComponentsSections(fm);
+    if (fm.coordination_strategy) html += detailSection('Coordination', `<p class="detail-prose">${escapeHtml(fm.coordination_strategy)}</p>`);
+    html += renderUseCases(fm);
+
+    if (fm.instructions && type !== 'agent' && type !== 'ensemble') {
+      html += detailSection('Instructions', renderInstructions(fm.instructions));
+    }
+    if (fm.gatekeeper && typeof fm.gatekeeper === 'object' && type !== 'agent' && type !== 'ensemble') {
+      html += renderGatekeeperSection(fm.gatekeeper);
+    }
+
+    return html;
+  }
+
+  /** Render components section (ensembles) */
+  function renderComponentsSections(fm) {
+    const compTypes = ['personas','skills','tools','templates','prompts','memories'];
+    const compEntries = compTypes
+      .filter(k => Array.isArray(fm[k]) && fm[k].length)
+      .map(k => `<div class="detail-field"><span class="detail-label">${capitalize(k)}</span><span class="detail-value">${detailPillList(fm[k])}</span></div>`)
+      .join('');
+    return compEntries ? detailSection('Components', compEntries) : '';
+  }
+
+  /** Render use cases section */
+  function renderUseCases(fm) {
+    if (!Array.isArray(fm.use_cases) || !fm.use_cases.length) return '';
+    const items = fm.use_cases.map(u => `<li>${escapeHtml(u)}</li>`).join('');
+    return detailSection('Use cases', `<ul class="detail-list">${items}</ul>`);
+  }
+
+  /** Render type-specific sections (parameters, agent, ensemble, proficiency) */
+  function renderTypeSpecificSections(fm, type) {
+    let html = '';
+    html += renderDetailParameters(fm);
+    html += renderDetailVariables(fm);
+    if (fm.proficiency_levels && typeof fm.proficiency_levels === 'object') {
+      const levels = Object.entries(fm.proficiency_levels)
+        .map(([lvl, desc]) => detailField(capitalize(lvl), desc)).join('');
+      if (levels) html += detailSection('Proficiency levels', levels);
+    }
+    if (type === 'agent') html += renderAgentSection(fm);
+    if (type === 'ensemble') html += renderEnsembleSection(fm);
+    return html;
+  }
+
+  /**
+   * Render element detail from pre-parsed structured JSON.
+   * The server has already validated and parsed the YAML — no client-side
+   * re-parsing needed. Uses the same rendering helpers as renderDetailView.
+   */
+  function renderStructuredDetail(data) {
+    const { metadata: fm, body, type } = data;
+    if (!fm || typeof fm !== 'object') {
+      return `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || JSON.stringify(data))}</code></pre>`;
+    }
+
+    if (type === 'memory') {
+      return renderMemoryView(data.raw);
+    }
+
+    let html = '';
+
+    if (data.validation?.status === 'warn') {
+      html += `<div class="detail-validation-warn">Security scan: ${escapeHtml(data.validation?.reason || 'warning')}</div>`;
+    }
+
+    html += renderCommonMetadata(fm, type);
+    html += renderTypeSpecificSections(fm, type);
+    html += renderDetailExtra(fm, body || '');
+
+    return html || `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || '')}</code></pre>`;
+  }
+
   function renderDetailView(content, type) { // NOSONAR - sequential independent metadata sections; complexity score is inflated by &&-guards on array existence checks
     if (type === 'memory') {
       // Portfolio memories are pure YAML — jsyaml.load succeeds.
@@ -1328,85 +1439,8 @@ function safeParseYaml(content) {
     const { frontmatter: fm, body } = parseFrontmatter(content);
     let html = '';
 
-    // ── Created date — prominent header line ──
-    const createdVal = fm.created || fm.created_date;
-    if (createdVal) {
-      html += `<div class="detail-created"><span class="detail-created-label">Created</span><span class="detail-created-value">${escapeHtml(formatDate(createdVal))}</span></div>`;
-    }
-
-    // ── Core metadata ──
-    const coreFields = [
-      detailField('Author', fm.author),
-      detailField('Version', fm.version ? `v${fm.version}` : null),
-      detailField('Category', fm.category),
-      detailField('License', fm.license),
-      detailField('Age rating', fm.age_rating),
-      detailField('Modified', fm.modified ? formatDate(fm.modified) : null),
-    ].filter(Boolean).join('');
-    if (coreFields) html += detailSection('Details', coreFields);
-
-    // ── Tags ──
-    if (Array.isArray(fm.tags) && fm.tags.length) {
-      html += detailSection('Tags', detailPillList(fm.tags, 'pill-tag'));
-    }
-
-    // ── Triggers (personas) ──
-    if (Array.isArray(fm.triggers) && fm.triggers.length) {
-      html += detailSection('Trigger words', detailPillList(fm.triggers, 'pill-trigger'));
-    }
-
-    // ── Components (ensembles) ──
-    const compTypes = ['personas','skills','tools','templates','prompts','memories'];
-    const compEntries = compTypes
-      .filter(k => Array.isArray(fm[k]) && fm[k].length)
-      .map(k => `<div class="detail-field"><span class="detail-label">${capitalize(k)}</span><span class="detail-value">${detailPillList(fm[k])}</span></div>`)
-      .join('');
-    if (compEntries) html += detailSection('Components', compEntries);
-
-    // ── Ensemble coordination ──
-    if (fm.coordination_strategy) html += detailSection('Coordination', `<p class="detail-prose">${escapeHtml(fm.coordination_strategy)}</p>`);
-
-    // ── Use cases ──
-    if (Array.isArray(fm.use_cases) && fm.use_cases.length) {
-      const useCaseItems = fm.use_cases.map(u => `<li>${escapeHtml(u)}</li>`).join('');
-      html += detailSection('Use cases', `<ul class="detail-list">${useCaseItems}</ul>`);
-    }
-
-    // ── Instructions (all element types) ──
-    if (fm.instructions && type !== 'agent' && type !== 'ensemble') {
-      // Agents and ensembles render instructions in their own sections
-      html += detailSection('Instructions', renderInstructions(fm.instructions));
-    }
-
-    // ── Gatekeeper (all element types) ──
-    if (fm.gatekeeper && typeof fm.gatekeeper === 'object' && type !== 'agent' && type !== 'ensemble') {
-      html += renderGatekeeperSection(fm.gatekeeper);
-    }
-
-    // ── Parameters (skills/tools) ──
-    html += renderDetailParameters(fm);
-
-    // ── Variables (templates) ──
-    html += renderDetailVariables(fm);
-
-    // ── Proficiency levels (skills) ──
-    if (fm.proficiency_levels && typeof fm.proficiency_levels === 'object') {
-      const levels = Object.entries(fm.proficiency_levels)
-        .map(([lvl, desc]) => detailField(capitalize(lvl), desc)).join('');
-      if (levels) html += detailSection('Proficiency levels', levels);
-    }
-
-    // ── Agent fields ──
-    if (type === 'agent') {
-      html += renderAgentSection(fm);
-    }
-
-    // ── Ensemble fields ──
-    if (type === 'ensemble') {
-      html += renderEnsembleSection(fm);
-    }
-
-    // ── Catch-all + body ──
+    html += renderCommonMetadata(fm, type);
+    html += renderTypeSpecificSections(fm, type);
     html += renderDetailExtra(fm, body);
 
     return html || `<pre class="element-source"><code class="element-code">${escapeHtml(content)}</code></pre>`;
