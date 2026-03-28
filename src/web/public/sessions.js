@@ -13,8 +13,9 @@
   var SESSION_POLL_INTERVAL = 10000;
   var sessions = [];
   var filterSessionId = '';
+  var dropdownBuilt = false;
+  var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
 
-  // Get display name for a session
   function displayName(session) {
     if (typeof session === 'object' && session.displayName) return session.displayName;
     var id = typeof session === 'string' ? session : (session && session.sessionId) || '';
@@ -22,11 +23,16 @@
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
-  // Apply session filter across logs and metrics
+  // Build a key from current sessions to detect changes
+  function sessionListKey(list) {
+    return list.map(function(s) { return s.sessionId + ':' + s.status; }).join(',');
+  }
+
+  // Apply session filter and update all UI to reflect it
   function applyFilter(sessionId) {
     filterSessionId = sessionId;
 
-    // Sync the log viewer filter dropdown if it exists
+    // Sync log viewer select
     var logSelect = document.getElementById('log-session-filter');
     if (logSelect) logSelect.value = sessionId;
 
@@ -35,25 +41,30 @@
       window.DollhouseConsole.logs.refilter();
     }
 
-    // Update dropdown selection state
-    var items = document.querySelectorAll('.session-dropdown-item');
-    for (var i = 0; i < items.length; i++) {
-      var isSelected = items[i].dataset.sessionId === sessionId;
-      items[i].classList.toggle('session-dropdown-item--selected', isSelected);
-    }
-
-    // Update the "All" item
-    var allItem = document.querySelector('.session-dropdown-item--all');
-    if (allItem) {
-      allItem.classList.toggle('session-dropdown-item--selected', !sessionId);
-    }
-
-    // Update the box label to show filtered session name
-    updateBoxLabel();
+    refreshSelectionState();
   }
 
-  // Update the box text to reflect current filter
-  function updateBoxLabel() {
+  // Update checkmarks and selected styling without rebuilding DOM
+  function refreshSelectionState() {
+    // Update items
+    var items = document.querySelectorAll('.session-dropdown-item[data-session-id]');
+    for (var i = 0; i < items.length; i++) {
+      var isSelected = items[i].dataset.sessionId === filterSessionId;
+      items[i].classList.toggle('session-dropdown-item--selected', isSelected);
+      var check = items[i].querySelector('.session-dropdown-check');
+      if (check) check.textContent = isSelected ? '\u2713' : '';
+    }
+
+    // Update "All" item
+    var allItem = document.querySelector('.session-dropdown-item--all');
+    if (allItem) {
+      var allSelected = !filterSessionId;
+      allItem.classList.toggle('session-dropdown-item--selected', allSelected);
+      var allCheck = allItem.querySelector('.session-dropdown-check');
+      if (allCheck) allCheck.textContent = allSelected ? '\u2713' : '';
+    }
+
+    // Update box label
     var countEl = document.querySelector('.session-box-count');
     var labelEl = document.querySelector('.session-box-label');
     if (!countEl || !labelEl) return;
@@ -72,18 +83,28 @@
     labelEl.textContent = active.length === 1 ? 'session' : 'sessions';
   }
 
-  // Update the header session indicator
+  // Build or rebuild the session indicator — only when session list actually changes
   function updateSessionIndicator() {
+    var active = sessions.filter(function(s) { return s.status === 'active'; });
+    var key = sessionListKey(active);
+
+    // If sessions haven't changed, just refresh selection state
+    if (key === lastSessionKey && dropdownBuilt) {
+      refreshSelectionState();
+      return;
+    }
+    lastSessionKey = key;
+
     var indicator = document.getElementById('session-indicator');
     if (!indicator) return;
 
-    var active = sessions.filter(function(s) { return s.status === 'active'; });
-    var count = active.length;
-
     indicator.innerHTML = '';
+    dropdownBuilt = false;
+
+    var count = active.length;
     if (count === 0) return;
 
-    // Labeled box button
+    // Box button
     var box = document.createElement('button');
     box.className = 'session-box';
     box.type = 'button';
@@ -92,10 +113,8 @@
 
     var countEl = document.createElement('span');
     countEl.className = 'session-box-count';
-
     var labelEl = document.createElement('span');
     labelEl.className = 'session-box-label';
-
     box.appendChild(countEl);
     box.appendChild(labelEl);
 
@@ -105,15 +124,25 @@
     dropdown.setAttribute('role', 'listbox');
     dropdown.hidden = true;
 
-    // "All Sessions" option
+    // "All Sessions" item
     var allItem = document.createElement('div');
     allItem.className = 'session-dropdown-item session-dropdown-item--all';
-    if (!filterSessionId) allItem.classList.add('session-dropdown-item--selected');
     allItem.setAttribute('role', 'option');
-    allItem.innerHTML =
-      '<span class="session-dropdown-check">' + (!filterSessionId ? '\u2713' : '') + '</span>' +
-      '<span class="session-dropdown-name">All Sessions</span>' +
-      '<span class="session-dropdown-role">' + count + ' total</span>';
+
+    var allCheck = document.createElement('span');
+    allCheck.className = 'session-dropdown-check';
+    allItem.appendChild(allCheck);
+
+    var allName = document.createElement('span');
+    allName.className = 'session-dropdown-name';
+    allName.textContent = 'All Sessions';
+    allItem.appendChild(allName);
+
+    var allCount = document.createElement('span');
+    allCount.className = 'session-dropdown-role';
+    allCount.textContent = count + ' total';
+    allItem.appendChild(allCount);
+
     allItem.addEventListener('click', function(e) {
       e.stopPropagation();
       applyFilter('');
@@ -132,11 +161,9 @@
         item.className = 'session-dropdown-item';
         item.dataset.sessionId = s.sessionId;
         item.setAttribute('role', 'option');
-        if (s.sessionId === filterSessionId) item.classList.add('session-dropdown-item--selected');
 
         var check = document.createElement('span');
         check.className = 'session-dropdown-check';
-        check.textContent = s.sessionId === filterSessionId ? '\u2713' : '';
         item.appendChild(check);
 
         var dot = document.createElement('span');
@@ -155,12 +182,7 @@
 
         item.addEventListener('click', function(e) {
           e.stopPropagation();
-          // Toggle: click same session again to deselect
-          if (filterSessionId === s.sessionId) {
-            applyFilter('');
-          } else {
-            applyFilter(s.sessionId);
-          }
+          applyFilter(filterSessionId === s.sessionId ? '' : s.sessionId);
         });
 
         dropdown.appendChild(item);
@@ -173,8 +195,10 @@
     wrapper.appendChild(dropdown);
     indicator.appendChild(wrapper);
 
-    // Set initial label
-    updateBoxLabel();
+    dropdownBuilt = true;
+
+    // Apply current selection state
+    refreshSelectionState();
 
     // Toggle dropdown
     box.addEventListener('click', function(e) {
@@ -206,8 +230,7 @@
       '<option value="">All Sessions</option></select>';
     filterBar.appendChild(group);
 
-    var select = group.querySelector('select');
-    select.addEventListener('change', function() {
+    group.querySelector('select').addEventListener('change', function() {
       applyFilter(this.value);
     });
   }
@@ -251,7 +274,6 @@
     getSessions: function() { return sessions; },
   };
 
-  // Initialize
   function init() {
     fetchSessions();
     setInterval(fetchSessions, SESSION_POLL_INTERVAL);
