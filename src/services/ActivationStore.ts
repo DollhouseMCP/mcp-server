@@ -87,7 +87,13 @@ const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
  */
 function resolveSessionId(): string {
   const envValue = process.env.DOLLHOUSE_SESSION_ID?.trim();
-  if (!envValue) return 'default';
+  if (!envValue) {
+    // Generate a unique session ID per server instance to prevent
+    // cross-session activation leaking (issue #33)
+    const id = `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    logger.info(`[ActivationStore] No DOLLHOUSE_SESSION_ID set — generated '${id}'`);
+    return id;
+  }
 
   if (!SESSION_ID_PATTERN.test(envValue)) {
     logger.warn(
