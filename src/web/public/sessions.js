@@ -48,16 +48,21 @@
     const active = sessions.filter(s => s.status === 'active');
     const count = active.length;
 
-    if (count <= 1) {
-      indicator.textContent = '';
-      indicator.title = count === 1 ? `Session: ${shortSessionId(active[0]?.sessionId)}` : 'No active sessions';
+    indicator.innerHTML = '';
+
+    if (count === 0) {
+      indicator.title = 'No active sessions';
       return;
     }
 
-    indicator.innerHTML = '';
     const badge = document.createElement('span');
     badge.className = 'session-count-badge';
-    badge.textContent = count + ' sessions';
+    if (count === 1) {
+      badge.textContent = shortSessionId(active[0].sessionId);
+      badge.style.background = sessionColor(active[0].sessionId);
+    } else {
+      badge.textContent = count + ' sessions';
+    }
     indicator.appendChild(badge);
     indicator.title = active.map(s =>
       `${shortSessionId(s.sessionId)} (pid ${s.pid})${s.isLeader ? ' [leader]' : ''}`
