@@ -13,6 +13,7 @@
 
 import { SecurityEvent } from '../securityMonitor.js';
 import { EvictingQueue } from '../../utils/EvictingQueue.js';
+import { EventDeduplicator } from '../../utils/EventDeduplicator.js';
 
 export interface AttackVector {
   type: string;
@@ -55,6 +56,7 @@ export class SecurityTelemetry {
   private readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
   private readonly attackVectorMap: Map<string, AttackVector> = new Map();
   private logListener?: (entry: AttackTelemetryEntry) => void;
+  private readonly logDedup = new EventDeduplicator(60_000, 500);
 
   addLogListener(fn: (entry: AttackTelemetryEntry) => void): () => void {
     this.logListener = fn;
@@ -91,7 +93,11 @@ export class SecurityTelemetry {
 
     // Bounded FIFO eviction — EvictingQueue handles capacity
     this.attackHistory.push(entry);
-    this.logListener?.(entry);
+
+    // Deduplicate log listener calls — same attackType+pattern within 60s = suppress
+    if (!this.logDedup.shouldSuppress(`${attackType}\0${pattern}`)) {
+      this.logListener?.(entry);
+    }
 
     // Update attack vector map
     const vectorKey = `${attackType}:${pattern}`;
