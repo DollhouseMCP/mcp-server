@@ -1,0 +1,235 @@
+/**
+ * Event ingestion routes for the unified web console.
+ *
+ * The console leader mounts these routes so follower MCP servers can
+ * forward their logs, metrics, and session lifecycle events. All ingested
+ * entries are stamped with `_sessionId` in their data field and then
+ * broadcast to SSE clients via the existing log/metrics broadcast hooks.
+ *
+ * Routes:
+ * - POST /api/ingest/logs     — Batched log entries from a follower
+ * - POST /api/ingest/metrics  — Metric snapshots from a follower
+ * - POST /api/ingest/session  — Session lifecycle events (started/stopped/heartbeat)
+ * - GET  /api/sessions        — Active session list for the UI
+ *
+ * @since v2.1.0 — Issue #1700
+ */
+
+import express, { Router } from 'express';
+import type { Request, Response } from 'express';
+import type { UnifiedLogEntry } from '../../logging/types.js';
+import type { MetricSnapshot } from '../../metrics/types.js';
+import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { logger } from '../../utils/logger.js';
+
+/** Maximum payload size for ingestion requests */
+const MAX_PAYLOAD_SIZE = '1mb';
+
+/** Rate limit: max requests per window per source */
+const RATE_LIMIT_MAX = 1000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Tracked session information.
+ */
+export interface SessionInfo {
+  sessionId: string;
+  pid: number;
+  startedAt: string;
+  lastHeartbeat: string;
+  status: 'active' | 'ended';
+  isLeader: boolean;
+}
+
+/**
+ * Payload for POST /api/ingest/logs
+ */
+export interface IngestLogPayload {
+  sessionId: string;
+  entries: UnifiedLogEntry[];
+}
+
+/**
+ * Payload for POST /api/ingest/metrics
+ */
+export interface IngestMetricsPayload {
+  sessionId: string;
+  snapshot: MetricSnapshot;
+}
+
+/**
+ * Payload for POST /api/ingest/session
+ */
+export interface SessionEventPayload {
+  sessionId: string;
+  event: 'started' | 'stopped' | 'heartbeat';
+  pid: number;
+  startedAt: string;
+}
+
+/**
+ * Callbacks provided by the unified console orchestrator for broadcasting
+ * ingested events through the existing SSE infrastructure.
+ */
+export interface IngestBroadcasts {
+  logBroadcast: (entry: UnifiedLogEntry) => void;
+  metricsOnSnapshot?: (snapshot: MetricSnapshot) => void;
+  sessionBroadcast?: (event: SessionInfo) => void;
+}
+
+/**
+ * Result of creating ingest routes.
+ */
+export interface IngestRoutesResult {
+  router: Router;
+  /** Get all tracked sessions */
+  getSessions: () => SessionInfo[];
+  /** Register the leader as a session */
+  registerLeaderSession: (sessionId: string, pid: number) => void;
+}
+
+/**
+ * Create the ingestion routes and session registry.
+ *
+ * @param broadcasts - Callbacks to forward ingested events to SSE clients
+ * @returns Router and session management functions
+ */
+export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesResult {
+  const router = Router();
+  const sessions = new Map<string, SessionInfo>();
+  const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+
+  // JSON body parsing with size limit
+  router.use(express.json({ limit: MAX_PAYLOAD_SIZE }));
+
+  /**
+   * POST /api/ingest/logs — Receive batched log entries from a follower.
+   */
+  router.post('/api/ingest/logs', (req: Request, res: Response) => {
+    if (!rateLimiter.tryAcquire()) {
+      res.status(429).json({ error: 'Rate limit exceeded' });
+      return;
+    }
+
+    const payload = req.body as IngestLogPayload;
+    if (!payload?.sessionId || !Array.isArray(payload.entries)) {
+      res.status(400).json({ error: 'Invalid payload: requires sessionId and entries[]' });
+      return;
+    }
+
+    let count = 0;
+    for (const entry of payload.entries) {
+      if (!entry || typeof entry.message !== 'string') continue;
+      // Stamp session context into the data field
+      const stamped: UnifiedLogEntry = {
+        ...entry,
+        data: { ...entry.data, _sessionId: payload.sessionId },
+      };
+      broadcasts.logBroadcast(stamped);
+      count++;
+    }
+
+    // Update session heartbeat
+    const session = sessions.get(payload.sessionId);
+    if (session) {
+      session.lastHeartbeat = new Date().toISOString();
+    }
+
+    res.status(200).json({ accepted: count });
+  });
+
+  /**
+   * POST /api/ingest/metrics — Receive metric snapshots from a follower.
+   */
+  router.post('/api/ingest/metrics', (req: Request, res: Response) => {
+    if (!rateLimiter.tryAcquire()) {
+      res.status(429).json({ error: 'Rate limit exceeded' });
+      return;
+    }
+
+    const payload = req.body as IngestMetricsPayload;
+    if (!payload?.sessionId || !payload.snapshot) {
+      res.status(400).json({ error: 'Invalid payload: requires sessionId and snapshot' });
+      return;
+    }
+
+    if (broadcasts.metricsOnSnapshot) {
+      broadcasts.metricsOnSnapshot(payload.snapshot);
+    }
+
+    res.status(200).json({ accepted: true });
+  });
+
+  /**
+   * POST /api/ingest/session — Session lifecycle events.
+   */
+  router.post('/api/ingest/session', (req: Request, res: Response) => {
+    const payload = req.body as SessionEventPayload;
+    if (!payload?.sessionId || !payload.event) {
+      res.status(400).json({ error: 'Invalid payload: requires sessionId and event' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    switch (payload.event) {
+      case 'started': {
+        const info: SessionInfo = {
+          sessionId: payload.sessionId,
+          pid: payload.pid,
+          startedAt: payload.startedAt || now,
+          lastHeartbeat: now,
+          status: 'active',
+          isLeader: false,
+        };
+        sessions.set(payload.sessionId, info);
+        logger.info(`[IngestRoutes] Session registered: ${payload.sessionId} (pid=${payload.pid})`);
+        broadcasts.sessionBroadcast?.(info);
+        break;
+      }
+      case 'stopped': {
+        const existing = sessions.get(payload.sessionId);
+        if (existing) {
+          existing.status = 'ended';
+          existing.lastHeartbeat = now;
+          broadcasts.sessionBroadcast?.(existing);
+        }
+        break;
+      }
+      case 'heartbeat': {
+        const existing = sessions.get(payload.sessionId);
+        if (existing) {
+          existing.lastHeartbeat = now;
+        }
+        break;
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  });
+
+  /**
+   * GET /api/sessions — List all tracked sessions.
+   */
+  router.get('/api/sessions', (_req: Request, res: Response) => {
+    const allSessions = Array.from(sessions.values());
+    res.json({ sessions: allSessions });
+  });
+
+  function getSessions(): SessionInfo[] {
+    return Array.from(sessions.values());
+  }
+
+  function registerLeaderSession(sessionId: string, pid: number): void {
+    sessions.set(sessionId, {
+      sessionId,
+      pid,
+      startedAt: new Date().toISOString(),
+      lastHeartbeat: new Date().toISOString(),
+      status: 'active',
+      isLeader: true,
+    });
+  }
+
+  return { router, getSessions, registerLeaderSession };
+}

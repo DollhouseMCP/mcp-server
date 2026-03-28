@@ -982,25 +982,26 @@ export class DollhouseContainer {
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
-      const { discoverAndBindPort } = await import('../web/portDiscovery.js');
-      const port = await discoverAndBindPort();
-
-      const { startWebServer } = await import('../web/server.js');
+      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const sessionId = activationStore.getSessionId();
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
       const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
       const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
       const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
+      const logManager = this.resolve<LogManager>('LogManager');
 
-      const webResult = await startWebServer({
+      const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
+      const result = await startUnifiedConsole({
+        sessionId,
         portfolioDir: portfolioManager.getBaseDir(),
         memorySink,
         metricsSink,
-        ...(port ? { port } : {}),
-        ...(mcpAqlHandler ? { mcpAqlHandler } : {}),
+        mcpAqlHandler,
+        registerLogSink: (sink) => logManager.registerSink(sink),
+        wireSSEBroadcasts: (webResult, mSink) => this.wireSSEBroadcasts(webResult, mSink),
       });
 
-      this.wireSSEBroadcasts(webResult, metricsSink);
-      logger.info('[Container] Web console started');
+      logger.info(`[Container] Web console started as ${result.role}`);
     } catch (error) {
       logger.warn('[Container] Web console startup failed:', error);
     }
