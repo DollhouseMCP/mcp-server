@@ -115,7 +115,7 @@ describe('evaluatePermission', () => {
       });
 
       const result = await evaluatePermission(
-        { tool_name: 'Read', input: { file_path: '/tmp/test' } },
+        { tool_name: 'Read', input: { file_path: '/home/user/test-file.ts' } },
         deps,
       );
 

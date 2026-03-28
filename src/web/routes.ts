@@ -265,22 +265,25 @@ function parseYamlFile(content: string): { metadata: Record<string, unknown>; bo
   }
 }
 
-export function createApiRoutes(portfolioDir: string): Router {
-  const router = Router();
+/**
+ * Register portfolio routes shared between simple and gateway modes.
+ * The structuredDetail option controls whether detail routes return
+ * structured JSON (gateway) or plain text (simple/legacy).
+ */
+function registerPortfolioRoutes(
+  router: Router,
+  portfolioDir: string,
+  options: { structuredDetail: boolean; logPrefix: string },
+): void {
+  const { structuredDetail, logPrefix } = options;
 
-  /**
-   * GET /api/elements
-   * Returns all elements across all types with metadata.
-   * Supports optional pagination: ?page=1&pageSize=50
-   * Without pagination params, returns all elements (backward compatible).
-   */
   router.get('/elements', async (req, res) => {
     try {
       const pageParam = req.query.page as string | undefined;
       const pageSizeParam = req.query.pageSize as string | undefined;
       const wantPagination = pageParam !== undefined && pageSizeParam !== undefined;
-      const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);
-      const pageSize = Math.max(1, Math.min(200, parseInt(pageSizeParam || '50', 10) || 50));
+      const page = Math.max(1, Number.parseInt(pageParam || '1', 10) || 1);
+      const pageSize = Math.max(1, Math.min(200, Number.parseInt(pageSizeParam || '50', 10) || 50));
 
       const result: Record<string, unknown[]> = {};
       let totalCount = 0;
@@ -298,7 +301,7 @@ export function createApiRoutes(portfolioDir: string): Router {
           const dirStat = await stat(typeDir);
           if (!dirStat.isDirectory()) continue;
 
-          const elements = await scanElementDirectory(typeDir, type, '[WebUI]');
+          const elements = await scanElementDirectory(typeDir, type, logPrefix);
           result[type] = elements;
           totalCount += elements.length;
         } catch {
@@ -307,7 +310,6 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
 
       if (wantPagination) {
-        // Flatten all elements, paginate, then return
         const allElements: unknown[] = [];
         for (const type of ELEMENT_TYPES) {
           allElements.push(...(result[type] || []));
@@ -315,27 +317,16 @@ export function createApiRoutes(portfolioDir: string): Router {
         const start = (page - 1) * pageSize;
         const paged = allElements.slice(start, start + pageSize);
         const totalPages = Math.ceil(allElements.length / pageSize);
-        res.json({
-          elements: paged,
-          totalCount: allElements.length,
-          page,
-          pageSize,
-          totalPages,
-        });
+        res.json({ elements: paged, totalCount: allElements.length, page, pageSize, totalPages });
       } else {
-        // Backward-compatible: grouped by type
         res.json({ elements: result, totalCount });
       }
     } catch (err) {
-      logger.error('[WebUI] Failed to list elements:', err);
+      logger.error(`${logPrefix} Failed to list elements:`, err);
       res.status(500).json({ error: 'Failed to list elements' });
     }
   });
 
-  /**
-   * GET /api/elements/:type
-   * Returns all elements of a specific type
-   */
   router.get('/elements/:type', async (req, res) => {
     const type = normalizeInput(req.params.type);
     if (!ELEMENT_TYPES.includes(type as typeof ELEMENT_TYPES[number])) {
@@ -350,22 +341,17 @@ export function createApiRoutes(portfolioDir: string): Router {
         return;
       }
 
-      const elements = await scanElementDirectory(join(portfolioDir, type), type, '[WebUI]');
+      const elements = await scanElementDirectory(join(portfolioDir, type), type, logPrefix);
       res.json({ type, elements, count: elements.length });
     } catch {
       res.status(500).json({ error: `Failed to list ${type}` });
     }
   });
 
-  /**
-   * GET /api/elements/memories/:date/:file
-   * Memory content loading with date-partitioned paths.
-   * Must be registered before the generic :type/:name route.
-   */
   router.get('/elements/memories/:date/:file', async (req, res) => {
     const { date, file } = req.params;
 
-    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       res.status(400).json({ error: 'Invalid date format' });
       return;
     }
@@ -389,18 +375,18 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
 
       const content = await readFile(filePath, 'utf-8');
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.send(content);
+      if (structuredDetail) {
+        const validation = validateElementContent(file, content, 'memories');
+        res.json(buildValidationResponse(validation, content, 'memories'));
+      } else {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(content);
+      }
     } catch {
       res.status(404).json({ error: `Memory not found: ${date}/${file}` });
     }
   });
 
-  /**
-   * GET /api/elements/:type/:name
-   * Returns the raw file content as plain text.
-   * The client-side app handles YAML/markdown parsing and rendering.
-   */
   router.get('/elements/:type/:name', async (req, res) => {
     const { type, name } = req.params;
     if (!ELEMENT_TYPES.includes(type as typeof ELEMENT_TYPES[number])) {
@@ -419,44 +405,35 @@ export function createApiRoutes(portfolioDir: string): Router {
     }
 
     try {
-      const typeDir = join(portfolioDir, type);
-      const files = await readdir(typeDir);
-
-      const match = files.find(f => {
-        const base = f.replace(extname(f), '');
-        return base === name || f === name;
-      });
-
-      if (!match) {
-        res.status(404).json({ error: `Element not found: ${type}/${name}` });
+      const resolved = await resolveElementFilePath(portfolioDir, type, name);
+      if ('error' in resolved) {
+        res.status(resolved.status).json({ error: resolved.error });
         return;
       }
 
-      const filePath = join(typeDir, match);
-      const resolvedPath = resolve(filePath);
-      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
-        res.status(400).json({ error: 'Path traversal detected' });
-        return;
-      }
-
-      const fileStat = await stat(filePath);
+      const fileStat = await stat(resolved.filePath);
       if (fileStat.size > MAX_FILE_SIZE_BYTES) {
         res.status(413).json({ error: `File too large (${fileStat.size} bytes). Max 1 MB.` });
         return;
       }
 
-      const content = await readFile(filePath, 'utf-8');
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.send(content);
+      const content = await readFile(resolved.filePath, 'utf-8');
+      if (structuredDetail) {
+        const filename = resolved.filePath.split('/').pop() || name;
+        const validation = validateElementContent(filename, content, type);
+        res.json(buildValidationResponse(validation, content, type));
+      } else {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(content);
+      }
     } catch {
       res.status(500).json({ error: `Failed to get element: ${type}/${name}` });
     }
   });
+}
 
-  /**
-   * GET /api/stats
-   * Returns portfolio statistics
-   */
+/** Register filesystem-based stats route (shared between simple and gateway) */
+function registerStatsRoute(router: Router, portfolioDir: string): void {
   router.get('/stats', async (_req, res) => {
     try {
       const stats: Record<string, number> = {};
@@ -472,10 +449,7 @@ export function createApiRoutes(portfolioDir: string): Router {
           }
           const typeDir = join(portfolioDir, type);
           const files = await readdir(typeDir);
-          const count = files.filter(f =>
-            !isBackupOrCruft(f) &&
-            VALID_EXTENSIONS.has(extname(f))
-          ).length;
+          const count = files.filter(f => !isBackupOrCruft(f) && VALID_EXTENSIONS.has(extname(f))).length;
           stats[type] = count;
           total += count;
         } catch {
@@ -488,16 +462,13 @@ export function createApiRoutes(portfolioDir: string): Router {
       res.status(500).json({ error: 'Failed to get stats' });
     }
   });
+}
 
-  /**
-   * GET /api/collection
-   * Proxies the DollhouseMCP community collection index.
-   * Prefers GitHub raw (authoritative source), falls back to local file.
-   */
+/** Register collection index proxy route (shared between simple and gateway) */
+function registerCollectionRoute(router: Router, portfolioDir: string): void {
   router.get('/collection', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
 
-    // Prefer GitHub raw (authoritative, always fresh)
     try {
       const response = await fetch('https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json');
       if (response.ok) {
@@ -508,7 +479,6 @@ export function createApiRoutes(portfolioDir: string): Router {
       }
     } catch { /* GitHub unreachable — fall back to local */ }
 
-    // Fall back to local collection repo (developer setup, may be stale)
     const localPaths = [
       join(portfolioDir, '..', '..', '..', 'collection', 'public', 'collection-index.json'),
       join(portfolioDir, '..', 'collection', 'public', 'collection-index.json'),
@@ -525,6 +495,15 @@ export function createApiRoutes(portfolioDir: string): Router {
 
     res.status(404).json({ error: 'Collection index not available' });
   });
+}
+
+export function createApiRoutes(portfolioDir: string): Router {
+  const router = Router();
+
+  registerPortfolioRoutes(router, portfolioDir, { structuredDetail: false, logPrefix: '[WebUI]' });
+
+  registerStatsRoute(router, portfolioDir);
+  registerCollectionRoute(router, portfolioDir);
 
   /**
    * POST /api/install
@@ -707,260 +686,11 @@ function asSingleResult(r: unknown): SingleOpResult {
 export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: string): Router {
   const router = Router();
 
-  /**
-   * GET /api/elements
-   * Uses direct filesystem listing to get accurate YAML frontmatter metadata
-   * (created, author, category) with content validated through the security
-   * pipeline (Unicode normalization, YAML bomb detection, injection scanning).
-   * MCP-AQL is used for all other endpoints.
-   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
-   */
-  router.get('/elements', async (req, res) => {
-    try {
-      const pageParam = req.query.page as string | undefined;
-      const pageSizeParam = req.query.pageSize as string | undefined;
-      const wantPagination = pageParam !== undefined && pageSizeParam !== undefined;
-      const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);
-      const pageSize = Math.max(1, Math.min(200, parseInt(pageSizeParam || '50', 10) || 50));
-
-      const result: Record<string, unknown[]> = {};
-      let totalCount = 0;
-
-      for (const type of ELEMENT_TYPES) {
-        try {
-          if (type === 'memories') {
-            const memElements = await loadMemoriesFromIndex(portfolioDir);
-            result[type] = memElements;
-            totalCount += memElements.length;
-            continue;
-          }
-
-          const typeDir = join(portfolioDir, type);
-          const dirStat = await stat(typeDir);
-          if (!dirStat.isDirectory()) continue;
-
-          const elements = await scanElementDirectory(typeDir, type, '[WebUI/Gateway]');
-          result[type] = elements;
-          totalCount += elements.length;
-        } catch {
-          result[type] = [];
-        }
-      }
-
-      if (wantPagination) {
-        const allElements: unknown[] = [];
-        for (const type of ELEMENT_TYPES) {
-          allElements.push(...(result[type] || []));
-        }
-        const start = (page - 1) * pageSize;
-        const paged = allElements.slice(start, start + pageSize);
-        const totalPages = Math.ceil(allElements.length / pageSize);
-        res.json({ elements: paged, totalCount: allElements.length, page, pageSize, totalPages });
-      } else {
-        res.json({ elements: result, totalCount });
-      }
-    } catch (err) {
-      logger.error('[WebUI/Gateway] Failed to list elements:', err);
-      res.status(500).json({ error: 'Failed to list elements' });
-    }
-  });
-
-  /**
-   * GET /api/elements/:type
-   * Routes through list_elements for a specific type.
-   */
-  router.get('/elements/:type', async (req, res) => {
-    const type = normalizeInput(req.params.type);
-    if (!ELEMENT_TYPES.includes(type as typeof ELEMENT_TYPES[number])) {
-      res.status(400).json({ error: `Invalid element type: ${type}` });
-      return;
-    }
-
-    try {
-      const opResult = asSingleResult(await handler.handleRead({
-        operation: 'list_elements',
-        params: { element_type: toSingularType(type), page: 1, pageSize: 1000 },
-      }));
-
-      if (!opResult.success) {
-        res.status(502).json({ error: opResult.error || `Failed to list ${type}` });
-        return;
-      }
-
-      const data = opResult.data as Record<string, unknown>;
-      const items = Array.isArray(data.items) ? data.items : [];
-      res.json({ type, elements: items, count: items.length });
-    } catch {
-      res.status(500).json({ error: `Failed to list ${type}` });
-    }
-  });
-
-  /**
-   * GET /api/elements/memories/:date/:file
-   * Memory content loading with date-partitioned paths.
-   * Must be registered before the generic :type/:name route.
-   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
-   */
-  router.get('/elements/memories/:date/:file', async (req, res) => {
-    const { date, file } = req.params;
-
-    if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      res.status(400).json({ error: 'Invalid date format' });
-      return;
-    }
-    if (file.includes('..') || file.includes('/') || file.includes('\\') || isBackupOrCruft(file)) {
-      res.status(400).json({ error: 'Invalid filename' });
-      return;
-    }
-
-    try {
-      const filePath = join(portfolioDir, 'memories', date, file);
-      const resolvedPath = resolve(filePath);
-      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
-        res.status(400).json({ error: 'Path traversal detected' });
-        return;
-      }
-
-      const fileStat = await stat(filePath);
-      if (!fileStat.isFile() || fileStat.size > MAX_FILE_SIZE_BYTES) {
-        res.status(fileStat.isFile() ? 413 : 404).json({ error: fileStat.isFile() ? 'File too large' : 'Not found' });
-        return;
-      }
-
-      const content = await readFile(filePath, 'utf-8');
-      const validation = validateElementContent(file, content, 'memories');
-
-      res.json({
-        metadata: validation.metadata,
-        body: validation.body,
-        raw: content,
-        type: 'memory',
-        validation: {
-          status: validation.valid ? 'pass' : 'warn',
-          ...(validation.rejection && {
-            reason: validation.rejection.reason,
-            severity: validation.rejection.severity,
-            patterns: validation.rejection.patterns,
-          }),
-        },
-      });
-    } catch {
-      res.status(404).json({ error: `Memory not found: ${date}/${file}` });
-    }
-  });
-
-  /**
-   * GET /api/elements/:type/:name
-   * Returns the raw file content as plain text, validated through the security pipeline.
-   * The client-side app handles YAML/markdown parsing and rendering.
-   */
-  router.get('/elements/:type/:name', async (req, res) => {
-    const { type, name } = req.params;
-    if (!ELEMENT_TYPES.includes(type as typeof ELEMENT_TYPES[number])) {
-      res.status(400).json({ error: `Invalid element type: ${type}` });
-      return;
-    }
-
-    if (name.includes('..') || name.includes('\\')) {
-      res.status(400).json({ error: 'Invalid element name' });
-      return;
-    }
-
-    if (type !== 'memories' && name.includes('/')) {
-      res.status(400).json({ error: 'Invalid element name' });
-      return;
-    }
-
-    try {
-      const resolved = await resolveElementFilePath(portfolioDir, type, name);
-      if ('error' in resolved) {
-        res.status(resolved.status).json({ error: resolved.error });
-        return;
-      }
-
-      const fileStat = await stat(resolved.filePath);
-      if (fileStat.size > MAX_FILE_SIZE_BYTES) {
-        res.status(413).json({ error: `File too large (${fileStat.size} bytes). Max 1 MB.` });
-        return;
-      }
-
-      const content = await readFile(resolved.filePath, 'utf-8');
-      const filename = resolved.filePath.split('/').pop() || name;
-      const validation = validateElementContent(filename, content, type);
-      res.json(buildValidationResponse(validation, content, type));
-    } catch {
-      res.status(500).json({ error: `Failed to get element: ${type}/${name}` });
-    }
-  });
-
-  /**
-   * GET /api/stats
-   * Portfolio statistics — lightweight aggregate, uses list_elements counts.
-   */
-  router.get('/stats', async (_req, res) => {
-    try {
-      const stats: Record<string, number> = {};
-      let total = 0;
-
-      // Parallelize stats queries
-      const typeStats = await Promise.all(ELEMENT_TYPES.map(async (type) => {
-        const opResult = asSingleResult(await handler.handleRead({
-          operation: 'list_elements',
-          params: { element_type: toSingularType(type), page: 1, pageSize: 1 },
-        }));
-        if (opResult.success && opResult.data) {
-          const data = opResult.data as Record<string, unknown>;
-          const pagination = data.pagination as Record<string, unknown> | undefined;
-          return { type, count: typeof pagination?.totalItems === 'number' ? pagination.totalItems : 0 };
-        }
-        return { type, count: 0 };
-      }));
-
-      for (const { type, count } of typeStats) {
-        stats[type] = count;
-        total += count;
-      }
-
-      res.json({ stats, total });
-    } catch {
-      res.status(500).json({ error: 'Failed to get stats' });
-    }
-  });
-
-  /**
-   * GET /api/collection
-   * Proxies the community collection index.
-   * No MCP-AQL equivalent — uses direct fetch (same as legacy).
-   */
-  router.get('/collection', async (_req, res) => {
-    res.setHeader('Cache-Control', 'no-cache');
-
-    try {
-      const response = await fetch('https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json');
-      if (response.ok) {
-        const data = await response.text();
-        res.setHeader('Content-Type', 'application/json');
-        res.send(data);
-        return;
-      }
-    } catch { /* GitHub unreachable — fall back to local */ }
-
-    const localPaths = [
-      join(portfolioDir, '..', '..', '..', 'collection', 'public', 'collection-index.json'),
-      join(portfolioDir, '..', 'collection', 'public', 'collection-index.json'),
-    ];
-
-    for (const localPath of localPaths) {
-      try {
-        const content = await readFile(localPath, 'utf-8');
-        res.setHeader('Content-Type', 'application/json');
-        res.send(content);
-        return;
-      } catch { /* try next */ }
-    }
-
-    res.status(404).json({ error: 'Collection index not available' });
-  });
+  // Shared portfolio routes — structured JSON for detail views
+  // codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware in server.ts
+  registerPortfolioRoutes(router, portfolioDir, { structuredDetail: true, logPrefix: '[WebUI/Gateway]' });
+  registerStatsRoute(router, portfolioDir);
+  registerCollectionRoute(router, portfolioDir);
 
   /**
    * GET /api/collection/content/*
