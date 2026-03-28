@@ -9,7 +9,7 @@
  * @since v2.1.0 — Issue #1700
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
 
 /**
@@ -104,20 +104,10 @@ const ALL_PUPPET_NAMES: readonly string[] = [
 /** Names that can never be assigned to a leader session */
 const FOLLOWER_ONLY_NAMES = new Set(['Punch']);
 
-/** Unbiased random integer in [0, max) using rejection sampling */
-function randomIntUnbiased(max: number): number {
-  const limit = Math.floor(0x100000000 / max) * max;
-  let val: number;
-  do {
-    val = randomBytes(4).readUInt32BE(0);
-  } while (val >= limit);
-  return val % max;
-}
-
-/** Fisher-Yates shuffle using unbiased crypto random */
+/** Fisher-Yates shuffle using crypto.randomInt (unbiased, no modulo) */
 function shuffleArray<T>(arr: T[]): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = randomIntUnbiased(i + 1);
+    const j = randomInt(i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
