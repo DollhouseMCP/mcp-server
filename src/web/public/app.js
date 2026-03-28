@@ -1325,6 +1325,78 @@ function safeParseYaml(content) {
     return html;
   }
 
+  /** Render common metadata sections (created, author, tags, etc.) shared by both renderers */
+  function renderCommonMetadata(fm, type) {
+    let html = '';
+
+    const createdVal = fm.created || fm.created_date;
+    if (createdVal) {
+      html += `<div class="detail-created"><span class="detail-created-label">Created</span><span class="detail-created-value">${escapeHtml(formatDate(createdVal))}</span></div>`;
+    }
+
+    const coreFields = [
+      detailField('Author', fm.author),
+      detailField('Version', fm.version ? `v${fm.version}` : null),
+      detailField('Category', fm.category),
+      detailField('License', fm.license),
+      detailField('Age rating', fm.age_rating),
+      detailField('Modified', fm.modified ? formatDate(fm.modified) : null),
+    ].filter(Boolean).join('');
+    if (coreFields) html += detailSection('Details', coreFields);
+
+    if (Array.isArray(fm.tags) && fm.tags.length) {
+      html += detailSection('Tags', detailPillList(fm.tags, 'pill-tag'));
+    }
+    if (Array.isArray(fm.triggers) && fm.triggers.length) {
+      html += detailSection('Trigger words', detailPillList(fm.triggers, 'pill-trigger'));
+    }
+
+    html += renderComponentsSections(fm);
+    if (fm.coordination_strategy) html += detailSection('Coordination', `<p class="detail-prose">${escapeHtml(fm.coordination_strategy)}</p>`);
+    html += renderUseCases(fm);
+
+    if (fm.instructions && type !== 'agent' && type !== 'ensemble') {
+      html += detailSection('Instructions', renderInstructions(fm.instructions));
+    }
+    if (fm.gatekeeper && typeof fm.gatekeeper === 'object' && type !== 'agent' && type !== 'ensemble') {
+      html += renderGatekeeperSection(fm.gatekeeper);
+    }
+
+    return html;
+  }
+
+  /** Render components section (ensembles) */
+  function renderComponentsSections(fm) {
+    const compTypes = ['personas','skills','tools','templates','prompts','memories'];
+    const compEntries = compTypes
+      .filter(k => Array.isArray(fm[k]) && fm[k].length)
+      .map(k => `<div class="detail-field"><span class="detail-label">${capitalize(k)}</span><span class="detail-value">${detailPillList(fm[k])}</span></div>`)
+      .join('');
+    return compEntries ? detailSection('Components', compEntries) : '';
+  }
+
+  /** Render use cases section */
+  function renderUseCases(fm) {
+    if (!Array.isArray(fm.use_cases) || !fm.use_cases.length) return '';
+    const items = fm.use_cases.map(u => `<li>${escapeHtml(u)}</li>`).join('');
+    return detailSection('Use cases', `<ul class="detail-list">${items}</ul>`);
+  }
+
+  /** Render type-specific sections (parameters, agent, ensemble, proficiency) */
+  function renderTypeSpecificSections(fm, type) {
+    let html = '';
+    html += renderDetailParameters(fm);
+    html += renderDetailVariables(fm);
+    if (fm.proficiency_levels && typeof fm.proficiency_levels === 'object') {
+      const levels = Object.entries(fm.proficiency_levels)
+        .map(([lvl, desc]) => detailField(capitalize(lvl), desc)).join('');
+      if (levels) html += detailSection('Proficiency levels', levels);
+    }
+    if (type === 'agent') html += renderAgentSection(fm);
+    if (type === 'ensemble') html += renderEnsembleSection(fm);
+    return html;
+  }
+
   /**
    * Render element detail from pre-parsed structured JSON.
    * The server has already validated and parsed the YAML — no client-side
@@ -1336,92 +1408,18 @@ function safeParseYaml(content) {
       return `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || JSON.stringify(data))}</code></pre>`;
     }
 
-    // Memories: render all fields with the memory-aware renderer
     if (type === 'memory') {
       return renderMemoryView(data.raw);
     }
 
     let html = '';
 
-    // Validation badge
-    if (data.validation && data.validation.status === 'warn') {
-      html += `<div class="detail-validation-warn">Security scan: ${escapeHtml(data.validation.reason || 'warning')}</div>`;
+    if (data.validation?.status === 'warn') {
+      html += `<div class="detail-validation-warn">Security scan: ${escapeHtml(data.validation?.reason || 'warning')}</div>`;
     }
 
-    // Created date
-    const createdVal = fm.created || fm.created_date;
-    if (createdVal) {
-      html += `<div class="detail-created"><span class="detail-created-label">Created</span><span class="detail-created-value">${escapeHtml(formatDate(createdVal))}</span></div>`;
-    }
-
-    // Core metadata
-    const coreFields = [
-      detailField('Author', fm.author),
-      detailField('Version', fm.version ? `v${fm.version}` : null),
-      detailField('Category', fm.category),
-      detailField('License', fm.license),
-      detailField('Age rating', fm.age_rating),
-      detailField('Modified', fm.modified ? formatDate(fm.modified) : null),
-    ].filter(Boolean).join('');
-    if (coreFields) html += detailSection('Details', coreFields);
-
-    // Tags
-    if (Array.isArray(fm.tags) && fm.tags.length) {
-      html += detailSection('Tags', detailPillList(fm.tags, 'pill-tag'));
-    }
-
-    // Triggers (personas)
-    if (Array.isArray(fm.triggers) && fm.triggers.length) {
-      html += detailSection('Trigger words', detailPillList(fm.triggers, 'pill-trigger'));
-    }
-
-    // Components (ensembles)
-    const compTypes = ['personas','skills','tools','templates','prompts','memories'];
-    const compEntries = compTypes
-      .filter(k => Array.isArray(fm[k]) && fm[k].length)
-      .map(k => `<div class="detail-field"><span class="detail-label">${capitalize(k)}</span><span class="detail-value">${detailPillList(fm[k])}</span></div>`)
-      .join('');
-    if (compEntries) html += detailSection('Components', compEntries);
-
-    // Ensemble coordination
-    if (fm.coordination_strategy) html += detailSection('Coordination', `<p class="detail-prose">${escapeHtml(fm.coordination_strategy)}</p>`);
-
-    // Use cases
-    if (Array.isArray(fm.use_cases) && fm.use_cases.length) {
-      const useCaseItems = fm.use_cases.map(u => `<li>${escapeHtml(u)}</li>`).join('');
-      html += detailSection('Use cases', `<ul class="detail-list">${useCaseItems}</ul>`);
-    }
-
-    // Instructions (non-agent/ensemble)
-    if (fm.instructions && type !== 'agent' && type !== 'ensemble') {
-      html += detailSection('Instructions', renderInstructions(fm.instructions));
-    }
-
-    // Gatekeeper (non-agent/ensemble)
-    if (fm.gatekeeper && typeof fm.gatekeeper === 'object' && type !== 'agent' && type !== 'ensemble') {
-      html += renderGatekeeperSection(fm.gatekeeper);
-    }
-
-    // Parameters (skills/tools)
-    html += renderDetailParameters(fm);
-
-    // Variables (templates)
-    html += renderDetailVariables(fm);
-
-    // Proficiency levels (skills)
-    if (fm.proficiency_levels && typeof fm.proficiency_levels === 'object') {
-      const levels = Object.entries(fm.proficiency_levels)
-        .map(([lvl, desc]) => detailField(capitalize(lvl), desc)).join('');
-      if (levels) html += detailSection('Proficiency levels', levels);
-    }
-
-    // Agent fields
-    if (type === 'agent') html += renderAgentSection(fm);
-
-    // Ensemble fields
-    if (type === 'ensemble') html += renderEnsembleSection(fm);
-
-    // Catch-all + body
+    html += renderCommonMetadata(fm, type);
+    html += renderTypeSpecificSections(fm, type);
     html += renderDetailExtra(fm, body || '');
 
     return html || `<pre class="element-source"><code class="element-code">${escapeHtml(data.raw || '')}</code></pre>`;

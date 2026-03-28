@@ -18,7 +18,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { logger } from '../utils/logger.js';
-import { validateElementContent } from './contentPipeline.js';
+import { validateElementContent, type PipelineResult } from './contentPipeline.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
 /** Normalize user input to NFC form to prevent Unicode homograph attacks */
@@ -48,6 +48,110 @@ function isBackupOrCruft(filename: string): boolean {
   if (filename.endsWith('.bak') || filename.endsWith('~')) return true;
   if (filename.includes(' copy')) return true;
   return false;
+}
+
+/**
+ * Scan a directory for valid elements, running each through the security
+ * validation pipeline. Returns metadata objects ready for API responses.
+ */
+async function scanElementDirectory(typeDir: string, type: string, logPrefix: string): Promise<unknown[]> {
+  const files = await readdir(typeDir);
+  const elements: unknown[] = [];
+
+  for (const file of files) {
+    if (isBackupOrCruft(file)) continue;
+    const ext = extname(file);
+    if (!VALID_EXTENSIONS.has(ext)) continue;
+
+    try {
+      const filePath = join(typeDir, file);
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile() || fileStat.size > MAX_FILE_SIZE_BYTES) continue;
+
+      const content = await readFile(filePath, 'utf-8');
+      const validationResult = validateElementContent(file, content, type);
+
+      if (!validationResult.valid) {
+        logger.debug(`${logPrefix} Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
+        continue;
+      }
+
+      const { metadata } = validationResult;
+      elements.push({
+        name: metadata.name || file.replace(ext, ''),
+        description: metadata.description || '',
+        type: type.slice(0, -1),
+        version: metadata.version || '1.0.0',
+        author: metadata.author || '',
+        category: metadata.category || '',
+        tags: metadata.tags || '',
+        created: metadata.created || '',
+        filename: file,
+      });
+    } catch (err) {
+      logger.debug(`${logPrefix} Failed to parse ${file}:`, err);
+    }
+  }
+
+  return elements;
+}
+
+/** Build a structured validation response for element detail routes */
+function buildValidationResponse(validation: PipelineResult, content: string, type: string) {
+  return {
+    metadata: validation.metadata,
+    body: validation.body,
+    raw: content,
+    type: type.endsWith('s') ? type.slice(0, -1) : type,
+    validation: {
+      status: validation.valid ? 'pass' : 'warn',
+      ...(validation.rejection && {
+        reason: validation.rejection.reason,
+        severity: validation.rejection.severity,
+        patterns: validation.rejection.patterns,
+      }),
+    },
+  };
+}
+
+/**
+ * Resolve a file path for an element, handling memory date-paths
+ * and name-with-or-without-extension matching.
+ * Returns the resolved path or null with an error to send.
+ */
+async function resolveElementFilePath(
+  portfolioDir: string, type: string, name: string
+): Promise<{ filePath: string } | { error: string; status: number }> {
+  if (type === 'memories' && name.includes('/')) {
+    const parts = name.split('/');
+    if (parts.length !== 2 || !parts[0].match(/^\d{4}-\d{2}-\d{2}$/) || isBackupOrCruft(parts[1])) {
+      return { error: 'Invalid memory path', status: 400 };
+    }
+    const filePath = join(portfolioDir, type, name);
+    const resolvedPath = resolve(filePath);
+    if (!resolvedPath.startsWith(resolve(portfolioDir))) {
+      return { error: 'Path traversal detected', status: 400 };
+    }
+    return { filePath };
+  }
+
+  const typeDir = join(portfolioDir, type);
+  const files = await readdir(typeDir);
+  const match = files.find(f => {
+    const base = f.replace(extname(f), '');
+    return base === name || f === name;
+  });
+
+  if (!match) {
+    return { error: `Element not found: ${type}/${name}`, status: 404 };
+  }
+
+  const filePath = join(portfolioDir, type, match);
+  const resolvedPath = resolve(filePath);
+  if (!resolvedPath.startsWith(resolve(portfolioDir))) {
+    return { error: 'Path traversal detected', status: 400 };
+  }
+  return { filePath };
 }
 
 /**
@@ -194,47 +298,7 @@ export function createApiRoutes(portfolioDir: string): Router {
           const dirStat = await stat(typeDir);
           if (!dirStat.isDirectory()) continue;
 
-          const files = await readdir(typeDir);
-          const elements: unknown[] = [];
-
-          for (const file of files) {
-            if (isBackupOrCruft(file)) continue;
-
-            const ext = extname(file);
-            if (!VALID_EXTENSIONS.has(ext)) continue;
-
-            try {
-              const filePath = join(typeDir, file);
-
-              const fileStat = await stat(filePath);
-              if (!fileStat.isFile()) continue;
-              if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
-
-              const content = await readFile(filePath, 'utf-8');
-              const validationResult = validateElementContent(file, content, type);
-
-              if (!validationResult.valid) {
-                logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
-                continue;
-              }
-
-              const { metadata } = validationResult;
-              elements.push({
-                name: metadata.name || file.replace(ext, ''),
-                description: metadata.description || '',
-                type: type.slice(0, -1),
-                version: metadata.version || '1.0.0',
-                author: metadata.author || '',
-                category: metadata.category || '',
-                tags: metadata.tags || '',
-                created: metadata.created || '',
-                filename: file,
-              });
-            } catch (err) {
-              logger.debug(`[WebUI] Failed to parse ${file}:`, err);
-            }
-          }
-
+          const elements = await scanElementDirectory(typeDir, type, '[WebUI]');
           result[type] = elements;
           totalCount += elements.length;
         } catch {
@@ -286,47 +350,7 @@ export function createApiRoutes(portfolioDir: string): Router {
         return;
       }
 
-      const typeDir = join(portfolioDir, type);
-      const files = await readdir(typeDir);
-      const elements: unknown[] = [];
-
-      for (const file of files) {
-        if (isBackupOrCruft(file)) continue;
-
-        const ext = extname(file);
-        if (!VALID_EXTENSIONS.has(ext)) continue;
-
-        try {
-          const filePath = join(typeDir, file);
-          const fileStat = await stat(filePath);
-          if (!fileStat.isFile()) continue;
-          if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
-
-          const content = await readFile(filePath, 'utf-8');
-          const validationResult = validateElementContent(file, content, type);
-
-          if (!validationResult.valid) {
-            logger.debug(`[WebUI] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
-            continue;
-          }
-
-          const { metadata } = validationResult;
-          elements.push({
-            name: metadata.name || file.replace(ext, ''),
-            description: metadata.description || '',
-            type: type.slice(0, -1),
-            version: metadata.version || '1.0.0',
-            author: metadata.author || '',
-            category: metadata.category || '',
-            tags: metadata.tags || '',
-            created: metadata.created || '',
-            filename: file,
-          });
-        } catch (err) {
-          logger.debug(`[WebUI] Failed to parse ${file}:`, err);
-        }
-      }
-
+      const elements = await scanElementDirectory(join(portfolioDir, type), type, '[WebUI]');
       res.json({ type, elements, count: elements.length });
     } catch {
       res.status(500).json({ error: `Failed to list ${type}` });
@@ -715,45 +739,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
           const dirStat = await stat(typeDir);
           if (!dirStat.isDirectory()) continue;
 
-          const files = await readdir(typeDir);
-          const elements: unknown[] = [];
-
-          for (const file of files) {
-            if (isBackupOrCruft(file)) continue;
-            const ext = extname(file);
-            if (!VALID_EXTENSIONS.has(ext)) continue;
-
-            try {
-              const filePath = join(typeDir, file);
-              const fileStat = await stat(filePath);
-              if (!fileStat.isFile()) continue;
-              if (fileStat.size > MAX_FILE_SIZE_BYTES) continue;
-
-              const content = await readFile(filePath, 'utf-8');
-              const validationResult = validateElementContent(file, content, type);
-
-              if (!validationResult.valid) {
-                logger.debug(`[WebUI/Gateway] Skipping rejected file ${file}: ${validationResult.rejection?.reason}`);
-                continue;
-              }
-
-              const { metadata } = validationResult;
-              elements.push({
-                name: metadata.name || file.replace(ext, ''),
-                description: metadata.description || '',
-                type: type.slice(0, -1),
-                version: metadata.version || '1.0.0',
-                author: metadata.author || '',
-                category: metadata.category || '',
-                tags: metadata.tags || '',
-                created: metadata.created || '',
-                filename: file,
-              });
-            } catch (err) {
-              logger.debug(`[WebUI/Gateway] Failed to parse ${file}:`, err);
-            }
-          }
-
+          const elements = await scanElementDirectory(typeDir, type, '[WebUI/Gateway]');
           result[type] = elements;
           totalCount += elements.length;
         } catch {
@@ -875,85 +861,33 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       return;
     }
 
-    // Prevent path traversal (but allow / for memory date paths like 2025-09-19/file.yaml)
     if (name.includes('..') || name.includes('\\')) {
       res.status(400).json({ error: 'Invalid element name' });
       return;
     }
 
-    // Non-memory types must not contain /
     if (type !== 'memories' && name.includes('/')) {
       res.status(400).json({ error: 'Invalid element name' });
       return;
     }
 
     try {
-      let filePath: string;
-
-      if (type === 'memories' && name.includes('/')) {
-        // Memory date-path: e.g., "2025-09-19/code-patterns.yaml"
-        const parts = name.split('/');
-        if (parts.length !== 2 || !parts[0].match(/^\d{4}-\d{2}-\d{2}$/) || isBackupOrCruft(parts[1])) {
-          res.status(400).json({ error: 'Invalid memory path' });
-          return;
-        }
-        filePath = join(portfolioDir, type, name);
-      } else {
-        const typeDir = join(portfolioDir, type);
-        const files = await readdir(typeDir);
-
-        // Find the file by name (with or without extension)
-        const match = files.find(f => {
-          const base = f.replace(extname(f), '');
-          return base === name || f === name;
-        });
-
-        if (!match) {
-          res.status(404).json({ error: `Element not found: ${type}/${name}` });
-          return;
-        }
-
-        filePath = join(portfolioDir, type, match);
-      }
-
-      // Verify resolved path stays within portfolio directory (defense in depth).
-      // codeql[js/path-injection] — mitigated: type validated against ELEMENT_TYPES whitelist,
-      // name checked for '..' and '\', memory paths validated as YYYY-MM-DD/filename,
-      // non-memory names matched against actual readdir() results (no user-controlled segments
-      // reach the filesystem), and final resolve() containment check below.
-      const resolvedPath = resolve(filePath);
-      if (!resolvedPath.startsWith(resolve(portfolioDir))) {
-        res.status(400).json({ error: 'Path traversal detected' });
+      const resolved = await resolveElementFilePath(portfolioDir, type, name);
+      if ('error' in resolved) {
+        res.status(resolved.status).json({ error: resolved.error });
         return;
       }
 
-      const fileStat = await stat(filePath);
+      const fileStat = await stat(resolved.filePath);
       if (fileStat.size > MAX_FILE_SIZE_BYTES) {
         res.status(413).json({ error: `File too large (${fileStat.size} bytes). Max 1 MB.` });
         return;
       }
 
-      const content = await readFile(filePath, 'utf-8');
-      const filename = filePath.split('/').pop() || name;
+      const content = await readFile(resolved.filePath, 'utf-8');
+      const filename = resolved.filePath.split('/').pop() || name;
       const validation = validateElementContent(filename, content, type);
-
-      // Return structured JSON: parsed metadata + body + raw content.
-      // The client renders metadata directly (no re-parsing), uses raw for
-      // the Raw toggle, Copy, and Download actions.
-      res.json({
-        metadata: validation.metadata,
-        body: validation.body,
-        raw: content,
-        type: type.endsWith('s') ? type.slice(0, -1) : type,
-        validation: {
-          status: validation.valid ? 'pass' : 'warn',
-          ...(validation.rejection && {
-            reason: validation.rejection.reason,
-            severity: validation.rejection.severity,
-            patterns: validation.rejection.patterns,
-          }),
-        },
-      });
+      res.json(buildValidationResponse(validation, content, type));
     } catch {
       res.status(500).json({ error: `Failed to get element: ${type}/${name}` });
     }

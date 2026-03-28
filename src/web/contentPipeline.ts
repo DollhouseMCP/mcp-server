@@ -77,7 +77,7 @@ export function validateElementContent(
       // keywords, and technical documentation. Memories are locally-generated
       // trusted content, not untrusted external submissions.
       const parsed = SecureYamlParser.parseRawYaml(normalizedContent);
-      metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as Record<string, unknown> : {};
+      metadata = (typeof parsed === 'object' && parsed !== null) ? parsed : {};
     } else {
       // Markdown with YAML frontmatter
       const parsed = SecureYamlParser.parse(normalizedContent, { contentContext });
