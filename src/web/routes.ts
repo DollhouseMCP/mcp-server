@@ -97,13 +97,22 @@ async function scanElementDirectory(typeDir: string, type: string, logPrefix: st
   return elements;
 }
 
+/** Normalize plural element type to singular form */
+const PLURAL_TO_SINGULAR: Record<string, string> = {
+  personas: 'persona', skills: 'skill', templates: 'template',
+  agents: 'agent', memories: 'memory', ensembles: 'ensemble',
+};
+function toSingularType(type: string): string {
+  return PLURAL_TO_SINGULAR[type] || (type.endsWith('s') ? type.slice(0, -1) : type);
+}
+
 /** Build a structured validation response for element detail routes */
 function buildValidationResponse(validation: PipelineResult, content: string, type: string) {
   return {
     metadata: validation.metadata,
     body: validation.body,
     raw: content,
-    type: type.endsWith('s') ? type.slice(0, -1) : type,
+    type: toSingularType(type),
     validation: {
       status: validation.valid ? 'pass' : 'warn',
       ...(validation.rejection && {
@@ -627,19 +636,6 @@ export function createApiRoutes(portfolioDir: string): Router {
 // These routes translate HTTP requests into MCPAQLHandler calls, routing all
 // reads/writes through the existing element managers, validation, and gatekeeper.
 // ────────────────────────────────────────────────────────────────────────────
-
-/** Normalize element type to singular form for MCP-AQL operations */
-const PLURAL_TO_SINGULAR: Record<string, string> = {
-  personas: 'persona',
-  skills: 'skill',
-  templates: 'template',
-  agents: 'agent',
-  memories: 'memory',
-  ensembles: 'ensemble',
-};
-function toSingularType(type: string): string {
-  return PLURAL_TO_SINGULAR[type] || (type.endsWith('s') ? type.slice(0, -1) : type);
-}
 
 /**
  * Extract single operation result from MCPAQLHandler response.
