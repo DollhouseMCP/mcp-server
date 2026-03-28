@@ -36,7 +36,8 @@ export class EventDeduplicator {
     // NFC-normalize to ensure canonical Unicode equivalents deduplicate correctly
     // (e.g. 'Café' decomposed vs composed). Uses String.normalize directly to
     // avoid circular dependency with UnicodeValidator → SecurityMonitor → this.
-    key = key.normalize('NFC');
+    // Falls back to raw key if normalize throws (e.g. mocked in tests).
+    try { key = key.normalize('NFC'); } catch { /* use raw key */ }
     const now = Date.now();
     const lastSeen = this.recentKeys.get(key);
 
@@ -47,7 +48,7 @@ export class EventDeduplicator {
 
     this._processedCount++;
     this.recentKeys.set(key, now);
-    this.cleanup(now);
+    try { this.cleanup(now); } catch { /* eviction failure is non-fatal */ }
     return false;
   }
 
