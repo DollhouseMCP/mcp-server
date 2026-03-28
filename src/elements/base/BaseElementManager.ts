@@ -125,6 +125,22 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    */
   private readonly invalidElements = new Map<string, InvalidElementRecord>();
 
+  /**
+   * Tracks file paths whose load failure has already been logged at error level.
+   * Repeated failures with the same reason are demoted to debug to avoid log flooding.
+   * Cleared when the file changes on disk or loads successfully.
+   */
+  private readonly suppressedLoadPaths = new Set<string>();
+
+  /**
+   * Returns true if the most recent load() failure for this path was suppressed
+   * because it was a repeat of an already-logged error.
+   * Subclasses can use this to avoid duplicate security event logging.
+   */
+  protected isLoadErrorSuppressed(filePath: string): boolean {
+    return this.suppressedLoadPaths.has(filePath);
+  }
+
   protected afterLoad?(element: T, filePath: string): Promise<void>;
   protected beforeSave?(element: T, filePath: string): Promise<void>;
   protected afterSave?(element: T, filePath: string): Promise<void>;
@@ -330,6 +346,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
       // Issue #708: Clear any previous invalid record on successful load
       this.invalidElements.delete(relativePath);
+      this.suppressedLoadPaths.delete(relativePath);
 
       logger.info(`${this.getElementLabelCapitalized()} loaded: ${element.metadata.name}`);
 
@@ -345,12 +362,17 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       // Only track parse/validation errors — ENOENT means the file is genuinely
       // missing, not invalid, so we must not pollute the invalid map with it.
       const isFileNotFound = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      let isRepeatError = false;
+
       if (!isFileNotFound) {
         const reason = error instanceof Error ? error.message : String(error);
+        const existing = this.invalidElements.get(relativePath);
+        isRepeatError = existing !== undefined && existing.reason === reason;
+
         this.invalidElements.set(relativePath, {
           filePath: relativePath,
           reason,
-          failedAt: new Date().toISOString(),
+          failedAt: isRepeatError ? existing!.failedAt : new Date().toISOString(),
         });
       }
 
@@ -358,7 +380,14 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         'element:load:error',
         this.createEventPayload({ correlationId, filePath: relativePath, error })
       );
-      logger.error(`Failed to load ${this.getElementLabel()} from ${absolutePath}:`, error);
+
+      if (isRepeatError) {
+        this.suppressedLoadPaths.add(relativePath);
+        logger.debug(`Suppressed repeated load error for ${this.getElementLabel()} ${relativePath}`);
+      } else {
+        this.suppressedLoadPaths.delete(relativePath);
+        logger.error(`Failed to load ${this.getElementLabel()} from ${absolutePath}:`, error);
+      }
       throw error;
     }
   }
@@ -597,9 +626,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
             if (cached) return cached;
             // Cache miss — read from disk (populates cache for next time)
             return await this.load(file);
-          } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            logger.error(`Failed to load ${this.getElementLabel()} ${file}: ${errorMessage}`);
+          } catch {
+            // load() handles error logging with deduplication
             return null;
           }
         })
@@ -986,6 +1014,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   private handleExternalChange(relativePath: string): void {
     this.uncacheByPath(relativePath);
     this.storageLayer.invalidate();
+    // Clear error suppression so a changed file gets fresh logging
+    this.invalidElements.delete(relativePath);
+    this.suppressedLoadPaths.delete(relativePath);
     const correlationId = randomUUID();
     this.eventDispatcher.emitAsync(
       'element:external-change',
@@ -1081,6 +1112,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.filePathToId.clear();
     this.elementGenerations.clear();
     this.storageLayer.clear();
+    this.suppressedLoadPaths.clear();
   }
 
   /**
