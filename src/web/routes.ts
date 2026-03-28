@@ -766,6 +766,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
    * Uses direct filesystem listing to get accurate YAML frontmatter metadata
    * (created, author, category) that list_elements MCP-AQL does not return.
    * Same logic as the non-gateway route — MCP-AQL is used for all other endpoints.
+   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
    */
   router.get('/elements', async (req, res) => {
     try {
@@ -905,6 +906,7 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
    * GET /api/elements/memories/:date/:file
    * Memory content loading with date-partitioned paths.
    * Must be registered before the generic :type/:name route.
+   * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
    */
   router.get('/elements/memories/:date/:file', async (req, res) => {
     const { date, file } = req.params;
