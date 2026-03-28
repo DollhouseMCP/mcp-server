@@ -56,6 +56,8 @@ export interface WebServerOptions {
   memorySink?: MemoryLogSink;
   /** MemoryMetricsSink for metrics routes (optional — metrics tab disabled if not provided) */
   metricsSink?: MemoryMetricsSink;
+  /** Additional routers to mount before the SPA fallback (e.g., ingest routes) */
+  additionalRouters?: import('express').Router[];
 }
 
 /**
@@ -230,6 +232,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.json({ pages: [], directory: pagesDir });
     }
   });
+
+  // Additional routers (e.g., unified console ingest routes) — must mount before SPA fallback
+  if (options.additionalRouters) {
+    for (const router of options.additionalRouters) {
+      app.use(router);
+    }
+  }
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');

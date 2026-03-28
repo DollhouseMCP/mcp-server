@@ -91,22 +91,37 @@ async function startAsLeader(
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
 
-  // Start the web server on the fixed console port
+  // Pre-create a placeholder broadcast that we'll wire up after the server starts
+  let liveBroadcast: ((entry: UnifiedLogEntry) => void) | undefined;
+  let liveMetricsOnSnapshot: ((snapshot: MetricSnapshot) => void) | undefined;
+
+  // Create ingestion routes with a deferred broadcast (wired after server starts)
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (entry) => liveBroadcast?.(entry),
+    metricsOnSnapshot: (snapshot) => liveMetricsOnSnapshot?.(snapshot),
+  });
+
+  // Register the leader as a session
+  ingestResult.registerLeaderSession(options.sessionId, process.pid);
+
+  // Start the web server with ingest routes mounted before the SPA fallback
   const webResult = await startWebServer({
     portfolioDir: options.portfolioDir,
     memorySink: options.memorySink,
     metricsSink: options.metricsSink,
     port: CONSOLE_PORT,
+    additionalRouters: [ingestResult.router],
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   });
 
   // Wire SSE broadcasts for this leader's own events
   options.wireSSEBroadcasts(webResult, options.metricsSink);
 
-  // Stamp leader's own entries with session ID
+  // Now wire the live broadcast functions into the ingest routes
   if (webResult.logBroadcast) {
     const originalBroadcast = webResult.logBroadcast;
-    webResult.logBroadcast = (entry: UnifiedLogEntry) => {
+    // Stamp leader's own entries with session ID
+    liveBroadcast = (entry: UnifiedLogEntry) => {
       const stamped: UnifiedLogEntry = {
         ...entry,
         data: { ...entry.data, _sessionId: options.sessionId },
@@ -114,20 +129,9 @@ async function startAsLeader(
       originalBroadcast(stamped);
     };
   }
+  liveMetricsOnSnapshot = webResult.metricsOnSnapshot;
 
-  // Mount ingestion routes for follower events on the Express app
-  let ingestResult: IngestRoutesResult | undefined;
-  if (webResult.logBroadcast && webResult.app) {
-    ingestResult = createIngestRoutes({
-      logBroadcast: webResult.logBroadcast,
-      metricsOnSnapshot: webResult.metricsOnSnapshot,
-    });
-    webResult.app.use(ingestResult.router);
-    logger.info('[UnifiedConsole] Ingestion routes mounted for follower event forwarding');
-
-    // Register the leader as a session
-    ingestResult.registerLeaderSession(options.sessionId, process.pid);
-  }
+  logger.info('[UnifiedConsole] Ingestion routes mounted for follower event forwarding');
 
   // Start heartbeat and register cleanup
   const stopHeartbeat = startHeartbeat(election.leaderInfo);
