@@ -124,7 +124,7 @@ async function resolveElementFilePath(
 ): Promise<{ filePath: string } | { error: string; status: number }> {
   if (type === 'memories' && name.includes('/')) {
     const parts = name.split('/');
-    if (parts.length !== 2 || !parts[0].match(/^\d{4}-\d{2}-\d{2}$/) || isBackupOrCruft(parts[1])) {
+    if (parts.length !== 2 || !/^\d{4}-\d{2}-\d{2}$/.test(parts[0]) || isBackupOrCruft(parts[1])) {
       return { error: 'Invalid memory path', status: 400 };
     }
     const filePath = join(portfolioDir, type, name);

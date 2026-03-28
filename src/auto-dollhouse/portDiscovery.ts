@@ -24,26 +24,26 @@ let portFilePath: string | null = null;
  * Tries sequential ports up to MAX_PORT_ATTEMPTS to avoid conflicts
  * when multiple DollhouseMCP sessions run simultaneously.
  */
-export function findAvailablePort(startPort: number): Promise<number> {
+function tryBindPort(port: number): Promise<number> {
   return new Promise((resolve, reject) => {
-    let attempt = 0;
-    function tryPort(port: number) {
-      const server = createServer();
-      server.once('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
-          attempt++;
-          tryPort(port + 1);
-        } else {
-          reject(err);
-        }
-      });
-      server.once('listening', () => {
-        server.close(() => resolve(port));
-      });
-      server.listen(port, '127.0.0.1');
-    }
-    tryPort(startPort);
+    const server = createServer();
+    server.once('error', (err: NodeJS.ErrnoException) => reject(err));
+    server.once('listening', () => server.close(() => resolve(port)));
+    server.listen(port, '127.0.0.1');
   });
+}
+
+export async function findAvailablePort(startPort: number): Promise<number> {
+  for (let attempt = 0; attempt <= MAX_PORT_ATTEMPTS; attempt++) {
+    try {
+      return await tryBindPort(startPort + attempt);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt === MAX_PORT_ATTEMPTS) {
+        throw err;
+      }
+    }
+  }
+  throw new Error(`No available port found after ${MAX_PORT_ATTEMPTS} attempts from ${startPort}`);
 }
 
 /**

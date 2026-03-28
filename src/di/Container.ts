@@ -1,6 +1,6 @@
 import os from "os";
 import * as path from "path";
-import { PACKAGE_VERSION as VERSION } from "../generated/version.js";
+import { PACKAGE_VERSION, PACKAGE_VERSION as VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
 import { RelationshipManager } from "../portfolio/RelationshipManager.js";
@@ -107,7 +107,6 @@ import {
 } from '../services/query/index.js';
 import { RetentionPolicyService, MemoryRetentionStrategy } from '../services/RetentionPolicyService.js';
 import { PolicyExportService } from '../services/PolicyExportService.js';
-import { PACKAGE_VERSION } from '../generated/version.js';
 import { LogManager, buildLogManagerConfig } from '../logging/LogManager.js';
 import { FileLogSink } from '../logging/sinks/FileLogSink.js';
 import { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';

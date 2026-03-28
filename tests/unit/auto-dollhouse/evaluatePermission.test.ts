@@ -73,26 +73,26 @@ describe('evaluatePermission', () => {
     });
   });
 
-  describe('evaluatePermission pipeline', () => {
-    function createMockDeps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
-      return {
-        permissionPromptLimiter: {
-          checkLimit: () => ({ allowed: true, remainingTokens: 99, resetTime: new Date() }),
-          consumeToken: jest.fn(),
-          ...overrides.permissionPromptLimiter,
-        } as any,
-        classifyTool: overrides.classifyTool ?? (() => ({
-          behavior: 'evaluate' as const,
-          riskLevel: 'moderate',
-          reason: 'Requires evaluation',
-        })),
-        evaluateCliToolPolicy: overrides.evaluateCliToolPolicy ?? (() => ({
-          behavior: 'allow' as const,
-        })),
-        getActiveElements: overrides.getActiveElements ?? (async () => []),
-      };
-    }
+  function createMockDeps(overrides: Partial<EvaluatePermissionDeps> = {}): EvaluatePermissionDeps {
+    return {
+      permissionPromptLimiter: {
+        checkLimit: () => ({ allowed: true, remainingTokens: 99, resetTime: new Date() }),
+        consumeToken: jest.fn(),
+        ...overrides.permissionPromptLimiter,
+      } as any,
+      classifyTool: overrides.classifyTool ?? (() => ({
+        behavior: 'evaluate' as const,
+        riskLevel: 'moderate',
+        reason: 'Requires evaluation',
+      })),
+      evaluateCliToolPolicy: overrides.evaluateCliToolPolicy ?? (() => ({
+        behavior: 'allow' as const,
+      })),
+      getActiveElements: overrides.getActiveElements ?? (async () => []),
+    };
+  }
 
+  describe('evaluatePermission pipeline', () => {
     it('should deny when rate limited', async () => {
       const deps = createMockDeps({
         permissionPromptLimiter: {

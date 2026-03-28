@@ -9,23 +9,23 @@ import express from 'express';
 import request from 'supertest';
 import { registerPermissionRoutes } from '../../../src/auto-dollhouse/permissionRoutes.js';
 
-describe('permissionRoutes', () => {
-  function createMockHandler(readResult?: unknown) {
-    return {
-      handleRead: jest.fn().mockResolvedValue(
-        readResult ?? [{ success: true, data: { decision: 'allow' } }]
-      ),
-    } as any;
-  }
+function createMockHandler(readResult?: unknown) {
+  return {
+    handleRead: jest.fn().mockResolvedValue(
+      readResult ?? [{ success: true, data: { decision: 'allow' } }]
+    ),
+  } as any;
+}
 
-  function createApp(handler: any) {
-    const app = express();
-    const router = express.Router();
+function createApp(handler: any) {
+  const app = express();
+  const router = express.Router();
     registerPermissionRoutes(router, handler);
-    app.use('/api', router);
-    return app;
-  }
+  app.use('/api', router);
+  return app;
+}
 
+describe('permissionRoutes', () => {
   describe('POST /api/evaluate_permission', () => {
     it('should return allow for a valid request', async () => {
       const handler = createMockHandler();
@@ -174,21 +174,6 @@ describe('permissionRoutes', () => {
       await request(app)
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'rm -rf /' } });
-
-      // Set up status handler that returns the tracked decisions
-      const statusHandler = {
-        handleRead: jest.fn().mockResolvedValue([{
-          success: true,
-          data: {
-            activeElementCount: 0,
-            hasAllowlist: false,
-            combinedDenyPatterns: [],
-            combinedAllowPatterns: [],
-            elements: [],
-            permissionPromptActive: false,
-          },
-        }]),
-      } as any;
 
       // Need to use the same router instance to see tracked decisions
       // The decision tracking is module-scoped, so it persists across requests

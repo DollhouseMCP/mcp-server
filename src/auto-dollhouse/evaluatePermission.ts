@@ -69,7 +69,8 @@ export async function evaluatePermission(
   deps: EvaluatePermissionDeps,
 ): Promise<Record<string, unknown>> {
   // DMCP-SEC-004: Normalize user input to prevent Unicode-based attacks
-  const toolName = UnicodeValidator.normalize(String(params.tool_name || '')).normalizedContent;
+  const rawToolName = typeof params.tool_name === 'string' ? params.tool_name : '';
+  const toolName = UnicodeValidator.normalize(rawToolName).normalizedContent;
   const inputRaw = params.input;
   const input = (inputRaw && typeof inputRaw === 'object')
     ? inputRaw as Record<string, unknown>

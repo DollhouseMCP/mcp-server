@@ -370,7 +370,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       if (!isFileNotFound) {
         const reason = error instanceof Error ? error.message : String(error);
         const existing = this.invalidElements.get(relativePath);
-        isRepeatError = existing !== undefined && existing.reason === reason;
+        isRepeatError = existing?.reason === reason;
 
         this.invalidElements.set(relativePath, {
           filePath: relativePath,

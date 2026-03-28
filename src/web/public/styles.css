@@ -1195,12 +1195,12 @@ body.modal-open { overflow: hidden; }
 }
 .scan-badge--pass {
   background: #f0fdf4;
-  color: #16a34a;
+  color: #166534;
   border: 1px solid #bbf7d0;
 }
 .scan-badge--warn {
   background: #fff7ed;
-  color: #ea580c;
+  color: #9a3412;
   border: 1px solid #fed7aa;
 }
 [data-theme="dark"] .scan-badge--pass {
