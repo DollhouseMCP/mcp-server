@@ -29,6 +29,7 @@ function makeMockTelemetry() {
       lowSeverityBlocked: 30,
       attacksPerHour: new Array(24).fill(0).map((_, i) => i * 2),
       topAttackVectors: [],
+      deduplication: { suppressedEvents: 50, uniqueEvents: 75, cacheSize: 12 },
       lastUpdated: new Date().toISOString(),
     }),
   };
@@ -221,6 +222,7 @@ describe('SecurityTelemetryCollector', () => {
           lowSeverityBlocked: 0,
           attacksPerHour: [42, ...new Array(23).fill(0)],
           topAttackVectors: [],
+          deduplication: { suppressedEvents: 0, uniqueEvents: 0, cacheSize: 0 },
           lastUpdated: new Date().toISOString(),
         }),
       } as never);
@@ -235,13 +237,48 @@ describe('SecurityTelemetryCollector', () => {
   });
 
   // -------------------------------------------------------------------------
+  // deduplication gauges
+  // -------------------------------------------------------------------------
+
+  describe('deduplication gauges', () => {
+    test('emits dedup_suppressed gauge with correct value', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.dedup_suppressed');
+      expect(entry).toBeDefined();
+      expect(entry?.type).toBe('gauge');
+      expect(entry?.value).toBe(50);
+    });
+
+    test('emits dedup_unique gauge with correct value', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.dedup_unique');
+      expect(entry).toBeDefined();
+      expect(entry?.type).toBe('gauge');
+      expect(entry?.value).toBe(75);
+    });
+
+    test('emits dedup_cache_size gauge with correct value', () => {
+      const entry = findByName(collector.collect(), 'security.telemetry.dedup_cache_size');
+      expect(entry).toBeDefined();
+      expect(entry?.type).toBe('gauge');
+      expect(entry?.value).toBe(12);
+    });
+
+    test('all dedup entries have source SecurityTelemetry', () => {
+      const entries = collector.collect().filter(e => e.name.includes('dedup'));
+      expect(entries).toHaveLength(3);
+      for (const entry of entries) {
+        expect(entry.source).toBe('SecurityTelemetry');
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Total metric count
   // -------------------------------------------------------------------------
 
   describe('total output count', () => {
-    test('returns exactly 7 metric entries', () => {
-      // blocked_24h, unique_vectors, 4×blocked_by_severity, attacks_per_hour
-      expect(collector.collect()).toHaveLength(7);
+    test('returns exactly 10 metric entries', () => {
+      // blocked_24h, unique_vectors, 4×blocked_by_severity, attacks_per_hour, 3×dedup
+      expect(collector.collect()).toHaveLength(10);
     });
   });
 
@@ -277,6 +314,7 @@ describe('SecurityTelemetryCollector', () => {
         lowSeverityBlocked: 0,
         attacksPerHour: new Array(24).fill(0),
         topAttackVectors: [],
+        deduplication: { suppressedEvents: 0, uniqueEvents: 0, cacheSize: 0 },
         lastUpdated: new Date().toISOString(),
       });
 

@@ -66,11 +66,17 @@ export interface SecurityLogEntry extends SecurityEvent {
   id: string;
 }
 
+/** Deduplication window: suppress identical events within this period */
+const DEDUP_WINDOW_MS = 60_000;
+
+/** Maximum dedup cache entries before LRU eviction */
+const DEDUP_MAX_SIZE = 500;
+
 export class SecurityMonitor {
   private static eventCount = 0;
   private static events = new EvictingQueue<SecurityLogEntry>(1000);
   private static logListener?: (entry: SecurityLogEntry) => void;
-  private static readonly dedup = new EventDeduplicator(60_000, 500);
+  private static readonly dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
 
   static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
     this.logListener = fn;

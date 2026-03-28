@@ -84,6 +84,30 @@ export class SecurityTelemetryCollector implements IMetricCollector {
           description: 'Attack attempts recorded in the current clock hour',
           value: attacksThisHour,
         },
+        {
+          type: 'gauge' as const,
+          name: 'security.telemetry.dedup_suppressed',
+          source: SOURCE,
+          unit: 'count' as const,
+          description: 'Repeated events suppressed by deduplication',
+          value: m.deduplication.suppressedEvents,
+        },
+        {
+          type: 'gauge' as const,
+          name: 'security.telemetry.dedup_unique',
+          source: SOURCE,
+          unit: 'count' as const,
+          description: 'Unique events that passed through deduplication',
+          value: m.deduplication.uniqueEvents,
+        },
+        {
+          type: 'gauge' as const,
+          name: 'security.telemetry.dedup_cache_size',
+          source: SOURCE,
+          unit: 'count' as const,
+          description: 'Current deduplication cache size',
+          value: m.deduplication.cacheSize,
+        },
       ];
 
       return entries;
