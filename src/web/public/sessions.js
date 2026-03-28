@@ -154,8 +154,14 @@
     divider.className = 'session-dropdown-divider';
     dropdown.appendChild(divider);
 
-    // Session items
-    for (var i = 0; i < active.length; i++) {
+    // Session items — leader first, then followers
+    var sorted = active.slice().sort(function(a, b) {
+      if (a.isLeader && !b.isLeader) return -1;
+      if (!a.isLeader && b.isLeader) return 1;
+      return 0;
+    });
+
+    for (var i = 0; i < sorted.length; i++) {
       (function(s) {
         var item = document.createElement('div');
         item.className = 'session-dropdown-item';
@@ -167,7 +173,7 @@
         item.appendChild(check);
 
         var dot = document.createElement('span');
-        dot.className = 'session-dot' + (s.isLeader ? ' session-dot--leader' : '');
+        dot.className = 'session-dot';
         item.appendChild(dot);
 
         var nameEl = document.createElement('span');
@@ -175,18 +181,13 @@
         nameEl.textContent = displayName(s);
         item.appendChild(nameEl);
 
-        var roleEl = document.createElement('span');
-        roleEl.className = 'session-dropdown-role';
-        roleEl.textContent = s.isLeader ? 'leader' : 'follower';
-        item.appendChild(roleEl);
-
         item.addEventListener('click', function(e) {
           e.stopPropagation();
           applyFilter(filterSessionId === s.sessionId ? '' : s.sessionId);
         });
 
         dropdown.appendChild(item);
-      })(active[i]);
+      })(sorted[i]);
     }
 
     var wrapper = document.createElement('div');

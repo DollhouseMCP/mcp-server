@@ -115,10 +115,6 @@
   flex-shrink: 0;
 }
 
-.session-dot--leader {
-  background: var(--accent, #f97316);
-}
-
 .session-dropdown-name {
   font-weight: 600;
   color: var(--ink-900, #18243a);
