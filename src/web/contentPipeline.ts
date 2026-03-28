@@ -27,10 +27,35 @@ const TYPE_TO_CONTEXT: Record<string, 'persona' | 'skill' | 'template' | 'agent'
   memories: 'memory',
 };
 
+/** Known metadata fields extracted from YAML frontmatter for web display */
+export interface ElementDisplayMetadata {
+  name?: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  category?: string;
+  created?: string;
+  created_date?: string;
+  modified?: string;
+  tags?: string[];
+  license?: string;
+  age_rating?: string;
+  triggers?: string[];
+  instructions?: string;
+  coordination_strategy?: string;
+  use_cases?: string[];
+  proficiency_levels?: Record<string, string>;
+  gatekeeper?: Record<string, unknown>;
+  goal?: Record<string, unknown>;
+  autonomy?: Record<string, unknown>;
+  memoryType?: string;
+  [key: string]: unknown;
+}
+
 export interface PipelineResult {
   valid: boolean;
   content: string;
-  metadata: Record<string, unknown>;
+  metadata: ElementDisplayMetadata;
   body: string;
   rejection?: {
     reason: string;
@@ -65,7 +90,7 @@ export function validateElementContent(
   const contentContext = TYPE_TO_CONTEXT[normalizedType];
 
   // Step 1: Parse and validate structure (YAML bomb detection, circular refs)
-  let metadata: Record<string, unknown> = {};
+  let metadata: ElementDisplayMetadata = {};
   let body = '';
 
   try {

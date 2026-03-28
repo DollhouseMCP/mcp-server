@@ -18,7 +18,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { logger } from '../utils/logger.js';
-import { validateElementContent, type PipelineResult } from './contentPipeline.js';
+import { validateElementContent, type PipelineResult, type ElementDisplayMetadata } from './contentPipeline.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
 /** Normalize user input to NFC form to prevent Unicode homograph attacks */
@@ -225,7 +225,7 @@ function sanitizeForHtml(text: string): string {
 }
 
 /** Parse YAML front matter from a markdown file */
-function parseFrontMatter(content: string): { metadata: Record<string, unknown>; body: string } {
+function parseFrontMatter(content: string): { metadata: ElementDisplayMetadata; body: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) {
     return { metadata: {}, body: content };
@@ -233,7 +233,7 @@ function parseFrontMatter(content: string): { metadata: Record<string, unknown>;
 
   try {
     const parsed = SecureYamlParser.parseRawYaml(match[1]);
-    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as Record<string, unknown> : {};
+    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as ElementDisplayMetadata : {};
     return { metadata, body: match[2] };
   } catch {
     return { metadata: {}, body: match[2] || content };
@@ -241,10 +241,10 @@ function parseFrontMatter(content: string): { metadata: Record<string, unknown>;
 }
 
 /** Parse a YAML-only file (memories) */
-function parseYamlFile(content: string): { metadata: Record<string, unknown>; body: string } {
+function parseYamlFile(content: string): { metadata: ElementDisplayMetadata; body: string } {
   try {
     const parsed = SecureYamlParser.parseRawYaml(content);
-    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as Record<string, unknown> : {};
+    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as ElementDisplayMetadata : {};
     return { metadata, body: '' };
   } catch {
     return { metadata: {}, body: content };
