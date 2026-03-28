@@ -121,6 +121,13 @@
   flex: 1;
 }
 
+.session-dropdown-uptime {
+  font-size: 0.7rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-500, #677893);
+  white-space: nowrap;
+}
+
 .session-dropdown-role {
   font-size: 0.65rem;
   font-weight: 600;

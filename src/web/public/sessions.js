@@ -16,6 +16,22 @@
   var dropdownBuilt = false;
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
 
+  function formatUptime(startedAt) {
+    if (!startedAt) return '';
+    var ms = Date.now() - new Date(startedAt).getTime();
+    if (ms < 0) return '0s';
+    var secs = Math.floor(ms / 1000);
+    if (secs < 60) return secs + 's';
+    var mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm';
+    var hrs = Math.floor(mins / 60);
+    var remainMins = mins % 60;
+    if (hrs < 24) return hrs + 'h ' + remainMins + 'm';
+    var days = Math.floor(hrs / 24);
+    var remainHrs = hrs % 24;
+    return days + 'd ' + remainHrs + 'h';
+  }
+
   function displayName(session) {
     if (typeof session === 'object' && session.displayName) return session.displayName;
     var id = typeof session === 'string' ? session : (session && session.sessionId) || '';
@@ -62,6 +78,12 @@
       allItem.classList.toggle('session-dropdown-item--selected', allSelected);
       var allCheck = allItem.querySelector('.session-dropdown-check');
       if (allCheck) allCheck.textContent = allSelected ? '\u2713' : '';
+    }
+
+    // Tick uptimes
+    var uptimes = document.querySelectorAll('.session-dropdown-uptime');
+    for (var j = 0; j < uptimes.length; j++) {
+      uptimes[j].textContent = formatUptime(uptimes[j].dataset.startedAt);
     }
 
     // Update box label
@@ -180,6 +202,12 @@
         nameEl.className = 'session-dropdown-name';
         nameEl.textContent = displayName(s);
         item.appendChild(nameEl);
+
+        var uptimeEl = document.createElement('span');
+        uptimeEl.className = 'session-dropdown-uptime';
+        uptimeEl.dataset.startedAt = s.startedAt;
+        uptimeEl.textContent = formatUptime(s.startedAt);
+        item.appendChild(uptimeEl);
 
         item.addEventListener('click', function(e) {
           e.stopPropagation();
