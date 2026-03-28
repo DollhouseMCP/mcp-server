@@ -136,6 +136,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Returns true if the most recent load() failure for this path was suppressed
    * because it was a repeat of an already-logged error.
    * Subclasses can use this to avoid duplicate security event logging.
+   *
+   * @param filePath - Relative file path within the element directory
+   * @returns Whether the error for this path is currently suppressed
    */
   protected isLoadErrorSuppressed(filePath: string): boolean {
     return this.suppressedLoadPaths.has(filePath);
