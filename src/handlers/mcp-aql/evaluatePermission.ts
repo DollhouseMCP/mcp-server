@@ -100,15 +100,15 @@ export function formatPermissionResponse(
   _input: Record<string, unknown>,
   reason?: string,
 ): Record<string, unknown> {
-  const formatter = platformFormatters[platform];
-  if (!formatter) {
+  // Validate platform against known list to prevent prototype pollution / dynamic dispatch attacks
+  if (!Object.prototype.hasOwnProperty.call(platformFormatters, platform)) {
     // Import lazily to avoid circular dependency at module load time
     import('../../utils/logger.js').then(({ logger }) => {
       logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
     }).catch(() => { /* logger not available */ });
     return formatClaudeCode(decision, reason);
   }
-  return formatter(decision, reason);
+  return platformFormatters[platform](decision, reason);
 }
 
 /**
