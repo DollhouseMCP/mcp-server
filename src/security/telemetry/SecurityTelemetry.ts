@@ -95,7 +95,7 @@ export class SecurityTelemetry {
     this.attackHistory.push(entry);
 
     // Deduplicate log listener calls — same attackType+pattern within 60s = suppress
-    if (!this.logDedup.shouldSuppress(`${attackType}:${pattern}`)) {
+    if (!this.logDedup.shouldSuppress(`${attackType}\0${pattern}`)) {
       this.logListener?.(entry);
     }
 

@@ -82,7 +82,7 @@ export class SecurityMonitor {
    */
   static logSecurityEvent(event: SecurityEvent): void {
     // Deduplicate: same type + source + details within 60s window = suppress
-    if (this.dedup.shouldSuppress(`${event.type}:${event.source}:${event.details}`)) {
+    if (this.dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
       return;
     }
 
