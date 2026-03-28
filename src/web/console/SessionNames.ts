@@ -9,12 +9,14 @@
  * @since v2.1.0 — Issue #1700
  */
 
+import { randomBytes } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
 
 /**
  * Famous puppets, marionettes, and puppet characters from around the world.
+ * Order doesn't matter — the pool is shuffled on startup.
  */
-const PUPPET_NAMES: readonly string[] = [
+const ALL_PUPPET_NAMES: readonly string[] = [
   // Classic & traditional
   'Punch',
   'Judy',
@@ -82,6 +84,21 @@ const PUPPET_NAMES: readonly string[] = [
   'Angel',
 ];
 
+/** Names that can never be assigned to a leader session */
+const FOLLOWER_ONLY_NAMES = new Set(['Punch']);
+
+/** Fisher-Yates shuffle using crypto random bytes */
+function shuffleArray<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = randomBytes(4).readUInt32BE(0) % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/** Shuffled copy of the name pool — randomized on each process start */
+const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
+
 /** Cooldown period before a released name can be reused (ms) */
 const NAME_COOLDOWN_MS = 5 * 60_000; // 5 minutes
 
@@ -104,8 +121,10 @@ export class SessionNamePool {
   /**
    * Assign a friendly name to a session.
    * Returns an existing assignment if the session already has one.
+   *
+   * @param isLeader - If true, follower-only names (e.g., Punch) are excluded
    */
-  assign(sessionId: string): string {
+  assign(sessionId: string, isLeader = false): string {
     // Already assigned?
     const existing = this.assigned.get(sessionId);
     if (existing) return existing;
@@ -113,10 +132,12 @@ export class SessionNamePool {
     // Flush expired cooldowns
     this.flushCooldowns();
 
-    // Find an available name
+    // Find an available name, respecting leader restrictions
     const cooldownNames = new Set(this.cooldown.map(c => c.name));
     const availableName = PUPPET_NAMES.find(
-      name => !this.nameToSession.has(name) && !cooldownNames.has(name)
+      name => !this.nameToSession.has(name) &&
+              !cooldownNames.has(name) &&
+              !(isLeader && FOLLOWER_ONLY_NAMES.has(name))
     );
 
     if (availableName) {

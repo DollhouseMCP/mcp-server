@@ -228,7 +228,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   }
 
   function registerLeaderSession(sessionId: string, pid: number): void {
-    const displayName = namePool.assign(sessionId);
+    const displayName = namePool.assign(sessionId, true);
     sessions.set(sessionId, {
       sessionId,
       displayName,
