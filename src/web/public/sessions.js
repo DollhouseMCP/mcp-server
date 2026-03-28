@@ -139,7 +139,6 @@
     labelEl.className = 'session-box-label';
     var arrow = document.createElement('span');
     arrow.className = 'session-box-arrow';
-    arrow.textContent = '\u25BE';
     box.appendChild(countEl);
     box.appendChild(labelEl);
     box.appendChild(arrow);
