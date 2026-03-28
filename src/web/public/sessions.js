@@ -1,204 +1,178 @@
 /**
  * Session awareness for the unified web console.
  *
- * Adds session badges to log entries, a session filter dropdown,
- * and a session indicator in the header showing active sessions.
- *
- * Fetches /api/sessions periodically and listens for `event: session`
- * SSE events for real-time updates.
+ * Shows a labeled "N sessions" box in the header. Clicking opens a
+ * dropdown listing each session by its puppet name and role.
  *
  * @since v2.1.0 — Issue #1700
  */
 (function() {
   'use strict';
 
-  const SESSION_COLORS = [
-    '#4CAF50', '#2196F3', '#FF9800', '#9C27B0',
-    '#F44336', '#00BCD4', '#795548', '#607D8B'
-  ];
+  var SESSION_POLL_INTERVAL = 10000;
+  var sessions = [];
+  var filterSessionId = '';
 
-  const SESSION_POLL_INTERVAL = 10_000;
-
-  let sessions = [];
-  let filterSessionId = '';
-
-  // Deterministic color from session ID hash
-  function sessionColor(sessionId) {
-    if (!sessionId) return '#999';
-    let hash = 0;
-    for (let i = 0; i < sessionId.length; i++) {
-      hash = ((hash << 5) - hash) + sessionId.charCodeAt(i);
-    }
-    return SESSION_COLORS[Math.abs(hash) % SESSION_COLORS.length];
-  }
-
-  // Get display name for a session (uses server-assigned puppet name, falls back to truncated ID)
+  // Get display name for a session
   function displayName(session) {
     if (typeof session === 'object' && session.displayName) return session.displayName;
-    // Fallback for raw session ID string
-    const id = typeof session === 'string' ? session : session?.sessionId || '';
-    const parts = id.split('-');
+    var id = typeof session === 'string' ? session : (session && session.sessionId) || '';
+    var parts = id.split('-');
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
   // Update the header session indicator
   function updateSessionIndicator() {
-    const indicator = document.getElementById('session-indicator');
+    var indicator = document.getElementById('session-indicator');
     if (!indicator) return;
 
-    const active = sessions.filter(s => s.status === 'active');
-    const count = active.length;
+    var active = sessions.filter(function(s) { return s.status === 'active'; });
+    var count = active.length;
 
     indicator.innerHTML = '';
 
-    if (count === 0) {
-      indicator.title = 'No active sessions';
-      return;
-    }
+    if (count === 0) return;
 
-    // Badge shows names for 1-2 sessions, count for 3+
-    var badgeContainer = document.createElement('div');
-    badgeContainer.className = 'session-badge-container';
+    // Labeled box
+    var box = document.createElement('button');
+    box.className = 'session-box';
+    box.type = 'button';
+    box.setAttribute('aria-expanded', 'false');
+    box.setAttribute('aria-haspopup', 'true');
 
-    if (count <= 2) {
-      for (var i = 0; i < active.length; i++) {
-        var badge = document.createElement('span');
-        badge.className = 'session-count-badge';
-        badge.textContent = displayName(active[i]);
-        badge.style.background = sessionColor(active[i].sessionId);
-        badge.dataset.sessionId = active[i].sessionId;
-        badgeContainer.appendChild(badge);
-      }
-    } else {
-      var countBadge = document.createElement('span');
-      countBadge.className = 'session-count-badge';
-      countBadge.textContent = count + ' sessions';
-      badgeContainer.appendChild(countBadge);
-    }
+    var label = document.createElement('span');
+    label.className = 'session-box-count';
+    label.textContent = String(count);
 
-    // Dropdown (always available on click)
+    var text = document.createElement('span');
+    text.className = 'session-box-label';
+    text.textContent = count === 1 ? 'session' : 'sessions';
+
+    box.appendChild(label);
+    box.appendChild(text);
+
+    // Dropdown
     var dropdown = document.createElement('div');
     dropdown.className = 'session-dropdown';
-    dropdown.id = 'session-dropdown';
     dropdown.hidden = true;
 
-    for (var j = 0; j < active.length; j++) {
+    var heading = document.createElement('div');
+    heading.className = 'session-dropdown-heading';
+    heading.textContent = 'Active Sessions';
+    dropdown.appendChild(heading);
+
+    for (var i = 0; i < active.length; i++) {
       var item = document.createElement('div');
       item.className = 'session-dropdown-item';
+
       var dot = document.createElement('span');
-      dot.className = 'session-dot';
-      dot.style.background = sessionColor(active[j].sessionId);
+      dot.className = 'session-dot' + (active[i].isLeader ? ' session-dot--leader' : '');
       item.appendChild(dot);
-      var nameSpan = document.createElement('span');
-      nameSpan.className = 'session-dropdown-name';
-      nameSpan.textContent = displayName(active[j]);
-      item.appendChild(nameSpan);
-      var roleSpan = document.createElement('span');
-      roleSpan.className = 'session-dropdown-role';
-      roleSpan.textContent = active[j].isLeader ? 'leader' : 'follower';
-      item.appendChild(roleSpan);
+
+      var nameEl = document.createElement('span');
+      nameEl.className = 'session-dropdown-name';
+      nameEl.textContent = displayName(active[i]);
+      item.appendChild(nameEl);
+
+      var roleEl = document.createElement('span');
+      roleEl.className = 'session-dropdown-role';
+      roleEl.textContent = active[i].isLeader ? 'leader' : 'follower';
+      item.appendChild(roleEl);
+
       dropdown.appendChild(item);
     }
 
-    badgeContainer.appendChild(dropdown);
-    indicator.appendChild(badgeContainer);
+    var wrapper = document.createElement('div');
+    wrapper.className = 'session-indicator-wrapper';
+    wrapper.appendChild(box);
+    wrapper.appendChild(dropdown);
+    indicator.appendChild(wrapper);
 
-    // Toggle dropdown on click
-    badgeContainer.addEventListener('click', function(e) {
+    // Toggle dropdown
+    box.addEventListener('click', function(e) {
       e.stopPropagation();
-      dropdown.hidden = !dropdown.hidden;
+      var open = !dropdown.hidden;
+      dropdown.hidden = open;
+      box.setAttribute('aria-expanded', String(!open));
     });
-    // Close on outside click
     document.addEventListener('click', function() {
       dropdown.hidden = true;
+      box.setAttribute('aria-expanded', 'false');
     });
   }
 
   // Inject session filter into log viewer filter bar
   function injectSessionFilter() {
-    // Look for the log filter area — this runs after logs.js has initialized
-    const logPanel = document.getElementById('tab-logs');
+    var logPanel = document.getElementById('tab-logs');
     if (!logPanel) return;
-
-    // Check if already injected
     if (document.getElementById('log-session-filter')) return;
 
-    // Find the filter bar (created by logs.js)
-    const filterBar = logPanel.querySelector('.log-filters');
+    var filterBar = logPanel.querySelector('.log-filters');
     if (!filterBar) return;
 
-    const group = document.createElement('div');
+    var group = document.createElement('div');
     group.className = 'log-filter-group';
-    group.innerHTML = `
-      <label for="log-session-filter">Session</label>
-      <select id="log-session-filter" class="log-filter-select">
-        <option value="">All Sessions</option>
-      </select>
-    `;
+    group.innerHTML =
+      '<label for="log-session-filter">Session</label>' +
+      '<select id="log-session-filter" class="log-filter-select">' +
+      '<option value="">All Sessions</option></select>';
     filterBar.appendChild(group);
 
-    const select = group.querySelector('select');
+    var select = group.querySelector('select');
     select.addEventListener('change', function() {
       filterSessionId = this.value;
-      // Trigger re-filter in logs.js if it exposes a filter function
       if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
         window.DollhouseConsole.logs.refilter();
       }
     });
   }
 
-  // Update the session filter dropdown options
+  // Update session filter dropdown options
   function updateSessionFilterOptions() {
-    const select = document.getElementById('log-session-filter');
+    var select = document.getElementById('log-session-filter');
     if (!select) return;
 
-    const current = select.value;
-    const active = sessions.filter(s => s.status === 'active');
+    var current = select.value;
+    var active = sessions.filter(function(s) { return s.status === 'active'; });
 
-    // Rebuild options
     select.innerHTML = '<option value="">All Sessions</option>';
-    for (const s of active) {
-      const opt = document.createElement('option');
-      opt.value = s.sessionId;
-      const label = displayName(s);
-      opt.textContent = label + (s.isLeader ? ' (leader)' : '');
-      opt.style.color = sessionColor(s.sessionId);
-      if (s.sessionId === current) opt.selected = true;
+    for (var i = 0; i < active.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = active[i].sessionId;
+      opt.textContent = displayName(active[i]) + (active[i].isLeader ? ' (leader)' : '');
+      if (active[i].sessionId === current) opt.selected = true;
       select.appendChild(opt);
     }
   }
 
   // Fetch sessions from the API
-  async function fetchSessions() {
-    try {
-      const res = await fetch('/api/sessions');
-      if (res.ok) {
-        const data = await res.json();
-        sessions = data.sessions || [];
+  function fetchSessions() {
+    fetch('/api/sessions').then(function(res) {
+      if (!res.ok) return;
+      return res.json();
+    }).then(function(data) {
+      if (data && data.sessions) {
+        sessions = data.sessions;
         updateSessionIndicator();
         updateSessionFilterOptions();
       }
-    } catch {
-      // API might not be available yet
-    }
+    }).catch(function() {});
   }
 
-  // Expose session utilities for logs.js integration
+  // Expose for logs.js integration
   window.DollhouseSessions = {
     getFilterSessionId: function() { return filterSessionId; },
-    sessionColor: sessionColor,
     displayName: displayName,
     getSessions: function() { return sessions; },
   };
 
-  // Initialize after DOM is ready
+  // Initialize
   function init() {
     fetchSessions();
     setInterval(fetchSessions, SESSION_POLL_INTERVAL);
 
-    // Inject session filter into log viewer (retry until logs.js has built the UI)
-    let retries = 0;
-    const tryInject = setInterval(function() {
+    var retries = 0;
+    var tryInject = setInterval(function() {
       injectSessionFilter();
       retries++;
       if (document.getElementById('log-session-filter') || retries > 20) {
