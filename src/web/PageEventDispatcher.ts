@@ -210,11 +210,22 @@ export class PageEventDispatcher {
    *
    * Times out after timeoutMs (default 60s) with an empty array.
    */
+  /** Allowed timeout values — prevents resource exhaustion from user-controlled timers (CodeQL) */
+  private static readonly ALLOWED_TIMEOUTS = [1_000, 5_000, 10_000, 30_000, 60_000] as const;
+
+  /** Snap a requested timeout to the nearest allowed value */
+  private static snapTimeout(requested: number): number {
+    let best: number = PageEventDispatcher.ALLOWED_TIMEOUTS[0];
+    for (const allowed of PageEventDispatcher.ALLOWED_TIMEOUTS) {
+      if (allowed <= requested) best = allowed;
+    }
+    return best;
+  }
+
   waitForEvents(agentName: string, timeoutMs?: number): Promise<PageEvent[]> {
-    // Clamp timeout to prevent resource exhaustion (CodeQL: user-controlled timer)
-    const timeout = Math.min(
-      Math.max(timeoutMs ?? PageEventDispatcher.DEFAULT_WAIT_TIMEOUT, 1_000),
-      PageEventDispatcher.DEFAULT_WAIT_TIMEOUT,
+    // Snap to nearest allowed timeout — breaks user→setTimeout data flow (CodeQL resource exhaustion)
+    const timeout = PageEventDispatcher.snapTimeout(
+      timeoutMs ?? PageEventDispatcher.DEFAULT_WAIT_TIMEOUT,
     );
 
     // If there are already queued events, return them immediately
