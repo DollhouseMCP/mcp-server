@@ -18,6 +18,7 @@ interface SSEClientFilter {
   level?: LogLevel;
   source?: string;
   correlationId?: string;
+  sessionId?: string;
 }
 
 interface SSEClient {
@@ -61,6 +62,9 @@ function parseSseFilter(query: Request['query']): SSEClientFilter {
   }
   if (typeof query['correlationId'] === 'string' && query['correlationId']) {
     filter.correlationId = query['correlationId'];
+  }
+  if (typeof query['sessionId'] === 'string' && query['sessionId']) {
+    filter.sessionId = query['sessionId'];
   }
   return filter;
 }
@@ -144,6 +148,9 @@ function matchesFilter(entry: UnifiedLogEntry, filter: SSEClientFilter): boolean
     }
   }
   if (filter.correlationId && entry.correlationId !== filter.correlationId) {
+    return false;
+  }
+  if (filter.sessionId && entry.data?.['_sessionId'] !== filter.sessionId) {
     return false;
   }
   return true;

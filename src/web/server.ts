@@ -56,12 +56,16 @@ export interface WebServerOptions {
   memorySink?: MemoryLogSink;
   /** MemoryMetricsSink for metrics routes (optional — metrics tab disabled if not provided) */
   metricsSink?: MemoryMetricsSink;
+  /** Additional routers to mount before the SPA fallback (e.g., ingest routes) */
+  additionalRouters?: import('express').Router[];
 }
 
 /**
  * Result of starting the web server, including hooks for DI wiring.
  */
 export interface WebServerResult {
+  /** Express app instance — for mounting additional routes (e.g., ingest routes) */
+  app?: import('express').Express;
   /** Log broadcast function — call with each entry to push to SSE clients */
   logBroadcast?: (entry: import('../logging/types.js').UnifiedLogEntry) => void;
   /** Metrics snapshot function — call with each snapshot to push to SSE clients */
@@ -141,6 +145,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   }
 
   const app = express();
+  result.app = app;
   app.disable('x-powered-by');
 
   // Security headers
@@ -227,6 +232,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.json({ pages: [], directory: pagesDir });
     }
   });
+
+  // Additional routers (e.g., unified console ingest routes) — must mount before SPA fallback
+  options.additionalRouters?.forEach(router => app.use(router));
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');

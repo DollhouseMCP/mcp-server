@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="logs.css">
   <link rel="stylesheet" href="metrics.css">
   <link rel="stylesheet" href="permissions.css">
+  <link rel="stylesheet" href="sessions.css">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -31,6 +32,7 @@
         <button class="console-tab" data-tab="metrics">Metrics</button>
         <button class="console-tab" data-tab="permissions">Permissions</button>
       </nav>
+      <div class="session-indicator" id="session-indicator" title="Active sessions"></div>
       <div class="site-stats" id="stats" aria-live="polite"></div>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
         <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">&#9790;</span>
@@ -183,5 +185,6 @@
   <script src="logs.js"></script>
   <script src="metrics.js"></script>
   <script src="permissions.js"></script>
+  <script src="sessions.js"></script>
 </body>
 </html>

@@ -1,0 +1,235 @@
+/* Session indicator — matches existing site-stats style */
+
+.session-indicator {
+  display: flex;
+  align-items: center;
+}
+
+.session-indicator-wrapper {
+  position: relative;
+}
+
+/* Labeled box — mirrors the "1655 portfolio" / "72 collection" stat boxes */
+.session-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  min-width: 8.5rem;
+  border: 1px solid var(--line, #c8d5e9);
+  border-radius: var(--radius-sm, 0.42rem);
+  background: var(--paper-strong, #fff);
+  color: var(--ink-700, #324563);
+  font-family: var(--font-body);
+  font-size: var(--step--1, 0.82rem);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  line-height: 1.4;
+}
+
+.session-box:hover {
+  border-color: var(--signal-2, #3b82f6);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal-2, #3b82f6) 15%, transparent);
+}
+
+.session-box[aria-expanded="true"] {
+  border-color: var(--signal, #1e40af);
+}
+
+.session-box-count {
+  font-weight: 700;
+  color: var(--ink-900, #18243a);
+}
+
+.session-box-label {
+  font-weight: 500;
+}
+
+.session-box-arrow {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--ink-500, #677893);
+  margin-left: 0.2rem;
+  transition: transform 0.15s;
+}
+
+.session-box[aria-expanded="true"] .session-box-arrow {
+  transform: rotate(180deg);
+}
+
+/* Dropdown panel */
+.session-dropdown {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 200px;
+  background: var(--paper-strong, #fff);
+  border: 1px solid var(--line, #c8d5e9);
+  border-radius: var(--radius-md, 0.85rem);
+  box-shadow: var(--shadow-soft, 0 0.95rem 1.8rem -1.15rem rgba(17,40,74,0.28));
+  z-index: 200;
+  overflow: hidden;
+}
+
+.session-dropdown-heading {
+  padding: 0.5rem 0.75rem 0.3rem;
+  font-family: var(--font-heading);
+  font-size: var(--step--1, 0.82rem);
+  font-weight: 700;
+  color: var(--ink-500, #677893);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--line, #c8d5e9);
+}
+
+.session-dropdown-divider {
+  height: 1px;
+  background: var(--line, #c8d5e9);
+  margin: 0.15rem 0;
+}
+
+.session-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  font-size: var(--step--1, 0.82rem);
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.session-dropdown-item:hover {
+  background: var(--surface-1, #eaf1ff);
+}
+
+.session-dropdown-item--selected {
+  background: color-mix(in srgb, var(--signal-2, #3b82f6) 8%, transparent);
+}
+
+.session-dropdown-item--selected:hover {
+  background: color-mix(in srgb, var(--signal-2, #3b82f6) 14%, transparent);
+}
+
+.session-dropdown-check {
+  width: 1rem;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--signal, #1e40af);
+  flex-shrink: 0;
+}
+
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--signal-2, #3b82f6);
+  flex-shrink: 0;
+}
+
+.session-dropdown-name {
+  font-weight: 600;
+  color: var(--ink-900, #18243a);
+  flex: 1;
+}
+
+.session-dropdown-uptime {
+  font-size: 0.7rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-500, #677893);
+  white-space: nowrap;
+}
+
+.session-dropdown-role {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ink-500, #677893);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Dark theme overrides */
+[data-theme="dark"] .session-box {
+  background: var(--paper-strong, #1a1a2e);
+  border-color: var(--line, #2a3a5e);
+  color: var(--ink-500, #8899bb);
+}
+
+[data-theme="dark"] .session-box-count {
+  color: var(--ink-900, #e0e8f0);
+}
+
+[data-theme="dark"] .session-dropdown {
+  background: var(--paper-strong, #1a1a2e);
+  border-color: var(--line, #2a3a5e);
+}
+
+[data-theme="dark"] .session-dropdown-item:hover {
+  background: var(--surface-1, #1e2848);
+}
+
+[data-theme="dark"] .session-dropdown-item--selected {
+  background: color-mix(in srgb, var(--signal-2, #3b82f6) 12%, transparent);
+}
+
+[data-theme="dark"] .session-dropdown-check {
+  color: var(--signal-2, #3b82f6);
+}
+
+[data-theme="dark"] .session-dropdown-divider {
+  background: var(--line, #2a3a5e);
+}
+
+[data-theme="dark"] .session-dropdown-name {
+  color: var(--ink-900, #e0e8f0);
+}
+
+/* Kill button */
+.session-kill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500, #677893);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+  padding: 0;
+}
+
+.session-kill-btn:hover {
+  background: color-mix(in srgb, #ef4444 12%, var(--paper-strong, #fff));
+  color: #dc2626;
+}
+
+/* Session badge on log entries */
+.log-session-badge {
+  display: inline-block;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ink-900, #18243a);
+  background: var(--surface-1, #eaf1ff);
+  margin-right: 0.35rem;
+  vertical-align: middle;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+}
+
+/* Session filter in the log viewer */
+#log-session-filter {
+  min-width: 120px;
+}
