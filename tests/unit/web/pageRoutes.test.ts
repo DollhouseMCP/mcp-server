@@ -12,6 +12,7 @@
  * @see https://github.com/DollhouseMCP/mcp-server/issues/1706
  */
 
+import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { createMcpAqlGatewayRoutes } from '../../../src/web/routes/mcpAqlGatewayRoutes.js';
