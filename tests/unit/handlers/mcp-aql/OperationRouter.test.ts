@@ -91,6 +91,9 @@ describe('OperationRouter', () => {
       'get_effective_cli_policies', // Issue #625 Phase 2
       'approve_cli_permission', // Issue #625 Phase 3
       'get_pending_cli_approvals', // Issue #625 Phase 3
+      // PAGE operations (Issue #1702)
+      'wait_for_page_events',
+      'send_page_event',
   ];
 
   describe('OPERATION_ROUTES constant', () => {

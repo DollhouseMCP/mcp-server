@@ -8,6 +8,7 @@
  * @see https://github.com/DollhouseMCP/mcp-server/issues/1714
  */
 
+import { jest } from '@jest/globals';
 import {
   PageEventDispatcher,
   type PageEvent,
