@@ -12,6 +12,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { logger } from '../../utils/logger.js';
 
 // ── Event Types ─────────────────────────────────────────────────────────────
 
@@ -95,8 +96,10 @@ export function createPageStreamRoutes(): PageStreamRoutesResult {
       if (client.template === normalized) {
         try {
           client.res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-        } catch {
-          // Client disconnected but close event hasn't fired yet
+        } catch (err) {
+          // Client disconnected but close event hasn't fired yet — clean up
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.debug(`[PageStream] SSE client disconnected for ${client.template}: ${msg}`);
           clients.delete(client);
         }
       }

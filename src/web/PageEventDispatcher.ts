@@ -98,6 +98,7 @@ export class PageEventDispatcher {
   private static readonly DEFAULT_WAIT_TIMEOUT = 60_000; // 60s long-poll max
   private static readonly MAX_QUEUE_SIZE = 100; // Max events per agent before oldest are dropped
   private static readonly MAX_SSE_CONNECTIONS = 50; // Max concurrent SSE waiters
+  private static readonly MAX_AGENT_CACHE_SIZE = 100; // Max cached agent resolutions
 
   constructor(
     private readonly handler: MCPAQLHandler,
@@ -180,8 +181,10 @@ export class PageEventDispatcher {
     const queue = this.pendingWakeEvents.get(agentName) || [];
     queue.push(event);
     // Drop oldest events if queue exceeds limit
-    while (queue.length > PageEventDispatcher.MAX_QUEUE_SIZE) {
-      queue.shift();
+    if (queue.length > PageEventDispatcher.MAX_QUEUE_SIZE) {
+      const dropCount = queue.length - PageEventDispatcher.MAX_QUEUE_SIZE;
+      queue.splice(0, dropCount);
+      logger.warn(`[PageDispatcher] Dropped ${dropCount} oldest event(s) for "${agentName}" (queue full at ${PageEventDispatcher.MAX_QUEUE_SIZE})`);
     }
     this.pendingWakeEvents.set(agentName, queue);
 
@@ -208,7 +211,11 @@ export class PageEventDispatcher {
    * Times out after timeoutMs (default 60s) with an empty array.
    */
   waitForEvents(agentName: string, timeoutMs?: number): Promise<PageEvent[]> {
-    const timeout = timeoutMs ?? PageEventDispatcher.DEFAULT_WAIT_TIMEOUT;
+    // Clamp timeout to prevent resource exhaustion (CodeQL: user-controlled timer)
+    const timeout = Math.min(
+      Math.max(timeoutMs ?? PageEventDispatcher.DEFAULT_WAIT_TIMEOUT, 1_000),
+      PageEventDispatcher.DEFAULT_WAIT_TIMEOUT,
+    );
 
     // If there are already queued events, return them immediately
     const existing = this.pendingWakeEvents.get(agentName);
@@ -342,6 +349,11 @@ export class PageEventDispatcher {
     }
 
     const agentName = await this.findBoundAgent(templateName);
+    // Evict oldest entries if cache is full
+    if (this.agentCache.size >= PageEventDispatcher.MAX_AGENT_CACHE_SIZE) {
+      const oldestKey = this.agentCache.keys().next().value;
+      if (oldestKey) this.agentCache.delete(oldestKey);
+    }
     this.agentCache.set(templateName, { agentName, cachedAt: Date.now() });
     return agentName;
   }
