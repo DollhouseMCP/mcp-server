@@ -611,6 +611,27 @@ export class MCPAQLHandler {
    */
   private readonly abortedGoals = new Set<string>();
 
+  /**
+   * Page infrastructure references — set by the web server after startup.
+   * Used by wait_for_page_events and send_page_event operations.
+   * Issue #1714: Server-side page event dispatcher.
+   */
+  private pageDispatcher?: import('../../web/PageEventDispatcher.js').PageEventDispatcher;
+  private pageBroadcast?: (template: string, event: import('../../web/routes/pageStreamRoutes.js').PageUpdateEvent) => void;
+
+  /**
+   * Wire page infrastructure into the handler. Called by webAutoStart after
+   * the web server is running.
+   */
+  setPageInfrastructure(
+    dispatcher: import('../../web/PageEventDispatcher.js').PageEventDispatcher,
+    broadcast: (template: string, event: import('../../web/routes/pageStreamRoutes.js').PageUpdateEvent) => void,
+  ): void {
+    this.pageDispatcher = dispatcher;
+    this.pageBroadcast = broadcast;
+    logger.info('[MCPAQLHandler] Page infrastructure registered (wait_for_page_events + send_page_event available)');
+  }
+
   constructor(
     private readonly handlers: HandlerRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
@@ -1221,6 +1242,11 @@ export class MCPAQLHandler {
     // Persona operations (Issue #241)
     if (module === 'Persona') {
       return this.dispatchPersona(method, params as Record<string, unknown>);
+    }
+
+    // Page operations (Issue #1702 — element-driven web pages)
+    if (module === 'Page') {
+      return this.dispatchPage(method, params as Record<string, unknown>);
     }
 
     // Execute operations (Issue #244 - CRUDE)
@@ -2354,6 +2380,101 @@ export class MCPAQLHandler {
    * 3. This method records the confirmation in the session
    * 4. LLM retries the original operation, which now passes via Layer 3
    */
+  /**
+   * Page operations — element-driven web pages (Issue #1702, #1714).
+   * These operations bridge the MCP-AQL tool layer with the web server's
+   * page event dispatcher and SSE broadcast.
+   */
+  private async dispatchPage(
+    method: string,
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    switch (method) {
+      case 'waitForEvents': {
+        if (!this.pageDispatcher) {
+          throw new Error(
+            'Page infrastructure not available. The web server must be running with the PageEventDispatcher. ' +
+            'This operation is only available when element-driven web pages are active.'
+          );
+        }
+        const agentName = typeof params.element_name === 'string'
+          ? params.element_name
+          : typeof params.agentName === 'string'
+            ? params.agentName
+            : undefined;
+        if (!agentName) {
+          throw new Error('element_name (agent name) is required for wait_for_page_events');
+        }
+
+        // Internal retry loop: if the wait times out with no events,
+        // re-enter the wait automatically. The LLM only wakes up when
+        // there are actual events to process. Zero token cost while idle.
+        const singleWaitMs = 60_000; // 60s per internal cycle
+        const maxWaitMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
+          ? params.timeoutMs
+          : 600_000; // Default: wait up to 10 minutes total
+        const deadline = Date.now() + maxWaitMs;
+
+        let events: Awaited<ReturnType<typeof this.pageDispatcher.waitForEvents>> = [];
+        while (Date.now() < deadline) {
+          const remaining = deadline - Date.now();
+          const thisWait = Math.min(singleWaitMs, remaining);
+          if (thisWait <= 0) break;
+
+          events = await this.pageDispatcher.waitForEvents(agentName, thisWait);
+          if (events.length > 0) break; // Got events — return to LLM
+          // Timed out — loop internally, LLM never sees this
+        }
+
+        return {
+          _type: 'PageEventsResult',
+          eventCount: events.length,
+          timedOut: events.length === 0,
+          events: events.map(e => ({
+            event: e.event,
+            target: e.target,
+            data: e.data,
+            template: e.template,
+            timestamp: e.timestamp,
+          })),
+        };
+      }
+
+      case 'sendEvent': {
+        if (!this.pageBroadcast) {
+          throw new Error(
+            'Page broadcast not available. The web server must be running with SSE page streams. ' +
+            'This operation is only available when element-driven web pages are active.'
+          );
+        }
+        const template = typeof params.template === 'string' ? params.template : undefined;
+        if (!template) {
+          throw new Error('template is required for send_page_event');
+        }
+        const data = (params.data && typeof params.data === 'object' && !Array.isArray(params.data))
+          ? params.data as Record<string, unknown>
+          : {};
+
+        this.pageBroadcast(template, {
+          type: 'agent-notification',
+          template,
+          data: {
+            event: 'agent-response',
+            eventData: data,
+            type: (data.type as string) || 'chat-response',
+            message: (data.message as string) || '',
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { _type: 'PageEventSent', delivered: true, template };
+      }
+
+      default:
+        throw new Error(`Unknown Page operation: ${method}`);
+    }
+  }
+
   private async dispatchGatekeeper(
     method: string,
     params: Record<string, unknown>
