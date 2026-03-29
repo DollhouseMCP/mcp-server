@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 
 // ── Event Types ─────────────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ export function createPageStreamRoutes(): PageStreamRoutesResult {
    */
   router.get('/pages/:template/stream', (req: Request, res: Response) => {
     const rawTemplate = req.params.template;
-    const template = typeof rawTemplate === 'string' ? rawTemplate.normalize('NFC') : '';
+    const template = typeof rawTemplate === 'string' ? UnicodeValidator.normalize(rawTemplate).normalizedContent : '';
     if (!template || template.includes('/') || template.includes('..')) {
       res.status(400).json({ error: 'Invalid template name' });
       return;
@@ -89,7 +90,7 @@ export function createPageStreamRoutes(): PageStreamRoutesResult {
    * Broadcast a page update event to all SSE clients subscribed to a template.
    */
   function broadcastPageUpdate(template: string, event: PageUpdateEvent): void {
-    const normalized = template.normalize('NFC');
+    const normalized = UnicodeValidator.normalize(template).normalizedContent;
     for (const client of clients) {
       if (client.template === normalized) {
         try {

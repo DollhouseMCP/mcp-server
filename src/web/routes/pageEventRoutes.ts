@@ -15,9 +15,15 @@
 import express, { Router } from 'express';
 import type { Request, Response } from 'express';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import type { PageUpdateEvent } from './pageStreamRoutes.js';
 import { PageEventDispatcher } from '../PageEventDispatcher.js';
+
+/** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
+function normalizeInput(s: string): string {
+  return UnicodeValidator.normalize(s).normalizedContent;
+}
 
 // ── Route Result Interface ──────────────────────────────────────────────────
 
@@ -71,8 +77,8 @@ export function createPageEventRoutes(
     };
 
     // Validate required fields
-    const template = typeof body.template === 'string' ? body.template.normalize('NFC') : undefined;
-    const event = typeof body.event === 'string' ? body.event.normalize('NFC') : undefined;
+    const template = typeof body.template === 'string' ? normalizeInput(body.template) : undefined;
+    const event = typeof body.event === 'string' ? normalizeInput(body.event) : undefined;
 
     if (!template || !event) {
       res.status(400).json({ success: false, error: 'Missing required fields: template, event' });
@@ -85,9 +91,9 @@ export function createPageEventRoutes(
       return;
     }
 
-    const target = typeof body.target === 'string' ? body.target.normalize('NFC') : undefined;
+    const target = typeof body.target === 'string' ? normalizeInput(body.target) : undefined;
     const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : {};
-    const explicitAgent = typeof body.agentName === 'string' ? body.agentName.normalize('NFC') : undefined;
+    const explicitAgent = typeof body.agentName === 'string' ? normalizeInput(body.agentName) : undefined;
 
     try {
       const result = await dispatcher.dispatch({

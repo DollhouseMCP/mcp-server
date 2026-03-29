@@ -69,15 +69,11 @@ export async function startPermissionServer(
     }
 
     // Wire page infrastructure into MCPAQLHandler for wait_for_page_events / send_page_event
-    const hasDispatcher = !!result?.pageEventDispatcher;
-    const hasBroadcast = !!result?.pageUpdateBroadcast;
-    const resultKeys = result ? Object.keys(result) : [];
-    console.error(`[auto-dollhouse] Page wiring: dispatcher=${hasDispatcher}, broadcast=${hasBroadcast}, resultKeys=${resultKeys.join(',')}`);
+    // Note: primary wiring happens in server.ts via setPageInfrastructure() during route setup.
+    // This secondary path handles cases where webAutoStart runs after the web server.
     if (result?.pageEventDispatcher && result?.pageUpdateBroadcast) {
       mcpAqlHandler.setPageInfrastructure(result.pageEventDispatcher, result.pageUpdateBroadcast);
-      console.error('[auto-dollhouse] Page infrastructure wired successfully');
-    } else {
-      console.error('[auto-dollhouse] Page infrastructure NOT wired');
+      logger.info('[auto-dollhouse] Page infrastructure wired via WebServerResult');
     }
 
     // Write port file for PreToolUse hook discovery

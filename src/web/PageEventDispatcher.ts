@@ -13,8 +13,14 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 import type { PageUpdateEvent } from './routes/pageStreamRoutes.js';
+
+/** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
+function normalizeInput(s: string): string {
+  return UnicodeValidator.normalize(s).normalizedContent;
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -90,6 +96,8 @@ export class PageEventDispatcher {
 
   private static readonly AGENT_CACHE_TTL = 30_000; // 30s
   private static readonly DEFAULT_WAIT_TIMEOUT = 60_000; // 60s long-poll max
+  private static readonly MAX_QUEUE_SIZE = 100; // Max events per agent before oldest are dropped
+  private static readonly MAX_SSE_CONNECTIONS = 50; // Max concurrent SSE waiters
 
   constructor(
     private readonly handler: MCPAQLHandler,
@@ -168,9 +176,13 @@ export class PageEventDispatcher {
    * Queue a wake event and start/reset the debounce timer.
    */
   private queueWakeEvent(agentName: string, event: PageEvent, config: DispatchConfig): void {
-    // Add to queue
+    // Add to queue with size limit
     const queue = this.pendingWakeEvents.get(agentName) || [];
     queue.push(event);
+    // Drop oldest events if queue exceeds limit
+    while (queue.length > PageEventDispatcher.MAX_QUEUE_SIZE) {
+      queue.shift();
+    }
     this.pendingWakeEvents.set(agentName, queue);
 
     // Reset debounce timer
@@ -321,7 +333,7 @@ export class PageEventDispatcher {
    * Results cached for 30s to avoid repeated lookups.
    */
   private async resolveAgent(templateName: string, explicitAgent?: string): Promise<string | undefined> {
-    if (explicitAgent) return explicitAgent;
+    if (explicitAgent) return normalizeInput(explicitAgent);
 
     // Check cache
     const cached = this.agentCache.get(templateName);

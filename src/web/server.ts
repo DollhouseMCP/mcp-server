@@ -208,8 +208,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     // Wire page infrastructure directly into the MCPAQLHandler so MCP-AQL
     // operations (wait_for_page_events, send_page_event) work regardless
     // of which caller started the web server first. Issue #1714.
-    if (typeof (options.mcpAqlHandler as any).setPageInfrastructure === 'function') {
-      (options.mcpAqlHandler as any).setPageInfrastructure(
+    const handler = options.mcpAqlHandler as MCPAQLHandler & {
+      setPageInfrastructure?: (d: unknown, b: unknown) => void;
+    };
+    if (typeof handler.setPageInfrastructure === 'function') {
+      handler.setPageInfrastructure(
         pageEventRoutes.dispatcher,
         pageStreamRoutes.broadcastPageUpdate,
       );

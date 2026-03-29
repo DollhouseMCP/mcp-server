@@ -13,6 +13,7 @@
 import express, { Router } from 'express';
 import type { Request, Response } from 'express';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { getRoute, type CRUDEndpoint } from '../../handlers/mcp-aql/OperationRouter.js';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
@@ -108,7 +109,7 @@ export function createMcpAqlGatewayRoutes(
     const body = req.body as { operation?: string; params?: Record<string, unknown> };
 
     // Validate operation
-    const operation = typeof body.operation === 'string' ? body.operation.normalize('NFC') : undefined;
+    const operation = typeof body.operation === 'string' ? UnicodeValidator.normalize(body.operation).normalizedContent : undefined;
     if (!operation) {
       res.status(400).json({ success: false, error: 'Missing required field: operation' });
       return;
@@ -198,8 +199,8 @@ export function createMcpAqlGatewayRoutes(
       }
 
       const body = req.body as { template?: string; event?: string; data?: Record<string, unknown> };
-      const template = typeof body.template === 'string' ? body.template.normalize('NFC') : undefined;
-      const event = typeof body.event === 'string' ? body.event.normalize('NFC') : 'agent-response';
+      const template = typeof body.template === 'string' ? UnicodeValidator.normalize(body.template).normalizedContent : undefined;
+      const event = typeof body.event === 'string' ? UnicodeValidator.normalize(body.event).normalizedContent : 'agent-response';
 
       if (!template) {
         res.status(400).json({ success: false, error: 'Missing required field: template' });
@@ -228,7 +229,7 @@ export function createMcpAqlGatewayRoutes(
       }
 
       const body = req.body as { agentName?: string; timeoutMs?: number };
-      const agentName = typeof body.agentName === 'string' ? body.agentName.normalize('NFC') : undefined;
+      const agentName = typeof body.agentName === 'string' ? UnicodeValidator.normalize(body.agentName).normalizedContent : undefined;
 
       if (!agentName) {
         res.status(400).json({ success: false, error: 'Missing required field: agentName' });
