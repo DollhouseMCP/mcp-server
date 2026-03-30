@@ -100,7 +100,7 @@
             <select id="log-level">
               <option value="">All</option>
               <option value="debug">debug</option>
-              <option value="info">info</option>
+              <option value="info" selected>info</option>
               <option value="warn">warn</option>
               <option value="error">error</option>
             </select>
