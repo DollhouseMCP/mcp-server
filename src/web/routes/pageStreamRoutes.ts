@@ -50,9 +50,8 @@ export interface PageStreamRoutesResult {
 
 /**
  * Performance characteristics:
- * - JSON.stringify in the broadcast hot path: ~0.01ms for typical event payloads (<1KB).
- *   Becomes measurable (>1ms) at payloads >100KB. For inject-html with large HTML blocks,
- *   consider pre-serializing before broadcast.
+ * - JSON.stringify is called once per broadcast (pre-serialized before client iteration),
+ *   so cost is O(1) regardless of subscriber count. ~0.01ms for typical payloads (<1KB).
  * - Linear client iteration: O(n) per broadcast where n = connected clients for that template.
  *   At MAX_CLIENTS=50 this is negligible. For 500+ clients, switch to Map<template, Set<client>>.
  * - Connection limit is configurable via the maxClients parameter.
@@ -107,10 +106,11 @@ export function createPageStreamRoutes(maxClients: number = 50): PageStreamRoute
    */
   function broadcastPageUpdate(template: string, event: PageUpdateEvent): void {
     const normalized = UnicodeValidator.normalize(template).normalizedContent;
+    const frame = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const client of clients) {
       if (client.template === normalized) {
         try {
-          client.res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          client.res.write(frame);
         } catch (err) {
           // Client disconnected but close event hasn't fired yet — clean up
           const msg = err instanceof Error ? err.message : String(err);
