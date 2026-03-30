@@ -27,6 +27,7 @@ import {
   ACTIVATION_SCHEMAS,
   SEARCH_SCHEMAS,
   BROWSER_SCHEMAS,
+  PAGE_SCHEMAS,
   INTROSPECTION_ONLY_SCHEMAS,
   ALL_OPERATION_SCHEMAS,
   isSchemaOperation,
@@ -776,7 +777,8 @@ describe('OperationSchema', () => {
           Object.keys(METRICS_SCHEMAS).length +
           Object.keys(ACTIVATION_SCHEMAS).length +
           Object.keys(SEARCH_SCHEMAS).length +
-          Object.keys(BROWSER_SCHEMAS).length;
+          Object.keys(BROWSER_SCHEMAS).length +
+          Object.keys(PAGE_SCHEMAS).length;
         expect(Object.keys(INTROSPECTION_ONLY_SCHEMAS)).toHaveLength(expectedCount);
       });
 

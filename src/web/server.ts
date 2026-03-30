@@ -34,6 +34,8 @@ const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
+/** Cached server result so repeated calls share page infrastructure refs. */
+let cachedServerResult: WebServerResult | undefined;
 
 /**
  * Options for starting the web server.
@@ -70,6 +72,10 @@ export interface WebServerResult {
   logBroadcast?: (entry: import('../logging/types.js').UnifiedLogEntry) => void;
   /** Metrics snapshot function — call with each snapshot to push to SSE clients */
   metricsOnSnapshot?: (snapshot: import('../metrics/types.js').MetricSnapshot) => void;
+  /** Page update broadcast — push updates to SSE clients for element-driven pages (#1706) */
+  pageUpdateBroadcast?: (template: string, event: import('./routes/pageStreamRoutes.js').PageUpdateEvent) => void;
+  /** Page event dispatcher — for wiring into MCPAQLHandler (#1714) */
+  pageEventDispatcher?: import('./PageEventDispatcher.js').PageEventDispatcher;
 }
 
 /**
@@ -135,7 +141,8 @@ function openInBrowser(url: string): Promise<{ success: boolean; error?: string 
  */
 export async function startWebServer(options: WebServerOptions): Promise<WebServerResult> {
   const port = options.port || DEFAULT_PORT;
-  const result: WebServerResult = {};
+  // Cache the result so repeated calls (unified console + webAutoStart) share the same refs
+  const result: WebServerResult = cachedServerResult ?? {};
 
   if (serverRunning) {
     if (options.openBrowser) {
@@ -175,6 +182,43 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     registerPermissionRoutes(permRouter, options.mcpAqlHandler);
     app.use('/api', permRouter);
 
+    // Page update SSE stream — GET /api/pages/:template/stream (Issue #1706)
+    const { createPageStreamRoutes } = await import('./routes/pageStreamRoutes.js');
+    const pageStreamRoutes = createPageStreamRoutes();
+    app.use('/api', pageStreamRoutes.router);
+    result.pageUpdateBroadcast = pageStreamRoutes.broadcastPageUpdate;
+
+    // Page event feedback bridge — POST /api/page-event (Issue #1705)
+    // Must be created before the gateway so the dispatcher can be passed to it.
+    const { createPageEventRoutes } = await import('./routes/pageEventRoutes.js');
+    const pageEventRoutes = createPageEventRoutes(options.mcpAqlHandler, pageStreamRoutes.broadcastPageUpdate);
+    app.use('/api', pageEventRoutes.router);
+
+    // MCP-AQL HTTP Gateway — POST /api/mcp-aql + POST /api/wait-for-page-events (Issue #1703, #1714)
+    const { createMcpAqlGatewayRoutes } = await import('./routes/mcpAqlGatewayRoutes.js');
+    const mcpAqlGateway = createMcpAqlGatewayRoutes(
+      options.mcpAqlHandler,
+      pageStreamRoutes.broadcastPageUpdate,
+      pageEventRoutes.dispatcher,
+    );
+    app.use('/api', mcpAqlGateway.router);
+
+    result.pageEventDispatcher = pageEventRoutes.dispatcher;
+
+    // Wire page infrastructure directly into the MCPAQLHandler so MCP-AQL
+    // operations (wait_for_page_events, send_page_event) work regardless
+    // of which caller started the web server first. Issue #1714.
+    const handler = options.mcpAqlHandler as MCPAQLHandler & {
+      setPageInfrastructure?: (d: unknown, b: unknown) => void;
+    };
+    if (typeof handler.setPageInfrastructure === 'function') {
+      handler.setPageInfrastructure(
+        pageEventRoutes.dispatcher,
+        pageStreamRoutes.broadcastPageUpdate,
+      );
+    }
+
+    logger.info('[WebUI] Element-driven page routes mounted (/api/mcp-aql, /api/page-event, /api/pages/*/stream)');
     logger.info('[WebUI] API routes using MCP-AQL Gateway + permission routes');
   } else {
     app.use('/api', createApiRoutes(options.portfolioDir));
@@ -268,6 +312,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   });
 
+  cachedServerResult = result;
   return result;
 }
 

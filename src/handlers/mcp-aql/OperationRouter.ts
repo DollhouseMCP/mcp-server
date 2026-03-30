@@ -259,6 +259,18 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     description: 'Resume agent execution from a handoff block. Validates integrity, verifies agent name match, restores context, and continues execution with caller-supplied parameters.',
   },
 
+  // ===== PAGE operations (element-driven web pages, Issue #1702) =====
+  wait_for_page_events: {
+    endpoint: 'READ',
+    handler: 'Page.waitForEvents',
+    description: 'Long-poll: block until browser events arrive for a page agent. Returns batched events from the PageEventDispatcher. Zero polling cost — call once, receive events when they arrive. Params: element_name (agent name), timeoutMs (optional, default 60000).',
+  },
+  send_page_event: {
+    endpoint: 'CREATE',
+    handler: 'Page.sendEvent',
+    description: 'Send an event to a browser page via SSE. Used by agents to push responses, updates, and notifications to element-driven web pages. Params: template (page name), data (object with type and message fields).',
+  },
+
   // ===== COLLECTION operations =====
   browse_collection: {
     endpoint: 'READ',

@@ -3,7 +3,7 @@
 This document provides a comprehensive visual reference for the entire MCP-AQL request lifecycle in the DollhouseMCP server. It covers:
 
 - The **5 CRUDE MCP tool entry points** (Create, Read, Update, Delete, Execute)
-- All **56 operations** mapped to their endpoints and handler modules
+- All **73 operations** mapped to their endpoints and handler modules
 - The **4-layer Gatekeeper enforcement pipeline** (route validation, element policies, session confirmations, default policies)
 - The **confirm_operation** and **verify_challenge** sub-flows
 - The **dispatch routing** from handler references to concrete handler modules
@@ -375,12 +375,12 @@ flowchart TD
 
 | File | Role |
 |------|------|
-| `src/handlers/mcp-aql/OperationRouter.ts` | Maps all 56 operations to endpoints and handler references |
+| `src/handlers/mcp-aql/OperationRouter.ts` | Maps all 73 operations to endpoints and handler references |
 | `src/handlers/mcp-aql/MCPAQLHandler.ts` | Unified handler: validate, enforce, route, dispatch, respond |
 | `src/handlers/mcp-aql/Gatekeeper.ts` | 4-layer policy engine with audit logging |
 | `src/handlers/mcp-aql/GatekeeperSession.ts` | In-memory per-connection session state for confirmations |
 | `src/handlers/mcp-aql/GatekeeperTypes.ts` | Permission levels, error codes, policy interfaces |
-| `src/handlers/mcp-aql/policies/OperationPolicies.ts` | Default permission levels for all 56 operations |
+| `src/handlers/mcp-aql/policies/OperationPolicies.ts` | Default permission levels for all 73 operations |
 | `src/handlers/mcp-aql/policies/ElementPolicies.ts` | Element-level policy resolution (deny > scope > confirm > allow) |
 | `src/handlers/mcp-aql/policies/AgentToolPolicyTranslator.ts` | Synthesizes Gatekeeper policies from agent `tools` config |
 | `src/handlers/mcp-aql/SchemaDispatcher.ts` | Declarative dispatch for schema-driven operations |

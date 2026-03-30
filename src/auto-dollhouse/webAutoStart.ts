@@ -68,6 +68,14 @@ export async function startPermissionServer(
       }
     }
 
+    // Wire page infrastructure into MCPAQLHandler for wait_for_page_events / send_page_event
+    // Note: primary wiring happens in server.ts via setPageInfrastructure() during route setup.
+    // This secondary path handles cases where webAutoStart runs after the web server.
+    if (result?.pageEventDispatcher && result?.pageUpdateBroadcast) {
+      mcpAqlHandler.setPageInfrastructure(result.pageEventDispatcher, result.pageUpdateBroadcast);
+      logger.info('[auto-dollhouse] Page infrastructure wired via WebServerResult');
+    }
+
     // Write port file for PreToolUse hook discovery
     await writePortFile(port);
     registerPortCleanup();

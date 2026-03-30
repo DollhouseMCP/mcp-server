@@ -1289,6 +1289,49 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
 } as const;
 
 // ============================================================================
+// Page Operations Schema (Element-Driven Web Pages, Issue #1702)
+// ============================================================================
+
+/**
+ * Page operations schema for element-driven web pages.
+ * Dispatched via MCPAQLHandler.dispatchPage(). Enables bidirectional
+ * browser-LLM communication through the PageEventDispatcher and SSE.
+ *
+ * @see Issue #1702 - Element-driven web applications epic
+ * @see Issue #1714 - Server-side page event dispatcher
+ */
+export const PAGE_SCHEMAS: OperationSchemaMap = {
+  wait_for_page_events: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchPage',
+    description: 'Long-poll: block until browser events arrive for a page agent. Returns batched events from the PageEventDispatcher. Zero polling cost — call once, receive events when they arrive.',
+    params: {
+      element_name: { type: 'string', required: true, description: 'Agent name to wait for events on' },
+      timeoutMs: { type: 'number', description: 'Maximum wait time in ms (default: 600000)' },
+    },
+    returns: { name: 'PageEventsResult', kind: 'object', description: '{ _type, eventCount, timedOut, events: [{ event, target, data, template, timestamp }] }' },
+    examples: [
+      '{ operation: "wait_for_page_events", params: { element_name: "page-chat-responder" } }',
+    ],
+  },
+  send_page_event: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchPage',
+    description: 'Send an event to a browser page via SSE. Push responses, commands, and HTML/CSS injection to element-driven web pages.',
+    params: {
+      template: { type: 'string', required: true, description: 'Page template name' },
+      data: { type: 'object', required: true, description: 'Event payload with type field (chat-response, page-command, inject-html, inject-css)' },
+    },
+    returns: { name: 'PageEventSent', kind: 'object', description: '{ _type, delivered, template }' },
+    examples: [
+      '{ operation: "send_page_event", params: { template: "the-drawing-room", data: { type: "chat-response", message: "Hello!" } } }',
+    ],
+  },
+};
+
+// ============================================================================
 // Gatekeeper Operations Schema (Introspection-Only)
 // ============================================================================
 
@@ -1678,6 +1721,7 @@ export const INTROSPECTION_ONLY_SCHEMAS: OperationSchemaMap = {
   ...MEMORY_SCHEMAS,
   ...EXECUTION_SCHEMAS,
   ...GATEKEEPER_SCHEMAS,
+  ...PAGE_SCHEMAS,
   ...LOGGING_SCHEMAS,
   ...METRICS_SCHEMAS,
   ...ACTIVATION_SCHEMAS,

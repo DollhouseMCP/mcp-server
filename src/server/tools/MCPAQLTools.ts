@@ -273,6 +273,9 @@ Import & portfolio:
 { operation: "sync_portfolio" }
 { operation: "portfolio_element_manager", params: { action: "push", element_type: "persona", element_name: "Tech-Writer" } }
 
+Page events (element-driven web pages):
+{ operation: "send_page_event", params: { template: "chat-page", data: { type: "agent-response", message: "Hello from the agent" } } }
+
 Auth & verification:
 { operation: "setup_github_auth" }
 { operation: "configure_oauth", params: { client_id: "your-client-id" } }
@@ -373,6 +376,9 @@ Gatekeeper & CLI policies:
 { operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
+
+Page events (element-driven web pages):
+{ operation: "wait_for_page_events", params: { element_name: "chat-agent", timeoutMs: 60000 } }
 
 Enhanced index:
 { operation: "find_similar_elements", params: { element_type: "persona", element_name: "Creative-Writer" } }
