@@ -182,7 +182,7 @@
     "@types/semver": "^7.7.1",
     "@types/supertest": "^7.2.0",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
-    "@typescript-eslint/parser": "^8.48.1",
+    "@typescript-eslint/parser": "^8.57.2",
     "archiver": "^7.0.1",
     "cross-env": "^10.1.0",
     "eslint": "^9.38.0",
