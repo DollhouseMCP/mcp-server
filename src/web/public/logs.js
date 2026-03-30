@@ -34,7 +34,7 @@
 
   // Filter state
   let filterCategory = '';
-  let filterLevel = '';
+  let filterLevel = 'info';  // Default to info — excludes debug noise from view
   let filterSource = '';
   let filterMessage = '';
   let filterCorrelationId = '';
@@ -161,6 +161,7 @@
     entryCountEl = document.getElementById('log-entry-count');
     categorySelect = document.getElementById('log-category');
     levelSelect = document.getElementById('log-level');
+    if (levelSelect && filterLevel) levelSelect.value = filterLevel;  // Sync dropdown with default
     sourceInput = document.getElementById('log-source');
     searchInput = document.getElementById('log-search');
     pauseBtn = document.getElementById('log-pause-btn');
@@ -244,7 +245,12 @@
   function connectSSE() {
     if (eventSource) eventSource.close();
     setStatus('reconnecting');
-    eventSource = new EventSource('/api/logs/stream');
+    // Pass current filters to server for SSE-level filtering (reduces bandwidth)
+    const params = new URLSearchParams();
+    if (filterCategory) params.set('category', filterCategory);
+    if (filterLevel) params.set('level', filterLevel);
+    const qs = params.toString();
+    eventSource = new EventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
 
     eventSource.onopen = () => setStatus('connected');
 

@@ -330,13 +330,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Cache via base class LRU cache
       this.cacheElement(memory, relativePath);
 
-      // Log successful load
-      SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_LOADED,
-        severity: 'LOW',
-        source: 'MemoryManager.load',
-        details: `Loaded memory from ${path.basename(fullPath)}`
-      });
+      // Routine load — debug level only. Security event for MEMORY_LOADED was
+      // generating ~128K entries/session, overwhelming the 5K security ring buffer
+      // with 25x turnover (backpressure). Downgraded per Issue #1687 analysis.
+      logger.debug(`[MemoryManager] Loaded memory from ${path.basename(fullPath)}`);
       
       return memory;
       
@@ -791,12 +788,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Update memory status in memory
     await memory.activate();
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'MEMORY_LOADED',
-      severity: 'LOW',
-      source: 'MemoryManager.activateMemory',
-      details: `Memory activated: ${memory.metadata.name}`
-    });
+    // Routine activation — debug only (was flooding security buffer)
+    logger.debug(`[MemoryManager] Memory activated: ${memory.metadata.name}`);
 
     logger.info(`Memory activated: ${memory.metadata.name}`);
 
@@ -1431,12 +1424,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       logger.info(`[MemoryManager] 🎉 Step 15: Seed memory installation COMPLETE!`);
 
-      SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_LOADED',
-        severity: 'LOW',
-        source: 'MemoryManager.installSeedMemories',
-        details: `Installed seed memory: ${seedFileName}`
-      });
+      logger.debug(`[MemoryManager] Installed seed memory: ${seedFileName}`);
 
     } catch (error) {
       // Log error but don't throw - seed installation should not break server startup
@@ -2028,9 +2016,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const emergencyDisabled = process.env.DOLLHOUSE_DISABLE_AUTOLOAD === 'true';
       if (emergencyDisabled) {
         logger.info('[MemoryManager] Auto-load disabled via DOLLHOUSE_DISABLE_AUTOLOAD');
+        // Keep as security event — emergency disable is a notable operational decision
         SecurityMonitor.logSecurityEvent({
           type: 'MEMORY_LOADED',
-          severity: 'LOW',
+          severity: 'MEDIUM',
           source: 'MemoryManager.loadAndActivateAutoLoadMemories',
           details: 'Auto-load memories disabled via emergency environment variable',
           additionalData: { reason: 'DOLLHOUSE_DISABLE_AUTOLOAD=true' }
@@ -2078,19 +2067,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
           logger.info(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens)`);
 
-          // Log security event
-          SecurityMonitor.logSecurityEvent({
-            type: 'MEMORY_LOADED',
-            severity: 'LOW',
-            source: 'MemoryManager.loadAndActivateAutoLoadMemories',
-            details: `Auto-loaded memory: ${memoryName}`,
-            additionalData: {
-              memoryName,
-              estimatedTokens,
-              priority: (memory.metadata as any).priority,
-              totalTokensSoFar: totalTokens
-            }
-          });
+          // Routine auto-load — debug only (was flooding security buffer)
+          logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
 
         } catch (error) {
           const memoryName = memory.metadata.name || 'unknown';
@@ -2107,12 +2085,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
         `(~${totalTokens} tokens), ${skipped} skipped, ${errors.length} errors, ${elapsedTime}ms`
       );
 
-      // Log completion
+      // Summary event — fires once per startup, keep as security event
       SecurityMonitor.logSecurityEvent({
         type: 'MEMORY_LOADED',
         severity: 'LOW',
         source: 'MemoryManager.loadAndActivateAutoLoadMemories',
-        details: 'Auto-load memories completed successfully',
+        details: `Auto-load complete: ${loaded} loaded, ${skipped} skipped, ${errors.length} errors`,
         additionalData: {
           loadedCount: loaded,
           skippedCount: skipped,
