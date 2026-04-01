@@ -27,6 +27,7 @@ describe('FileLogSink', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -352,7 +353,7 @@ describe('FileLogSink', () => {
 
   test('dir size cap emits stderr warning when deleting security log', async () => {
     const stderrMessages: string[] = [];
-    jest.spyOn(process.stderr, 'write').mockImplementation((msg: unknown) => {
+    const spy = jest.spyOn(process.stderr, 'write').mockImplementation((msg: unknown) => {
       stderrMessages.push(String(msg));
       return true;
     });
@@ -370,7 +371,7 @@ describe('FileLogSink', () => {
       await fs.utimes(secFile, oldMtime, oldMtime);
 
       // Cap at 250 — must delete at least one file; security file is oldest
-      const sink = createSink({ maxDirSizeBytes: 250, retentionDays: 9999 });
+      const sink = createSink({ maxDirSizeBytes: 250, retentionDays: 9999, securityRetentionDays: 9999 });
       await sink.cleanupExpiredFiles();
 
       const warnings = stderrMessages.filter(m => m.includes('dir-size cap') && m.includes('security'));
@@ -378,7 +379,7 @@ describe('FileLogSink', () => {
 
       await sink.close();
     } finally {
-      jest.restoreAllMocks();
+      spy.mockRestore();
     }
   });
 
