@@ -54,24 +54,24 @@ Your **portfolio** (`~/.dollhouse/portfolio/`) is a local folder that holds all 
 
 ## Quick Start
 
-> **v2.0.0-rc.2 is now available.** This is a release candidate — install with the `@rc` tag. Once stable, v2 will become the default. [Release notes](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.2) | [Migration guide](docs/guides/v2-migration-guide.md) | [Report issues](https://github.com/DollhouseMCP/mcp-server/issues)
+> **v2.0.0 is now available.** DollhouseMCP v2 is the default release. [Release notes](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0) | [Migration guide](docs/guides/v2-migration-guide.md) | [Report issues](https://github.com/DollhouseMCP/mcp-server/issues)
 
 DollhouseMCP installs on any MCP-compatible AI client — Claude Code, Claude Desktop, Cursor, Gemini, Codex, and local LLMs. Core element management (create, activate, search, browse) works across all platforms. Advanced features (Gatekeeper confirmation flows, agentic loop execution) have been tested extensively on Claude Code and should work on any client that supports standard MCP tool call/response patterns.
 
 **Claude Desktop** (one-click install):
 
-Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0-rc.2) (`.mcpb` file) and open it. Claude Desktop handles the rest — no terminal required.
+Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0) (`.mcpb` file) and open it. Claude Desktop handles the rest — no terminal required.
 
 **Claude Code** (one command):
 
 All projects (recommended):
 ```bash
-claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
 Current project only:
 ```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
 **Other platforms** — see the [Quick Start Guide](docs/guides/quick-start.md) for Claude Desktop manual config, Gemini, Cursor, Codex, local LLMs, and more.
@@ -291,7 +291,7 @@ The [Quick Start](#quick-start) above covers the fastest path. For more control:
 
 ```bash
 mkdir -p ~/mcp-servers && cd ~/mcp-servers
-npm install @dollhousemcp/mcp-server@rc
+npm install @dollhousemcp/mcp-server
 ```
 
 Then point your MCP client at `node <path>/node_modules/@dollhousemcp/mcp-server/dist/index.js`.

@@ -1,7 +1,7 @@
 # DollhouseMCP Server Architecture
 
-**Version:** 2.0.0-beta
-**Last Updated:** March 2026
+**Version:** 2.0.0
+**Last Updated:** April 2026
 
 ## 1. Introduction
 

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-03-18
-version: 2.0.0-beta
+version: 2.0.0
 ---
 
 # MCP-AQL in DollhouseMCP

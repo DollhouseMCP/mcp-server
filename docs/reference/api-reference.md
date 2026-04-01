@@ -1,4 +1,4 @@
-# DollhouseMCP API Reference (v2.0.0-beta)
+# DollhouseMCP API Reference (v2.0.0)
 
 **Last Updated:** March 2026
 

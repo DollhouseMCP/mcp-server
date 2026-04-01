@@ -1,7 +1,7 @@
 # Environment Variables Guide
 
 **Last Updated:** 2026-03-18
-**Version:** 2.0.0-beta
+**Version:** 2.0.0
 **Purpose:** Complete guide to configuring DollhouseMCP environment variables
 
 ---

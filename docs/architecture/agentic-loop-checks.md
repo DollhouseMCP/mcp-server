@@ -3,7 +3,7 @@
 > All checks, validations, evaluations, and gates that fire during agent execution in the MCP-AQL EXECUTE pipeline.
 
 **Last updated:** 2026-02-21
-**Applies to:** v2.0.0-beta.3+ on `develop`
+**Applies to:** v2.0.0
 
 ---
 
