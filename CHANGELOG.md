@@ -1,70 +1,61 @@
 # Changelog
 
+## [2.0.0] - 2026-04-01
+
+DollhouseMCP v2.0.0 is the first stable release of the v2 line. This release brings MCP-AQL (Agent Query Language), Gatekeeper permission system, unified web console, multi-session support, comprehensive metrics, and 9000+ tests across unit, integration, security, and e2e suites.
+
+### Highlights Since RC Cycle
+
+#### Unified Web Console (#1681, #1701)
+- Built-in web dashboard with log viewer, metrics, and permissions tabs
+- Multi-session support with leader election and follower forwarding
+- Session names (Punch, Kermit, Echo, etc.) with uptime tracking and kill controls
+- Dynamic port discovery for concurrent sessions (#1690)
+- SSE-based real-time log and metrics streaming
+
+#### Permission System (#1691, #1692, #1693)
+- `evaluate_permission` MCP-AQL operation for multi-platform hooks
+- HTTP permission evaluation endpoint for external integrations
+- Permissions dashboard tab in web console
+- Cross-platform adapter support (Claude Code, Gemini CLI, Cursor, Codex CLI, Windsurf, VS Code Copilot, JetBrains Junie)
+
+#### Gatekeeper Auto-Confirm (#1653)
+- Operations that required `confirm_operation` + retry now auto-confirm in a single call
+- Reduces session startup from ~50 user approvals to ~15
+- Risk scoring (0-100) on all auto-confirmed operations
+
+#### Stability & Performance
+- File watcher debounce to prevent memory loading loops (#1689)
+- Security event deduplication to stop log flooding and memory pressure (#1699)
+- Log backpressure elimination — `MEMORY_LOADED` downgraded from security events to debug (#1715)
+- SAFE_DESCRIPTION validation relaxed to allow common symbols (#1695)
+- Security validation pipeline for web console element rendering (#1697)
+
+#### Log Management (#709)
+- **BREAKING DEFAULT**: `DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS` default reduced from 90 to **7 days**
+- `DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY` env var (default `100`) — caps rotated files per category
+- `DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES` env var (default `0` = disabled) — caps total log directory size
+- Restart sequence recovery for `FileLogSink`
+
+#### Element Filename Convention (#514)
+- Element filenames revert to plain `{name}.ext` — directory structure provides type context
+- Fixes lookup failures when `metadata.name` (spaces) didn't match identifier (hyphens)
+- 33 bundled seed elements renamed to match new convention
+
+#### Testing & Quality
+- 9000+ tests (unit, integration, security, e2e, calibration)
+- Permission flow test harness: 393 tests covering every operation x permission level (#1669, #1670)
+- Enhanced pattern syntax validation with real-time LLM feedback (#1664)
+- Security warnings in `mcp_aql_delete` and `mcp_aql_execute` tool descriptions
+- Fork PR CI permissions handled gracefully (#1673)
+
+---
+
+*For the full v2 feature set (MCP-AQL, Gatekeeper, agentic loop, ensembles, etc.), see the beta release notes below.*
+
 ## [2.0.0-rc.6] - 2026-03-26
 
-### 🚀 Auto-Confirm UX Fix
-
-- **fix(gatekeeper): auto-confirm on confirmationPending (#1653)**
-  - Operations that required `confirm_operation` + retry now auto-confirm in a single call
-  - Reduces session startup from ~50 user approvals to ~15
-  - Risk scoring (0-100) on all auto-confirmed operations: DELETE=80, EXECUTE=60, UPDATE=40, CREATE=20
-  - CONFIRM_SINGLE_USE operations log at `warn` level for audit visibility
-  - Safety layers preserved: element deny policies, canBeElevated constraints, safety tier, DangerZone
-
-### ✨ Features
-
-- **feat: debug logging for externalRestrictions pattern evaluation (#1662)**
-  - Debug logs at every decision point in `evaluateCliToolPolicy()` via `[CliPolicy]` prefix
-  - Element type summaries and elapsed timing in decision logs
-  - 12 new tests covering all logging code paths
-
-- **feat: enhanced pattern syntax validation (#1664)**
-  - `analyzePatternSyntax()` warns about missing tool prefixes, overly broad wildcards, regex syntax in glob patterns, unknown tool names, leading/trailing whitespace
-  - Wired into `validateGatekeeperPolicy()` for real-time LLM feedback
-  - Confirm/deny pattern overlap detection
-
-- **feat: security warnings in tool descriptions**
-  - `mcp_aql_delete` and `mcp_aql_execute` descriptions warn against auto-allowing in host settings
-  - Visible to LLMs and users during tool setup
-
-### 🧪 Testing
-
-- **test: permission flow test harness (#1669, #1670)** — 393 tests total:
-  - 27 scenario-based tests (pre-confirmed ops, element overrides, confirmation scoping, Scenario G safety analysis)
-  - 260 programmatic full-matrix tests (every operation × permission level × live gatekeeper enforcement)
-  - 112 cross-platform adapter tests (Claude Code, Gemini CLI, Cursor, Codex CLI, Windsurf, VS Code Copilot, JetBrains Junie)
-
-### 🔧 CI/CD
-
-- **fix(ci): handle fork PR permissions gracefully (#1673)**
-  - Security audit falls back to workflow summary on 403
-  - Claude review and doc validation skip on fork PRs
-  - `workflow_dispatch` triggers for manual runs by maintainers
-
-### 📋 Housekeeping
-
-- Closed 8 stale issues verified as already fixed (#610, #937, #528, #661, #1174, #1404, #1405, #1045)
-- Added insomnolence as collaborator with write access
-
-## [Unreleased]
-
-### 🔧 Improvements
-
-- **Fix log directory unbounded growth** (#709)
-  - **BREAKING DEFAULT**: `DOLLHOUSE_LOG_SECURITY_RETENTION_DAYS` default reduced from 90 to **7 days**. Deployments generating high security log volume (e.g. bridge) will no longer accumulate tens of GB over 90 days. Compliance operators who require longer retention must set this env var explicitly.
-  - **Bug fix**: Restart sequence recovery — `FileLogSink` previously reset sequence counters to 0 on every restart, causing new writes to reuse base files and mix data across restart boundaries. The sink now scans the log directory on startup to resume from the highest existing sequence number.
-  - **New**: `DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY` env var (default `100`) — caps the number of rotated files per category, deleting oldest first (date ASC, then sequence ASC).
-  - **New**: `DOLLHOUSE_LOG_MAX_DIR_SIZE_BYTES` env var (default `0` = disabled) — caps the total log directory size in bytes, deleting oldest files by mtime. Emits a `stderr` warning when a security log is deleted so operators can investigate.
-  - Cleanup order: age pass → count pass → size pass.
-
-- **Revert `{name}-{type}` Filename Convention** (#514)
-  - Element filenames revert to plain `{name}.ext` — directory structure provides type context
-  - Fixes lookup failures when `metadata.name` (spaces) didn't match identifier (hyphens)
-  - `tryDirectLoad()` and `findByName()` now normalize both sides before comparison
-  - Removed `validateElementFilename()`, `enforceNamingConvention()`, and `naming-validation-config.ts`
-  - 33 bundled seed elements renamed to match new convention
-  - Added `scripts/revert-element-type-suffixes.sh` for opt-in user portfolio migration
-  - Removed `scripts/migrate-element-names.sh` (obsolete forward migration)
+See [2.0.0] above — rc.6 features are consolidated into the stable release.
 
 ## [2.0.0-beta.3] - 2026-02-03
 

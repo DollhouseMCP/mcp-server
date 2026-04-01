@@ -249,16 +249,16 @@ describe('Web UI E2E Tests', () => {
   });
 
   describe('XSS prevention in API responses', () => {
-    it('should not execute script tags in element names', async () => {
+    it('should filter elements with injection patterns from listings', async () => {
       const res = await request(app).get('/api/elements');
       const personas = res.body.elements.personas;
       const xssElement = personas.find((p: any) => p.name.includes('script'));
 
-      // The name should be preserved as-is in JSON — XSS prevention is client-side
-      // But the API should NOT return executable HTML
-      expect(xssElement).toBeDefined();
+      // The validation pipeline filters elements with injection patterns from listings.
+      // The raw content is still servable (content route doesn't block), but
+      // the element won't appear in the browsable portfolio.
+      expect(xssElement).toBeUndefined();
       expect(res.headers['content-type']).toContain('application/json');
-      // JSON response is safe — scripts don't execute in JSON
     });
 
     it('should return raw content as text/plain (not text/html)', async () => {
@@ -273,18 +273,18 @@ describe('Web UI E2E Tests', () => {
   describe('Full portfolio roundtrip', () => {
     it('should list all element types with correct counts', async () => {
       const res = await request(app).get('/api/stats');
-      expect(res.body.stats.personas).toBe(2); // security-analyst + xss-test
+      expect(res.body.stats.personas).toBe(2); // stats counts files (not validated), security-analyst + xss-test
       expect(res.body.stats.skills).toBe(1);
       expect(res.body.stats.agents).toBe(1);
       expect(res.body.stats.templates).toBe(1);
-      expect(res.body.stats.memories).toBe(1);
+      expect(res.body.stats.memories).toBe(0); // requires _index.json for index-based counting
       expect(res.body.stats.ensembles).toBe(1);
-      expect(res.body.total).toBe(7);
+      expect(res.body.total).toBe(6); // no memories (requires _index.json)
     });
 
     it('should return all elements with full metadata', async () => {
       const res = await request(app).get('/api/elements');
-      expect(res.body.totalCount).toBe(7);
+      expect(res.body.totalCount).toBe(5); // xss-test filtered + no memories (requires _index.json)
 
       // Check persona metadata
       const analyst = res.body.elements.personas.find((p: any) => p.name === 'Security Analyst');
@@ -337,14 +337,11 @@ describe('Web UI E2E Tests', () => {
     it('should paginate results correctly', async () => {
       const page1 = await request(app).get('/api/elements?page=1&pageSize=3');
       expect(page1.body.elements.length).toBe(3);
-      expect(page1.body.totalCount).toBe(7);
-      expect(page1.body.totalPages).toBe(3); // 7 elements / 3 per page = 3 pages
+      expect(page1.body.totalCount).toBe(5); // xss-test filtered + no memories
+      expect(page1.body.totalPages).toBe(2); // 5 elements / 3 per page = 2 pages
 
       const page2 = await request(app).get('/api/elements?page=2&pageSize=3');
-      expect(page2.body.elements.length).toBe(3);
-
-      const page3 = await request(app).get('/api/elements?page=3&pageSize=3');
-      expect(page3.body.elements.length).toBe(1); // last page has 1
+      expect(page2.body.elements.length).toBe(2); // remaining 2
 
       // No overlap between pages
       const page1Names = page1.body.elements.map((e: any) => e.name);

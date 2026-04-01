@@ -432,13 +432,11 @@ describe('LogHooks', () => {
       expect(mockLogManager.logCalls[0].level).toBe('info');
     });
 
-    it('should map unmapped events to debug level', () => {
-      const mockOn = jest.fn();
+    it('should only subscribe to mapped events (not start/cache/external-change)', () => {
+      const eventHandlers: Record<string, any> = {};
       const dispatcher = {
         on: jest.fn((event, handler) => {
-          if (event === 'element:cache:refresh') {
-            mockOn.mockImplementation(handler);
-          }
+          eventHandlers[event] = handler;
           return jest.fn();
         }),
       };
@@ -446,16 +444,21 @@ describe('LogHooks', () => {
 
       wireLogHooks(mockLogManager, container);
 
-      mockOn({ elementType: 'template', elementId: 'cached-template' });
-
-      expect(mockLogManager.logCalls[0].level).toBe('debug');
+      // Start/cache/external-change events should NOT be subscribed
+      expect(eventHandlers['element:load:start']).toBeUndefined();
+      expect(eventHandlers['element:cache:refresh']).toBeUndefined();
+      expect(eventHandlers['element:external-change']).toBeUndefined();
+      // But error/success/activate events should be
+      expect(eventHandlers['element:load:error']).toBeDefined();
+      expect(eventHandlers['element:load:success']).toBeDefined();
+      expect(eventHandlers['element:activate']).toBeDefined();
     });
 
-    it('should handle missing elementType/elementId gracefully', () => {
+    it('should include filePath in element name when elementId is missing', () => {
       const mockOn = jest.fn();
       const dispatcher = {
         on: jest.fn((event, handler) => {
-          if (event === 'element:load:start') {
+          if (event === 'element:load:error') {
             mockOn.mockImplementation(handler);
           }
           return jest.fn();
@@ -465,9 +468,9 @@ describe('LogHooks', () => {
 
       wireLogHooks(mockLogManager, container);
 
-      mockOn({});
+      mockOn({ elementType: 'skills', filePath: 'test-skill.md' });
 
-      expect(mockLogManager.logCalls[0].message).toBe('element:load:start [unknown:]');
+      expect(mockLogManager.logCalls[0].message).toBe('element:load:error [skills:test-skill]');
     });
 
     it('should include correlationId when present', () => {
@@ -1110,10 +1113,10 @@ describe('LogHooks', () => {
 
       // Should have cleanups for:
       // - MCPLogger, SecurityMonitor (static), SecurityTelemetry, PerformanceMonitor
-      // - ElementEventDispatcher (15 events), OperationalTelemetry, FileLockManager
+      // - ElementEventDispatcher (9 mapped events), OperationalTelemetry, FileLockManager
       // - DefaultElementProvider (static), LRUCache (static), StateChangeNotifier
-      // Total: 1 + 1 + 1 + 1 + 15 + 1 + 1 + 1 + 1 + 1 = 24
-      expect(cleanups.length).toBeGreaterThanOrEqual(21);
+      // Total: 1 + 1 + 1 + 1 + 9 + 1 + 1 + 1 + 1 + 1 = 18
+      expect(cleanups.length).toBeGreaterThanOrEqual(15);
     });
 
     it('should handle all ElementEventDispatcher events', () => {
@@ -1128,18 +1131,26 @@ describe('LogHooks', () => {
 
       wireLogHooks(mockLogManager, container);
 
-      // Verify all expected events were registered
+      // Only mapped events should be registered (not start/cache/external-change)
       const expectedEvents = [
-        'element:load:start', 'element:load:success', 'element:load:error',
-        'element:save:start', 'element:save:success', 'element:save:error',
-        'element:delete:start', 'element:delete:success', 'element:delete:error',
+        'element:load:error', 'element:load:success',
+        'element:save:error', 'element:save:success',
+        'element:delete:error', 'element:delete:success',
         'element:activate', 'element:deactivate',
-        'element:cache:refresh', 'element:cache:evict',
-        'element:external-change', 'element:lock-timeout',
+        'element:lock-timeout',
       ];
 
       expectedEvents.forEach(event => {
         expect(eventHandlers[event]).toBeDefined();
+      });
+
+      // These should NOT be registered
+      const skippedEvents = [
+        'element:load:start', 'element:save:start', 'element:delete:start',
+        'element:cache:refresh', 'element:cache:evict', 'element:external-change',
+      ];
+      skippedEvents.forEach(event => {
+        expect(eventHandlers[event]).toBeUndefined();
       });
     });
   });

@@ -49,12 +49,12 @@ A comprehensive Model Context Protocol (MCP) server that enables dynamic AI pers
 
 All projects (recommended):
 ```bash
-claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
 Current project only:
 ```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@rc
+claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
 ---

@@ -1,7 +1,7 @@
 # Ensemble System Architecture
 
-**Last Updated:** February 2, 2026
-**Version:** 2.0.0-beta.2
+**Last Updated:** April 2026
+**Version:** 2.0.0
 
 ## Table of Contents
 
@@ -886,7 +886,7 @@ Ensembles provide powerful orchestration of multiple elements, with:
 - **4 element roles**: `primary`, `support`, `override`, `monitor`
 - **3 activation modes**: `always`, `on-demand`, `conditional`
 
-> **Known limitations (as of v2.0.0-beta.2):**
+> **Known limitations (as of v2.0.0):**
 > - Element roles are semantic labels only; they do not affect runtime behavior.
 > - Context sharing modes are stored in metadata but not enforced at runtime. All elements can access shared context regardless of the configured mode.
 > - Conditional activation mode evaluates all elements when no condition expression is provided. Condition evaluation logic is not yet fully implemented.

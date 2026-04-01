@@ -54,8 +54,8 @@ ls ~/.dollhouse/logs/
 **3. Enable the browser viewer** (optional):
 
 ```bash
-export DOLLHOUSE_LOG_VIEWER=true
-# Open http://127.0.0.1:9100 in your browser
+export DOLLHOUSE_WEB_CONSOLE=true
+# Open http://dollhouse.localhost:3939 and click the Logs tab
 ```
 
 **4. Query logs via MCP:**
@@ -198,33 +198,28 @@ When a queue reaches capacity, the oldest entry is evicted to make room. These e
 | `DOLLHOUSE_LOG_MEMORY_PERF_CAPACITY` | `2000` | Performance queue capacity |
 | `DOLLHOUSE_LOG_MEMORY_TELEMETRY_CAPACITY` | `1000` | Telemetry queue capacity |
 
-### Browser Viewer (SSELogSink)
+### Browser Viewer (Web Console)
 
-An opt-in real-time log viewer served over HTTP. Binds to localhost only (`127.0.0.1`).
+The management console at `http://dollhouse.localhost:3939` includes a real-time log viewer under the **Logs** tab. It is enabled by default via `DOLLHOUSE_WEB_CONSOLE=true`.
 
-**Enable it:**
-
-```bash
-export DOLLHOUSE_LOG_VIEWER=true
-```
-
-**Endpoints:**
+**API Endpoints (on port 3939):**
 
 | Path | Method | Description |
 |------|--------|-------------|
-| `/` | GET | Browser-based log viewer UI |
-| `/logs/stream` | GET | Server-Sent Events (SSE) stream — real-time entries |
-| `/logs` | GET | JSON query endpoint (same filters as `query_logs`) |
-| `/health` | GET | Health check — returns `{ status, clients, uptime }` |
+| `/api/logs` | GET | JSON query endpoint (same filters as `query_logs`) |
+| `/api/logs/stream` | GET | Server-Sent Events (SSE) stream — real-time entries |
+| `/api/logs/stats` | GET | Queue sizes and capacities |
+| `/api/health` | GET | Health check — uptime, sink stats, SSE client counts |
 
-**Features**: Color-coded log levels, category/level/source filters, text search, pause/resume streaming, automatic backfill of recent history on connect.
+**Features**: Virtual-scrolling log viewer (10K entry buffer), color-coded log levels, category/level/source filters, text search, pause/resume streaming, expandable entry detail, automatic backfill on connect.
 
 **Environment variables:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOLLHOUSE_LOG_VIEWER` | `false` | Enable the browser viewer |
-| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | HTTP port for the viewer |
+| `DOLLHOUSE_WEB_CONSOLE` | `true` | Enable the unified web console (logs + metrics) |
+| `DOLLHOUSE_LOG_VIEWER` | `false` | **Deprecated** — use `DOLLHOUSE_WEB_CONSOLE` instead |
+| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 3939 |
 
 ---
 
@@ -330,13 +325,13 @@ When the browser viewer is enabled (`DOLLHOUSE_LOG_VIEWER=true`):
 
 ```bash
 # JSON query (same parameters as query_logs)
-curl "http://127.0.0.1:9100/logs?category=security&level=warn&limit=10"
+curl "http://127.0.0.1:3939/api/logs?category=security&level=warn&limit=10"
 
 # SSE stream with filters (-N disables output buffering for real-time streaming)
-curl -N "http://127.0.0.1:9100/logs/stream?category=security&level=error"
+curl -N "http://127.0.0.1:3939/api/logs/stream?category=security&level=error"
 
 # Health check
-curl "http://127.0.0.1:9100/health"
+curl "http://127.0.0.1:3939/api/health"
 ```
 
 ### Command-Line (grep, jq)
@@ -445,9 +440,10 @@ If you see `[REDACTED]` in your logs, this is expected and intentional. The orig
 | `DOLLHOUSE_LOG_MEMORY_TELEMETRY_CAPACITY` | `1000` | Telemetry queue capacity |
 | **Entry Size** | | |
 | `DOLLHOUSE_LOG_MAX_ENTRY_SIZE` | `16384` | Max serialized entry size (bytes, 16 KB); oversized `data` is truncated |
-| **Browser Viewer** | | |
-| `DOLLHOUSE_LOG_VIEWER` | `false` | Enable the browser-based log viewer |
-| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | HTTP port for the viewer (localhost only) |
+| **Web Console** | | |
+| `DOLLHOUSE_WEB_CONSOLE` | `true` | Enable the unified web console (logs + metrics on port 3939) |
+| `DOLLHOUSE_LOG_VIEWER` | `false` | **Deprecated** — use `DOLLHOUSE_WEB_CONSOLE` instead |
+| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 3939 |
 
 ---
 
@@ -537,8 +533,8 @@ Add environment variables to your Claude Desktop `claude_desktop_config.json`:
 
 ### Browser viewer not loading
 
-**Cause**: The viewer is not enabled, or the port is in use.
-**Solution**: Ensure `DOLLHOUSE_LOG_VIEWER=true` is set. Check that port 9100 (or your custom `DOLLHOUSE_LOG_VIEWER_PORT`) is not already in use: `lsof -i :9100`. The viewer binds to `127.0.0.1` only — access it from the same machine.
+**Cause**: The web console is not enabled, or the port is in use.
+**Solution**: Ensure `DOLLHOUSE_WEB_CONSOLE=true` is set (default). Check that port 3939 is not already in use: `lsof -i :3939`. The console binds to `127.0.0.1` only — access it from the same machine. The Logs tab provides real-time log streaming.
 
 ### `[REDACTED]` appearing in log data
 

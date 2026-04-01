@@ -1144,6 +1144,41 @@ body.modal-open { overflow: hidden; }
   border-color: color-mix(in srgb, var(--signal) 30%, var(--line));
 }
 
+/* ── Security scan badges ──────────────────────────────────── */
+.scan-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: default;
+  margin-left: 0.5rem;
+}
+.scan-badge--pass {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.scan-badge--warn {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+}
+[data-theme="dark"] .scan-badge--pass {
+  background: #052e16;
+  color: #86efac;
+  border-color: #14532d;
+}
+[data-theme="dark"] .scan-badge--warn {
+  background: #431407;
+  color: #fdba74;
+  border-color: #7c2d12;
+}
+
 /* Submit button — accent amber for local elements */
 .modal-nav {
   display: flex;
@@ -1271,6 +1306,66 @@ body.modal-open { overflow: hidden; }
   color: var(--ink-500);
   min-width: 8ch;
   text-align: center;
+}
+
+/* ── Console tabs ────────────────────────────────────────────────────────── */
+
+.console-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.console-tab {
+  background: transparent;
+  color: var(--ink-500);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 14px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  letter-spacing: 0.02em;
+}
+
+.console-tab:hover {
+  color: var(--ink-900);
+  background: var(--surface-2);
+}
+
+.console-tab.active {
+  background: var(--paper-strong);
+  color: var(--signal);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+@media (max-width: 640px) {
+  .console-tabs {
+    order: -1;
+    width: 100%;
+  }
+  .console-tab {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+/* ── Tab panels ──────────────────────────────────────────────────────────── */
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.tab-panel[hidden] {
+  display: none !important;
 }
 
 /* ── Site footer ─────────────────────────────────────────────────────────── */

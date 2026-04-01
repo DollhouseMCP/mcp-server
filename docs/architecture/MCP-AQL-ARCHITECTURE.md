@@ -1,6 +1,6 @@
 # MCP-AQL Architecture
 
-**Version:** 2.0.0-beta
+**Version:** 2.0.0
 **Last Updated:** 2026-01-03
 
 ## Overview

@@ -216,29 +216,29 @@ export function wireLogHooks(
       'element:delete:success': 'info',
     };
 
-    const allEvents = [
-      'element:load:start', 'element:load:success', 'element:load:error',
-      'element:save:start', 'element:save:success', 'element:save:error',
-      'element:delete:start', 'element:delete:success', 'element:delete:error',
-      'element:activate', 'element:deactivate',
-      'element:cache:refresh', 'element:cache:evict',
-      'element:external-change', 'element:lock-timeout',
-    ];
+    // Only log events that have a mapped level (errors, warnings, success, activate/deactivate).
+    // Skip start/cache/external-change events — they fire per-element and create noise
+    // without adding value beyond the completion/error logs.
+    const loggedEvents = Object.keys(eventLevelMap);
 
-    for (const eventName of allEvents) {
+    for (const eventName of loggedEvents) {
       const unsub = dispatcher.on(eventName, (payload: any) => {
         const level = eventLevelMap[eventName] ?? 'debug';
         const requestCorrelationId = contextTracker?.getCorrelationId();
+        // Use elementId if available, fall back to filename from filePath
+        const elementName = payload.elementId
+          || (payload.filePath ? payload.filePath.replace(/\.[^.]+$/, '') : '');
         const entry: UnifiedLogEntry = {
           id: logManager.generateId(),
           timestamp: new Date().toISOString(),
           category: 'application',
           level,
           source: 'ElementEventDispatcher',
-          message: `${eventName} [${payload.elementType ?? 'unknown'}:${payload.elementId ?? ''}]`,
+          message: `${eventName} [${payload.elementType ?? 'unknown'}:${elementName}]`,
           data: {
             ...payload.extra,
             ...(payload.correlationId ? { operationId: payload.correlationId } : {}),
+            ...(payload.filePath ? { filePath: payload.filePath } : {}),
           },
           correlationId: requestCorrelationId ?? payload.correlationId,
         };

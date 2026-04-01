@@ -32,6 +32,8 @@ jest.mock('../../../src/security/fileLockManager.js');
 jest.mock('../../../src/security/securityMonitor.js');
 jest.mock('../../../src/utils/logger.js');
 
+import { logger as _logger } from '../../../src/utils/logger.js';
+
 // Test element for concrete implementation
 interface TestElementMetadata {
   name: string;
@@ -993,6 +995,165 @@ describe('BaseElementManager - Requirements & Contract', () => {
       // All should succeed
       expect(elements).toHaveLength(5);
       elements.forEach(e => expect(e.metadata.name).toBe('Concurrent'));
+    });
+  });
+
+  // ============================================
+  // ERROR SUPPRESSION (log deduplication)
+  // ============================================
+
+  describe('Repeated Load Error Suppression', () => {
+    let failingManager: TestElementManager;
+
+    const errorSpy = jest.spyOn(_logger, 'error').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(_logger, 'debug').mockImplementation(() => {});
+
+    beforeEach(async () => {
+      errorSpy.mockClear();
+      debugSpy.mockClear();
+      // Create a manager subclass whose parseMetadata throws for specific content
+      class FailingTestManager extends TestElementManager {
+        protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {
+          if (data.name === 'FAIL_PARSE') throw new Error('Simulated parse failure');
+          if (data.name === 'FAIL_OTHER') throw new Error('Different failure reason');
+          return super.parseMetadata(data);
+        }
+      }
+
+      failingManager = new FailingTestManager(
+        ElementType.SKILL, portfolioManager, fileLockManager,
+        fileOperationsService, validationRegistry
+      );
+      fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
+        return fs.readFile(filePath, 'utf-8');
+      }) as any;
+
+      jest.clearAllMocks();
+    });
+
+    it('logs error on first load failure', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'bad-element.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      await expect(failingManager.load('bad-element.md')).rejects.toThrow('Simulated parse failure');
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it('suppresses repeated identical error to debug level', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'bad-element.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // First load — logs at error level
+      await expect(failingManager.load('bad-element.md')).rejects.toThrow();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      jest.clearAllMocks();
+
+      // Second load — same file, same error — should be suppressed
+      await expect(failingManager.load('bad-element.md')).rejects.toThrow();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(debugSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Suppressed repeated load error')
+      );
+    });
+
+    it('suppresses element:load:error event on repeated identical error', async () => {
+      // Create a manager with a real event dispatcher to track events
+      const dispatcher = new ElementEventDispatcher();
+      const loadErrorEvents: string[] = [];
+      dispatcher.on('element:load:error', (payload) => {
+        loadErrorEvents.push((payload as any).filePath);
+      });
+
+      class FailingDispatchManager extends TestElementManager {
+        protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {
+          if (data.name === 'FAIL_PARSE') throw new Error('Simulated parse failure');
+          return super.parseMetadata(data);
+        }
+      }
+
+      const dispatchManager = new FailingDispatchManager(
+        ElementType.SKILL, portfolioManager, fileLockManager,
+        fileOperationsService, validationRegistry,
+        { eventDispatcher: dispatcher },
+      );
+
+      await fs.writeFile(
+        path.join(elementsDir, 'dispatch-test.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // First load — event should fire
+      await expect(dispatchManager.load('dispatch-test.md')).rejects.toThrow();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(loadErrorEvents).toHaveLength(1);
+
+      // Second load — same error — event should NOT fire
+      await expect(dispatchManager.load('dispatch-test.md')).rejects.toThrow();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(loadErrorEvents).toHaveLength(1); // still 1, not 2
+    });
+
+    it('re-logs error when the error reason changes', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'bad-element.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // First load — parse failure
+      await expect(failingManager.load('bad-element.md')).rejects.toThrow();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      jest.clearAllMocks();
+
+      // Change file to produce a different error
+      await fs.writeFile(
+        path.join(elementsDir, 'bad-element.md'),
+        '---\nname: FAIL_OTHER\n---\n\nContent'
+      );
+
+      // Second load — different error — should log at error level again
+      await expect(failingManager.load('bad-element.md')).rejects.toThrow('Different failure reason');
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it('clears suppression on successful load', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'fixable.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // First load — fails, logged at error
+      await expect(failingManager.load('fixable.md')).rejects.toThrow();
+
+      // Second load — same error, suppressed
+      await expect(failingManager.load('fixable.md')).rejects.toThrow();
+
+      // Fix the file
+      await fs.writeFile(
+        path.join(elementsDir, 'fixable.md'),
+        '---\nname: Fixable\ndescription: Now valid\n---\n\nContent'
+      );
+
+      // Third load — succeeds, clears suppression
+      const element = await failingManager.load('fixable.md');
+      expect(element.metadata.name).toBe('Fixable');
+
+      jest.clearAllMocks();
+
+      // Break it again with same error
+      await fs.writeFile(
+        path.join(elementsDir, 'fixable.md'),
+        '---\nname: FAIL_PARSE\n---\n\nContent'
+      );
+
+      // Fourth load — should log at error level (suppression was cleared by success)
+      await expect(failingManager.load('fixable.md')).rejects.toThrow();
+      expect(errorSpy).toHaveBeenCalled();
     });
   });
 });

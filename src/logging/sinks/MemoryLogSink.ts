@@ -24,6 +24,7 @@ const CATEGORY_KEY: Record<LogCategory, keyof MemoryLogSinkOptions> = {
 
 export class MemoryLogSink implements ILogSink {
   private readonly queues: Map<LogCategory, EvictingQueue<UnifiedLogEntry>>;
+  private readonly evictionCounts: Map<LogCategory, number> = new Map();
 
   constructor(options: MemoryLogSinkOptions) {
     this.queues = new Map<LogCategory, EvictingQueue<UnifiedLogEntry>>();
@@ -32,12 +33,19 @@ export class MemoryLogSink implements ILogSink {
         category as LogCategory,
         new EvictingQueue<UnifiedLogEntry>(options[key]),
       );
+      this.evictionCounts.set(category as LogCategory, 0);
     }
   }
 
   write(entry: UnifiedLogEntry): void {
     const queue = this.queues.get(entry.category);
     if (queue) {
+      if (queue.size >= queue.capacity) {
+        this.evictionCounts.set(
+          entry.category,
+          (this.evictionCounts.get(entry.category) ?? 0) + 1,
+        );
+      }
       queue.push(entry);
     }
   }
@@ -54,7 +62,7 @@ export class MemoryLogSink implements ILogSink {
 
   query(options?: LogQueryOptions): LogQueryResult {
     const category = options?.category ?? 'all';
-    const limit = Math.max(1, Math.min(options?.limit ?? 50, 500));
+    const limit = Math.max(1, Math.min(options?.limit ?? 50, 10000));
     const offset = Math.max(0, options?.offset ?? 0);
 
     // 1. Select queues
@@ -118,10 +126,14 @@ export class MemoryLogSink implements ILogSink {
     };
   }
 
-  getStats(): Record<LogCategory, { size: number; capacity: number }> {
-    const stats = {} as Record<LogCategory, { size: number; capacity: number }>;
+  getStats(): Record<LogCategory, { size: number; capacity: number; evictions: number }> {
+    const stats = {} as Record<LogCategory, { size: number; capacity: number; evictions: number }>;
     for (const [category, queue] of this.queues) {
-      stats[category] = { size: queue.size, capacity: queue.capacity };
+      stats[category] = {
+        size: queue.size,
+        capacity: queue.capacity,
+        evictions: this.evictionCounts.get(category) ?? 0,
+      };
     }
     return stats;
   }

@@ -62,7 +62,36 @@ export const suppressions: Suppression[] = [
     file: 'src/elements/memories/MemoryManager.ts',
     reason: 'FALSE POSITIVE: Line 1024 is a logger.error() call formatting an error message with string concatenation. This is not a SQL query - the codebase does not use SQL. The string concatenation builds a user-facing error message for deletion failures. PR #7'
   },
-  
+  {
+    rule: 'CWE-89-001',
+    file: 'src/web/public/metrics.js',
+    reason: 'FALSE POSITIVE: Browser-side Date.toLocaleTimeString() concatenation for display label. Not SQL — the codebase does not use SQL.'
+  },
+
+  // ========================================
+  // Metrics & Web Console False Positives
+  // ========================================
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/metrics/sinks/MemoryMetricsSink.ts',
+    reason: 'FALSE POSITIVE: Internal metrics storage — does not process user input directly. Metric names and sources are server-generated constants. Input normalization is handled at the route handler boundary.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/metrics/collectors/PerformanceMonitorCollector.ts',
+    reason: 'FALSE POSITIVE: Metric collector with hardcoded constant strings only. No user input enters this component. All metric names, sources, and descriptions are compile-time constants.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/metrics.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Dashboard renders server-generated metric data only — no user text input.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/logs.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript. Filter inputs are used for local JS array filtering only — never sent to server. UnicodeValidator is a Node.js module unavailable in browser context.'
+  },
+
   // ========================================
   // Test File Suppressions
   // ========================================
@@ -1027,13 +1056,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/logging/sinks/SSELogSink.ts',
-    reason: 'JSON-serializes pre-constructed UnifiedLogEntry objects over SSE. No HTML rendering; the viewer (viewerHtml.ts) handles HTML escaping via document.createTextNode. PR #471'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/logging/viewer/viewerHtml.ts',
-    reason: 'All dynamic content (timestamp, category, source, message, correlationId) is HTML-escaped via escHtml() using document.createTextNode before DOM insertion. PR #471'
+    file: 'src/web/routes/logRoutes.ts',
+    reason: 'JSON-serializes pre-constructed UnifiedLogEntry objects over SSE. All query parameters are validated strings passed to MemoryLogSink.query(). No HTML rendering.'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -1082,6 +1106,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: 'src/converters/AgentSkillConverter.ts',
     reason: 'NFC normalization added to both convertAgentToDollhouse() and convertDollhouseToAgent() entry points. File-level scanner flags despite per-input fix.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/permissionRoutes.ts',
+    reason: 'NFC normalization applied to tool_name and platform inputs at HTTP boundary before forwarding to MCPAQLHandler.handleRead(). GET /permissions/status has no user-supplied string parameters. Scanner may flag file-level despite per-input fix.'
   }
 ];
 

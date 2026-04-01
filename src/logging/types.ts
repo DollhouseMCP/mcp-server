@@ -118,7 +118,5 @@ export interface LogManagerConfig {
   fileMaxSize: number;
   maxDirSizeBytes: number;       // 0 = disabled
   maxFilesPerCategory: number;   // 0 = disabled
-  viewerEnabled: boolean;
-  viewerPort: number;
   logLevel: LogLevel;
 }

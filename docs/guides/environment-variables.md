@@ -1,7 +1,7 @@
 # Environment Variables Guide
 
 **Last Updated:** 2026-03-18
-**Version:** 2.0.0-beta
+**Version:** 2.0.0
 **Purpose:** Complete guide to configuring DollhouseMCP environment variables
 
 ---
@@ -461,9 +461,9 @@ Prevents file descriptor exhaustion from high-frequency memory updates (Issue #6
 | `DOLLHOUSE_MEMORY_SAVE_FREQUENCY_WARN` | `50` | `5` | `10000` | Warning threshold: `addEntry` calls per memory per monitor window. |
 | `DOLLHOUSE_MEMORY_SAVE_FREQUENCY_CRITICAL` | `200` | `10` | `50000` | Critical threshold: `addEntry` calls per memory per monitor window. Logs error-level alert. |
 
-### Metrics
+### Metrics Collection (6 variables)
 
-Batching and flush configuration for metrics collection.
+Controls the built-in metrics collection system: enable/disable, collection interval, snapshot capacity, size limits, failure thresholds, and duration warnings. See `docs/reference/environment-vars.md` for the full table.
 
 | Variable | Default | Min | Max | Description |
 |----------|---------|-----|-----|-------------|

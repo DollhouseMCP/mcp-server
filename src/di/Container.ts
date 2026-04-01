@@ -1,6 +1,6 @@
 import os from "os";
 import * as path from "path";
-import { VERSION } from "../constants/version.js";
+import { PACKAGE_VERSION, PACKAGE_VERSION as VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
 import { RelationshipManager } from "../portfolio/RelationshipManager.js";
@@ -24,7 +24,7 @@ import { PortfolioManager, ElementType } from "../portfolio/PortfolioManager.js"
 import { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexManager } from "../portfolio/EnhancedIndexManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
-import { MCPAQLHandler } from "../handlers/mcp-aql/MCPAQLHandler.js";
+import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { SkillManager } from "../elements/skills/index.js";
 import { TemplateManager } from "../elements/templates/TemplateManager.js";
@@ -32,7 +32,8 @@ import { TemplateRenderer } from "../utils/TemplateRenderer.js";
 import { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
 import { MemoryManager } from "../elements/memories/MemoryManager.js";
-import { SSELogSink } from "../logging/sinks/SSELogSink.js";
+import { WebSSELogSink } from "../web/sinks/WebSSELogSink.js";
+import { WebSSEMetricsSink } from "../web/sinks/WebSSEMetricsSink.js";
 import { EnsembleManager } from "../elements/ensembles/EnsembleManager.js";
 import { PersonaExporter, PersonaImporter } from "../persona/export-import/index.js";
 import { PersonaManager } from "../persona/PersonaManager.js";
@@ -106,13 +107,29 @@ import {
 } from '../services/query/index.js';
 import { RetentionPolicyService, MemoryRetentionStrategy } from '../services/RetentionPolicyService.js';
 import { PolicyExportService } from '../services/PolicyExportService.js';
-import { PACKAGE_VERSION } from '../generated/version.js';
 import { LogManager, buildLogManagerConfig } from '../logging/LogManager.js';
 import { FileLogSink } from '../logging/sinks/FileLogSink.js';
 import { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import { PlainTextFormatter } from '../logging/formatters/PlainTextFormatter.js';
 import { JsonlFormatter } from '../logging/formatters/JsonlFormatter.js';
 import { wireLogHooks, getTriggerMetricsLogListener } from '../logging/LogHooks.js';
+import { MetricsManager } from '../metrics/MetricsManager.js';
+import { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
+import { buildMetricsManagerConfig } from '../metrics/types.js';
+import {
+  PerformanceMonitorCollector,
+  LRUCacheCollector,
+  SecurityMonitorCollector,
+  SecurityTelemetryCollector,
+  FileLockManagerCollector,
+  DefaultElementProviderCollector,
+  TriggerMetricsTrackerCollector,
+  OperationalTelemetryCollector,
+  OperationMetricsCollector,
+  GatekeeperMetricsCollector,
+} from '../metrics/collectors/index.js';
+import { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
+import { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
 
 // State is owned by PersonaManager and services
 
@@ -394,18 +411,7 @@ export class DollhouseContainer {
       });
       manager.registerSink(memorySink);
 
-      // Register as named service for Phase 5's MCP query tool
       this.register('MemoryLogSink', () => memorySink);
-
-      // Phase 6: SSELogSink (opt-in HTTP debug viewer)
-      if (config.viewerEnabled) {
-        const sseSink = new SSELogSink({
-          port: config.viewerPort,
-          memorySink: memorySink,
-        });
-        manager.registerSink(sseSink);
-        void sseSink.start();
-      }
 
       // Startup marker — first entry in every server session
       manager.log({
@@ -419,12 +425,28 @@ export class DollhouseContainer {
           version: VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
-          viewer: config.viewerEnabled ? `http://127.0.0.1:${config.viewerPort}` : 'disabled',
+          console: env.DOLLHOUSE_WEB_CONSOLE ? 'http://dollhouse.localhost:3939' : 'disabled',
         },
       });
 
       return manager;
     });
+
+    // METRICS COLLECTION
+    // MemoryMetricsSink is registered separately (not as a side effect inside
+    // MetricsManager's factory) so it's available in the container regardless
+    // of MetricsManager resolution order.
+    const metricsConfig = buildMetricsManagerConfig(env);
+    if (metricsConfig.enabled) {
+      const memoryMetricsSink = new MemoryMetricsSink(metricsConfig.memorySnapshotCapacity);
+      this.register('MemoryMetricsSink', () => memoryMetricsSink);
+
+      this.register('MetricsManager', () => {
+        const manager = new MetricsManager(metricsConfig, logger);
+        manager.registerSink(memoryMetricsSink);
+        return manager;
+      });
+    }
 
     // TELEMETRY
     this.register('OperationalTelemetry', () => new OperationalTelemetry(
@@ -704,6 +726,9 @@ export class DollhouseContainer {
       monitor.startMonitoring();
       return monitor;
     });
+
+    this.register('OperationMetricsTracker', () => new OperationMetricsTracker(), { singleton: true });
+    this.register('GatekeeperMetricsTracker', () => new GatekeeperMetricsTracker(), { singleton: true });
   }
 
   public getPersonasDir(): string | null {
@@ -832,7 +857,26 @@ export class DollhouseContainer {
       await new Promise(resolve => setTimeout(resolve, testDelay));
     }
 
-    // --- memory_autoload (deferred) ---
+    await this.deferredMemoryAutoload(timer);
+    await this.deferredActivationRestore(timer);
+    await this.deferredPolicyExport();
+    await this.deferredLogHooks(timer);
+    await this.deferredMetricsCollectors(timer);
+    await this.deferredWebConsole(timer);
+    await this.deferredDangerZoneInit(timer);
+    await this.deferredPatternEncryption(timer);
+    await this.deferredBackgroundValidator(timer);
+
+    this.deferredSetupComplete = true;
+
+    const report = timer.getReport();
+    logger.info(
+      `[Startup] Deferred setup completed in ${report.deferredMs}ms ` +
+      `(total startup: ${report.totalMs}ms, critical: ${report.criticalPathMs}ms)`
+    );
+  }
+
+  private async deferredMemoryAutoload(timer: StartupTimer): Promise<void> {
     timer.startPhase('memory_autoload', false);
     try {
       const configManager = this.resolve<ConfigManager>('ConfigManager');
@@ -860,8 +904,9 @@ export class DollhouseContainer {
       logger.error('[Container] Memory auto-load failed:', error);
     }
     timer.endPhase('memory_autoload');
+  }
 
-    // --- activation_restore (deferred) ---
+  private async deferredActivationRestore(timer: StartupTimer): Promise<void> {
     timer.startPhase('activation_restore', false);
     try {
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
@@ -874,16 +919,18 @@ export class DollhouseContainer {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
     timer.endPhase('activation_restore');
+  }
 
-    // --- policy_export (deferred, Issue #762) ---
+  private async deferredPolicyExport(): Promise<void> {
     try {
       const policyExportService = this.resolve<PolicyExportService>('PolicyExportService');
       await policyExportService.exportPolicies();
     } catch (error) {
       logger.debug('[Container] Policy export skipped:', error);
     }
+  }
 
-    // --- log_hooks (deferred) ---
+  private async deferredLogHooks(timer: StartupTimer): Promise<void> {
     timer.startPhase('log_hooks', false);
     try {
       const logManager = this.resolve<LogManager>('LogManager');
@@ -893,8 +940,75 @@ export class DollhouseContainer {
       logger.warn('[Container] Failed to wire log hooks:', error);
     }
     timer.endPhase('log_hooks');
+  }
 
-    // --- danger_zone_init (deferred) ---
+  private async deferredMetricsCollectors(timer: StartupTimer): Promise<void> {
+    timer.startPhase('metrics_collectors', false);
+    try {
+      const metricsManager = this.resolve<MetricsManager>('MetricsManager');
+      this.wireMetricsCollectors(metricsManager);
+      metricsManager.start();
+      logger.info('[Container] Metrics collection started');
+    } catch (error) {
+      logger.warn('[Container] Metrics wiring skipped:', error);
+    }
+    timer.endPhase('metrics_collectors');
+  }
+
+  /** Try to resolve a service, returning undefined if not registered */
+  private tryResolve<T>(name: string): T | undefined {
+    try { return this.resolve<T>(name); } catch { return undefined; }
+  }
+
+  /** Wire SSE broadcast sinks for the web console */
+  private wireSSEBroadcasts(
+    webResult: import('../web/server.js').WebServerResult,
+    metricsSink: MemoryMetricsSink | undefined,
+  ): void {
+    if (webResult.logBroadcast) {
+      const logManager = this.resolve<LogManager>('LogManager');
+      logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    }
+    if (webResult.metricsOnSnapshot && metricsSink) {
+      const metricsManager = this.tryResolve<MetricsManager>('MetricsManager');
+      if (metricsManager) {
+        metricsManager.registerSink(new WebSSEMetricsSink(webResult.metricsOnSnapshot));
+      }
+    }
+  }
+
+  private async deferredWebConsole(timer: StartupTimer): Promise<void> {
+    timer.startPhase('web_console', false);
+    try {
+      if (!env.DOLLHOUSE_WEB_CONSOLE) return;
+
+      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const sessionId = activationStore.getSessionId();
+      const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
+      const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
+      const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
+      const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
+      const logManager = this.resolve<LogManager>('LogManager');
+
+      const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
+      const result = await startUnifiedConsole({
+        sessionId,
+        portfolioDir: portfolioManager.getBaseDir(),
+        memorySink,
+        metricsSink,
+        mcpAqlHandler,
+        registerLogSink: (sink) => logManager.registerSink(sink),
+        wireSSEBroadcasts: (webResult, mSink) => this.wireSSEBroadcasts(webResult, mSink),
+      });
+
+      logger.info(`[Container] Web console started as ${result.role}`);
+    } catch (error) {
+      logger.warn('[Container] Web console startup failed:', error);
+    }
+    timer.endPhase('web_console');
+  }
+
+  private async deferredDangerZoneInit(timer: StartupTimer): Promise<void> {
     timer.startPhase('danger_zone_init', false);
     try {
       const dangerZoneEnforcer = this.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
@@ -903,8 +1017,9 @@ export class DollhouseContainer {
       logger.warn('[Container] DangerZoneEnforcer initialization failed:', error);
     }
     timer.endPhase('danger_zone_init');
+  }
 
-    // --- pattern_encryption (deferred) ---
+  private async deferredPatternEncryption(timer: StartupTimer): Promise<void> {
     timer.startPhase('pattern_encryption', false);
     try {
       const patternEncryptor = this.resolve('PatternEncryptor') as PatternEncryptor;
@@ -914,8 +1029,9 @@ export class DollhouseContainer {
       logger.warn('[Container] Pattern encryption initialization failed:', error);
     }
     timer.endPhase('pattern_encryption');
+  }
 
-    // --- background_validator (deferred) ---
+  private async deferredBackgroundValidator(timer: StartupTimer): Promise<void> {
     timer.startPhase('background_validator', false);
     try {
       const backgroundValidator = this.resolve('BackgroundValidator') as any;
@@ -925,14 +1041,6 @@ export class DollhouseContainer {
       logger.warn('[Container] Background validator start failed:', error);
     }
     timer.endPhase('background_validator');
-
-    this.deferredSetupComplete = true;
-
-    const report = timer.getReport();
-    logger.info(
-      `[Startup] Deferred setup completed in ${report.deferredMs}ms ` +
-      `(total startup: ${report.totalMs}ms, critical: ${report.criticalPathMs}ms)`
-    );
   }
 
   /**
@@ -1206,7 +1314,10 @@ export class DollhouseContainer {
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
     // Issue #402: Pass DangerZoneEnforcer via HandlerRegistry
-    const mcpAqlHandler = new MCPAQLHandler({
+    // Build handler registry, then add lazy metricsSink getter.
+    // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
+    // so it isn't available at handler construction time — resolve on first access instead.
+    const handlerDeps: HandlerRegistry = {
       elementCRUD: elementCrudHandler,
       memoryManager: this.resolve('MemoryManager'),
       agentManager: this.resolve('AgentManager'),
@@ -1227,7 +1338,16 @@ export class DollhouseContainer {
       verificationStore: this.resolve('VerificationStore'),  // Issue #142: Verification codes
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
-    }, this.resolve<ContextTracker>('ContextTracker'));
+      performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
+      gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
+    };
+    Object.defineProperty(handlerDeps, 'metricsSink', {
+      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
@@ -1394,53 +1514,142 @@ export class DollhouseContainer {
     }
   }
 
+  /**
+   * Wire all metric collectors into the MetricsManager.
+   * Mirrors wireLogHooks() — keeps collector registration out of the constructor.
+   */
+  private wireMetricsCollectors(metricsManager: MetricsManager): void {
+    // PerformanceMonitor (instance)
+    try {
+      const monitor = this.resolve<import('../utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor');
+      metricsManager.registerCollector(new PerformanceMonitorCollector(monitor));
+    } catch { /* not registered */ }
+
+    // LRUCache instances — API cache + all element manager caches
+    const caches = this.collectLruCachesForMetrics();
+    if (caches.length > 0) {
+      metricsManager.registerCollector(new LRUCacheCollector(caches));
+    }
+
+    // SecurityMonitor (static)
+    try {
+      metricsManager.registerCollector(new SecurityMonitorCollector());
+    } catch { /* not available */ }
+
+    // SecurityTelemetry (instance)
+    try {
+      const telemetry = this.resolve<import('../security/telemetry/SecurityTelemetry.js').SecurityTelemetry>('SecurityTelemetry');
+      metricsManager.registerCollector(new SecurityTelemetryCollector(telemetry));
+    } catch { /* not registered */ }
+
+    // FileLockManager (instance)
+    try {
+      const lockManager = this.resolve<import('../security/fileLockManager.js').FileLockManager>('FileLockManager');
+      metricsManager.registerCollector(new FileLockManagerCollector(lockManager));
+    } catch { /* not registered */ }
+
+    // DefaultElementProvider (static)
+    try {
+      metricsManager.registerCollector(new DefaultElementProviderCollector());
+    } catch { /* not available */ }
+
+    // TriggerMetricsTracker (instance — created inside EnhancedIndexManager factory)
+    try {
+      const enhancedIndex = this.resolve<import('../portfolio/EnhancedIndexManager.js').EnhancedIndexManager>('EnhancedIndexManager');
+      // EnhancedIndexManager exposes tracker via public getter if available
+      if ('triggerMetricsTracker' in enhancedIndex) {
+        const tracker = (enhancedIndex as any).triggerMetricsTracker;
+        if (tracker) {
+          metricsManager.registerCollector(new TriggerMetricsTrackerCollector(tracker));
+        }
+      }
+    } catch { /* not registered */ }
+
+    // OperationalTelemetry (instance)
+    try {
+      const opTelemetry = this.resolve<import('../telemetry/OperationalTelemetry.js').OperationalTelemetry>('OperationalTelemetry');
+      metricsManager.registerCollector(new OperationalTelemetryCollector(opTelemetry));
+    } catch { /* not registered */ }
+
+    // OperationMetricsTracker (instance)
+    try {
+      const opTracker = this.resolve<OperationMetricsTracker>('OperationMetricsTracker');
+      metricsManager.registerCollector(new OperationMetricsCollector(opTracker));
+    } catch { /* not registered */ }
+
+    // GatekeeperMetricsTracker (instance)
+    try {
+      const gkTracker = this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker');
+      metricsManager.registerCollector(new GatekeeperMetricsCollector(gkTracker));
+    } catch { /* not registered */ }
+  }
+
+  private collectLruCachesForMetrics(): Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> {
+    const caches: Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> = [];
+    try {
+      const apiCache = this.resolve<{ getStats(): import('../cache/LRUCache.js').CacheStats }>('APICache');
+      caches.push({ name: 'APICache', instance: apiCache as any });
+    } catch { /* not available */ }
+
+    const managerNames = [
+      'PersonaManager', 'SkillManager', 'AgentManager',
+      'MemoryManager', 'EnsembleManager', 'TemplateManager',
+    ] as const;
+    for (const name of managerNames) {
+      try {
+        const mgr = this.resolve<import('../elements/base/BaseElementManager.js').BaseElementManager<any>>(name);
+        caches.push(...mgr.getMetricsCaches());
+      } catch { /* not registered */ }
+    }
+
+    return caches;
+  }
+
   public async dispose(): Promise<void> {
+    // Close MetricsManager before general disposal (flush final snapshot)
+    try {
+      const metricsManager = this.resolve<MetricsManager>('MetricsManager');
+      await metricsManager.close();
+    } catch { /* metrics not enabled or not registered */ }
+
     // Clean up log hooks before disposing services
     try {
       const cleanups = this.resolve<(() => void)[]>('_logHookCleanups');
       cleanups.forEach(fn => fn());
     } catch { /* hooks not yet wired */ }
 
-    // Use Promise.allSettled to ensure all services attempt disposal
-    // even if some fail. This provides better resilience and comprehensive
-    // error reporting compared to Promise.all which fails fast.
-    const disposalPromises: Array<{ name: string; promise: Promise<void> }> = [];
+    const disposalPromises = this.buildDisposalPromises();
+    const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
+    this.reportDisposalFailures(disposalPromises, results);
+  }
 
+  private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {
+    const promises: Array<{ name: string; promise: Promise<void> }> = [];
     for (const [name, service] of this.services) {
-      if (service.instance) {
-        const instance = service.instance as any;
-        if (typeof instance.dispose === 'function') {
-          // Wrap in try-catch to handle synchronous throws, then wrap in Promise
-          disposalPromises.push({
-            name,
-            promise: Promise.resolve().then(() => instance.dispose())
-          });
-        } else if (typeof instance.cleanup === 'function') {
-          // Wrap in try-catch to handle synchronous throws, then wrap in Promise
-          disposalPromises.push({
-            name,
-            promise: Promise.resolve().then(() => instance.cleanup())
-          });
-        }
+      if (!service.instance) continue;
+      const instance = service.instance as any;
+      if (typeof instance.dispose === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.dispose()) });
+      } else if (typeof instance.cleanup === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.cleanup()) });
       }
     }
+    return promises;
+  }
 
-    // Execute all disposals in parallel, collecting results
-    const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
-
-    // Aggregate and report all failures for comprehensive diagnostics
-    const failures: Array<{ service: string; error: Error }> = [];
-
+  private reportDisposalFailures(
+    disposalPromises: Array<{ name: string; promise: Promise<void> }>,
+    results: PromiseSettledResult<void>[],
+  ): void {
+    const failures: string[] = [];
     for (const [index, result] of results.entries()) {
       if (result.status === 'rejected') {
         const serviceName = disposalPromises[index].name;
         const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-        failures.push({ service: serviceName, error });
+        failures.push(serviceName);
         logger.warn(`Failed to dispose service '${serviceName}'`, { error });
       }
     }
-
-    // Log summary if there were failures
     if (failures.length > 0) {
       logger.warn(`Container disposal completed with ${failures.length} failure(s) out of ${disposalPromises.length} services`);
     }

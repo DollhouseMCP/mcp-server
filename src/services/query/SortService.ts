@@ -75,12 +75,6 @@ export class SortService<T extends IElement = IElement> implements ISortService<
     const sortBy = options?.sortBy ?? SortService.DEFAULT_SORT_BY;
     const sortOrder = options?.sortOrder ?? SortService.DEFAULT_SORT_ORDER;
 
-    logger.debug('SortService.sort', {
-      itemCount: items.length,
-      sortBy,
-      sortOrder,
-    });
-
     // Create shallow copy to avoid mutation
     const sortedItems = [...items];
 

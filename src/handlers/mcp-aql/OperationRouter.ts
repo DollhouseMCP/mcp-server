@@ -86,6 +86,12 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.permissionPrompt',
     description: 'Evaluate CLI-level permission prompts for non-interactive sessions via --permission-prompt-tool',
   },
+  // Permission evaluation for PreToolUse hooks (interactive sessions, all platforms)
+  evaluate_permission: {
+    endpoint: 'READ',
+    handler: 'Gatekeeper.evaluatePermission',
+    description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex).',
+  },
   // Issue #625 Phase 2: CLI policy visibility
   get_effective_cli_policies: {
     endpoint: 'READ',
@@ -381,6 +387,13 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     endpoint: 'READ',
     handler: 'Logging.query',
     description: 'Query recent log entries from the in-memory buffer with filtering and pagination',
+  },
+
+  // ===== METRICS operations =====
+  query_metrics: {
+    endpoint: 'READ',
+    handler: 'Metrics.query',
+    description: 'Query collected metrics snapshots with filtering by name, source, type, and time range',
   },
 
   // ===== ENHANCED INDEX operations =====

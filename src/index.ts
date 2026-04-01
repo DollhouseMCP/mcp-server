@@ -725,13 +725,14 @@ export class DollhouseMCPServer implements IToolHandler {
     const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
     serverSetup.setDeferredSetupPromise(deferredPromise);
 
-    // Log startup report after deferred setup completes
-    deferredPromise.then(() => {
+    // Log startup timing after deferred setup completes
+    deferredPromise.then(async () => {
       const report = timer.getReport();
       logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
         `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
         `total ${report.totalMs}ms`);
     }).catch(() => { /* already logged */ });
+
   }
 }
 

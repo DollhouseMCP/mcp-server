@@ -1,4 +1,3 @@
-import { logger } from '../../utils/logger.js';
 import type { IndexEntry } from '../PortfolioIndexManager.js';
 import type {
   ActionDefinition,
@@ -37,13 +36,8 @@ export class ElementDefinitionBuilder {
         triggers: entry.metadata?.triggers
       };
 
-      if (entry.metadata?.triggers && entry.metadata.triggers.length > 0) {
-        logger.debug('Found triggers for element', {
-          name: entryName,
-          type: entry.elementType,
-          triggers: entry.metadata.triggers
-        });
-      }
+      // Per-element trigger detail available via element inspection;
+      // aggregate counts logged in "Enhanced index built" summary
     }
 
     if (existing?.custom) {
@@ -98,13 +92,6 @@ export class ElementDefinitionBuilder {
           });
         }
       }
-    }
-
-    if (relationships.length > 0) {
-      logger.debug('Extracted activates relationships', {
-        element: entry.metadata?.name,
-        relationshipCount: relationships.length
-      });
     }
 
     return relationships;

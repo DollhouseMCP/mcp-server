@@ -1,7 +1,7 @@
 # DollhouseMCP Security Architecture
 
-> **Version:** 2.0.0-beta
-> **Updated:** March 2026
+> **Version:** 2.0.0
+> **Updated:** April 2026
 > **Covers:** MCP Server v2.0 security stack (Gatekeeper, Autonomy Evaluator, Danger Zone, CLI permission delegation, content/filesystem/activation security)
 
 ---

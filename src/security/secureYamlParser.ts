@@ -232,13 +232,6 @@ export class SecureYamlParser {
       finalContent = contentValidation.sanitizedContent || markdownContent;
     }
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'YAML_PARSE_SUCCESS',
-      severity: 'LOW',
-      source: 'SecureYamlParser',
-      details: `Successfully parsed YAML with ${Object.keys(data).length} fields`
-    });
-
     return {
       data,
       content: finalContent
@@ -361,13 +354,6 @@ export class SecureYamlParser {
     if (typeof parsed !== 'object' || parsed === null) {
       throw new SecurityError('YAML content must parse to an object', 'medium');
     }
-
-    SecurityMonitor.logSecurityEvent({
-      type: 'YAML_PARSE_SUCCESS',
-      severity: 'LOW',
-      source: 'SecureYamlParser',
-      details: `Parsed raw YAML with ${Object.keys(parsed).length} keys`
-    });
 
     return parsed as Record<string, unknown>;
   }

@@ -83,11 +83,6 @@ export class PaginationService<T = any> implements IPaginationService<T> {
    * ```
    */
   public paginate(items: T[], options?: PaginationOptions): PaginatedResult<T> {
-    logger.debug('PaginationService.paginate called', {
-      itemCount: items.length,
-      options,
-    });
-
     // Apply defaults
     const page = options?.page ?? PAGINATION_CONSTANTS.MIN_PAGE;
     const pageSize = options?.pageSize ?? PAGINATION_CONSTANTS.DEFAULT_PAGE_SIZE;
@@ -121,16 +116,6 @@ export class PaginationService<T = any> implements IPaginationService<T> {
       hasNextPage,
       hasPrevPage,
     };
-
-    logger.debug('PaginationService.paginate completed', {
-      page,
-      pageSize,
-      totalItems,
-      totalPages,
-      returnedItems: pageItems.length,
-      hasNextPage,
-      hasPrevPage,
-    });
 
     return {
       items: pageItems,

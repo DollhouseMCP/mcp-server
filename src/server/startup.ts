@@ -32,7 +32,7 @@ import { FileLockManager } from '../security/fileLockManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
-import { VERSION } from '../constants/version.js';
+import { PACKAGE_VERSION as VERSION } from '../generated/version.js';
 import type { AutoLoadMetrics } from '../telemetry/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -179,19 +179,10 @@ export class ServerStartup {
       await memory.activate();
       logger.info(`[ServerStartup] ✅ Memory activated: ${memoryName}`);
 
-      // FIX: DMCP-SEC-006 - Audit log each loaded memory
-      SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_LOADED',
-        severity: 'LOW',
-        source: 'ServerStartup.initializeAutoLoadMemories',
-        details: `Auto-loaded memory: ${memoryName}`,
-        additionalData: {
-          memoryName,
-          estimatedTokens,
-          priority: memory.metadata.priority,
-          totalTokensSoFar: options.totalTokens + estimatedTokens
-        }
-      });
+      // DMCP-SEC-006: Per-memory audit downgraded from security event to debug.
+      // Was generating O(n) security events per startup where n = auto-load count,
+      // causing 25x security buffer turnover. Completion summary kept as security event.
+      logger.debug(`[ServerStartup] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${memory.metadata.priority})`);
 
       return { skip: false, breakLoop: false, skippedCount: 0, estimatedTokens, warnings };
     } catch (error) {
@@ -327,13 +318,6 @@ export class ServerStartup {
 
       if (!config.autoLoad.enabled) {
         logger.debug('[ServerStartup] Auto-load memories disabled in configuration');
-        SecurityMonitor.logSecurityEvent({
-          type: 'MEMORY_LOADED',
-          severity: 'LOW',
-          source: 'ServerStartup.initializeAutoLoadMemories',
-          details: 'Auto-load memories disabled in configuration',
-          additionalData: { reason: 'config.autoLoad.enabled=false' }
-        });
         return;
       }
 
@@ -408,12 +392,12 @@ export class ServerStartup {
         `(~${totalTokens} tokens), ${skippedCount} skipped, ${warningCount} warnings`
       );
 
-      // FIX: DMCP-SEC-006 - Audit log successful completion
+      // Summary event — fires once per startup, keep as security event
       SecurityMonitor.logSecurityEvent({
         type: 'MEMORY_LOADED',
         severity: 'LOW',
         source: 'ServerStartup.initializeAutoLoadMemories',
-        details: 'Auto-load memories completed successfully',
+        details: `Auto-load complete: ${loadedCount} loaded, ${skippedCount} skipped`,
         additionalData: {
           loadedCount,
           skippedCount,

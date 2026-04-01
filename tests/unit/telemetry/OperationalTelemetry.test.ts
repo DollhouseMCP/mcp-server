@@ -27,8 +27,8 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   }
 }));
 
-jest.unstable_mockModule('../../../src/constants/version.js', () => ({
-  VERSION: '1.9.19'
+jest.unstable_mockModule('../../../src/generated/version.js', () => ({
+  PACKAGE_VERSION: '1.9.19'
 }));
 
 // Mock PostHog

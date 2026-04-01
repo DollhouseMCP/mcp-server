@@ -1,0 +1,472 @@
+/**
+ * Log Viewer Styles — Dark terminal aesthetic, theme-aware
+ */
+
+/* ── Log viewer container ─────────────────────────────────────── */
+.log-viewer {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ── Controls bar ─────────────────────────────────────────────── */
+.log-controls {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.log-controls label {
+  color: var(--ink-500);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-controls select,
+.log-controls input {
+  background: var(--paper-strong);
+  color: var(--ink-900);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.log-controls select:focus,
+.log-controls input:focus {
+  outline: 2px solid var(--signal-2);
+  outline-offset: -1px;
+}
+
+.log-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-search {
+  flex: 1;
+  min-width: 140px;
+  max-width: 280px;
+}
+
+/* ── Status & action buttons ──────────────────────────────────── */
+.log-status-bar {
+  display: flex;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  font-size: 11px;
+  color: var(--ink-500);
+}
+
+.log-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #888;
+}
+
+.log-status-dot.connected { background: #22c55e; }
+.log-status-dot.disconnected { background: #ef4444; }
+.log-status-dot.reconnecting { background: #f59e0b; animation: pulse-dot 1s infinite; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.log-action-btn {
+  background: var(--paper-strong);
+  color: var(--ink-700);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.log-action-btn:hover {
+  background: var(--signal-2);
+  color: #fff;
+  border-color: var(--signal-2);
+}
+
+.log-action-btn.active {
+  background: var(--signal);
+  color: #fff;
+  border-color: var(--signal);
+}
+
+.log-entry-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Virtual scroll viewport ──────────────────────────────────── */
+.log-viewport {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  background: var(--paper);
+}
+
+.log-scroll-spacer {
+  width: 100%;
+  position: relative;
+}
+
+/* ── Log entries ──────────────────────────────────────────────── */
+.log-entry {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+
+.log-entry:hover {
+  background: var(--surface-1);
+}
+
+.log-entry.selected {
+  background: color-mix(in srgb, var(--signal-2) 12%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--signal-2) 20%, transparent);
+}
+
+.log-entry.selected:hover {
+  background: color-mix(in srgb, var(--signal-2) 18%, transparent);
+}
+
+/* ── Checkbox ─────────────────────────────────────────────────── */
+.log-checkbox {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.log-checkbox:hover {
+  border-color: var(--signal-2);
+}
+
+.log-checkbox.checked {
+  background: var(--signal);
+  border-color: var(--signal);
+}
+
+.log-checkbox.checked::after {
+  content: '';
+  width: 5px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+/* ── Entry fields ─────────────────────────────────────────────── */
+.log-time {
+  color: var(--ink-500);
+  font-size: 11px;
+  flex-shrink: 0;
+  width: 85px;
+}
+
+.log-level {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+  width: 42px;
+  text-align: center;
+  padding: 1px 0;
+  border-radius: 3px;
+}
+
+.log-level.debug { color: var(--ink-500); background: transparent; }
+.log-level.info  { color: #2563eb; background: rgba(59, 130, 246, 0.1); } /* NOSONAR — contrast computed against page bg, not rgba tint */
+.log-level.warn  { color: #b45309; background: rgba(245, 158, 11, 0.1); } /* NOSONAR */
+.log-level.error { color: #dc2626; background: rgba(239, 68, 68, 0.1); } /* NOSONAR */
+
+.log-category {
+  color: var(--ink-500);
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 70px;
+}
+
+.log-source {
+  color: var(--violet);
+  font-size: 11px;
+  flex-shrink: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-message {
+  color: var(--ink-900);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.log-entry.level-error .log-message { color: #ef4444; }
+.log-entry.level-warn .log-message { color: #f59e0b; }
+
+/* ── Correlation ID badge (per-row) ───────────────────────────── */
+.log-corr-badge {
+  flex-shrink: 0;
+  width: 60px;
+  text-align: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--signal, #6366f1) 12%, transparent);
+  color: var(--signal, #6366f1);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.log-corr-badge:hover:not(.empty) {
+  background: color-mix(in srgb, var(--signal, #6366f1) 25%, transparent);
+}
+.log-corr-badge.empty {
+  background: none;
+  cursor: default;
+}
+
+/* ── Trace banner ────────────────────────────────────────────── */
+.log-trace-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--signal) 10%, var(--surface-0));
+  border-bottom: 1px solid color-mix(in srgb, var(--signal) 30%, transparent);
+  font-size: 12px;
+  color: var(--ink-700);
+}
+.log-trace-banner-icon { font-size: 13px; }
+.log-trace-banner code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  background: color-mix(in srgb, var(--signal) 15%, transparent);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.log-trace-clear {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--ink-500);
+}
+.log-trace-clear:hover {
+  background: var(--surface-1);
+  color: var(--ink-900);
+}
+
+/* ── Trace link in detail modal ──────────────────────────────── */
+.log-trace-link {
+  color: var(--signal);
+  text-decoration: none;
+  cursor: pointer;
+}
+.log-trace-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Detail modal card ────────────────────────────────────────── */
+.log-detail-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-detail-modal[hidden] {
+  display: none !important;
+}
+
+.log-detail-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.log-detail-card {
+  position: relative;
+  width: min(680px, 90vw);
+  max-height: 80vh;
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.log-detail-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.log-detail-card-title {
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-900);
+}
+
+.log-detail-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.log-detail-close {
+  background: none;
+  border: none;
+  color: var(--ink-500);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.log-detail-close:hover {
+  background: var(--surface-2);
+  color: var(--ink-900);
+}
+
+.log-detail-card-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-detail-field {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--surface-1);
+}
+
+.log-detail-field-label {
+  color: var(--ink-500);
+  min-width: 100px;
+  flex-shrink: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: 1px;
+}
+
+.log-detail-field-value {
+  color: var(--ink-900);
+  word-break: break-all;
+}
+
+.log-detail-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.log-detail-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-500);
+  margin-bottom: 6px;
+}
+
+.log-detail-pre {
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 6px 0;
+  overflow-x: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 300px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink-900);
+}
+
+/* ── Jump to bottom button ────────────────────────────────────── */
+.log-jump-bottom {
+  position: absolute;
+  bottom: 16px;
+  right: 24px;
+  background: var(--signal);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  z-index: 10;
+  display: none;
+}
+
+.log-jump-bottom.visible {
+  display: block;
+}
+
+.log-jump-bottom:hover {
+  background: var(--signal-2);
+}

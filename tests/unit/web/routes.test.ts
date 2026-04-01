@@ -67,6 +67,23 @@ tags:
 retention: permanent
 `);
 
+  // Memory index for index-based listing
+  const memIndex = {
+    version: 1,
+    generatedAt: '2026-03-27T00:00:00Z',
+    entryCount: 1,
+    entries: {
+      'test-memory.yaml': {
+        name: 'Test Memory',
+        description: 'A test memory',
+        tags: ['test'],
+        version: '1.0.0',
+        author: 'tester',
+      },
+    },
+  };
+  await writeFile(join(testDir, 'memories', '_index.json'), JSON.stringify(memIndex));
+
   // Add files that should be skipped
   await writeFile(join(testDir, 'personas', '.hidden-file.md'), 'hidden');
   await writeFile(join(testDir, 'personas', 'test.backup-2026-01-01.md'), 'backup');
@@ -391,6 +408,167 @@ Here is a GitHub token: ghp_abcdefghijklmnopqrstuvwxyz0123456789 that was leaked
       expect(res.body).toHaveProperty('error');
       expect(typeof res.body.error).toBe('string');
     });
+  });
+});
+
+describe('Memory index-based listing', () => {
+  let memTestDir: string;
+  let memApp: express.Express;
+
+  beforeEach(async () => {
+    memTestDir = await mkdtemp(join(tmpdir(), 'web-mem-test-'));
+    for (const type of ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles']) {
+      await mkdir(join(memTestDir, type), { recursive: true });
+    }
+
+    // Create memory index
+    const memIndex = {
+      version: 1,
+      generatedAt: '2026-03-27T00:00:00Z',
+      entryCount: 3,
+      entries: {
+        '2025-09-19/code-patterns.yaml': {
+          name: 'code-patterns',
+          description: 'Coding patterns reference',
+          tags: ['code', 'patterns'],
+          created: '2025-09-19',
+        },
+        '2025-09-20/session-notes.yaml': {
+          name: 'session-notes',
+          description: 'Session notes from Sept 20',
+          tags: ['session'],
+          created: '2025-09-20',
+        },
+        '2025-10-01/project-context.yaml': {
+          name: 'project-context',
+          description: 'Project context memory',
+          tags: ['project'],
+          created: '2025-10-01',
+        },
+      },
+    };
+    await writeFile(join(memTestDir, 'memories', '_index.json'), JSON.stringify(memIndex));
+
+    // Create actual memory files in date directories
+    await mkdir(join(memTestDir, 'memories', '2025-09-19'), { recursive: true });
+    await writeFile(
+      join(memTestDir, 'memories', '2025-09-19', 'code-patterns.yaml'),
+      'name: code-patterns\ndescription: Coding patterns\nentries:\n  - content: Use const over let\n',
+    );
+    await mkdir(join(memTestDir, 'memories', '2025-09-20'), { recursive: true });
+    await writeFile(
+      join(memTestDir, 'memories', '2025-09-20', 'session-notes.yaml'),
+      'name: session-notes\ndescription: Session notes\nentries:\n  - content: Did some work\n',
+    );
+
+    memApp = express();
+    memApp.use('/api', createApiRoutes(memTestDir));
+  });
+
+  afterEach(async () => {
+    await rm(memTestDir, { recursive: true, force: true });
+  });
+
+  it('should list memories from _index.json', async () => {
+    const res = await request(memApp).get('/api/elements');
+    expect(res.status).toBe(200);
+    expect(res.body.elements.memories).toHaveLength(3);
+  });
+
+  it('should include name and description from index', async () => {
+    const res = await request(memApp).get('/api/elements/memories');
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(3);
+    const cp = res.body.elements.find((e: any) => e.name === 'code-patterns');
+    expect(cp).toBeDefined();
+    expect(cp.description).toBe('Coding patterns reference');
+    expect(cp.filename).toBe('2025-09-19/code-patterns.yaml');
+  });
+
+  it('should load memory content via date path', async () => {
+    const res = await request(memApp).get('/api/elements/memories/2025-09-19/code-patterns.yaml');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.text).toContain('code-patterns');
+    expect(res.text).toContain('Use const over let');
+  });
+
+  it('should return 404 for non-existent memory date path', async () => {
+    const res = await request(memApp).get('/api/elements/memories/2025-01-01/nonexistent.yaml');
+    expect(res.status).toBe(404);
+  });
+
+  it('should reject invalid date format in memory path', async () => {
+    const res = await request(memApp).get('/api/elements/memories/not-a-date/file.yaml');
+    expect(res.status).toBe(400);
+  });
+
+  it('should reject path traversal in memory date path', async () => {
+    const res = await request(memApp).get('/api/elements/memories/..%2F..%2Fetc/passwd');
+    expect(res.status).toBe(400);
+  });
+
+  it('should return 0 memories when no index exists', async () => {
+    // Remove the index
+    await rm(join(memTestDir, 'memories', '_index.json'));
+    const res = await request(memApp).get('/api/elements/memories');
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(0);
+  });
+});
+
+describe('Backup and cruft filtering', () => {
+  let cruftTestDir: string;
+  let cruftApp: express.Express;
+
+  beforeEach(async () => {
+    cruftTestDir = await mkdtemp(join(tmpdir(), 'web-cruft-test-'));
+    for (const type of ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles']) {
+      await mkdir(join(cruftTestDir, type), { recursive: true });
+    }
+
+    // Valid element
+    await writeFile(join(cruftTestDir, 'personas', 'good-persona.md'), '---\nname: Good\ndescription: Valid\nversion: 1.0.0\n---\nContent\n');
+
+    // Cruft that should be filtered
+    await writeFile(join(cruftTestDir, 'personas', '.DS_Store'), 'hidden');
+    await writeFile(join(cruftTestDir, 'personas', 'old.md.backup'), 'backup');
+    await writeFile(join(cruftTestDir, 'personas', 'draft.md~'), 'tilde backup');
+    await writeFile(join(cruftTestDir, 'personas', 'thing copy.md'), 'copy file');
+    await writeFile(join(cruftTestDir, 'personas', 'old.bak'), 'bak file');
+    await writeFile(join(cruftTestDir, 'personas', '_index.json'), '{}');
+
+    cruftApp = express();
+    cruftApp.use('/api', createApiRoutes(cruftTestDir));
+  });
+
+  afterEach(async () => {
+    await rm(cruftTestDir, { recursive: true, force: true });
+  });
+
+  it('should only show valid element files', async () => {
+    const res = await request(cruftApp).get('/api/elements/personas');
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+    expect(res.body.elements[0].name).toBe('Good');
+  });
+
+  it('should filter .backup files', async () => {
+    const res = await request(cruftApp).get('/api/elements/personas');
+    const names = res.body.elements.map((e: any) => e.filename);
+    expect(names).not.toContain('old.md.backup');
+  });
+
+  it('should filter tilde backup files', async () => {
+    const res = await request(cruftApp).get('/api/elements/personas');
+    const names = res.body.elements.map((e: any) => e.filename);
+    expect(names).not.toContain('draft.md~');
+  });
+
+  it('should filter copy files', async () => {
+    const res = await request(cruftApp).get('/api/elements/personas');
+    const names = res.body.elements.map((e: any) => e.filename);
+    expect(names).not.toContain('thing copy.md');
   });
 });
 

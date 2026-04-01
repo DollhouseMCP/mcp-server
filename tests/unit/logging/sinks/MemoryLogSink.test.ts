@@ -244,10 +244,10 @@ describe('MemoryLogSink', () => {
       expect(result.limit).toBe(50);
     });
 
-    test('limit is clamped to [1, 500]', () => {
+    test('limit is clamped to [1, 10000]', () => {
       expect(sink.query({ limit: 0 }).limit).toBe(1);
       expect(sink.query({ limit: -5 }).limit).toBe(1);
-      expect(sink.query({ limit: 1000 }).limit).toBe(500);
+      expect(sink.query({ limit: 20000 }).limit).toBe(10000);
     });
 
     test('offset defaults to 0', () => {
@@ -350,10 +350,10 @@ describe('MemoryLogSink', () => {
       s.write(makeEntry({ category: 'security' }));
 
       const stats = s.getStats();
-      expect(stats.application).toEqual({ size: 2, capacity: 50 });
-      expect(stats.security).toEqual({ size: 1, capacity: 200 });
-      expect(stats.performance).toEqual({ size: 0, capacity: 75 });
-      expect(stats.telemetry).toEqual({ size: 0, capacity: 30 });
+      expect(stats.application).toEqual({ size: 2, capacity: 50, evictions: 0 });
+      expect(stats.security).toEqual({ size: 1, capacity: 200, evictions: 0 });
+      expect(stats.performance).toEqual({ size: 0, capacity: 75, evictions: 0 });
+      expect(stats.telemetry).toEqual({ size: 0, capacity: 30, evictions: 0 });
     });
   });
 });

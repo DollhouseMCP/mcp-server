@@ -190,7 +190,7 @@ export class RelationshipManager {
     // FIX: Add timeout to prevent infinite loops
     const MAX_DISCOVERY_TIME = 3000; // 3 seconds max
 
-    logger.info('Starting relationship discovery');
+    logger.debug('Starting relationship discovery');
 
     // First, ensure semantic relationships are calculated
     // (This is already done in EnhancedIndexManager)

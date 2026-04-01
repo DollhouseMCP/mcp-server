@@ -83,9 +83,9 @@ describe('ActivationStore', () => {
   });
 
   describe('constructor', () => {
-    it('should use default session ID when env var not set', () => {
+    it('should generate unique session ID when env var not set', () => {
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should use DOLLHOUSE_SESSION_ID when set', () => {
@@ -100,10 +100,10 @@ describe('ActivationStore', () => {
       expect(s.getSessionId()).toBe('default');
     });
 
-    it('should fall back to default for empty session ID', () => {
+    it('should generate unique session ID for empty session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should accept alphanumeric with hyphens and underscores', () => {
@@ -478,7 +478,7 @@ describe('ActivationStore', () => {
       const written = JSON.parse(lastCall[1]);
 
       expect(written.version).toBe(1);
-      expect(written.sessionId).toBe('default');
+      expect(written.sessionId).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
       expect(written.lastUpdated).toBeDefined();
       expect(written.activations.skill).toHaveLength(1);
       expect(written.activations.agent).toHaveLength(1);

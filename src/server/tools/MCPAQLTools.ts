@@ -358,6 +358,8 @@ System:
 { operation: "get_build_info" }
 { operation: "get_cache_budget_report" }
 { operation: "query_logs", params: { level: "error", limit: 10 } }
+{ operation: "query_metrics" }
+{ operation: "query_metrics", params: { names: ["system.memory.*"], type: "gauge" } }
 { operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }
 { operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", security_mode: "warn", path_mode: "lossless", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }
 { operation: "convert_skill_format", params: { direction: "dollhouse_to_agent", path_mode: "lossless", dollhouse_markdown: "---\\nname: my-skill\\ndescription: test\\ninstructions: Use this skill.\\n---\\n\\n### binaries/logo.png\\n(binary link: ./skills/binaries/logo.png)" } }
@@ -368,6 +370,7 @@ Auth:
 
 Gatekeeper & CLI policies:
 { operation: "permission_prompt", params: { tool: "Bash", prompt: "run npm test" } }
+{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
 

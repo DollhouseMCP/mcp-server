@@ -23,6 +23,7 @@ import {
   EXECUTION_SCHEMAS,
   GATEKEEPER_SCHEMAS,
   LOGGING_SCHEMAS,
+  METRICS_SCHEMAS,
   ACTIVATION_SCHEMAS,
   SEARCH_SCHEMAS,
   BROWSER_SCHEMAS,
@@ -618,8 +619,8 @@ describe('OperationSchema', () => {
     });
 
     describe('GATEKEEPER_SCHEMAS', () => {
-      it('should define 7 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(7);
+      it('should define 8 gatekeeper operations', () => {
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(8);
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice).toBeDefined();
@@ -772,6 +773,7 @@ describe('OperationSchema', () => {
           Object.keys(EXECUTION_SCHEMAS).length +
           Object.keys(GATEKEEPER_SCHEMAS).length +
           Object.keys(LOGGING_SCHEMAS).length +
+          Object.keys(METRICS_SCHEMAS).length +
           Object.keys(ACTIVATION_SCHEMAS).length +
           Object.keys(SEARCH_SCHEMAS).length +
           Object.keys(BROWSER_SCHEMAS).length;

@@ -1364,6 +1364,23 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       '{ operation: "permission_prompt", params: { tool_name: "Edit", input: { file_path: "src/index.ts", old_string: "...", new_string: "..." } } }',
     ],
   },
+  // Permission evaluation for PreToolUse hooks (all platforms)
+  evaluate_permission: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex). Alternative to permission_prompt for interactive sessions using PreToolUse hooks.',
+    params: {
+      tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write")' },
+      input: { type: 'object', description: 'The tool input parameters to evaluate' },
+      platform: { type: 'string', description: 'Target platform for response formatting (default: "claude_code"). Options: claude_code, gemini, cursor, windsurf, codex' },
+    },
+    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { decision: "allow"|"deny"|"ask", reason? }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex: { hookSpecificOutput: { permissionDecision, reason? } }.' },
+    examples: [
+      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" } } }',
+      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git push --force" }, platform: "claude_code" } }',
+    ],
+  },
   // Issue #625 Phase 2: CLI policy visibility
   get_effective_cli_policies: {
     endpoint: 'READ',
@@ -1444,6 +1461,41 @@ export const LOGGING_SCHEMAS: OperationSchemaMap = {
       // Response: { _type: "LogQueryResult", entries: [...], total: 42 }
       '{ operation: "query_logs", params: { category: "security", level: "warn", limit: 10 } }',
       '{ operation: "query_logs", params: { since: "2026-01-01T00:00:00Z", source: "Gatekeeper" } }',
+    ],
+  },
+} as const;
+
+// ============================================================================
+// Metrics Operations Schema (Introspection-Only)
+// ============================================================================
+
+/**
+ * Metrics collection query schema — introspection-only.
+ *
+ * Dispatched via MCPAQLHandler.dispatchMetrics() which routes to
+ * MemoryMetricsSink.query(). Follows the same pattern as query_logs.
+ */
+export const METRICS_SCHEMAS: OperationSchemaMap = {
+  query_metrics: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchMetrics',
+    description: 'Query collected metrics snapshots. Returns filtered, paginated results sorted newest-first. Supports filtering by metric name (prefix or exact), source, type, and time range.',
+    params: {
+      names: { type: 'string[]', description: "Metric name filters. Exact match or prefix match with trailing '.' or '.*' (e.g., 'system.memory.*')" },
+      source: { type: 'string', description: 'Collector source filter (case-insensitive substring match)' },
+      type: { type: 'string', description: "Metric type filter: 'counter', 'gauge', or 'histogram'" },
+      since: { type: 'string', description: 'ISO 8601 timestamp — return snapshots after this time' },
+      until: { type: 'string', description: 'ISO 8601 timestamp — return snapshots before this time' },
+      latest: { type: 'boolean', description: 'If true (default), return only the most recent snapshot. Set false for historical range queries' },
+      limit: { type: 'number', description: 'Max snapshots to return (1-100, default 1)' },
+      offset: { type: 'number', description: 'Number of snapshots to skip for pagination (default 0)' },
+    },
+    returns: { name: 'MetricQueryResult', kind: 'object', description: 'Metric snapshots: { _type: "MetricQueryResult", snapshots, total, hasMore, oldestAvailable, newestAvailable }' },
+    examples: [
+      '{ operation: "query_metrics" }',
+      '{ operation: "query_metrics", params: { names: ["system.memory.*"], type: "gauge" } }',
+      '{ operation: "query_metrics", params: { latest: false, limit: 10, since: "2026-01-01T00:00:00Z" } }',
     ],
   },
 } as const;
@@ -1627,6 +1679,7 @@ export const INTROSPECTION_ONLY_SCHEMAS: OperationSchemaMap = {
   ...EXECUTION_SCHEMAS,
   ...GATEKEEPER_SCHEMAS,
   ...LOGGING_SCHEMAS,
+  ...METRICS_SCHEMAS,
   ...ACTIVATION_SCHEMAS,
   ...SEARCH_SCHEMAS,
   ...BROWSER_SCHEMAS,

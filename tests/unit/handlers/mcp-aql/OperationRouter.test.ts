@@ -68,8 +68,11 @@ describe('OperationRouter', () => {
         'get_execution_state',
         'get_gathered_data',
         'permission_prompt', // Issue #647: Moved from EXECUTE to READ
+        'evaluate_permission', // Permission evaluation for PreToolUse hooks (all platforms)
         // LOGGING operations (Issue #528)
         'query_logs',
+        // METRICS operations
+        'query_metrics',
         // UPDATE operations
         'edit_element',
         'upgrade_element',

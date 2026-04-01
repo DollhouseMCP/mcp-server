@@ -416,24 +416,6 @@ export class VerbTriggerManager {
     // Cache the results
     this.verbCache.set(verb, limited);
 
-    // FIX: Proper audit logging for verb trigger operations
-    // Previously: Used 'ELEMENT_CREATED' which was incorrect
-    // Now: Using 'VERB_TRIGGERED' for operational observability
-    if (limited.length > 0) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'VERB_TRIGGERED' as any, // Cast needed until security types updated
-        severity: 'LOW',
-        source: 'VerbTriggerManager.getElementsForVerb',
-        details: `Verb '${verb}' triggered, matched ${limited.length} elements`,
-        metadata: {
-          verb,
-          elementCount: limited.length,
-          topElement: limited[0]?.name,
-          confidence: limited[0]?.confidence
-        }
-      });
-    }
-
     return limited;
   }
 
@@ -525,8 +507,11 @@ export class VerbTriggerManager {
    * Clear verb cache (useful after index updates)
    */
   public clearCache(): void {
+    const cleared = this.verbCache.size;
     this.verbCache.clear();
-    logger.debug('Verb cache cleared');
+    if (cleared > 0) {
+      logger.debug('Verb cache cleared', { entriesCleared: cleared });
+    }
   }
 
   /**
