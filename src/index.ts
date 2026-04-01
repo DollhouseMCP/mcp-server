@@ -733,9 +733,6 @@ export class DollhouseMCPServer implements IToolHandler {
         `total ${report.totalMs}ms`);
     }).catch(() => { /* already logged */ });
 
-    // auto-dollhouse features (port discovery, permission routes, mcpAqlHandler gateway)
-    // are now wired directly in Container.deferredWebConsole() when .auto-dollhouse marker
-    // or DOLLHOUSE_AUTONOMOUS_MODE env var is detected. No separate registration needed.
   }
 }
 
