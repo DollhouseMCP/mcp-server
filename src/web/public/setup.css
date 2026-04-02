@@ -1,0 +1,648 @@
+/**
+ * DollhouseMCP Console — Setup Tab
+ *
+ * Platform-specific install instructions with OS detection,
+ * copy-to-clipboard code blocks, and verification steps.
+ */
+
+/* ── Layout ────────────────────────────────────────────────────────────── */
+
+.setup-page {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: var(--gutter) var(--gutter) 3rem;
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────── */
+
+.setup-hero {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.setup-hero-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, #22c55e 12%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #22c55e 30%, var(--line));
+  color: #16a34a;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+[data-theme="dark"] .setup-hero-status {
+  color: #4ade80;
+}
+
+.setup-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: setup-pulse 2s ease-in-out infinite;
+}
+
+@keyframes setup-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.setup-hero-title {
+  font-family: var(--font-heading);
+  font-size: var(--step-3);
+  font-weight: 700;
+  color: var(--ink-950);
+  margin: 0 0 0.4rem;
+}
+
+.setup-hero-sub {
+  font-size: var(--step-0);
+  color: var(--ink-500);
+  margin: 0;
+}
+
+/* ── Method toggle ─────────────────────────────────────────────────────── */
+
+.setup-method-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  border: none;
+  padding: 0;
+  margin: 0 0 1.2rem;
+}
+
+.setup-method-btn {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 1rem;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.setup-method-btn:hover {
+  border-color: color-mix(in srgb, var(--signal) 40%, var(--line));
+}
+
+.setup-method-btn.is-active {
+  border-color: var(--signal);
+  background: color-mix(in srgb, var(--signal-2) 8%, var(--surface-2));
+}
+
+.setup-method-btn strong {
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+  color: var(--ink-950);
+}
+
+.setup-method-btn span {
+  font-size: var(--step--1);
+  color: var(--ink-500);
+}
+
+.setup-method-btn.is-active strong {
+  color: var(--signal);
+}
+
+.setup-pinned-prereq {
+  margin-bottom: 1.2rem;
+}
+
+.setup-method h4 {
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+  font-weight: 600;
+  color: var(--ink-900);
+  margin: 1rem 0 0.3rem;
+}
+
+.setup-method h4:first-of-type {
+  margin-top: 0.3rem;
+}
+
+/* ── Platform tabs ─────────────────────────────────────────────────────── */
+
+.setup-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.setup-platform-tab {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-700);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.42rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.setup-platform-tab:hover,
+.setup-platform-tab:focus-visible {
+  background: color-mix(in srgb, var(--signal-2) 12%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--signal) 30%, var(--line));
+  color: var(--ink-950);
+}
+
+.setup-platform-tab.is-active {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: #fff;
+}
+
+/* ── Panels ────────────────────────────────────────────────────────────── */
+
+.setup-panel {
+  display: grid;
+  gap: 1.2rem;
+}
+
+.setup-panel[hidden] {
+  display: none;
+}
+
+/* ── Method blocks ─────────────────────────────────────────────────────── */
+
+.setup-method {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 1.2rem 1.4rem;
+}
+
+.setup-method-primary {
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--signal-2) 6%, var(--surface-2)),
+      var(--surface-2) 60%);
+  border-color: color-mix(in srgb, var(--signal) 25%, var(--line));
+}
+
+.setup-method h3 {
+  font-family: var(--font-heading);
+  font-size: var(--step-1);
+  font-weight: 700;
+  color: var(--ink-950);
+  margin: 0 0 0.5rem;
+}
+
+.setup-method p {
+  color: var(--ink-700);
+  font-size: var(--step--1);
+  margin: 0 0 0.65rem;
+  line-height: 1.55;
+}
+
+.setup-method p:last-child {
+  margin-bottom: 0;
+}
+
+.setup-paths {
+  list-style: none;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.setup-paths li {
+  font-size: var(--step--1);
+  color: var(--ink-700);
+}
+
+.setup-paths li strong {
+  color: var(--ink-900);
+  min-width: 5rem;
+  display: inline-block;
+}
+
+.setup-paths li.is-current {
+  color: var(--signal);
+  font-weight: 600;
+}
+
+.setup-paths li.is-current strong {
+  color: var(--signal);
+}
+
+/* ── Code blocks ───────────────────────────────────────────────────────── */
+
+.setup-code-block {
+  position: relative;
+  margin: 0.5rem 0;
+}
+
+.setup-code-block pre {
+  margin: 0;
+  padding: 1rem 1.2rem;
+  padding-right: 4.5rem;
+  background: var(--ink-950);
+  color: #e2e8f0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+[data-theme="dark"] .setup-code-block pre {
+  background: #0a0e18;
+  border: 1px solid var(--line);
+}
+
+.setup-code-block-sm pre {
+  padding: 0.7rem 1rem;
+  padding-right: 4.5rem;
+}
+
+.setup-copy-btn {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  z-index: 2;
+  appearance: none;
+  border: 1px solid color-mix(in srgb, #ffffff 18%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink-950) 80%, #1e293b);
+  color: #cbd5e1;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.setup-copy-btn:hover {
+  background: color-mix(in srgb, var(--signal) 70%, var(--ink-950));
+  color: #fff;
+}
+
+.setup-copy-btn[data-copied] {
+  background: color-mix(in srgb, #22c55e 50%, var(--ink-950));
+  color: #fff;
+}
+
+/* ── CTA button ────────────────────────────────────────────────────────── */
+
+.setup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1.4rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.setup-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.setup-btn-primary {
+  background: var(--signal);
+  color: #fff;
+  border: none;
+}
+
+.setup-btn-primary:hover {
+  background: var(--signal-2);
+}
+
+/* ── Install row ───────────────────────────────────────────────────────── */
+
+.setup-install-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+
+.setup-install-btn.is-loading {
+  opacity: 0.7;
+  cursor: wait;
+  animation: setup-install-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes setup-install-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.4; }
+}
+
+.setup-install-btn.is-success {
+  background: #16a34a;
+  cursor: default;
+}
+
+.setup-install-status {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.setup-install-status.is-success {
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-install-status.is-success {
+  color: #4ade80;
+}
+
+.setup-install-status.is-error {
+  color: #dc2626;
+}
+
+[data-theme="dark"] .setup-install-status.is-error {
+  color: #f87171;
+}
+
+.setup-btn-secondary {
+  background: var(--surface-1);
+  color: var(--signal);
+  border: 1px solid color-mix(in srgb, var(--signal) 30%, var(--line));
+}
+
+.setup-btn-secondary:hover {
+  background: color-mix(in srgb, var(--signal-2) 12%, var(--surface-1));
+}
+
+/* ── Open config button ────────────────────────────────────────────────── */
+
+.setup-open-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--signal);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  vertical-align: middle;
+  margin-left: 0.5rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.setup-open-btn:hover {
+  background: color-mix(in srgb, var(--signal-2) 12%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--signal) 35%, var(--line));
+}
+
+.setup-open-btn[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Badges ────────────────────────────────────────────────────────────── */
+
+.setup-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: color-mix(in srgb, #22c55e 15%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #22c55e 30%, var(--line));
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-badge {
+  color: #4ade80;
+}
+
+.setup-badge-muted {
+  background: var(--surface-1);
+  border-color: var(--line);
+  color: var(--ink-500);
+}
+
+/* ── Hints ─────────────────────────────────────────────────────────────── */
+
+.setup-hint {
+  font-size: var(--step--1);
+  color: var(--ink-500);
+  font-style: italic;
+  margin: 0.3rem 0 0;
+}
+
+/* ── Verify section ────────────────────────────────────────────────────── */
+
+.setup-verify {
+  margin-top: 2rem;
+  padding: 1.4rem 1.6rem;
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--accent) 5%, var(--surface-2)),
+      var(--surface-2) 60%);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: var(--radius-md);
+}
+
+.setup-verify h3 {
+  font-family: var(--font-heading);
+  font-size: var(--step-1);
+  font-weight: 700;
+  color: var(--ink-950);
+  margin: 0 0 0.5rem;
+}
+
+.setup-verify p {
+  color: var(--ink-700);
+  font-size: var(--step--1);
+  margin: 0 0 0.65rem;
+  line-height: 1.55;
+}
+
+.setup-try-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.setup-try-prompts code {
+  display: inline-block;
+  padding: 0.3rem 0.7rem;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-700);
+  white-space: nowrap;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+
+.setup-footer {
+  margin-top: 1.5rem;
+  text-align: center;
+}
+
+.setup-footer p {
+  font-size: var(--step--1);
+  color: var(--ink-500);
+}
+
+.setup-footer a {
+  color: var(--signal);
+  text-decoration: none;
+}
+
+.setup-footer a:hover {
+  text-decoration: underline;
+}
+
+/* ── Detection: installed notice + tab badge ────────────────────────────── */
+
+.setup-tab-badge {
+  display: inline-block;
+  margin-left: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, #22c55e 18%, var(--surface-1));
+  color: #16a34a;
+  vertical-align: middle;
+}
+
+[data-theme="dark"] .setup-tab-badge {
+  color: #4ade80;
+}
+
+.setup-installed-notice {
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  font-size: var(--step--1);
+  color: var(--ink-700);
+  line-height: 1.5;
+}
+
+.setup-installed-notice strong {
+  color: var(--accent);
+}
+
+/* Green match state — config matches what would be installed */
+.setup-installed-notice.is-match {
+  border-color: color-mix(in srgb, #22c55e 35%, var(--line));
+  background: color-mix(in srgb, #22c55e 6%, var(--surface-2));
+}
+
+.setup-installed-notice.is-match strong {
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-installed-notice.is-match strong {
+  color: #4ade80;
+}
+
+.setup-tab-badge.is-match {
+  background: color-mix(in srgb, #22c55e 25%, var(--surface-1));
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-tab-badge.is-match {
+  color: #4ade80;
+}
+
+.setup-install-btn.is-match {
+  background: #16a34a;
+  cursor: default;
+  opacity: 0.85;
+}
+
+.setup-installed-notice details {
+  margin-top: 0.5rem;
+}
+
+.setup-installed-notice summary {
+  cursor: pointer;
+  color: var(--signal);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.setup-installed-notice pre {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--ink-950);
+  color: #e2e8f0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+[data-theme="dark"] .setup-installed-notice pre {
+  background: #0a0e18;
+  border: 1px solid var(--line);
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .setup-page {
+    padding: 1rem;
+  }
+
+  .setup-platforms {
+    gap: 0.25rem;
+  }
+
+  .setup-platform-tab {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.65rem;
+  }
+
+  .setup-method {
+    padding: 1rem;
+  }
+
+  .setup-code-block pre {
+    font-size: 0.75rem;
+    padding-right: 3.8rem;
+  }
+
+  .setup-try-prompts {
+    flex-direction: column;
+  }
+}
