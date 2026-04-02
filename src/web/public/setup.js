@@ -317,6 +317,8 @@
               status.textContent = 'Restart the application to activate.';
               status.classList.add('is-success');
             }
+            // Re-run detection to update badges and notices
+            reDetect();
           } else {
             throw new Error(data.error || 'Installation failed');
           }
@@ -460,20 +462,25 @@
     return compareJsonConfig(current, generated);
   };
 
-  /** Compare a detected config object against a generated config block */
+  /** Compare a detected config object against a generated config block.
+   *  Matches on command + package reference. Ignores flags like -y and
+   *  extra keys like env, type, etc. — those don't change the server version. */
   const compareJsonConfig = (current, generated) => {
     try {
-      // Parse the generated config to extract the dollhousemcp server entry
       const genText = generated.copyText || generated.code;
       const genParsed = JSON.parse(genText);
       const genServer = genParsed.mcpServers?.dollhousemcp || genParsed.servers?.dollhousemcp;
       if (!genServer) return false;
 
-      // Compare command and args
+      // Command must match
       if (current.command !== genServer.command) return false;
-      const currentArgs = JSON.stringify(current.args || []);
-      const genArgs = JSON.stringify(genServer.args || []);
-      return currentArgs === genArgs;
+
+      // Extract the package reference from args (the @dollhousemcp/... part)
+      const getPkgRef = (args) => (args || []).find(a => a.includes('@dollhousemcp/'));
+      const currentPkg = getPkgRef(current.args);
+      const genPkg = getPkgRef(genServer.args);
+
+      return currentPkg === genPkg;
     } catch {
       return false;
     }
@@ -586,6 +593,47 @@
     } catch {
       // Offline or no API — skip detection
     }
+  };
+
+  /** Re-fetch detection after an install and update state */
+  const reDetect = async () => {
+    try {
+      const res = await fetch('/api/setup/detect');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      for (const [clientId, info] of Object.entries(data)) {
+        const platformId = clientToPlatform[clientId];
+        if (!platformId || !info) continue;
+        detectedConfigs[platformId] = info;
+
+        // If this platform didn't have a notice before but now it's installed, add one
+        const panel = document.getElementById('setup-panel-' + platformId);
+        const tabBtn = document.getElementById('setup-tab-' + platformId);
+        if (panel && info.installed && !panel.querySelector('.setup-installed-notice')) {
+          const notice = document.createElement('div');
+          notice.className = 'setup-installed-notice';
+          let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
+          html += '<span class="setup-notice-msg">Installing will overwrite the existing configuration.</span>';
+          if (info.currentConfig) {
+            const configStr = JSON.stringify(info.currentConfig, null, 2);
+            html += `<details><summary>Current config</summary><pre><code>${escapeHtml(configStr)}</code></pre></details>`;
+          }
+          notice.innerHTML = html;
+          panel.insertBefore(notice, panel.firstChild);
+        }
+
+        // Add badge if not already there
+        if (tabBtn && info.installed && !tabBtn.querySelector('.setup-tab-badge')) {
+          const badge = document.createElement('span');
+          badge.className = 'setup-tab-badge';
+          badge.textContent = 'installed';
+          tabBtn.appendChild(badge);
+        }
+      }
+
+      updateDetectionState();
+    } catch { /* ignore */ }
   };
 
   const escapeHtml = (str) => str
