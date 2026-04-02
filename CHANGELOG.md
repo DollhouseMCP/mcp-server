@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.0.3] - 2026-04-02
+
+### Setup Tab — Interactive Installer
+
+One command opens a browser-based setup wizard for installing DollhouseMCP on any MCP client:
+
+```bash
+npx @dollhousemcp/mcp-server@latest --web
+```
+
+#### Features
+- **One-click install** for 9 platforms: Claude Desktop, Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Cline, LM Studio
+- **Auto-updating vs Pinned version** toggle — all config snippets update dynamically
+- **Installation detection** — scans existing client configs, shows green/amber state based on whether current settings match
+- **Open config file** buttons — opens client config in the system default editor
+- **Version-aware .mcpb download** — resolves correct versioned Desktop Extension from GitHub API
+- **Install verification** — confirms config was written after install
+- **Keyboard navigation** — arrow keys, Home, End for platform tabs
+
+#### Technical
+- Bundled `install-mcp` (MIT, by Dhravya Shah) as runtime dependency
+- 7 of 9 platform panels generated from declarative PLATFORMS registry (zero HTML duplication)
+- `UnicodeValidator.normalize()` on all server-side user input
+- 171 tests including JSDOM DOM validation of generated panels
+- All READMEs and guides updated with interactive setup one-liner
+
 ## [2.0.0] - 2026-04-01
 
 DollhouseMCP v2.0.0 is the first stable release of the v2 line. This release brings MCP-AQL (Agent Query Language), Gatekeeper permission system, unified web console, multi-session support, comprehensive metrics, and 9000+ tests across unit, integration, security, and e2e suites.
