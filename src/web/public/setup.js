@@ -616,12 +616,67 @@
 
   // ── Generate platform panels from registry ─────────────────────────────
 
+  /** Build an Open config file button string, or empty if no openClient */
+  const openBtnHtml = (openClient) =>
+    openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${openClient}">Open config file</button>` : '';
+
+  /** Build the Install Now + CLI terminal command section */
+  const renderInstallSection = (p) => {
+    let html = '';
+    if (p.installClient) {
+      html += '<div class="setup-method setup-method-primary">';
+      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
+      html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
+    }
+    if (p.cli) {
+      const cmd = `${p.cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`;
+      if (!p.installClient) html += '<div class="setup-method setup-method-primary">';
+      html += '<h3>Or run in your terminal</h3><p>Run this in your terminal:</p>';
+      html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${cmd}" aria-label="Copy command">Copy</button>`;
+      html += `<pre><code>${cmd}</code></pre></div>`;
+    }
+    return html;
+  };
+
+  /** Build the JSON config block section */
+  const renderJsonSection = (p, hasPrimaryBlock) => {
+    if (!p.configPath) return hasPrimaryBlock ? '</div>' : '';
+
+    const config = configs[p.id]?.npx;
+    const configCode = config?.code || '';
+    const copyText = config?.copyText || configCode;
+    let html = '';
+
+    if (hasPrimaryBlock) {
+      html += `</div><div class="setup-method"><h3>Or add config manually${openBtnHtml(p.openClient)}</h3>`;
+    } else {
+      html += `<div class="setup-method setup-method-primary"><h3>Config${openBtnHtml(p.openClient)}</h3>`;
+    }
+    html += `<p>Add to ${p.configPath}:</p>`;
+    html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${copyText}' aria-label="Copy config">Copy</button>`;
+    html += `<pre><code>${configCode}</code></pre></div>`;
+    if (p.hint) html += `<p class="setup-hint">${p.hint}</p>`;
+    html += '</div>';
+    return html;
+  };
+
+  /** Build the TOML config block section (Codex) */
+  const renderTomlSection = (p) => {
+    if (!p.tomlPath) return '';
+    const tomlConfig = configs[p.id]?.npxToml;
+    const tomlCode = tomlConfig?.code || '';
+    let html = `<div class="setup-method"><h3>Or add to config${openBtnHtml(p.openClient)}</h3>`;
+    html += `<p>Add to ${p.tomlPath}:</p>`;
+    html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${tomlCode}' aria-label="Copy config">Copy</button>`;
+    html += `<pre><code>${tomlCode}</code></pre></div></div>`;
+    return html;
+  };
+
   const renderGeneratedPanels = () => {
     const container = document.getElementById('setup-generated-panels');
     if (!container) return;
 
     for (const p of PLATFORMS) {
-      // Skip platforms without configPath — they have handwritten HTML panels
       if (!p.configPath && !p.tomlPath) continue;
 
       const section = document.createElement('section');
@@ -631,67 +686,12 @@
       section.setAttribute('aria-labelledby', 'setup-tab-' + p.id);
       section.hidden = true;
 
-      let html = '';
+      const hasPrimaryBlock = !!(p.installClient || p.cli);
+      section.innerHTML =
+        renderInstallSection(p) +
+        renderJsonSection(p, hasPrimaryBlock) +
+        renderTomlSection(p);
 
-      // Install Now button (if installClient is set)
-      if (p.installClient) {
-        html += '<div class="setup-method setup-method-primary">';
-        html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
-        html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
-      }
-
-      // CLI terminal command (if cli is set)
-      if (p.cli) {
-        const cmd = `${p.cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`;
-        if (!p.installClient) html += '<div class="setup-method setup-method-primary">';
-        html += `<h3>Or run in your terminal</h3><p>Run this in your terminal:</p>`;
-        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${cmd}" aria-label="Copy command">Copy</button>`;
-        html += `<pre><code>${cmd}</code></pre></div>`;
-        if (!p.configPath && !p.tomlPath) html += '</div>';
-      }
-
-      // Close primary method div if we opened it for install button
-      if (p.installClient && !p.cli) {
-        // JSON config goes in the same primary block
-      }
-
-      // JSON config block
-      if (p.configPath) {
-        const config = configs[p.id]?.npx;
-        const configCode = config?.code || '';
-        const copyText = config?.copyText || configCode;
-        const openBtn = p.openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${p.openClient}">Open config file</button>` : '';
-
-        if (p.installClient || p.cli) {
-          // Second method block
-          html += '</div><div class="setup-method">';
-          html += `<h3>Or add config manually${openBtn}</h3>`;
-        } else {
-          // Primary method block (no install button, e.g., LM Studio)
-          html += '<div class="setup-method setup-method-primary">';
-          html += `<h3>Config${openBtn}</h3>`;
-        }
-        html += `<p>Add to ${p.configPath}:</p>`;
-        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${copyText}' aria-label="Copy config">Copy</button>`;
-        html += `<pre><code>${configCode}</code></pre></div>`;
-        if (p.hint) html += `<p class="setup-hint">${p.hint}</p>`;
-        html += '</div>';
-      } else if (p.installClient && !p.cli) {
-        html += '</div>';
-      }
-
-      // TOML config block (Codex)
-      if (p.tomlPath) {
-        const tomlConfig = configs[p.id]?.npxToml;
-        const tomlCode = tomlConfig?.code || '';
-        const openBtn = p.openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${p.openClient}">Open config file</button>` : '';
-        html += `<div class="setup-method"><h3>Or add to config${openBtn}</h3>`;
-        html += `<p>Add to ${p.tomlPath}:</p>`;
-        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${tomlCode}' aria-label="Copy config">Copy</button>`;
-        html += `<pre><code>${tomlCode}</code></pre></div></div>`;
-      }
-
-      section.innerHTML = html;
       container.appendChild(section);
     }
   };

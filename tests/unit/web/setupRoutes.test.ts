@@ -390,7 +390,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
     it('all non-VS Code platforms use mcpServers in PLATFORMS registry', () => {
       const platforms = ['cursor', 'windsurf', 'cline', 'lmstudio', 'gemini', 'claude-desktop', 'claude-code', 'codex'];
       for (const p of platforms) {
-        const line = new RegExp(`id:\\s*'${p}'[^}]*`).exec(js);
+        const line = new RegExp(String.raw`id:\s*'${p}'[^}]*`).exec(js);
         expect(line?.[0]).toContain("rootKey: 'mcpServers'");
       }
     });
@@ -988,7 +988,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
       const copyBtns = panel?.querySelectorAll('.setup-copy-btn');
       expect(copyBtns?.length).toBeGreaterThan(0);
       copyBtns?.forEach((btn) => {
-        expect(btn.getAttribute('data-copy-text')).toBeTruthy();
+        expect((btn as HTMLElement).dataset.copyText).toBeTruthy();
       });
     }
   });
@@ -999,7 +999,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-install-btn');
       expect(btn).not.toBeNull();
-      expect(btn?.getAttribute('data-install-client')).toBeTruthy();
+      expect((btn as HTMLElement)?.dataset.installClient).toBeTruthy();
     }
   });
 
@@ -1015,7 +1015,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-open-btn');
       expect(btn).not.toBeNull();
-      expect(btn?.getAttribute('data-open-client')).toBeTruthy();
+      expect((btn as HTMLElement)?.dataset.openClient).toBeTruthy();
     }
   });
 
@@ -1046,7 +1046,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
       const panel = document.getElementById('setup-panel-' + p);
       const copyBtns = panel?.querySelectorAll('.setup-copy-btn') || [];
       for (const btn of copyBtns) {
-        const text = btn.getAttribute('data-copy-text') || '';
+        const text = (btn as HTMLElement).dataset.copyText || '';
         if (text.startsWith('{')) {
           expect(() => JSON.parse(text)).not.toThrow();
           const parsed = JSON.parse(text);
