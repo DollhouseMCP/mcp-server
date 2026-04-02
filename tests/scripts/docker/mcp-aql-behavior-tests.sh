@@ -1664,6 +1664,68 @@ test_template_operations() {
 }
 
 # ============================================================================
+# Suite 21: Long/Complex Content Creation (Issue #1726)
+# ============================================================================
+test_long_complex_content_creation() {
+    if [ "$TEST_MODE" != "crud" ]; then
+        echo -e "\n${CYAN}⏭️  Skipping Long Content Creation tests (mode: $TEST_MODE)${NC}\n"
+        return
+    fi
+
+    echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}  Suite 21: Long/Complex Content Creation (Issue #1726)${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+    # T1: Create a detailed persona — the exact scenario from #1726
+    run_behavior_test "Create DETAILED persona with rich content" \
+        "Using mcp_aql_create, create a persona named 'senior-architect' with element_type 'persona'. Description: 'A senior software architect with 20 years of experience across distributed systems, cloud infrastructure, and team leadership'. The content should be comprehensive — include at minimum: a multi-paragraph role description, a Core Expertise section with at least 8 bullet points covering different domains, a Communication Style section with sub-bullets, a Code Review Methodology section with numbered steps and code examples in a fenced code block, a Decision Framework section with a markdown table of trade-offs, and a Working Principles section with at least 5 principles each having a bold title and explanation. This persona should be at least 2000 characters of content. Report whether creation succeeded and show the element name." \
+        "created|senior-architect|success|confirmation.*required" \
+        90 \
+        "create" \
+        "true"
+
+    # T2: Create a complex skill with structured sections and code examples
+    run_behavior_test "Create COMPLEX skill with code examples" \
+        "Using mcp_aql_create, create a skill named 'api-design-review' with element_type 'skill'. Description: 'Comprehensive API design review covering REST conventions, error handling, pagination, versioning, and security'. The content must include: an Overview section, a REST Conventions Checklist with at least 10 items using checkboxes, an Error Response Format section with a JSON code block showing a standard error schema, a Pagination Patterns section comparing cursor vs offset with a markdown table, a Security Checklist section with sub-categories for Authentication, Authorization, and Input Validation each having multiple bullet points, and a Versioning Strategy section with pros/cons. Make the content thorough and detailed — at least 3000 characters. Report success or failure." \
+        "created|api-design-review|success|confirmation.*required" \
+        90 \
+        "create" \
+        "true"
+
+    # T3: Create a template with lots of variable placeholders and nested structure
+    run_behavior_test "Create LARGE template with many variables" \
+        "Using mcp_aql_create, create a template named 'incident-report' with element_type 'template'. Description: 'Post-incident report template for production outages'. The content should be a full incident report template with these sections, each using {{variable}} placeholders: Executive Summary (with {{incident_title}}, {{severity}}, {{duration}}, {{impact_summary}}), Timeline (with {{detection_time}}, {{response_time}}, {{mitigation_time}}, {{resolution_time}}), Root Cause Analysis (with {{root_cause}}, {{contributing_factors}}, {{trigger_event}}), Impact Assessment (with {{affected_users}}, {{affected_services}}, {{data_loss}}, {{revenue_impact}}), Response Actions as a numbered list with at least 8 action items, Lessons Learned with at least 5 items, and Action Items as a markdown table with columns: Action, Owner, Priority, Due Date, Status. Include metadata with all the variable names listed. The content should be at least 2500 characters. Report whether creation succeeded." \
+        "created|incident-report|success|confirmation.*required" \
+        90 \
+        "create" \
+        "true"
+
+    # T4: Create a memory with dense, multi-paragraph knowledge content
+    run_behavior_test "Create DENSE memory with knowledge content" \
+        "Using mcp_aql_create, create an element named 'architecture-decisions' with element_type 'memory'. Description: 'Key architecture decisions and their rationale for the platform'. The content should document at least 6 architecture decisions, each with: a bold decision title, the context/problem (2-3 sentences), the decision made (1-2 sentences), the rationale with trade-offs considered (3-4 sentences), and consequences both positive and negative as sub-bullets. Include decisions about: database choice, API style, authentication approach, caching strategy, deployment model, and monitoring stack. This should be substantial — at least 3000 characters of real content. Report whether creation succeeded." \
+        "created|architecture-decisions|success|confirmation.*required" \
+        90 \
+        "create" \
+        "true"
+
+    # T5: Create an agent with complex goal templates and activation config
+    run_behavior_test "Create COMPLEX agent with goal templates" \
+        "Using mcp_aql_create, create an element named 'security-auditor' with element_type 'agent'. Description: 'Automated security audit agent that reviews code for OWASP Top 10 vulnerabilities'. The content should include: a detailed multi-paragraph description of the agent's purpose and approach, a goal section with template 'Audit {target} for {vulnerability_categories} with {depth} analysis', parameter definitions for each variable with types and defaults, at least 5 success criteria, an activates section listing personas and skills it should use, a tools section with allowed and restricted tool lists, and a detailed methodology section describing the 5-step audit process with sub-steps under each. The content should be at least 2500 characters. Report whether creation succeeded." \
+        "created|security-auditor|success|confirmation.*required" \
+        90 \
+        "create" \
+        "true"
+
+    # T6: The stress test — create then immediately read back to verify content integrity
+    run_behavior_test "Create LARGE element then READ it back" \
+        "Do these two steps in order: Step 1: Using mcp_aql_create, create a persona named 'fullstack-mentor' with element_type 'persona'. Description: 'A patient fullstack development mentor'. The content should cover frontend (React, CSS, accessibility, performance), backend (Node.js, databases, APIs, caching), DevOps (Docker, CI/CD, monitoring, incident response), and soft skills (code review etiquette, mentoring approach, communication). Each area should have at least 4 detailed bullet points with explanations. Include a Teaching Methodology section and a Common Pitfalls section. Make it thorough. Step 2: Using mcp_aql_read, read back the element with get_element operation, element_name 'fullstack-mentor', element_type 'persona'. Report whether both operations succeeded and confirm the read-back contains the expected content sections." \
+        "created|fullstack-mentor|content|frontend|backend|success|confirmation.*required" \
+        120 \
+        "create" \
+        "true"
+}
+
+# ============================================================================
 # Summary
 # ============================================================================
 print_summary() {
@@ -1737,6 +1799,7 @@ main() {
     test_permission_prompt_evaluation    # Issue #625: Permission prompt evaluation pipeline (Phase 4)
     test_ensemble_crud_operations        # Issue #662: Ensemble CRUD operations
     test_template_operations             # Issue #662: Template operations
+    test_long_complex_content_creation   # Issue #1726: Long/complex content creation
 
     print_summary
 
