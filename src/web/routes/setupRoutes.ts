@@ -1,0 +1,217 @@
+/**
+ * Setup Routes — Auto-install DollhouseMCP to MCP clients
+ *
+ * Uses `install-mcp` (https://github.com/supermemoryai/install-mcp)
+ * to inject server configuration into supported MCP client config files.
+ *
+ * Security: localhost-only binding (enforced by server.ts), rate-limited,
+ * and command arguments are hardcoded — no user-supplied shell input.
+ */
+
+import type { Request, Response } from 'express';
+import { execFile } from 'node:child_process';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { homedir, platform } from 'node:os';
+import { logger } from '../../utils/logger.js';
+import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+
+/** Allowed client identifiers — must match install-mcp's --client values */
+const ALLOWED_CLIENTS = new Set([
+  'claude',
+  'claude-code',
+  'cursor',
+  'vscode',
+  'cline',
+  'roo-cline',
+  'windsurf',
+  'witsy',
+  'enconvo',
+  'gemini-cli',
+  'goose',
+  'zed',
+  'warp',
+  'codex',
+]);
+
+/** Rate limit: 5 installs per minute */
+const installLimiter = new SlidingWindowRateLimiter(5, 60_000);
+
+/**
+ * Known config file paths per client.
+ * Returns the absolute path for the current platform.
+ */
+function getConfigPath(client: string): string | null {
+  const home = homedir();
+  const plat = platform();
+
+  const paths: Record<string, () => string | null> = {
+    'claude': () => {
+      if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+      if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+      return join(home, '.config', 'Claude', 'claude_desktop_config.json');
+    },
+    'claude-code': () => join(home, '.claude.json'),
+    'cursor': () => join(home, '.cursor', 'mcp.json'),
+    'windsurf': () => join(home, '.codeium', 'windsurf', 'mcp_config.json'),
+    'lmstudio': () => join(home, '.lmstudio', 'mcp.json'),
+    'gemini-cli': () => join(home, '.gemini', 'settings.json'),
+    'codex': () => join(home, '.codex', 'config.toml'),
+  };
+
+  const resolver = paths[client];
+  return resolver ? resolver() : null;
+}
+
+/**
+ * Open a file in the system's default text editor.
+ */
+function openInEditor(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const plat = platform();
+    let cmd: string;
+    let args: string[];
+
+    if (plat === 'darwin') {
+      cmd = 'open';
+      args = ['-t', filePath];
+    } else if (plat === 'win32') {
+      cmd = 'notepad';
+      args = [filePath];
+    } else {
+      cmd = 'xdg-open';
+      args = [filePath];
+    }
+
+    execFile(cmd, args, { timeout: 10_000 }, (err) => {
+      if (err) {
+        reject(new Error(`Could not open editor: ${err.message}`));
+        return;
+      }
+      resolve('Opened in editor.');
+    });
+  });
+}
+
+/** Clients whose config files we can locate and open */
+const OPENABLE_CLIENTS = new Set([
+  'claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex',
+]);
+
+/**
+ * Create setup handlers (Express 5 compatible — plain handler functions, not Router).
+ */
+export function createSetupRoutes(): {
+  installHandler: (req: Request, res: Response) => Promise<void>;
+  openConfigHandler: (req: Request, res: Response) => Promise<void>;
+} {
+  // ── Open config file in editor ──────────────────────────────────────
+  const openConfigHandler = async (req: Request, res: Response): Promise<void> => {
+    const { client } = req.body as { client?: string };
+
+    if (!client || typeof client !== 'string') {
+      res.status(400).json({ error: 'Missing required field: client' });
+      return;
+    }
+
+    const normalizedClient = client.toLowerCase().trim();
+    if (!OPENABLE_CLIENTS.has(normalizedClient)) {
+      res.status(400).json({ error: `Cannot open config for: ${client}` });
+      return;
+    }
+
+    const configPath = getConfigPath(normalizedClient);
+    if (!configPath) {
+      res.status(400).json({ error: `Config path unknown for: ${client}` });
+      return;
+    }
+
+    // Create the file with empty content if it doesn't exist yet
+    try {
+      await access(configPath);
+    } catch {
+      try {
+        await mkdir(dirname(configPath), { recursive: true });
+        const content = configPath.endsWith('.toml') ? '' : '{}';
+        await writeFile(configPath, content + '\n', 'utf-8');
+        logger.info(`[Setup] Created empty config: ${configPath}`);
+      } catch (mkErr) {
+        const msg = mkErr instanceof Error ? mkErr.message : String(mkErr);
+        res.status(500).json({ error: `Could not create config file: ${msg}` });
+        return;
+      }
+    }
+
+    logger.info(`[Setup] Opening config for ${normalizedClient}: ${configPath}`);
+
+    try {
+      await openInEditor(configPath);
+      res.json({ success: true, path: configPath });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ success: false, error: message, path: configPath });
+    }
+  };
+
+  // ── Auto-install via install-mcp ────────────────────────────────────
+  const installHandler = async (req: Request, res: Response): Promise<void> => {
+    if (!installLimiter.tryAcquire()) {
+      res.status(429).json({ error: 'Too many install requests. Try again in a minute.' });
+      return;
+    }
+
+    const { client } = req.body as { client?: string };
+
+    if (!client || typeof client !== 'string') {
+      res.status(400).json({ error: 'Missing required field: client' });
+      return;
+    }
+
+    const normalizedClient = client.toLowerCase().trim();
+    if (!ALLOWED_CLIENTS.has(normalizedClient)) {
+      res.status(400).json({
+        error: `Unsupported client: ${client}`,
+        supported: Array.from(ALLOWED_CLIENTS),
+      });
+      return;
+    }
+
+    logger.info(`[Setup] Installing DollhouseMCP to client: ${normalizedClient}`);
+
+    try {
+      const output = await runInstallMcp(normalizedClient);
+      logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
+      res.json({ success: true, output, client: normalizedClient });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`[Setup] Install failed for ${normalizedClient}: ${message}`);
+      res.status(500).json({ success: false, error: message, client: normalizedClient });
+    }
+  };
+
+  return { installHandler, openConfigHandler };
+}
+
+/**
+ * Run `npx install-mcp` to configure a specific MCP client.
+ * The command is fully hardcoded — no user input reaches the shell.
+ */
+function runInstallMcp(client: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      'install-mcp',
+      '@dollhousemcp/mcp-server@latest',
+      '--client', client,
+      '--name', 'dollhousemcp',
+      '--yes',
+    ];
+
+    execFile('npx', args, { timeout: 30_000 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr || err.message));
+        return;
+      }
+      resolve(stdout || 'Installation completed.');
+    });
+  });
+}

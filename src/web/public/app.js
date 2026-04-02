@@ -1922,6 +1922,21 @@ function safeParseYaml(content) {
     const consoleTabs = document.getElementById('console-tabs');
     const tabInits = { logs: false, metrics: false, permissions: false };
 
+    // Show Setup tab on first visit (localStorage flag)
+    const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
+    if (consoleTabs && !localStorage.getItem(SETUP_SEEN_KEY)) {
+      localStorage.setItem(SETUP_SEEN_KEY, '1');
+      const setupBtn = consoleTabs.querySelector('[data-tab="setup"]');
+      if (setupBtn) {
+        consoleTabs.querySelectorAll('.console-tab').forEach(b => b.classList.remove('active'));
+        setupBtn.classList.add('active');
+        document.querySelectorAll('.tab-panel').forEach(p => {
+          p.hidden = p.id !== 'tab-setup';
+          p.classList.toggle('active', p.id === 'tab-setup');
+        });
+      }
+    }
+
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {
         const btn = e.target.closest('.console-tab');
