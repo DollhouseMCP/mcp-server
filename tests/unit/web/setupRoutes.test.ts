@@ -1108,6 +1108,62 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
   });
 });
 
+// ── npm package inclusion check ───────────────────────────────────────
+// Verifies that static web assets and seed elements are included in the
+// npm package via the files field in package.json.
+
+describe('Setup Tab — Package Inclusion', () => {
+  let packageJson: Record<string, unknown>;
+
+  beforeAll(async () => {
+    const raw = await readFileAsync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8');
+    packageJson = JSON.parse(raw);
+  });
+
+  it('files field includes dist/web/public/** for HTML, CSS, and fonts', () => {
+    const files = packageJson.files as string[];
+    expect(files).toContain('dist/web/public/**');
+  });
+
+  it('files field includes dist/seed-elements/** for seed memories', () => {
+    const files = packageJson.files as string[];
+    expect(files).toContain('dist/seed-elements/**');
+  });
+
+  it('dist/web/public/index.html exists', () => {
+    const indexPath = join(__dirname, '..', '..', '..', 'dist', 'web', 'public', 'index.html');
+    expect(() => readFileSync(indexPath)).not.toThrow();
+  });
+
+  it('dist/web/public/setup.css exists', () => {
+    const cssPath = join(__dirname, '..', '..', '..', 'dist', 'web', 'public', 'setup.css');
+    expect(() => readFileSync(cssPath)).not.toThrow();
+  });
+
+  it('dist/web/public/setup.js exists', () => {
+    const jsPath = join(__dirname, '..', '..', '..', 'dist', 'web', 'public', 'setup.js');
+    expect(() => readFileSync(jsPath)).not.toThrow();
+  });
+
+  it('dist/web/public/styles.css exists', () => {
+    const cssPath = join(__dirname, '..', '..', '..', 'dist', 'web', 'public', 'styles.css');
+    expect(() => readFileSync(cssPath)).not.toThrow();
+  });
+
+  it('dist/web/public/fonts.css exists', () => {
+    const cssPath = join(__dirname, '..', '..', '..', 'dist', 'web', 'public', 'fonts.css');
+    expect(() => readFileSync(cssPath)).not.toThrow();
+  });
+
+  it('dist/seed-elements/memories/ has seed files', async () => {
+    const seedDir = join(__dirname, '..', '..', '..', 'dist', 'seed-elements', 'memories');
+    const { readdirSync } = await import('node:fs');
+    const files = readdirSync(seedDir).map(String);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some(f => f.endsWith('.yaml'))).toBe(true);
+  });
+});
+
 // ── Dependency check ──────────────────────────────────────────────────
 
 describe('Setup Tab — Dependencies', () => {
