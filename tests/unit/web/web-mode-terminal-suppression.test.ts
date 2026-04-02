@@ -77,7 +77,6 @@ describe('--web mode terminal suppression', () => {
       process.stderr.write = originalWrite;
 
       // Verify restore works by capturing output
-      const testWrite = process.stderr.write;
       process.stderr.write = ((chunk: any) => {
         captured.push(String(chunk));
         return true;
