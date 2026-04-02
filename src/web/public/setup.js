@@ -366,6 +366,10 @@
       if (localCmd) localCmd.textContent = `mkdir -p ~/mcp-servers && cd ~/mcp-servers\nnpm install ${PKG}@${pinnedVersion}`;
       if (localCopy) localCopy.dataset.copyText = `mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install ${PKG}@${pinnedVersion}`;
 
+      // Update .mcpb download button version label
+      const mcpbVersion = document.getElementById('pinned-mcpb-version');
+      if (mcpbVersion) mcpbVersion.textContent = `(v${pinnedVersion})`;
+
       // If currently showing pinned method, refresh all config snippets
       if (currentMethod === 'global') {
         updateAllConfigs('global');

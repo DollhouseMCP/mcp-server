@@ -390,6 +390,17 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(html).toContain('href="/api/setup/mcpb"');
     });
 
+    it('.mcpb download is in the pinned prereq section, not auto-updating', () => {
+      const pinnedSection = html.slice(
+        html.indexOf('id="setup-pinned-prereq"'),
+        html.indexOf('id="setup-platforms"')
+      );
+      expect(pinnedSection).toContain('/api/setup/mcpb');
+      expect(pinnedSection).toContain('.mcpb');
+      expect(pinnedSection).toContain('double-click');
+      expect(pinnedSection).toContain('Claude Desktop only');
+    });
+
     it('does not contain broken .mcpb direct download link', () => {
       expect(html).not.toContain('/download/dollhousemcp.mcpb');
     });

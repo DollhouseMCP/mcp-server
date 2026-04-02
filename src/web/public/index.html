@@ -93,6 +93,10 @@
 npm install @dollhousemcp/mcp-server</code></pre>
           </div>
           <p class="setup-hint">Then point your client config at: <code>node ~/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js</code></p>
+
+          <h4>Desktop Extension <span class="setup-badge setup-badge-muted">Claude Desktop only</span></h4>
+          <p>Download the <code>.mcpb</code> bundle and double-click it. Claude Desktop installs it automatically &mdash; no terminal, no config editing. The bundle contains a complete pinned copy of DollhouseMCP at the version shown above.</p>
+          <a class="setup-btn setup-btn-secondary" href="/api/setup/mcpb" id="pinned-mcpb-btn">Download .mcpb <span id="pinned-mcpb-version"></span></a>
         </div>
       </div>
 
@@ -117,11 +121,6 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude">Install Now</button>
             <span class="setup-install-status" data-install-status="claude"></span>
           </div>
-        </div>
-        <div class="setup-method">
-          <h3>Or download the Desktop Extension <span class="setup-badge setup-badge-muted">static version</span></h3>
-          <p>Download the <code>.mcpb</code> bundle and open it. Zero terminal interaction, but installs a fixed version that won't auto-update.</p>
-          <a class="setup-btn setup-btn-secondary" href="/api/setup/mcpb">Download .mcpb</a>
         </div>
         <div class="setup-method">
           <h3>Or add manually
