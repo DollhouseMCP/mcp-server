@@ -554,6 +554,35 @@
   color: var(--accent);
 }
 
+/* Green match state — config matches what would be installed */
+.setup-installed-notice.is-match {
+  border-color: color-mix(in srgb, #22c55e 35%, var(--line));
+  background: color-mix(in srgb, #22c55e 6%, var(--surface-2));
+}
+
+.setup-installed-notice.is-match strong {
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-installed-notice.is-match strong {
+  color: #4ade80;
+}
+
+.setup-tab-badge.is-match {
+  background: color-mix(in srgb, #22c55e 25%, var(--surface-1));
+  color: #16a34a;
+}
+
+[data-theme="dark"] .setup-tab-badge.is-match {
+  color: #4ade80;
+}
+
+.setup-install-btn.is-match {
+  background: #16a34a;
+  cursor: default;
+  opacity: 0.85;
+}
+
 .setup-installed-notice details {
   margin-top: 0.5rem;
 }

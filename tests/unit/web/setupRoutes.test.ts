@@ -736,6 +736,50 @@ describe('Setup Tab — Regressions', () => {
     });
   });
 
+  describe('Config comparison logic', () => {
+    it('JS has configsMatch function', () => {
+      expect(js).toContain('configsMatch');
+    });
+
+    it('JS has compareJsonConfig function', () => {
+      expect(js).toContain('compareJsonConfig');
+    });
+
+    it('JS has updateDetectionState function', () => {
+      expect(js).toContain('updateDetectionState');
+    });
+
+    it('JS stores detected configs for comparison', () => {
+      expect(js).toContain('detectedConfigs');
+    });
+
+    it('JS re-evaluates on method toggle', () => {
+      // updateDetectionState should be called when toggle changes
+      expect(js).toContain('updateDetectionState()');
+    });
+
+    it('JS shows green match state when configs match', () => {
+      expect(js).toContain('is-match');
+      expect(js).toContain('No changes would be made');
+      expect(js).toContain('Already configured');
+    });
+
+    it('JS shows amber warning when configs differ', () => {
+      expect(js).toContain('overwrite the existing configuration');
+    });
+
+    it('JS disables Install button when config matches', () => {
+      // When matched, button should be disabled
+      expect(js).toContain("installBtn.disabled = true");
+      expect(js).toContain("installBtn.classList.add('is-match')");
+    });
+
+    it('JS re-enables Install button when config differs', () => {
+      expect(js).toContain("installBtn.disabled = false");
+      expect(js).toContain("installBtn.classList.remove('is-match')");
+    });
+  });
+
   describe('Detection UI', () => {
     it('JS fetches from /api/setup/detect', () => {
       expect(js).toContain('/api/setup/detect');
@@ -766,6 +810,18 @@ describe('Setup Tab — Regressions', () => {
 
     it('CSS defines installed notice', () => {
       expect(css).toContain('.setup-installed-notice');
+    });
+
+    it('CSS defines green match state for notice', () => {
+      expect(css).toContain('.setup-installed-notice.is-match');
+    });
+
+    it('CSS defines green match state for tab badge', () => {
+      expect(css).toContain('.setup-tab-badge.is-match');
+    });
+
+    it('CSS defines match state for install button', () => {
+      expect(css).toContain('.setup-install-btn.is-match');
     });
   });
 

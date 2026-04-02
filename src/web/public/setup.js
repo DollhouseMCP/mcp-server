@@ -118,8 +118,9 @@
         // Show/hide pinned install prereq step
         if (prereq) prereq.hidden = method !== 'global';
 
-        // Update all config snippets
+        // Update all config snippets and re-evaluate detection matches
         updateAllConfigs(method);
+        updateDetectionState();
       });
     });
   };
@@ -387,6 +388,111 @@
     'codex': 'codex',
   };
 
+  // Stored detection results — keyed by platform panel ID
+  let detectedConfigs = {};
+
+  /**
+   * Compare the detected config against what the current method would install.
+   * Returns true if command + args match (ignoring env vars and extra keys).
+   */
+  const configsMatch = (platformId, method) => {
+    const detected = detectedConfigs[platformId];
+    if (!detected || !detected.installed || !detected.currentConfig) return false;
+
+    const current = detected.currentConfig;
+
+    // Get the generated config for this platform + method
+    const platformConfigs = configs[platformId];
+    if (!platformConfigs) return false;
+
+    const generated = platformConfigs[method];
+    if (!generated || generated.isTerminal) {
+      // For terminal-command platforms, compare via the JSON config instead
+      const jsonKey = method + 'Json';
+      const jsonConfig = platformConfigs[jsonKey];
+      if (!jsonConfig) return false;
+      return compareJsonConfig(current, jsonConfig);
+    }
+
+    return compareJsonConfig(current, generated);
+  };
+
+  /** Compare a detected config object against a generated config block */
+  const compareJsonConfig = (current, generated) => {
+    try {
+      // Parse the generated config to extract the dollhousemcp server entry
+      const genText = generated.copyText || generated.code;
+      const genParsed = JSON.parse(genText);
+      const genServer = genParsed.mcpServers?.dollhousemcp || genParsed.servers?.dollhousemcp;
+      if (!genServer) return false;
+
+      // Compare command and args
+      if (current.command !== genServer.command) return false;
+      const currentArgs = JSON.stringify(current.args || []);
+      const genArgs = JSON.stringify(genServer.args || []);
+      return currentArgs === genArgs;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Update all detection notices and button states based on current method.
+   * Called on init and whenever the method toggle changes.
+   */
+  const updateDetectionState = () => {
+    for (const [clientId, platformId] of Object.entries(clientToPlatform)) {
+      const detected = detectedConfigs[platformId];
+      if (!detected) continue;
+
+      const panel = document.getElementById('setup-panel-' + platformId);
+      const tabBtn = document.getElementById('setup-tab-' + platformId);
+      const notice = panel?.querySelector('.setup-installed-notice');
+      const installBtn = panel?.querySelector('.setup-install-btn');
+      const badge = tabBtn?.querySelector('.setup-tab-badge');
+
+      if (!detected.installed) continue;
+
+      const matches = configsMatch(platformId, currentMethod);
+
+      // Update notice
+      if (notice) {
+        if (matches) {
+          notice.className = 'setup-installed-notice is-match';
+          const strong = notice.querySelector('strong');
+          if (strong) strong.textContent = 'DollhouseMCP is configured and matches these settings.';
+          const msg = notice.querySelector('.setup-notice-msg');
+          if (msg) msg.textContent = 'No changes would be made.';
+        } else {
+          notice.className = 'setup-installed-notice';
+          const strong = notice.querySelector('strong');
+          if (strong) strong.textContent = 'DollhouseMCP is already configured for this client.';
+          const msg = notice.querySelector('.setup-notice-msg');
+          if (msg) msg.textContent = 'Installing will overwrite the existing configuration.';
+        }
+      }
+
+      // Update badge
+      if (badge) {
+        badge.className = matches ? 'setup-tab-badge is-match' : 'setup-tab-badge';
+        badge.textContent = matches ? 'configured' : 'installed';
+      }
+
+      // Update install button
+      if (installBtn && !installBtn.classList.contains('is-success')) {
+        if (matches) {
+          installBtn.textContent = 'Already configured';
+          installBtn.disabled = true;
+          installBtn.classList.add('is-match');
+        } else {
+          installBtn.textContent = 'Install Now';
+          installBtn.disabled = false;
+          installBtn.classList.remove('is-match');
+        }
+      }
+    }
+  };
+
   const fetchDetection = async () => {
     try {
       const res = await fetch('/api/setup/detect');
@@ -396,6 +502,9 @@
       for (const [clientId, info] of Object.entries(data)) {
         const platformId = clientToPlatform[clientId];
         if (!platformId || !info) continue;
+
+        // Store for comparison
+        detectedConfigs[platformId] = info;
 
         const { installed, currentConfig } = info;
 
@@ -409,14 +518,14 @@
           tabBtn.appendChild(badge);
         }
 
-        // Add warning to the platform panel
+        // Add notice to the platform panel
         const panel = document.getElementById('setup-panel-' + platformId);
         if (panel && installed) {
           const notice = document.createElement('div');
           notice.className = 'setup-installed-notice';
 
           let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
-          html += 'Installing again will overwrite the existing configuration.';
+          html += '<span class="setup-notice-msg">Installing will overwrite the existing configuration.</span>';
 
           if (currentConfig) {
             const configStr = JSON.stringify(currentConfig, null, 2);
@@ -427,6 +536,9 @@
           panel.insertBefore(notice, panel.firstChild);
         }
       }
+
+      // Run comparison after all notices are in the DOM
+      updateDetectionState();
     } catch {
       // Offline or no API — skip detection
     }

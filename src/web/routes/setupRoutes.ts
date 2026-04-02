@@ -132,10 +132,30 @@ async function detectClient(client: string): Promise<{
   try {
     const raw = await readFile(configPath, 'utf-8');
 
-    // TOML (Codex) — simple string search
+    // TOML (Codex) — extract command and args from any dollhousemcp section
     if (configPath.endsWith('.toml')) {
-      const hasDollhouse = raw.includes('dollhousemcp');
-      return { installed: hasDollhouse, configPath };
+      const hasDollhouse = raw.toLowerCase().includes('dollhousemcp');
+      if (!hasDollhouse) return { installed: false, configPath };
+
+      // Find the section header (case-insensitive) and extract config
+      const tomlConfig: Record<string, unknown> = {};
+      const sectionMatch = raw.match(/\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i);
+      if (sectionMatch) {
+        const sectionName = sectionMatch[1];
+        tomlConfig.serverName = sectionName;
+        // Extract content between this section and the next section header
+        const sectionStart = sectionMatch.index! + sectionMatch[0].length;
+        const nextSection = raw.indexOf('\n[', sectionStart);
+        const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+
+        const commandMatch = sectionContent.match(/command\s*=\s*"([^"]+)"/);
+        const argsMatch = sectionContent.match(/args\s*=\s*\[([^\]]*)\]/);
+        if (commandMatch) tomlConfig.command = commandMatch[1];
+        if (argsMatch) {
+          tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+        }
+      }
+      return { installed: true, configPath, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
     }
 
     // JSON configs
