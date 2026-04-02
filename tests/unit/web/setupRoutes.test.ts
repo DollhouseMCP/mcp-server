@@ -918,6 +918,156 @@ describe('Setup Tab — Regressions', () => {
   });
 });
 
+// ── Generated panel DOM validation ────────────────────────────────────
+// Uses JSDOM to execute setup.js against the actual HTML template,
+// then validates the rendered DOM output programmatically.
+
+describe('Setup Tab — Generated Panel DOM Validation', () => {
+  let document: Document;
+
+  beforeAll(async () => {
+    const { JSDOM } = await import('jsdom');
+    const html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    const js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+
+    // Create a DOM environment with the HTML template
+    const dom = new JSDOM(html, {
+      url: 'http://localhost:3939/',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+    document = dom.window.document;
+
+    // Mock fetch (setup.js calls /api/setup/version and /api/setup/detect)
+    dom.window.fetch = (() => Promise.resolve({ ok: false })) as unknown as typeof fetch;
+    // Mock navigator.clipboard
+    Object.defineProperty(dom.window.navigator, 'clipboard', {
+      value: { writeText: () => Promise.resolve() },
+    });
+
+    // Execute setup.js in the DOM context
+    const scriptEl = document.createElement('script');
+    scriptEl.textContent = js;
+    document.body.appendChild(scriptEl);
+  });
+
+  const generatedPlatforms = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline', 'lmstudio'];
+
+  it('generates a panel for each non-static platform', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      expect(panel).not.toBeNull();
+    }
+  });
+
+  it('each generated panel has role="tabpanel"', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      expect(panel?.getAttribute('role')).toBe('tabpanel');
+    }
+  });
+
+  it('each generated panel has aria-labelledby matching its tab', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      expect(panel?.getAttribute('aria-labelledby')).toBe('setup-tab-' + p);
+    }
+  });
+
+  it('each generated panel has at least one code block', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const codeBlocks = panel?.querySelectorAll('.setup-code-block');
+      expect(codeBlocks?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('each generated panel has at least one copy button with data-copy-text', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const copyBtns = panel?.querySelectorAll('.setup-copy-btn');
+      expect(copyBtns?.length).toBeGreaterThan(0);
+      copyBtns?.forEach((btn) => {
+        expect(btn.getAttribute('data-copy-text')).toBeTruthy();
+      });
+    }
+  });
+
+  it('platforms with installClient have an Install Now button', () => {
+    const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
+    for (const p of withInstall) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const btn = panel?.querySelector('.setup-install-btn');
+      expect(btn).not.toBeNull();
+      expect(btn?.getAttribute('data-install-client')).toBeTruthy();
+    }
+  });
+
+  it('LM Studio does not have an Install Now button', () => {
+    const panel = document.getElementById('setup-panel-lmstudio');
+    const btn = panel?.querySelector('.setup-install-btn');
+    expect(btn).toBeNull();
+  });
+
+  it('platforms with openClient have an Open config file button', () => {
+    const withOpen = ['cursor', 'codex', 'gemini', 'windsurf', 'lmstudio'];
+    for (const p of withOpen) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const btn = panel?.querySelector('.setup-open-btn');
+      expect(btn).not.toBeNull();
+      expect(btn?.getAttribute('data-open-client')).toBeTruthy();
+    }
+  });
+
+  it('VS Code and Cline do not have Open config file buttons', () => {
+    for (const p of ['vscode', 'cline']) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const btn = panel?.querySelector('.setup-open-btn');
+      expect(btn).toBeNull();
+    }
+  });
+
+  it('Codex panel has both terminal command and TOML config blocks', () => {
+    const panel = document.getElementById('setup-panel-codex');
+    const codeBlocks = panel?.querySelectorAll('.setup-code-block');
+    // Terminal command + TOML config = at least 2
+    expect(codeBlocks?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('all generated panels are hidden by default', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      expect(panel?.hidden).toBe(true);
+    }
+  });
+
+  it('JSON copy-text attributes contain valid JSON where applicable', () => {
+    for (const p of generatedPlatforms) {
+      const panel = document.getElementById('setup-panel-' + p);
+      const copyBtns = panel?.querySelectorAll('.setup-copy-btn') || [];
+      for (const btn of copyBtns) {
+        const text = btn.getAttribute('data-copy-text') || '';
+        if (text.startsWith('{')) {
+          expect(() => JSON.parse(text)).not.toThrow();
+          const parsed = JSON.parse(text);
+          const server = parsed.mcpServers?.dollhousemcp || parsed.servers?.dollhousemcp;
+          expect(server).toBeTruthy();
+          expect(server.command).toBe('npx');
+        }
+      }
+    }
+  });
+
+  it('VS Code generated config uses "servers" key, not "mcpServers"', () => {
+    const panel = document.getElementById('setup-panel-vscode');
+    const copyBtn = panel?.querySelector('.setup-copy-btn');
+    const text = copyBtn?.getAttribute('data-copy-text') || '';
+    const parsed = JSON.parse(text);
+    expect(parsed.servers).toBeDefined();
+    expect(parsed.mcpServers).toBeUndefined();
+  });
+});
+
 // ── Dependency check ──────────────────────────────────────────────────
 
 describe('Setup Tab — Dependencies', () => {
