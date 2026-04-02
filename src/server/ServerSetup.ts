@@ -124,6 +124,22 @@ export class ServerSetup {
       return this.contextTracker.runAsync(context, async () => {
         const { name, arguments: args } = request.params;
 
+        // Issue #1726: Debug log raw args to diagnose create_element long content failures.
+        // Captures arg structure before any processing to identify if the MCP SDK
+        // or LLM is delivering malformed input for large content payloads.
+        if (name.startsWith('mcp_aql_')) {
+          const argKeys = args && typeof args === 'object' ? Object.keys(args) : [];
+          const contentLength = args && typeof args === 'object'
+            ? JSON.stringify(args).length
+            : 0;
+          logger.debug(`[CallTool] ${name} raw args: keys=[${argKeys.join(',')}] size=${contentLength}`, {
+            argTypes: argKeys.reduce((acc, k) => {
+              acc[k] = typeof (args as Record<string, unknown>)[k];
+              return acc;
+            }, {} as Record<string, string>),
+          });
+        }
+
         try {
           const handler = toolRegistry.getHandler(name);
 
