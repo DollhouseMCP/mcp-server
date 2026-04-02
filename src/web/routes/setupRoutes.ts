@@ -19,6 +19,7 @@ import { homedir, platform } from 'node:os';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
@@ -172,6 +173,29 @@ async function detectClient(client: string): Promise<DetectResult | null> {
   }
 }
 
+/**
+ * Validate and normalize a client name from request body.
+ * Returns the normalized client name or null (with error response sent).
+ */
+function validateClient(
+  req: Request, res: Response, allowedSet: Set<string>,
+): string | null {
+  const { client } = req.body as { client?: string };
+  if (!client || typeof client !== 'string') {
+    res.status(400).json({ error: 'Missing required field: client' });
+    return null;
+  }
+  const normalized = UnicodeValidator.normalize(client).normalizedContent.toLowerCase().trim();
+  if (!allowedSet.has(normalized)) {
+    res.status(400).json({
+      error: `Unsupported client: ${client}`,
+      supported: Array.from(allowedSet),
+    });
+    return null;
+  }
+  return normalized;
+}
+
 export function createSetupRoutes(): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
@@ -204,22 +228,12 @@ export function createSetupRoutes(): {
 
   // ── Open config file in editor ──────────────────────────────────────
   const openConfigHandler = async (req: Request, res: Response): Promise<void> => {
-    const { client } = req.body as { client?: string };
-
-    if (!client || typeof client !== 'string') {
-      res.status(400).json({ error: 'Missing required field: client' });
-      return;
-    }
-
-    const normalizedClient = client.normalize('NFC').toLowerCase().trim();
-    if (!OPENABLE_CLIENTS.has(normalizedClient)) {
-      res.status(400).json({ error: `Cannot open config for client "${client}". Supported: ${Array.from(OPENABLE_CLIENTS).join(', ')}` });
-      return;
-    }
+    const normalizedClient = validateClient(req, res, OPENABLE_CLIENTS);
+    if (!normalizedClient) return;
 
     const configPath = getConfigPath(normalizedClient);
     if (!configPath) {
-      res.status(400).json({ error: `Config path unknown for: ${client}` });
+      res.status(400).json({ error: `Config path unknown for: ${normalizedClient}` });
       return;
     }
 
@@ -257,26 +271,14 @@ export function createSetupRoutes(): {
       return;
     }
 
-    const { client, version } = req.body as { client?: string; version?: string };
-
-    if (!client || typeof client !== 'string') {
-      res.status(400).json({ error: 'Missing required field: client' });
-      return;
-    }
+    const normalizedClient = validateClient(req, res, ALLOWED_CLIENTS);
+    if (!normalizedClient) return;
 
     // Validate version if provided — must be semver-like (no shell injection)
-    const normalizedVersion = version?.normalize('NFC');
+    const { version } = req.body as { version?: string };
+    const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
     if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-      res.status(400).json({ error: 'Invalid version format' });
-      return;
-    }
-
-    const normalizedClient = client.normalize('NFC').toLowerCase().trim();
-    if (!ALLOWED_CLIENTS.has(normalizedClient)) {
-      res.status(400).json({
-        error: `Unsupported client: ${client}`,
-        supported: Array.from(ALLOWED_CLIENTS),
-      });
+      res.status(400).json({ error: 'Invalid version format. Expected semver (e.g., 2.0.2)' });
       return;
     }
 

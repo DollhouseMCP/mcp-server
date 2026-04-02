@@ -214,7 +214,7 @@ describe('Setup Routes — API Endpoints', () => {
         .send({ client: 'vscode' })
         .expect(400);
 
-      expect(res.body.error).toMatch(/Cannot open config/);
+      expect(res.body.error).toMatch(/Unsupported client/);
     });
 
     it('rejects unsupported clients', async () => {
@@ -223,7 +223,7 @@ describe('Setup Routes — API Endpoints', () => {
         .send({ client: 'not-real' })
         .expect(400);
 
-      expect(res.body.error).toMatch(/Cannot open config/);
+      expect(res.body.error).toMatch(/Unsupported client/);
     });
 
     it('does not reject valid openable client names', async () => {
@@ -513,29 +513,25 @@ describe('Setup Tab — JavaScript Integrity', () => {
   });
 
   describe('Config data', () => {
-    it('has config entries for all platforms with JSON configs', () => {
-      // Keys may be quoted or unquoted in the JS object literal
+    it('has platform registry with all platforms', () => {
       const platforms = [
         'claude-desktop', 'cursor', 'windsurf', 'cline',
-        'gemini', 'lmstudio', 'vscode',
+        'gemini', 'lmstudio', 'vscode', 'claude-code', 'codex',
       ];
       for (const p of platforms) {
-        const hasQuoted = js.includes(`'${p}':`);
-        const hasUnquoted = js.includes(`${p}:`);
-        expect(hasQuoted || hasUnquoted).toBe(true);
+        expect(js).toContain(`id: '${p}'`);
       }
     });
 
-    it('has config entries for CLI-based platforms', () => {
-      // claude-code must be quoted (has hyphen), codex can be unquoted
-      expect(js).toContain("'claude-code':");
-      const hasCodex = js.includes("'codex':") || js.includes("codex:");
-      expect(hasCodex).toBe(true);
+    it('VS Code uses "servers" key in platform registry', () => {
+      // vscode entry should have rootKey: 'servers'
+      const vscodeLine = js.match(/id:\s*'vscode'[^}]*/);
+      expect(vscodeLine?.[0]).toContain("rootKey: 'servers'");
     });
 
-    it('VS Code uses "servers" key', () => {
-      // The platformJson/platformCli call for vscode should use 'servers'
-      expect(js).toContain("vscode: platformJson('servers'");
+    it('CLI platforms have cli property', () => {
+      expect(js).toContain("cli: 'claude'");
+      expect(js).toContain("cli: 'codex'");
     });
 
     it('references @latest not @rc', () => {

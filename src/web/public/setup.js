@@ -12,7 +12,20 @@
 
   const PKG = '@dollhousemcp/mcp-server';
 
-  /** Build a JSON config block from an npx-style command string */
+  /** Platform registry — drives config generation for all platforms */
+  const PLATFORMS = [
+    { id: 'claude-desktop', rootKey: 'mcpServers' },
+    { id: 'cursor',         rootKey: 'mcpServers' },
+    { id: 'windsurf',       rootKey: 'mcpServers' },
+    { id: 'cline',          rootKey: 'mcpServers' },
+    { id: 'gemini',         rootKey: 'mcpServers' },
+    { id: 'lmstudio',       rootKey: 'mcpServers' },
+    { id: 'vscode',         rootKey: 'servers' },
+    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude' },
+    { id: 'codex',          rootKey: 'mcpServers', cli: 'codex', toml: true },
+  ];
+
+  /** Build a JSON config block for a given npx command string */
   function jsonConfig(rootKey, npxCmd) {
     const parts = npxCmd.split(' ');
     const obj = {};
@@ -20,41 +33,33 @@
     return { code: JSON.stringify(obj, null, 2), copyText: JSON.stringify(obj) };
   }
 
-  /** Build configs for a platform that uses JSON (mcpServers or servers) */
-  function platformJson(rootKey, version) {
-    return {
-      npx: jsonConfig(rootKey, `npx -y ${PKG}@latest`),
-      global: jsonConfig(rootKey, `npx -y ${PKG}@${version}`),
-    };
-  }
+  /** Build npx command string for a version tag */
+  const npxCmd = (tag) => `npx -y ${PKG}@${tag}`;
 
-  /** Build configs for a CLI platform (terminal command + JSON fallback) */
-  function platformCli(cli, rootKey, version) {
-    return {
-      npx: { code: `${cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`, isTerminal: true },
-      global: { code: `${cli} mcp add dollhousemcp -- npx -y ${PKG}@${version}`, isTerminal: true },
-      npxJson: jsonConfig(rootKey, `npx -y ${PKG}@latest`),
-      globalJson: jsonConfig(rootKey, `npx -y ${PKG}@${version}`),
-    };
-  }
-
-  /** Build all platform configs for a given version */
+  /** Build all platform configs for a given pinned version */
   function buildConfigs(version) {
-    return {
-      'claude-desktop': platformJson('mcpServers', version),
-      cursor: platformJson('mcpServers', version),
-      windsurf: platformJson('mcpServers', version),
-      cline: platformJson('mcpServers', version),
-      gemini: platformJson('mcpServers', version),
-      lmstudio: platformJson('mcpServers', version),
-      vscode: platformJson('servers', version),
-      'claude-code': platformCli('claude', 'mcpServers', version),
-      codex: {
-        ...platformCli('codex', 'mcpServers', version),
-        npxToml: { code: `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@latest"]` },
-        globalToml: { code: `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${version}"]` },
-      },
-    };
+    const result = {};
+    for (const { id, rootKey, cli, toml } of PLATFORMS) {
+      const entry = {
+        npx: cli
+          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd('latest')}`, isTerminal: true }
+          : jsonConfig(rootKey, npxCmd('latest')),
+        global: cli
+          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(version)}`, isTerminal: true }
+          : jsonConfig(rootKey, npxCmd(version)),
+      };
+      if (cli) {
+        entry.npxJson = jsonConfig(rootKey, npxCmd('latest'));
+        entry.globalJson = jsonConfig(rootKey, npxCmd(version));
+      }
+      if (toml) {
+        const tomlBlock = (tag) => `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${tag}"]`;
+        entry.npxToml = { code: tomlBlock('latest') };
+        entry.globalToml = { code: tomlBlock(version) };
+      }
+      result[id] = entry;
+    }
+    return result;
   }
 
   // Start with a placeholder version, update once we fetch from server

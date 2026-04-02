@@ -91,6 +91,11 @@ export const suppressions: Suppression[] = [
     file: 'src/web/public/logs.js',
     reason: 'FALSE POSITIVE: Client-side browser JavaScript. Filter inputs are used for local JS array filtering only — never sent to server. UnicodeValidator is a Node.js module unavailable in browser context.'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/setup.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript. User inputs (platform tab clicks, method toggle) are matched against hardcoded DOM element IDs only — no free-text processing. Server-side handlers in setupRoutes.ts use UnicodeValidator.normalize() on all API input. UnicodeValidator is a Node.js module unavailable in browser context.'
+  },
 
   // ========================================
   // Test File Suppressions
