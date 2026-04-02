@@ -103,35 +103,36 @@
 
   // ── Method toggle ─────────────────────────────────────────────────────
 
-  /** Handle method toggle button click */
-  const handleMethodToggle = (btn, buttons) => {
-    const method = btn.dataset.method;
-    if (!method || method === currentMethod) return;
-
-    currentMethod = method;
-
-    buttons.forEach((b) => {
-      b.classList.toggle('is-active', b.dataset.method === method);
-      b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
-    });
-
-    const prereq = document.getElementById('setup-pinned-prereq');
-    const mcpbSection = document.getElementById('setup-mcpb-section');
-    if (prereq) prereq.hidden = method !== 'global';
-    if (mcpbSection) mcpbSection.hidden = method !== 'global';
-
-    updateAllConfigs(method);
-    updateInstallButtonLabels();
-    updateDetectionState();
-  };
-
   const initMethodToggle = () => {
     const toggle = document.getElementById('setup-method-toggle');
     if (!toggle) return;
 
     const buttons = toggle.querySelectorAll('.setup-method-btn');
+    // Cache DOM elements queried on every toggle click
+    const prereq = document.getElementById('setup-pinned-prereq');
+    const mcpbSection = document.getElementById('setup-mcpb-section');
+
+    const handleToggle = (btn) => {
+      const method = btn.dataset.method;
+      if (!method || method === currentMethod) return;
+
+      currentMethod = method;
+
+      buttons.forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.method === method);
+        b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
+      });
+
+      if (prereq) prereq.hidden = method !== 'global';
+      if (mcpbSection) mcpbSection.hidden = method !== 'global';
+
+      updateAllConfigs(method);
+      updateInstallButtonLabels();
+      updateDetectionState();
+    };
+
     buttons.forEach((btn) => {
-      btn.addEventListener('click', () => handleMethodToggle(btn, buttons));
+      btn.addEventListener('click', () => handleToggle(btn));
     });
   };
 
