@@ -272,6 +272,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   });
 
   // Bind to localhost only — handle port conflicts gracefully
+  // NOTE: console.log is intentional here (not logger). In --web standalone mode,
+  // the user sees terminal output directly. logger.info writes to the structured
+  // log system (MemoryLogSink → SSE → web console). Both are needed: console.log
+  // for the human at the terminal, logger for the log viewer tab.
   await new Promise<void>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;

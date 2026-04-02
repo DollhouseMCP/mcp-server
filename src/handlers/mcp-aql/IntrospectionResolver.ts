@@ -98,6 +98,8 @@ export interface OperationDetails {
   returns: TypeInfo;
   /** Usage examples */
   examples: string[];
+  /** Alternative operation names that resolve to this operation */
+  aliases?: string[];
 }
 
 /**
@@ -955,6 +957,7 @@ export class IntrospectionResolver {
       parameters: OPERATION_PARAMETERS[name] || [],
       returns: this.getReturnType(name),
       examples: OPERATION_EXAMPLES[name] || [],
+      ...(route.aliases?.length ? { aliases: route.aliases } : {}),
     };
   }
 
@@ -975,6 +978,7 @@ export class IntrospectionResolver {
       ? { name: resolvedSchema.returns.name, kind: resolvedSchema.returns.kind, description: resolvedSchema.returns.description }
       : { name: 'OperationResult', kind: 'union', description: 'Success with data or failure with error' };
 
+    const route = OPERATION_ROUTES[name];
     return {
       name,
       endpoint: resolvedSchema.endpoint,
@@ -984,6 +988,7 @@ export class IntrospectionResolver {
       parameters: schemaToParameterInfo(resolvedSchema.params),
       returns,
       examples: resolvedSchema.examples || [],
+      ...(route?.aliases?.length ? { aliases: route.aliases } : {}),
     };
   }
 
