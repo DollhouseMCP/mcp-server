@@ -107,7 +107,8 @@ function openInBrowser(url: string): Promise<{ success: boolean; error?: string 
 
     // Security: use execFile with URL as argument array, not string interpolation
     const urlStr = String(url);
-    if (!/^https?:\/\/localhost[:/]/.test(urlStr)) {
+    // Accept localhost, 127.0.0.1, and *.localhost subdomains (RFC 6761)
+    if (!/^https?:\/\/(localhost|127\.0\.0\.1|[\w-]+\.localhost)[:/]/.test(urlStr)) {
       resolve({ success: false, error: 'URL must be a localhost HTTP URL' });
       return;
     }

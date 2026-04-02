@@ -203,6 +203,53 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
 }
 
 /**
+ * Probe whether the leader's web console is reachable.
+ * Returns true if the leader's ingest endpoint responds, false otherwise.
+ */
+export async function isLeaderWebConsoleReachable(leaderInfo: ConsoleLeaderInfo): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2_000);
+    const res = await fetch(`http://127.0.0.1:${leaderInfo.port}/api/logs/stats`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Force claim leadership by deleting the existing lock and claiming.
+ * Used when the existing leader is alive but not running a web console.
+ */
+export async function forceClaimLeadership(sessionId: string, port: number): Promise<ElectionResult> {
+  logger.info('[LeaderElection] Forcing leadership takeover — existing leader has no web console');
+  await deleteLeaderLock();
+
+  const now = new Date().toISOString();
+  const myInfo: ConsoleLeaderInfo = {
+    version: LOCK_VERSION,
+    pid: process.pid,
+    port,
+    sessionId: UnicodeValidator.normalize(sessionId).normalizedContent,
+    startedAt: now,
+    heartbeat: now,
+  };
+
+  const claimed = await claimLeadership(myInfo);
+  if (claimed) {
+    logger.info('[LeaderElection] Forced leadership claimed', { sessionId, port, pid: process.pid });
+    return { role: 'leader', leaderInfo: myInfo };
+  }
+
+  // Failed — fall back to follower
+  const winner = await readLeaderLock();
+  return { role: 'follower', leaderInfo: winner ?? myInfo };
+}
+
+/**
  * Start the leader heartbeat loop.
  * Updates the lock file every HEARTBEAT_INTERVAL_MS so followers know the leader is alive.
  *

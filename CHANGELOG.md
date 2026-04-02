@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.5] - 2026-04-02
+
+### Hotfix: `--web` mode UX improvements
+
+- **Fix**: Browser now auto-opens on `--web` startup (was blocked by security check on `dollhouse.localhost` URL — now uses `127.0.0.1`)
+- **Fix**: Debug log spam suppressed in `--web` mode — only info/warn/error print to terminal unless `DOLLHOUSE_DEBUG` is set
+- **Fix**: Follower log forwarding gives up after 5 failed attempts instead of retrying forever (issue #1751)
+
 ## [2.0.4] - 2026-04-02
 
 ### Hotfix: npm package missing web assets

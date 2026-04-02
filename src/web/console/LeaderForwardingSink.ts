@@ -35,6 +35,9 @@ const INITIAL_BACKOFF_MS = 1_000;
 /** Maximum backoff delay (ms) */
 const MAX_BACKOFF_MS = 30_000;
 
+/** Give up forwarding after this many consecutive failures */
+const MAX_CONSECUTIVE_FAILURES = 5;
+
 /** HTTP request timeout (ms) */
 const REQUEST_TIMEOUT_MS = 5_000;
 
@@ -46,6 +49,8 @@ export class LeaderForwardingLogSink implements ILogSink {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private backoffMs = INITIAL_BACKOFF_MS;
   private flushing = false;
+  private consecutiveFailures = 0;
+  private gaveUp = false;
 
   constructor(
     private readonly leaderUrl: string,
@@ -87,7 +92,7 @@ export class LeaderForwardingLogSink implements ILogSink {
   }
 
   private async flushBuffer(): Promise<void> {
-    if (this.flushing || this.buffer.length === 0) return;
+    if (this.flushing || this.buffer.length === 0 || this.gaveUp) return;
     this.flushing = true;
 
     const batch = this.buffer.splice(0, BATCH_SIZE);
@@ -105,13 +110,14 @@ export class LeaderForwardingLogSink implements ILogSink {
 
       if (response.ok) {
         this.backoffMs = INITIAL_BACKOFF_MS;
+        this.consecutiveFailures = 0;
       } else {
         this.requeueBatch(batch);
-        this.scheduleRetry();
+        this.handleFailure();
       }
     } catch {
       this.requeueBatch(batch);
-      this.scheduleRetry();
+      this.handleFailure();
     } finally {
       this.flushing = false;
     }
@@ -127,8 +133,23 @@ export class LeaderForwardingLogSink implements ILogSink {
     }
   }
 
-  private scheduleRetry(): void {
-    logger.debug(`[ForwardingSink] Leader unreachable, backoff ${this.backoffMs}ms (buffered: ${this.buffer.length})`);
+  private handleFailure(): void {
+    this.consecutiveFailures++;
+
+    if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      if (!this.gaveUp) {
+        this.gaveUp = true;
+        logger.info(`[ForwardingSink] Leader not running web console — log forwarding disabled after ${this.consecutiveFailures} failed attempts. Buffered ${this.buffer.length} entries discarded.`);
+        this.buffer.length = 0;
+        if (this.flushTimer) {
+          clearInterval(this.flushTimer);
+          this.flushTimer = null;
+        }
+      }
+      return;
+    }
+
+    logger.debug(`[ForwardingSink] Leader unreachable, backoff ${this.backoffMs}ms (attempt ${this.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}, buffered: ${this.buffer.length})`);
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
   }
 }

@@ -785,6 +785,13 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
   if (isWebMode) {
     // Issue #796: Bootstrap DI container for web-only mode so API routes
     // go through MCPAQLHandler (validated, cached, gatekeeper-checked)
+    //
+    // Suppress debug output in --web mode unless DOLLHOUSE_DEBUG is set.
+    // The web console captures all logs in memory — no need to flood the terminal.
+    if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
+      logger.setMinLevel('info');
+    }
+
     (async () => {
       const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
       const portArg = process.argv.find(a => a.startsWith('--port='));
