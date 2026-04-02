@@ -30,10 +30,7 @@ export async function safeExec(
   }
 }
 
-/**
- * Execute a command using exec (use only for trusted input)
- */
-export { exec };
+// SEC-02: Raw exec intentionally NOT exported — use safeExec or CommandValidator.secureExec
 
 /**
  * Get current git branch

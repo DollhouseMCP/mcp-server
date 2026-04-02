@@ -941,8 +941,6 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return persona;
   }
 
-  // REMOVED: createPersona() and createNewPersona() - use create() instead (v2 breaking change)
-
   /**
    * Edit an existing persona
    */

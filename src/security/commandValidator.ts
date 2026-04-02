@@ -39,8 +39,20 @@ export class CommandValidator {
       ...options,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
-        ...process.env,
-        PATH: '/usr/bin:/bin:/usr/local/bin' // Restrict PATH
+        // SEC-03: Explicit allowlist instead of spreading full process.env
+        PATH: '/usr/bin:/bin:/usr/local/bin',
+        HOME: process.env.HOME,
+        USER: process.env.USER,
+        LANG: process.env.LANG,
+        TERM: process.env.TERM,
+        // Git operations need these
+        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
+        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
+        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL,
+        // npm operations
+        NODE_PATH: process.env.NODE_PATH,
+        npm_config_cache: process.env.npm_config_cache,
       },
       cwd: options?.cwd || process.cwd(),
       timeout: options?.timeout || 30000 // 30 second default

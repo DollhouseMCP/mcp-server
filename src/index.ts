@@ -2,7 +2,7 @@
 
 // Load environment variables from .env files BEFORE anything else
 // This ensures .env.local and .env are loaded for all modules
-import './config/env.js';
+import { env } from './config/env.js';
 
 import * as path from 'path';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -12,6 +12,7 @@ import { logger } from "./utils/logger.js";
 import { DollhouseContainer } from "./di/Container.js";
 import { ElementType } from "./portfolio/PortfolioManager.js";
 import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
+import { PACKAGE_VERSION } from "./generated/version.js";
 import type { IndicatorConfig } from "./config/indicator-config.js";
 import type { IToolHandler } from "./server/index.js";
 import type { ToolRegistry } from "./handlers/ToolRegistry.js";
@@ -116,7 +117,7 @@ export class DollhouseMCPServer implements IToolHandler {
     this.server = new Server(
       {
         name: "dollhousemcp",
-        version: "1.0.0-build-20250817-1630-pr606",
+        version: PACKAGE_VERSION,
       },
       {
         capabilities,
@@ -217,7 +218,6 @@ export class DollhouseMCPServer implements IToolHandler {
     return this.personaHandler!.listPersonas();
   }
 
-  // ===== REMOVED: Legacy persona-specific methods (Issue #281) =====
   // Use activateElement(name, 'persona'), deactivateElement(name, 'persona'),
   // getActiveElements('persona'), and getElementDetails(name, 'persona') instead.
   // These were removed to normalize persona handling through the generic element API.
@@ -442,9 +442,6 @@ export class DollhouseMCPServer implements IToolHandler {
     return this.githubAuthHandler!.configureOAuth(client_id);
   }
 
-  // REMOVED: createPersona() - use createElement() with type='persona' instead (v2 breaking change)
-
-  // retryNetworkOperation has been removed with UpdateTools
 
 
 
@@ -673,6 +670,11 @@ export class DollhouseMCPServer implements IToolHandler {
       });
 
       logger.info("Portfolio and personas initialized successfully");
+
+      if (!env.DOLLHOUSE_GATEKEEPER_ENABLED) {
+        logger.warn("⚠️  Gatekeeper is DISABLED (DOLLHOUSE_GATEKEEPER_ENABLED=false). All permission checks are bypassed.");
+      }
+
       logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
       logger.debug("DollhouseMCPServer.run() completed initialization");
     } catch (error) {
