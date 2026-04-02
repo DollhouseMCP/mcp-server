@@ -2,7 +2,6 @@
 
 // Load environment variables from .env files BEFORE anything else
 // This ensures .env.local and .env are loaded for all modules
-import './config/env.js';
 import { env } from './config/env.js';
 
 import * as path from 'path';
