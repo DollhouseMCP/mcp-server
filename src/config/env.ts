@@ -23,10 +23,17 @@ import { logger } from '../utils/logger.js';
 // The MCP protocol requires that ONLY JSON-RPC messages go to stdout.
 // dotenv may output version info to stdout, which breaks Claude Desktop connection.
 // Solution: Temporarily redirect stdout to stderr during dotenv initialization.
+// In --web mode, suppress both stdout AND stderr — the user only needs the
+// console URL banner, not dotenv's injection summary. Logs go to the web viewer.
+const isWebSilent = process.argv.includes('--web')
+  && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG;
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-process.stdout.write = process.stderr.write.bind(process.stderr) as any;
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+process.stdout.write = (isWebSilent ? (() => true) : process.stderr.write.bind(process.stderr)) as any;
+if (isWebSilent) process.stderr.write = (() => true) as any;
 dotenv.config({ path: ['.env.local', '.env'] });
 process.stdout.write = originalStdoutWrite;
+if (isWebSilent) process.stderr.write = originalStderrWrite;
 
 /**
  * Environment variable schema with validation

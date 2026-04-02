@@ -786,10 +786,11 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
     // Issue #796: Bootstrap DI container for web-only mode so API routes
     // go through MCPAQLHandler (validated, cached, gatekeeper-checked)
     //
-    // Suppress debug output in --web mode unless DOLLHOUSE_DEBUG is set.
-    // The web console captures all logs in memory — no need to flood the terminal.
+    // Suppress terminal output in --web mode unless DOLLHOUSE_DEBUG is set.
+    // All logs are still captured in MemoryLogSink and visible in the Logs tab —
+    // the terminal only needs the console URL banner, not a wall of startup noise.
     if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
-      logger.setMinLevel('info');
+      logger.setMinLevel('error');
     }
 
     (async () => {
@@ -810,7 +811,6 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         // Extract sinks from container — deferred setup may have already wired them
         try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
         try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
-        console.error("[DollhouseMCP] Container bootstrapped — web routes using MCP-AQL Gateway");
       } catch (err) {
         console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
         console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
