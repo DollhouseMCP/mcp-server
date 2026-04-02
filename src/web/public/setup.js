@@ -194,6 +194,7 @@
       tabs.forEach((t) => {
         t.classList.remove('is-active');
         t.setAttribute('aria-selected', 'false');
+        t.setAttribute('tabindex', '-1');
       });
 
       panels.forEach((p) => {
@@ -203,6 +204,7 @@
 
       tab.classList.add('is-active');
       tab.setAttribute('aria-selected', 'true');
+      tab.setAttribute('tabindex', '0');
 
       const panel = container.querySelector('#' + targetId);
       if (panel) {
@@ -211,8 +213,32 @@
       }
     };
 
-    tabs.forEach((tab) => {
+    tabs.forEach((tab, i) => {
       tab.addEventListener('click', () => activate(tab));
+      tab.setAttribute('tabindex', tab.classList.contains('is-active') ? '0' : '-1');
+    });
+
+    // Keyboard navigation: arrow keys cycle through platform tabs
+    nav.addEventListener('keydown', (e) => {
+      const tabArr = Array.from(tabs);
+      const current = tabArr.findIndex(t => t.classList.contains('is-active'));
+      let next = -1;
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        next = (current + 1) % tabArr.length;
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        next = (current - 1 + tabArr.length) % tabArr.length;
+      } else if (e.key === 'Home') {
+        next = 0;
+      } else if (e.key === 'End') {
+        next = tabArr.length - 1;
+      }
+
+      if (next >= 0) {
+        e.preventDefault();
+        activate(tabArr[next]);
+        tabArr[next].focus();
+      }
     });
   };
 
@@ -316,14 +342,21 @@
 
       if (!data.success) throw new Error(data.error || 'Installation failed');
 
+      btn.textContent = 'Verifying...';
+
+      // Verify the install by re-detecting — confirms config was written
+      await fetchDetection();
+      const verified = detectedConfigs[clientToPlatformReverse[client]]?.installed;
+
       btn.textContent = 'Installed';
       btn.classList.remove('is-loading');
       btn.classList.add('is-success');
       if (status) {
-        status.textContent = 'Restart the application to activate.';
+        status.textContent = verified
+          ? 'Verified — config written. Restart the application to activate.'
+          : 'Restart the application to activate.';
         status.classList.add('is-success');
       }
-      fetchDetection();
     } catch (err) {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -434,7 +467,7 @@
 
   // ── Detect existing installations ──────────────────────────────────────
 
-  // Map from detect API client IDs to platform panel IDs
+  // Map from detect API client IDs to platform panel IDs (and reverse for install verification)
   const clientToPlatform = {
     'claude': 'claude-desktop',
     'claude-code': 'claude-code',
@@ -444,6 +477,13 @@
     'gemini-cli': 'gemini',
     'codex': 'codex',
   };
+
+  // Reverse map: installClient ID → platform panel ID (for install verification)
+  const clientToPlatformReverse = {};
+  for (const [detectId, platformId] of Object.entries(clientToPlatform)) {
+    // Also map installClient IDs that differ from detect IDs
+    clientToPlatformReverse[detectId] = platformId;
+  }
 
   // Stored detection results — keyed by platform panel ID
   let detectedConfigs = {};
