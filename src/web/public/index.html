@@ -67,16 +67,28 @@
         </button>
       </fieldset>
 
-      <!-- npm global install step (hidden by default, shown when global selected) -->
-      <div class="setup-global-prereq" id="setup-global-prereq" hidden>
+      <!-- Pinned install prereq (hidden by default, shown when pinned selected) -->
+      <div class="setup-pinned-prereq" id="setup-pinned-prereq" hidden>
         <div class="setup-method">
-          <h3>Step 1: Install globally</h3>
-          <p>Run this first, then pick your platform below to connect it.</p>
+          <h3>Step 1: Install the package</h3>
+          <p>Pick one of these, then choose your platform below to connect it.</p>
+
+          <h4>Global install <span class="setup-badge">recommended</span></h4>
+          <p>Puts <code>dollhousemcp</code> on your PATH. Available everywhere.</p>
           <div class="setup-code-block">
-            <button class="setup-copy-btn" type="button" data-copy-text="npm install -g @dollhousemcp/mcp-server" aria-label="Copy install command">Copy</button>
+            <button class="setup-copy-btn" type="button" data-copy-text="npm install -g @dollhousemcp/mcp-server" aria-label="Copy global install command">Copy</button>
             <pre><code>npm install -g @dollhousemcp/mcp-server</code></pre>
           </div>
-          <p class="setup-hint">To update later: <code>npm update -g @dollhousemcp/mcp-server</code></p>
+          <p class="setup-hint">Update later: <code>npm update -g @dollhousemcp/mcp-server</code></p>
+
+          <h4>Local project install</h4>
+          <p>Installs into a directory you control. Good for isolating versions or running multiple installs.</p>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" data-copy-text="mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install @dollhousemcp/mcp-server" aria-label="Copy local install command">Copy</button>
+            <pre><code>mkdir -p ~/mcp-servers && cd ~/mcp-servers
+npm install @dollhousemcp/mcp-server</code></pre>
+          </div>
+          <p class="setup-hint">Then point your client config at: <code>node ~/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js</code></p>
         </div>
       </div>
 

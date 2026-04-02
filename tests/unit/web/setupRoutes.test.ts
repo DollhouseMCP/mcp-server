@@ -384,14 +384,26 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(npxBtn).not.toBeNull();
     });
 
-    it('has npm global install prerequisite section', () => {
-      expect(html).toContain('id="setup-global-prereq"');
+    it('has pinned install prerequisite section', () => {
+      expect(html).toContain('id="setup-pinned-prereq"');
+    });
+
+    it('pinned prereq is hidden by default', () => {
+      const prereq = html.match(/id="setup-pinned-prereq"[^>]*/);
+      expect(prereq?.[0]).toContain('hidden');
+    });
+
+    it('shows global install command', () => {
       expect(html).toContain('npm install -g @dollhousemcp/mcp-server');
     });
 
-    it('global prereq is hidden by default', () => {
-      const prereq = html.match(/id="setup-global-prereq"[^>]*/);
-      expect(prereq?.[0]).toContain('hidden');
+    it('shows local project install command', () => {
+      expect(html).toContain('mkdir -p ~/mcp-servers');
+      expect(html).toContain('npm install @dollhousemcp/mcp-server');
+    });
+
+    it('shows local install node path hint', () => {
+      expect(html).toContain('node ~/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js');
     });
   });
 

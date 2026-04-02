@@ -123,7 +123,7 @@
 
   const initMethodToggle = () => {
     const toggle = document.getElementById('setup-method-toggle');
-    const prereq = document.getElementById('setup-global-prereq');
+    const prereq = document.getElementById('setup-pinned-prereq');
     if (!toggle) return;
 
     const buttons = toggle.querySelectorAll('.setup-method-btn');
@@ -140,7 +140,7 @@
           b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
         });
 
-        // Show/hide global prereq step
+        // Show/hide pinned install prereq step
         if (prereq) prereq.hidden = method !== 'global';
 
         // Update all config snippets
