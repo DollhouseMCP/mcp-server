@@ -29,6 +29,10 @@ export interface OperationRoute {
   handler: HandlerReference;
   /** Optional description of what this operation does */
   description?: string;
+  /** Alternative names that resolve to this operation */
+  aliases?: string[];
+  /** Parameters automatically injected when this operation is dispatched (merged under user params) */
+  implicitParams?: Record<string, unknown>;
 }
 
 /**
@@ -68,6 +72,43 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     endpoint: 'READ',
     handler: 'Browser.open',
     description: 'Start the portfolio web UI and open it in the system browser',
+    aliases: [
+      'open_console',
+      'open_management_console',
+      'open_dollhouse_console',
+      'open_dollhouse_mcp',
+      'open_dollhouse_mcp_console',
+      'open_web_console',
+    ],
+  },
+  // Console tab deep-link operations
+  open_logs: {
+    endpoint: 'READ',
+    handler: 'Browser.open',
+    description: 'Open the management console on the logs tab',
+    aliases: ['open_dollhouse_logs', 'open_dollhouse_mcp_logs', 'open_log_viewer'],
+    implicitParams: { tab: 'logs' },
+  },
+  open_metrics: {
+    endpoint: 'READ',
+    handler: 'Browser.open',
+    description: 'Open the management console on the metrics tab',
+    aliases: ['open_dollhouse_metrics', 'open_dollhouse_mcp_metrics', 'open_metrics_dashboard'],
+    implicitParams: { tab: 'metrics' },
+  },
+  open_permissions: {
+    endpoint: 'READ',
+    handler: 'Browser.open',
+    description: 'Open the management console on the permissions tab',
+    aliases: ['open_dollhouse_permissions', 'open_dollhouse_mcp_permissions'],
+    implicitParams: { tab: 'permissions' },
+  },
+  open_setup: {
+    endpoint: 'READ',
+    handler: 'Browser.open',
+    description: 'Open the management console on the setup/install tab',
+    aliases: ['open_dollhouse_setup', 'open_dollhouse_mcp_setup', 'open_installer'],
+    implicitParams: { tab: 'setup' },
   },
   // Issue #452: Gatekeeper confirmation flow
   // Routed through EXECUTE so MCP clients can gate it separately from CREATE.
@@ -438,8 +479,21 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
  * // { endpoint: 'CREATE', handler: 'ElementCRUD.create', description: '...' }
  * ```
  */
+/**
+ * Resolve an operation name to its canonical form, checking aliases.
+ * Returns the canonical operation name, or the input if no alias matches.
+ */
+export function resolveOperationName(operation: string): string {
+  if (operation in OPERATION_ROUTES) return operation;
+  for (const [canonical, route] of Object.entries(OPERATION_ROUTES)) {
+    if (route.aliases?.includes(operation)) return canonical;
+  }
+  return operation;
+}
+
 export function getRoute(operation: string): OperationRoute | undefined {
-  return OPERATION_ROUTES[operation];
+  const canonical = resolveOperationName(operation);
+  return OPERATION_ROUTES[canonical];
 }
 
 /**

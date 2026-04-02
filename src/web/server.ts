@@ -36,6 +36,11 @@ const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
 
+/** Check whether the web server has been started in this process. */
+export function isWebServerRunning(): boolean {
+  return serverRunning;
+}
+
 /**
  * Options for starting the web server.
  */
@@ -266,18 +271,34 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     res.sendFile(join(publicDir, 'index.html'));
   });
 
-  // Bind to localhost only
-  app.listen(port, '127.0.0.1', () => {
-    serverRunning = true;
-    serverPort = port;
-    const url = `http://${CONSOLE_HOST}:${port}`;
-    const fallbackUrl = `http://127.0.0.1:${port}`;
-    logger.info(`[WebUI] Management console running at ${url}`);
-    console.log(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+  // Bind to localhost only — handle port conflicts gracefully
+  await new Promise<void>((resolve) => {
+    const httpServer = app.listen(port, '127.0.0.1', () => {
+      serverRunning = true;
+      serverPort = port;
+      const url = `http://${CONSOLE_HOST}:${port}`;
+      const fallbackUrl = `http://127.0.0.1:${port}`;
+      logger.info(`[WebUI] Management console running at ${url}`);
+      console.log(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
 
-    if (options.openBrowser) {
-      openInBrowser(url);
-    }
+      if (options.openBrowser) {
+        openInBrowser(url);
+      }
+      resolve();
+    });
+    httpServer.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        const url = `http://${CONSOLE_HOST}:${port}`;
+        logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
+        console.log(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
+        if (options.openBrowser) {
+          openInBrowser(url);
+        }
+      } else {
+        logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+      }
+      resolve(); // Web console is optional — don't block startup
+    });
   });
 
   return result;
@@ -296,9 +317,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
  * @param port - Port to bind to (default: 3939)
  * @returns Result with URL, server status, and browser open status
  */
-export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler): Promise<BrowserOpenResult> {
+export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string): Promise<BrowserOpenResult> {
   const targetPort = port || DEFAULT_PORT;
-  const url = `http://${CONSOLE_HOST}:${targetPort}`;
+  const baseUrl = `http://${CONSOLE_HOST}:${targetPort}`;
+  const url = tab ? `${baseUrl}/#${tab}` : baseUrl;
   const alreadyRunning = serverRunning;
 
   if (!serverRunning) {
@@ -308,8 +330,6 @@ export async function openPortfolioBrowser(portfolioDir: string, port?: number, 
       openBrowser: false, // We'll open manually below to capture the result
       mcpAqlHandler,
     });
-    // Wait briefly for the server to bind
-    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   const browserResult = await openInBrowser(url);

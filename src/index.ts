@@ -799,12 +799,17 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const noBrowser = process.argv.includes('--no-open');
 
       let mcpAqlHandler;
+      let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
+      let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
       try {
         const container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
         await container.completeDeferredSetup();
         mcpAqlHandler = bundle.mcpAqlHandler;
+        // Extract sinks from container — deferred setup may have already wired them
+        try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
+        try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
         console.error("[DollhouseMCP] Container bootstrapped — web routes using MCP-AQL Gateway");
       } catch (err) {
         console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
@@ -812,8 +817,24 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         console.error("[DollhouseMCP] This may indicate a corrupt portfolio or missing dependencies.");
       }
 
+      // Ensure sinks exist even if container bootstrap failed —
+      // standalone --web mode still needs working logs and metrics tabs
+      if (!memorySink) {
+        const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
+        memorySink = new MemoryLogSink({
+          appCapacity: 10000,
+          securityCapacity: 5000,
+          perfCapacity: 2000,
+          telemetryCapacity: 1000,
+        });
+      }
+      if (!metricsSink) {
+        const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
+        metricsSink = new MemoryMetricsSink(240);
+      }
+
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler });
+      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink });
     })().catch(err => {
       console.error("[DollhouseMCP] Web UI failed to start:", err);
       process.exit(1);
