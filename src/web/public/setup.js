@@ -316,7 +316,7 @@
         status.textContent = 'Restart the application to activate.';
         status.classList.add('is-success');
       }
-      reDetect();
+      fetchDetection();
     } catch (err) {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -331,6 +331,14 @@
   const initInstallButtons = () => {
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
       btn.addEventListener('click', () => handleInstallClick(btn));
+      // Link button to its status message for accessibility
+      const client = btn.dataset.installClient;
+      const status = document.querySelector(`[data-install-status="${client}"]`);
+      if (status) {
+        const statusId = `install-status-${client}`;
+        status.id = statusId;
+        btn.setAttribute('aria-describedby', statusId);
+      }
     });
   };
 
@@ -578,12 +586,12 @@
     if (panel && !panel.querySelector('.setup-installed-notice')) createPanelNotice(panel, info.currentConfig);
   };
 
+  /** Fetch detection results from API and update all platform states */
   const fetchDetection = async () => {
     try {
       const res = await fetch('/api/setup/detect');
       if (!res.ok) return;
       const data = await res.json();
-
       for (const [clientId, info] of Object.entries(data)) {
         applyDetectionResult(clientId, info);
       }
@@ -591,19 +599,6 @@
     } catch {
       // Offline or no API — skip detection
     }
-  };
-
-  /** Re-fetch detection after an install and update state */
-  const reDetect = async () => {
-    try {
-      const res = await fetch('/api/setup/detect');
-      if (!res.ok) return;
-      const data = await res.json();
-      for (const [clientId, info] of Object.entries(data)) {
-        applyDetectionResult(clientId, info);
-      }
-      updateDetectionState();
-    } catch { /* offline — skip */ }
   };
 
   const escapeHtml = (str) => str

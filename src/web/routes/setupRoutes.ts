@@ -124,16 +124,16 @@ function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   }
 
   const tomlConfig: Record<string, unknown> = {};
-  const sectionMatch = raw.match(/\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i);
+  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
   if (!sectionMatch) return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
 
   tomlConfig.serverName = sectionMatch[1];
-  const sectionStart = sectionMatch.index! + sectionMatch[0].length;
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
   const nextSection = raw.indexOf('\n[', sectionStart);
   const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
 
-  const commandMatch = sectionContent.match(/command\s*=\s*"([^"]+)"/);
-  const argsMatch = sectionContent.match(/args\s*=\s*\[([^\]]*)\]/);
+  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
+  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
   if (commandMatch) tomlConfig.command = commandMatch[1];
   if (argsMatch) {
     tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replaceAll('"', ''));
@@ -211,9 +211,9 @@ export function createSetupRoutes(): {
       return;
     }
 
-    const normalizedClient = client.toLowerCase().trim();
+    const normalizedClient = client.normalize('NFC').toLowerCase().trim();
     if (!OPENABLE_CLIENTS.has(normalizedClient)) {
-      res.status(400).json({ error: `Cannot open config for: ${client}` });
+      res.status(400).json({ error: `Cannot open config for client "${client}". Supported: ${Array.from(OPENABLE_CLIENTS).join(', ')}` });
       return;
     }
 
@@ -265,12 +265,13 @@ export function createSetupRoutes(): {
     }
 
     // Validate version if provided — must be semver-like (no shell injection)
-    if (version && !/^\d+\.\d+\.\d+/.test(version)) {
+    const normalizedVersion = version?.normalize('NFC');
+    if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
       res.status(400).json({ error: 'Invalid version format' });
       return;
     }
 
-    const normalizedClient = client.toLowerCase().trim();
+    const normalizedClient = client.normalize('NFC').toLowerCase().trim();
     if (!ALLOWED_CLIENTS.has(normalizedClient)) {
       res.status(400).json({
         error: `Unsupported client: ${client}`,
@@ -279,13 +280,13 @@ export function createSetupRoutes(): {
       return;
     }
 
-    const tag = version ? `@${version}` : '@latest';
+    const tag = normalizedVersion ? `@${normalizedVersion}` : '@latest';
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await runInstallMcp(normalizedClient, version);
+      const output = await runInstallMcp(normalizedClient, normalizedVersion);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
-      res.json({ success: true, output, client: normalizedClient, version: version || 'latest' });
+      res.json({ success: true, output, client: normalizedClient, version: normalizedVersion || 'latest' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn(`[Setup] Install failed for ${normalizedClient}: ${message}`);
